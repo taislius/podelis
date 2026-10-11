@@ -105,7 +105,12 @@ pub(super) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Option<(u
     }
     let x = text_area.x + (app.tab.editor.cursor_display_col() - app.tab.editor.scroll_col) as u16;
     let y = text_area.y + (app.tab.editor.cursor_row - app.tab.editor.scroll_row) as u16;
-    f.set_cursor_position((x, y));
+    // Under a popup (the command menu, a confirmation…) the terminal's
+    // cursor would blink through it; autocomplete is typed in the editor.
+    let covered = app.help_visible || app.top_overlay().is_some_and(|o| o != crate::app::Overlay::Completion);
+    if !covered {
+        f.set_cursor_position((x, y));
+    }
     Some((x, y))
 }
 
