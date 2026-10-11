@@ -128,7 +128,13 @@ same way tools like `lazygit` do.
 
 ## Install
 
-Prebuilt binaries for Linux and macOS are attached to each
+With [Homebrew](https://brew.sh) (macOS and Linux):
+
+```sh
+brew install taislius/tap/podelis
+```
+
+Prebuilt binaries for Linux and macOS are also attached to each
 [GitHub release](https://github.com/taislius/podelis/releases). Or build from
 source:
 
