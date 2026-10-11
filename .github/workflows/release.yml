@@ -32,6 +32,10 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-about
+      # No prebuilt cargo-about for some targets (Intel macOS): the action's
+      # fallback then builds it without the `cli` feature, so no command.
+      - run: cargo about --version || cargo install cargo-about --locked --features cli
+        shell: bash
       - run: ./scripts/third-party-licenses.sh
         shell: bash
       - name: Package
