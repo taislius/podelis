@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 446d35ebaf18e4d0dfe0211c18bd67ed8dd7ae717d4f50026f2c4ba5afdc071b # shrinks to text = "``\"", engine = Sqlite, at = 0
+cc 8f57ccb678568af5dc32983af844b3f093467c0f68e7a8300bf151eea584a75e # shrinks to text = "\u{b}--", engine = Postgres, at = 0

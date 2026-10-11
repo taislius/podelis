@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs the project checks before pushing (CI's minutes may run out; this
+# doesn't). Skip once with: git push --no-verify
+exec "$(git rev-parse --show-toplevel)/scripts/check.sh"

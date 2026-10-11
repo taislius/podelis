@@ -1,0 +1,254 @@
+//! Ctrl+K: first a menu of one-letter actions and the focused pane's keys;
+//! typing anything else searches every action by name (the palette).
+
+use super::*;
+use crate::keys::Action;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Command {
+    Action(Action),
+    RecordView,
+    ExportCsv,
+    ExportJson,
+    ExportInserts,
+    LoadMore,
+    PipeRows,
+    OpenRows,
+    RefreshSchema,
+    CopyDiagnostics,
+    Help,
+    Quit,
+    /// An open tab, by index.
+    SwitchTab(usize),
+    /// Compare with another tab's connection (or the only other one).
+    CompareSchema(Option<u64>),
+    CompareRows(Option<u64>),
+}
+
+impl Command {
+    fn all() -> Vec<Command> {
+        let mut out: Vec<Command> = Action::all().filter(|a| *a != Action::Palette).map(Command::Action).collect();
+        out.extend([
+            Command::RecordView,
+            Command::ExportCsv,
+            Command::ExportJson,
+            Command::ExportInserts,
+            Command::LoadMore,
+            Command::PipeRows,
+            Command::OpenRows,
+            Command::RefreshSchema,
+            Command::CopyDiagnostics,
+            Command::Help,
+            Command::Quit,
+        ]);
+        out
+    }
+
+    pub fn describe(self) -> &'static str {
+        match self {
+            Command::Action(a) => a.describe(),
+            Command::RecordView => "Show the selected row vertically",
+            Command::ExportCsv => "Export rows as CSV",
+            Command::ExportJson => "Export rows as JSON",
+            Command::ExportInserts => "Export rows as SQL INSERT statements",
+            Command::LoadMore => "Load more rows",
+            Command::PipeRows => "Pipe rows through a command (grep, sort, jq…)",
+            Command::OpenRows => "Open rows in the viewer (less, VisiData…)",
+            Command::RefreshSchema => "Refresh the navigator",
+            Command::CopyDiagnostics => "Copy diagnostics for a bug report",
+            Command::Help => "Show all keys",
+            Command::Quit => "Quit",
+            Command::SwitchTab(_) => "Switch to tab",
+            Command::CompareSchema(_) => "Compare the schema with another connection",
+            Command::CompareRows(_) => "Compare the query's rows with another connection",
+        }
+    }
+
+    /// What the palette lists: the description, with the tab's name.
+    pub fn text(self, app: &App) -> String {
+        match self {
+            Command::SwitchTab(i) => {
+                format!("Switch to tab: {}", app.tabs.get(i).map_or("", |t| t.name.as_str()))
+            }
+            Command::CompareSchema(Some(id)) | Command::CompareRows(Some(id)) => {
+                let name = app.other_connections().into_iter().find(|(i, _)| *i == id).map(|(_, n)| n);
+                let what = if matches!(self, Command::CompareSchema(_)) { "schema" } else { "query's rows" };
+                format!("Compare the {what} with {}", name.unwrap_or_default())
+            }
+            _ => self.describe().to_string(),
+        }
+    }
+
+    /// The key that does it directly, if any.
+    pub fn keys(self, app: &App) -> String {
+        match self {
+            Command::Action(a) => app.keymap.label(a).to_string(),
+            Command::RecordView => "x (results)".into(),
+            Command::ExportCsv => "e (results)".into(),
+            Command::ExportJson => "J (results)".into(),
+            Command::ExportInserts => "i (results)".into(),
+            Command::LoadMore => "M (results)".into(),
+            Command::PipeRows => "| (results)".into(),
+            Command::OpenRows => "o (results)".into(),
+            Command::RefreshSchema => "r (schema)".into(),
+            Command::Help => "F1".into(),
+            Command::Quit => "Ctrl+C".into(),
+            Command::SwitchTab(i) if i < 9 => format!("Ctrl+K {}", i + 1),
+            Command::CopyDiagnostics | Command::SwitchTab(_) | Command::CompareSchema(_) | Command::CompareRows(_) => {
+                String::new()
+            }
+        }
+    }
+}
+
+/// How long Ctrl+K waits for a letter before showing its menu, so typing
+/// `Ctrl+K w` quickly doesn't flash it.
+pub const MENU_DELAY: Duration = Duration::from_millis(500);
+
+pub struct Palette {
+    pub query: LineInput,
+    pub selected: usize,
+    /// Searching commands by name (false: the menu of letters).
+    pub searching: bool,
+    /// The menu of letters is shown (it waits for `MENU_DELAY` first).
+    pub menu: bool,
+    opened: Instant,
+}
+
+impl App {
+    /// Waits for a letter; `menu_now` shows the menu at once (for `?`).
+    pub(super) fn open_palette(&mut self, menu_now: bool) {
+        self.palette = Some(Palette {
+            query: LineInput::default(),
+            selected: 0,
+            searching: false,
+            menu: menu_now,
+            opened: Instant::now(),
+        });
+        if !menu_now {
+            let key = self.keymap.short_label(Action::Palette);
+            self.set_status(format!("{key}…"), false);
+        }
+    }
+
+    /// When the waiting Ctrl+K should show its menu.
+    pub fn palette_menu_due(&self) -> Option<Instant> {
+        self.palette.as_ref().filter(|p| !p.searching && !p.menu).map(|p| p.opened + MENU_DELAY)
+    }
+
+    /// No letter came: show the menu.
+    pub fn show_palette_menu(&mut self) {
+        if let Some(palette) = &mut self.palette {
+            palette.menu = true;
+        }
+        self.status.clear();
+    }
+
+    /// Commands whose description contains every word typed.
+    pub fn palette_items(&self) -> Vec<Command> {
+        let query = self.palette.as_ref().map(|p| p.query.text().to_lowercase()).unwrap_or_default();
+        // The other open tabs, by name, after the commands.
+        let tabs = (0..self.tabs.len()).filter(|i| *i != self.active_tab).map(Command::SwitchTab);
+        // Comparing: with each other connection, or (with none open) a hint.
+        let others: Vec<Option<u64>> = match self.other_connections().as_slice() {
+            [] => vec![None],
+            many => many.iter().map(|(id, _)| Some(*id)).collect(),
+        };
+        let compare = others.iter().flat_map(|id| [Command::CompareSchema(*id), Command::CompareRows(*id)]);
+        Command::all()
+            .into_iter()
+            .chain(compare)
+            .chain(tabs)
+            .filter(|c| {
+                let text = c.text(self).to_lowercase();
+                query.split_whitespace().all(|w| text.contains(w))
+            })
+            .collect()
+    }
+
+    pub(super) fn handle_palette_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if self.palette.as_ref().is_some_and(|p| !p.searching) {
+            return self.handle_leader_key(key, ctrl);
+        }
+        let count = self.palette_items().len();
+        let Some(palette) = &mut self.palette else { return };
+        if let Some(i) = list::step(palette.selected, count, key, Nav::SEARCHED) {
+            palette.selected = i;
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => self.palette = None,
+            // Back to the letters.
+            KeyCode::Backspace if palette.query.is_empty() => palette.searching = false,
+            KeyCode::Enter => {
+                let selected = palette.selected;
+                let chosen = self.palette_items().get(selected).copied();
+                self.palette = None;
+                if let Some(command) = chosen {
+                    self.run_command(command);
+                }
+            }
+            _ => {
+                if palette.query.handle(key) == InputResult::Changed {
+                    palette.selected = 0;
+                }
+            }
+        }
+    }
+
+    /// A key in the menu of letters: run its action, or start searching.
+    fn handle_leader_key(&mut self, key: KeyEvent, ctrl: bool) {
+        let again = self.keymap.action(key) == Some(Action::Palette);
+        let Some(palette) = &mut self.palette else { return };
+        match key.code {
+            KeyCode::Esc => self.palette = None,
+            // Ctrl+K again, or arrows/Enter: the full list.
+            _ if again => palette.searching = true,
+            KeyCode::Up | KeyCode::Down | KeyCode::Enter => palette.searching = true,
+            KeyCode::Char(c) if !ctrl => {
+                if let Some(n) = c.to_digit(10).filter(|n| *n > 0) {
+                    self.palette = None;
+                    return self.switch_tab((n as usize - 1).min(self.tabs.len() - 1));
+                }
+                if c == '?' {
+                    self.palette = None;
+                    self.help_visible = true;
+                    return;
+                }
+                if let Some(action) = self.keymap.leader(c) {
+                    self.palette = None;
+                    return self.run_action(action);
+                }
+                palette.searching = true;
+                if c != '/' && c != ' ' {
+                    palette.query.insert_str(&c.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn run_command(&mut self, command: Command) {
+        match command {
+            Command::Action(a) => self.run_action(a),
+            Command::RecordView => self.open_record_view(),
+            Command::ExportCsv => self.export(ExportFormat::Csv),
+            Command::ExportJson => self.export(ExportFormat::Json),
+            Command::ExportInserts => self.export(ExportFormat::Sql),
+            Command::LoadMore => self.load_more(),
+            Command::PipeRows => self.open_pipe_prompt(),
+            Command::OpenRows => self.open_in_viewer(),
+            Command::RefreshSchema => self.load_catalog(),
+            Command::CopyDiagnostics => {
+                let text = self.diagnostics();
+                self.copy_text(text, "Copied diagnostics (no hosts, users or SQL)");
+            }
+            Command::Help => self.help_visible = true,
+            Command::Quit => self.request_quit(),
+            Command::SwitchTab(i) => self.switch_tab(i),
+            Command::CompareSchema(id) => self.compare_schema(id),
+            Command::CompareRows(id) => self.compare_rows(id),
+        }
+    }
+}

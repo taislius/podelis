@@ -1,0 +1,293 @@
+//! Result sets as text: CSV, TSV, JSON, `INSERT` statements and an
+//! aligned table. Used by exports, pipes and the command line alike.
+
+use std::borrow::Cow;
+use std::fmt::Write as _;
+
+use crate::db::{Engine, QueryOutcome};
+
+/// The text formats a result can be written in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    /// Aligned columns with a header rule, like psql.
+    Table,
+    Csv,
+    Tsv,
+    Json,
+}
+
+/// Makes a cell value fit on one table line.
+pub fn display_cell(value: &str) -> Cow<'_, str> {
+    if value.contains(['\n', '\r', '\t']) {
+        Cow::Owned(value.replace("\r\n", "↵").replace(['\n', '\r'], "↵").replace('\t', " "))
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
+/// [`display_cell`] of at most the first `max` characters: enough to fill
+/// a column that wide, without copying or measuring a huge value (a JSON
+/// document, a log) on every frame.
+pub fn display_prefix(value: &str, max: usize) -> Cow<'_, str> {
+    let end = value.char_indices().nth(max).map_or(value.len(), |(i, _)| i);
+    display_cell(&value[..end])
+}
+
+fn csv_field(value: &str) -> Cow<'_, str> {
+    if value.contains([',', '"', '\n', '\r']) {
+        Cow::Owned(format!("\"{}\"", value.replace('"', "\"\"")))
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
+/// CSV (RFC 4180) of the rows in `view` order. `NULL` becomes an empty field.
+pub fn csv(outcome: &QueryOutcome, view: &[usize]) -> String {
+    let mut out = String::new();
+    let header: Vec<_> = outcome.columns.iter().map(|c| csv_field(c)).collect();
+    out.push_str(&header.join(","));
+    out.push_str("\r\n");
+    for row in view.iter().map(|&i| &outcome.rows[i]) {
+        let fields: Vec<_> = row.iter().map(|c| csv_field(c.as_deref().unwrap_or(""))).collect();
+        out.push_str(&fields.join(","));
+        out.push_str("\r\n");
+    }
+    out
+}
+
+/// TSV with a header line. Tabs and line breaks inside values become a
+/// space and `\n`, so every row is one line; NULL is empty.
+pub fn tsv(outcome: &QueryOutcome, view: &[usize]) -> String {
+    let clean = |v: &str| v.replace('\t', " ").replace("\r\n", "\\n").replace(['\n', '\r'], "\\n");
+    let mut out = outcome.columns.iter().map(|c| clean(c)).collect::<Vec<_>>().join("\t");
+    out.push('\n');
+    for &i in view {
+        let cells: Vec<String> = outcome.rows[i].iter().map(|c| c.as_deref().map(clean).unwrap_or_default()).collect();
+        out.push_str(&cells.join("\t"));
+        out.push('\n');
+    }
+    out
+}
+
+/// JSON array of objects (one per row, keys in column order) for the rows
+/// in `view`. Values are strings as displayed; `NULL` becomes `null`.
+/// Duplicate column names get a `_2`, `_3`... suffix.
+pub fn json(outcome: &QueryOutcome, view: &[usize]) -> String {
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let keys: Vec<String> = outcome
+        .columns
+        .iter()
+        .map(|c| {
+            let n = seen.entry(c.as_str()).or_insert(0);
+            *n += 1;
+            let key = if *n == 1 { c.clone() } else { format!("{c}_{n}") };
+            serde_json::to_string(&key).unwrap_or_default()
+        })
+        .collect();
+    let rows: Vec<String> = view
+        .iter()
+        .map(|&i| {
+            let fields: Vec<String> = keys
+                .iter()
+                .zip(&outcome.rows[i])
+                .map(|(k, v)| format!("{k}: {}", serde_json::to_string(v).unwrap_or_default()))
+                .collect();
+            format!("  {{{}}}", fields.join(", "))
+        })
+        .collect();
+    if rows.is_empty() { "[]\n".to_string() } else { format!("[\n{}\n]\n", rows.join(",\n")) }
+}
+
+/// One `INSERT INTO table (...) VALUES (...);` per row in `view` order.
+/// Numbers in numeric columns stay unquoted; NULL stays NULL.
+pub fn sql_inserts(outcome: &QueryOutcome, view: &[usize], table: &str, engine: Engine) -> String {
+    let numeric = |i: usize| {
+        let ty = outcome.column_types.get(i).map(|t| t.to_ascii_uppercase()).unwrap_or_default();
+        ["INT", "NUMERIC", "DECIMAL", "FLOAT", "DOUBLE", "REAL"].iter().any(|n| ty.contains(n))
+    };
+    let columns: Vec<String> = outcome.columns.iter().map(|c| engine.quote_ident(c)).collect();
+    let columns = columns.join(", ");
+    let mut out = String::new();
+    for &r in view {
+        let values: Vec<String> = outcome.rows[r]
+            .iter()
+            .enumerate()
+            .map(|(i, v)| match v {
+                None => "NULL".to_string(),
+                Some(v) if numeric(i) && v.parse::<f64>().is_ok() => v.clone(),
+                Some(v) => crate::db::sql_literal(v, engine),
+            })
+            .collect();
+        let _ = writeln!(out, "INSERT INTO {table} ({columns}) VALUES ({});", values.join(", "));
+    }
+    out
+}
+
+/// Every row in `format`.
+pub fn render_all_rows(outcome: &QueryOutcome, format: Format) -> String {
+    render(outcome, &(0..outcome.rows.len()).collect::<Vec<_>>(), format)
+}
+
+/// The rows in `view` (indices into `outcome.rows`) in `format`.
+pub fn render(outcome: &QueryOutcome, view: &[usize], format: Format) -> String {
+    match format {
+        Format::Csv => csv(outcome, view),
+        Format::Tsv => tsv(outcome, view),
+        Format::Json => json(outcome, view),
+        Format::Table => table(outcome, view),
+    }
+}
+
+/// Aligned columns with a header rule, like psql.
+fn table(outcome: &QueryOutcome, view: &[usize]) -> String {
+    const MAX_WIDTH: usize = 60;
+    let cells: Vec<Vec<String>> = view
+        .iter()
+        .map(|&i| &outcome.rows[i])
+        .map(|r| {
+            r.iter()
+                .map(|c| c.as_deref().map_or_else(|| "NULL".to_string(), |v| display_cell(v).into_owned()))
+                .collect()
+        })
+        .collect();
+    let width = |s: &str| unicode_width::UnicodeWidthStr::width(s);
+    let widths: Vec<usize> = (0..outcome.columns.len())
+        .map(|i| {
+            let data = cells.iter().map(|r| width(&r[i])).max().unwrap_or(0);
+            width(&outcome.columns[i]).max(data).min(MAX_WIDTH)
+        })
+        .collect();
+    let fit = |s: &str, w: usize| {
+        let mut out = String::new();
+        let mut used = 0;
+        for c in s.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if used + cw > w {
+                out.pop();
+                out.push('…');
+                break;
+            }
+            out.push(c);
+            used += cw;
+        }
+        let pad = w.saturating_sub(width(&out));
+        out + &" ".repeat(pad)
+    };
+    let line = |row: &[String]| {
+        let parts: Vec<String> = row.iter().zip(&widths).map(|(c, w)| fit(c, *w)).collect();
+        parts.join(" | ").trim_end().to_string() + "\n"
+    };
+    let mut out = line(&outcome.columns);
+    out += &(widths.iter().map(|w| "-".repeat(*w)).collect::<Vec<_>>().join("-+-") + "\n");
+    for row in &cells {
+        out += &line(row);
+    }
+    let _ = writeln!(out, "({} row{})", view.len(), if view.len() == 1 { "" } else { "s" });
+    out
+}
+
+/// Lines up tab-separated output into columns (the text view doesn't
+/// show tabs).
+pub fn align_tabs(text: &str) -> String {
+    use unicode_width::UnicodeWidthStr;
+    const MAX: usize = 40;
+    if !text.contains('\t') {
+        return text.to_string();
+    }
+    let rows: Vec<Vec<&str>> = text.lines().map(|l| l.split('\t').collect()).collect();
+    let mut widths: Vec<usize> = Vec::new();
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            let w = cell.width().min(MAX);
+            match widths.get_mut(i) {
+                Some(cur) => *cur = (*cur).max(w),
+                None => widths.push(w),
+            }
+        }
+    }
+    let mut out = String::new();
+    for row in rows {
+        let last = row.len().saturating_sub(1);
+        for (i, cell) in row.into_iter().enumerate() {
+            out.push_str(cell);
+            if i < last {
+                out.push_str(&" ".repeat(widths[i].saturating_sub(cell.width()) + 2));
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome(columns: &[&str], rows: &[&[Option<&str>]]) -> QueryOutcome {
+        QueryOutcome {
+            columns: columns.iter().map(ToString::to_string).collect(),
+            column_types: columns.iter().map(|_| String::new()).collect(),
+            rows: rows.iter().map(|r| r.iter().map(|c| c.map(str::to_string)).collect()).collect(),
+            total_rows: rows.len() as u64,
+            ..QueryOutcome::default()
+        }
+    }
+
+    #[test]
+    fn csv_escaping() {
+        let o = outcome(&["a", "b,c"], &[&[Some("x\"y"), None], &[Some("1\n2"), Some("plain")]]);
+        assert_eq!(csv(&o, &[0, 1]), "a,\"b,c\"\r\n\"x\"\"y\",\r\n\"1\n2\",plain\r\n");
+    }
+
+    #[test]
+    fn display_cell_flattens_newlines() {
+        assert_eq!(display_cell("a\r\nb\tc"), "a↵b c");
+        assert_eq!(display_prefix("a\r\nb\tc", 3), "a↵");
+        assert_eq!(display_prefix("žąsis", 2), "žą");
+        assert_eq!(display_prefix("ab", 10), "ab");
+        assert!(matches!(display_cell("plain"), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn json_export_keeps_column_order_and_dedupes_keys() {
+        let o = outcome(&["id", "id", "note"], &[&[Some("1"), Some("2"), None], &[Some("3"), Some("4"), Some("q\"")]]);
+        assert_eq!(
+            json(&o, &[1, 0]),
+            "[\n  {\"id\": \"3\", \"id_2\": \"4\", \"note\": \"q\\\"\"},\n  {\"id\": \"1\", \"id_2\": \"2\", \"note\": null}\n]\n"
+        );
+        assert_eq!(json(&o, &[]), "[]\n");
+    }
+
+    #[test]
+    fn sql_insert_export() {
+        let mut o = outcome(
+            &["id", "Name", "note"],
+            &[&[Some("1"), Some("O'Neil"), None], &[Some("2"), Some("Bo"), Some("x")]],
+        );
+        o.column_types = vec!["INT4".into(), "TEXT".into(), "TEXT".into()];
+        assert_eq!(
+            sql_inserts(&o, &[1, 0], "public.people", Engine::Postgres),
+            "INSERT INTO public.people (id, \"Name\", note) VALUES (2, 'Bo', 'x');\n\
+             INSERT INTO public.people (id, \"Name\", note) VALUES (1, 'O''Neil', NULL);\n"
+        );
+    }
+
+    #[test]
+    fn tsv_rows_are_one_line_each() {
+        let outcome = QueryOutcome {
+            columns: vec!["id".into(), "note".into()],
+            rows: vec![vec![Some("1".into()), Some("a\tb\nc".into())], vec![Some("2".into()), None]],
+            ..QueryOutcome::default()
+        };
+        assert_eq!(tsv(&outcome, &[0, 1]), "id\tnote\n1\ta b\\nc\n2\t\n");
+        assert_eq!(tsv(&outcome, &[1]), "id\tnote\n2\t\n");
+        let old_mac = super::tests::outcome(&["v"], &[&[Some("a\rb\r\nc")]]);
+        assert_eq!(tsv(&old_mac, &[0]), "v\na\\nb\\nc\n");
+    }
+
+    #[test]
+    fn tab_output_is_aligned() {
+        assert_eq!(align_tabs("a\tbb\nccc\td\n"), "a    bb\nccc  d\n");
+        assert_eq!(align_tabs("no tabs"), "no tabs");
+    }
+}

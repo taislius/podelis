@@ -1,0 +1,20 @@
+---
+source: src/ui/tests.rs
+expression: "render(&mut app, 80, 16)"
+---
+" >_  PODĖLIS v0.2.0   │  projects & connections                                 "
+"┌ PROJECTS ───────── 2 ┐┌ CONNECTIONS ─────────────────────────────────── shop ┐"
+"│▸ ● shop         open ││  local                     PostgreSQL localhost/shop │"
+"│  analytics           ││  prod                         MySQL db.internal/shop │"
+"│  + New project       ││  + New connection                                    │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"└──────────────────────┘└──────────────────────────────────────────────────────┘"
+"                               ↵  open   ?  keys                                "

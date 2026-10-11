@@ -1,0 +1,5 @@
+---
+source: src/scope.rs
+expression: "outline(\"select * from public.orders o join customers c on o.cid = c.id, items where true\")"
+---
+select from [public.orders, join customers, items] where ctes []

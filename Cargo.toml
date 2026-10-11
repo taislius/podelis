@@ -1,0 +1,64 @@
+[package]
+name = "podelis"
+version = "0.2.0"
+edition = "2024"
+description = "A terminal UI SQL client for PostgreSQL, MySQL and SQLite"
+license = "AGPL-3.0-only"
+repository = "https://github.com/taislius/podelis"
+readme = "README.md"
+exclude = [".github/", ".githooks/", "docs/demo.gif", "packaging/"]
+keywords = ["sql", "tui", "postgres", "mysql", "database"]
+categories = ["command-line-utilities", "database"]
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = "0.4.45"
+crossterm = { version = "0.29.0", features = ["osc52"] }
+csv = "1.4.0"
+dirs = "7.0.0"
+futures-util = "0.3.34"
+keyring = "4.2.0" # default `v1`: Keychain on macOS, Secret Service (zbus) on Linux
+ratatui = "0.30.2"
+rust_decimal = "1.43.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sqlformat = "0.5.0"
+sqlparser = { version = "0.63", features = ["visitor"] }
+sqlx = { version = "0.9.0", features = ["postgres", "mysql", "sqlite", "runtime-tokio", "tls-rustls-aws-lc-rs", "chrono", "rust_decimal", "uuid", "json"] }
+tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "time", "sync", "net", "process", "io-util"] }
+toml = "1.1.6"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "env-filter", "std"] }
+unicode-width = "0.2.2"
+url = "2.5"
+uuid = { version = "1.27.0", features = ["v4"] }
+
+[dev-dependencies]
+insta = "1"
+proptest = "1"
+tempfile = "3"
+
+[profile.release]
+# Smaller, faster release binaries (22 → 16 MB). Function names stay, so
+# crash.log backtraces remain readable; only debug info is dropped.
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Deliberate in this codebase:
+cast_possible_truncation = "allow" # terminal coordinates are u16; values are clamped before casting
+cast_possible_wrap = "allow"       # ids/ports cast between integer types of known range
+wildcard_imports = "allow"         # `use super::*` in the app's per-screen modules
+struct_excessive_bools = "allow"   # UI state flags
+items_after_statements = "allow"   # local consts next to where they're used
+# Catch leftovers:
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+print_stdout = "warn"              # the TUI owns the terminal; see parse_args for the exception
+print_stderr = "warn"

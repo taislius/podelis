@@ -1,0 +1,1182 @@
+use super::*;
+use crate::keys::Action;
+
+/// How soon a second Space counts as a double press.
+const DOUBLE_SPACE: Duration = Duration::from_millis(250);
+
+impl App {
+    pub(super) fn handle_query_key(&mut self, key: KeyEvent) {
+        let after_esc = std::mem::take(&mut self.esc_then_tab);
+        self.esc_then_tab = key.code == KeyCode::Esc && self.focus == Focus::Editor;
+        // The popup in front takes the keys; the text view and completion
+        // let tab keys through, so they're handled further down.
+        match self.top_overlay() {
+            Some(Overlay::Menu) => return self.handle_menu_key(key),
+            Some(Overlay::PipePrompt) => return self.handle_pipe_prompt_key(key),
+            Some(Overlay::RowForm) => return self.handle_row_form_key(key),
+            Some(Overlay::Palette) => return self.handle_palette_key(key),
+            Some(Overlay::Activity) => return self.handle_activity_key(key),
+            Some(Overlay::TxPicker) => return self.handle_tx_picker_key(key),
+            Some(Overlay::Review) => return self.handle_review_key(key),
+            Some(Overlay::ParamForm) => return self.handle_param_key(key),
+            Some(Overlay::TabPrompt) => return self.handle_tab_prompt_key(key),
+            Some(Overlay::Library) => return self.handle_library_key(key),
+            Some(Overlay::Confirm | Overlay::CellView | Overlay::Completion) | None => {}
+        }
+        // Ctrl+U and Ctrl+W edit the input being typed in, before any key
+        // binding (Ctrl+W also closes the tab).
+        let edit_key = key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('u' | 'w'));
+        if edit_key && self.cell_view.is_none() {
+            let schema_filter = self.schema.as_ref().is_some_and(|s| s.filter_editing);
+            if self.cell_edit.is_some() {
+                return self.handle_cell_edit_key(key);
+            }
+            match self.focus {
+                Focus::Results if self.tab.grid.filter_editing => return self.handle_filter_key(key),
+                Focus::Schema if schema_filter => return self.handle_schema_key(key),
+                Focus::Editor if self.find.is_some() => return self.handle_find_key(key),
+                _ => {}
+            }
+        }
+        // The find bar takes typing; bound actions (run, palette…) still work.
+        if self.find.is_some() && self.focus == Focus::Editor && self.keymap.action(key).is_none() {
+            return self.handle_find_key(key);
+        }
+        let action = self.keymap.action(key);
+        if let Some(a) = action.filter(|a| a.is_tab_action()) {
+            return self.run_action(a);
+        }
+        if self.handle_tab_key(key) {
+            return;
+        }
+        if self.cell_view.is_some() {
+            return self.handle_cell_view_key(key);
+        }
+        if self.focus == Focus::Results && self.tab.grid.filter_editing {
+            return self.handle_filter_key(key);
+        }
+        if self.cell_edit.is_some() {
+            return self.handle_cell_edit_key(key);
+        }
+        if self.focus == Focus::Editor && self.completion.is_some() && self.handle_completion_key(key) {
+            return;
+        }
+        // Tab after a partial word completes it; otherwise (or after Esc)
+        // it moves focus.
+        if key.code == KeyCode::Tab && !after_esc && self.tab_completes() {
+            return self.open_completion();
+        }
+        match action {
+            Some(Action::Complete) if self.focus == Focus::Editor && self.editor_inserting() => {
+                return self.open_completion();
+            }
+            Some(Action::Complete) | None => {}
+            Some(a) => return self.run_action(a),
+        }
+        match key.code {
+            KeyCode::Esc if self.executing => return self.cancel_query(),
+            // Esc leaves the zoom, after a results filter (which it clears
+            // first) and outside vim mode in the editor (where it's vim's).
+            KeyCode::Esc
+                if self.zoomed
+                    && (self.focus != Focus::Results || self.tab.grid.filter.is_empty())
+                    && (self.focus != Focus::Editor || self.vim_mode().is_none()) =>
+            {
+                return self.toggle_zoom();
+            }
+            KeyCode::Tab => return self.cycle_focus(true),
+            KeyCode::BackTab => return self.cycle_focus(false),
+            _ => {}
+        }
+
+        match self.focus {
+            Focus::Editor => self.handle_editor_key(key),
+            Focus::Results => self.handle_results_key(key),
+            Focus::Schema => self.handle_schema_key(key),
+        }
+    }
+
+    /// Pastes into what has the typing: the popup in front, else the cell
+    /// being edited, a filter, the find bar or the editor.
+    pub(super) fn paste_on_query_screen(&mut self, text: &str) {
+        match self.top_overlay() {
+            Some(Overlay::PipePrompt) => {
+                if let Some(input) = &mut self.pipe_prompt {
+                    input.insert_str(text);
+                }
+            }
+            Some(Overlay::Palette) => {
+                if let Some(palette) = &mut self.palette {
+                    palette.searching = true;
+                    palette.query.insert_str(text);
+                    palette.selected = 0;
+                }
+            }
+            Some(Overlay::TabPrompt) => {
+                if let Some(prompt) = &mut self.tab_prompt {
+                    prompt.text.insert_str(text);
+                }
+            }
+            Some(Overlay::Library) => {
+                if let Some(view) = &mut self.library_view {
+                    view.query.insert_str(text);
+                    view.selected = 0;
+                }
+            }
+            Some(Overlay::ParamForm) => self.paste_param(text),
+            Some(Overlay::RowForm) => self.paste_row_form(text),
+            // Popups without text to type into.
+            Some(
+                Overlay::Confirm
+                | Overlay::Menu
+                | Overlay::CellView
+                | Overlay::Activity
+                | Overlay::TxPicker
+                | Overlay::Review,
+            ) => {}
+            Some(Overlay::Completion) | None => self.paste_into_pane(text),
+        }
+    }
+
+    fn paste_into_pane(&mut self, text: &str) {
+        if let Some(edit) = &mut self.cell_edit {
+            return edit.text.insert_str(text);
+        }
+        match self.focus {
+            Focus::Results if self.tab.grid.filter_editing => {
+                self.tab.grid.filter.insert_str(text);
+                self.tab.grid.refresh_view();
+            }
+            Focus::Schema => {
+                if let Some(panel) = self.schema.as_mut().filter(|p| p.filter_editing) {
+                    panel.filter.insert_str(text);
+                    panel.selected = step_selectable(&panel.nodes(), 0, 1);
+                }
+            }
+            Focus::Editor if self.find.is_some() => self.paste_find(text),
+            Focus::Editor => {
+                self.tab.editor.insert_str(text);
+                self.edited();
+            }
+            Focus::Results => {}
+        }
+    }
+
+    /// Tab and library keys, available from every pane. True if handled.
+    /// Alt+1…9 switch tabs (Ctrl+K 1…9 does too, and works where Alt
+    /// doesn't). True if handled.
+    fn handle_tab_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Char(c @ '1'..='9') if key.modifiers == KeyModifiers::ALT => {
+                self.switch_tab(c as usize - '1' as usize);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Does what a (configurable) key binding is for.
+    pub(super) fn run_action(&mut self, action: Action) {
+        let n = self.tabs.len();
+        match action {
+            Action::Run => self.execute_all(),
+            Action::RunStatement => self.execute_current(),
+            Action::Explain => self.explain_current(),
+            Action::Complete => self.open_completion(),
+            Action::HistoryPrev => self.history_older(),
+            Action::HistoryNext => self.history_newer(),
+            Action::Undo => self.undo(),
+            Action::Redo => self.redo(),
+            Action::ToggleSchema => self.toggle_schema(),
+            Action::OpenConnection => self.open_connection(),
+            Action::Disconnect => self.request_disconnect(),
+            Action::NewTab => self.new_tab(None, "", None),
+            Action::CloseTab => self.request_close_tab(),
+            Action::NextTab => self.switch_tab((self.active_tab + 1) % n),
+            Action::PrevTab => self.switch_tab((self.active_tab + n - 1) % n),
+            Action::SaveTab => self.save_tab(),
+            Action::RenameTab => self.rename_tab(),
+            Action::Library => self.open_library(),
+            Action::Find => self.open_find(),
+            Action::Comment => self.toggle_comment(),
+            Action::Format => self.format_sql(),
+            Action::NextWarning => self.next_warning(),
+            Action::Palette => self.open_palette(false),
+            Action::ConnectionInfo => self.show_connection_info(),
+            Action::Activity => self.open_activity(),
+            Action::ExplainAnalyze => self.explain_analyze_current(),
+            Action::InsertSnippet => self.open_snippets(),
+            Action::Menu => self.open_menu(None),
+            Action::Zoom => self.toggle_zoom(),
+            Action::Heartbeat => self.toggle_heartbeat(),
+            Action::TxMode => self.open_tx_picker(),
+            Action::Projects => self.open_manager(Screen::Projects),
+            Action::Commit => self.end_transaction("COMMIT"),
+            Action::Rollback => self.end_transaction("ROLLBACK"),
+        }
+    }
+
+    /// Shows the focused pane full-screen, or the normal layout again.
+    pub(super) fn toggle_zoom(&mut self) {
+        self.zoomed = !self.zoomed;
+        self.completion = None;
+        let msg = if self.zoomed {
+            format!("Zoomed: Tab moves between panes; {} or Esc returns", self.keymap.label(Action::Zoom))
+        } else {
+            String::new()
+        };
+        self.set_status(msg, false);
+    }
+
+    pub(super) fn cycle_focus(&mut self, forward: bool) {
+        let mut order = vec![Focus::Editor, Focus::Results];
+        if self.schema_shown {
+            order.push(Focus::Schema);
+        }
+        let idx = order.iter().position(|f| *f == self.focus).unwrap_or(0);
+        let n = order.len();
+        self.focus = order[if forward { (idx + 1) % n } else { (idx + n - 1) % n }];
+    }
+
+    pub(super) fn handle_editor_key(&mut self, key: KeyEvent) {
+        if self.double_space(key) {
+            return self.open_palette(false);
+        }
+        if self.vim_enabled() {
+            self.handle_vim_key(key);
+        } else {
+            self.handle_standard_editor_key(key);
+        }
+        let space = key.code == KeyCode::Char(' ') && (key.modifiers - KeyModifiers::SHIFT).is_empty();
+        if space && self.settings.leader_double_space && self.editor_inserting() {
+            self.last_space = Some((Instant::now(), self.tab.editor.cursor()));
+        }
+    }
+
+    /// With `leader_double_space`: whether this Space came right after
+    /// another one, which it then takes back.
+    fn double_space(&mut self, key: KeyEvent) -> bool {
+        let Some((at, pos)) = self.last_space.take() else { return false };
+        let space = key.code == KeyCode::Char(' ') && (key.modifiers - KeyModifiers::SHIFT).is_empty();
+        if !space || at.elapsed() > DOUBLE_SPACE || pos != self.tab.editor.cursor() || !self.editor_inserting() {
+            return false;
+        }
+        self.tab.editor.backspace();
+        self.edited();
+        self.completion = None;
+        true
+    }
+
+    /// Whether the editor takes typed text now (always, unless vim is in
+    /// Normal/Visual mode). Autocomplete only applies then.
+    fn editor_inserting(&self) -> bool {
+        self.vim_mode().is_none_or(|m| m == VimMode::Insert)
+    }
+
+    pub(super) fn handle_standard_editor_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let page = self.editor_height.saturating_sub(1).max(1);
+        let ed = &mut self.tab.editor;
+
+        // Movement; Shift extends the selection. macOS terminals send
+        // Option+←/→ as Alt+b / Alt+f.
+        let movement: Option<fn(&mut TextEditor)> = match key.code {
+            KeyCode::Left if ctrl || alt => Some(TextEditor::move_word_left),
+            KeyCode::Right if ctrl || alt => Some(TextEditor::move_word_right),
+            KeyCode::Char('b') if alt => Some(TextEditor::move_word_left),
+            KeyCode::Char('f') if alt => Some(TextEditor::move_word_right),
+            KeyCode::Home if ctrl => Some(TextEditor::move_doc_start),
+            KeyCode::End if ctrl => Some(TextEditor::move_doc_end),
+            KeyCode::Left => Some(TextEditor::move_left),
+            KeyCode::Right => Some(TextEditor::move_right),
+            KeyCode::Up => Some(TextEditor::move_up),
+            KeyCode::Down => Some(TextEditor::move_down),
+            KeyCode::Home => Some(TextEditor::move_home),
+            KeyCode::End => Some(TextEditor::move_end),
+            _ => None,
+        };
+        if let Some(movement) = movement {
+            ed.prepare_move(shift);
+            movement(ed);
+            self.completion = None;
+            return;
+        }
+        match key.code {
+            KeyCode::PageUp => {
+                ed.prepare_move(shift);
+                ed.page_up(page);
+                return;
+            }
+            KeyCode::PageDown => {
+                ed.prepare_move(shift);
+                ed.page_down(page);
+                return;
+            }
+            KeyCode::Char('a') if ctrl => return ed.select_all(),
+            KeyCode::Char('x') if ctrl => {
+                if let Some(text) = ed.cut() {
+                    self.edited();
+                    self.copy_text(text, "Cut selection");
+                }
+                return;
+            }
+            KeyCode::Esc => return ed.clear_selection(),
+            _ => {}
+        }
+        if ctrl || alt {
+            return;
+        }
+        match key.code {
+            KeyCode::Char(c) => ed.insert_char(c),
+            KeyCode::Enter => ed.insert_newline(),
+            KeyCode::Backspace => ed.backspace(),
+            KeyCode::Delete => ed.delete(),
+            _ => return,
+        }
+        self.edited();
+        // Keep an open popup in sync with the word being typed; a `.` opens
+        // it for `table.` / `alias.` / `schema.`.
+        let keep_open = self.completion.is_some() && self.word_before_cursor();
+        self.completion = if keep_open || key.code == KeyCode::Char('.') { self.compute_completion() } else { None };
+    }
+
+    /// Whether Tab in the editor would complete a word rather than move
+    /// to the next pane.
+    pub fn tab_completes(&self) -> bool {
+        self.focus == Focus::Editor && !self.esc_then_tab && self.editor_inserting() && self.word_before_cursor()
+    }
+
+    /// Whether the char before the cursor is part of an identifier.
+    fn word_before_cursor(&self) -> bool {
+        let text = self.tab.editor.text();
+        text[..self.tab.editor.cursor_offset()]
+            .chars()
+            .last()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$')
+    }
+
+    fn compute_completion(&self) -> Option<Completion> {
+        let tables: Vec<TableRef> = self
+            .schema
+            .iter()
+            .flat_map(|p| &p.tables)
+            .map(|t| TableRef { schema: &t.info.schema, name: &t.info.name, columns: &t.columns })
+            .collect();
+        let text = self.tab.editor.text();
+        let (prefix_len, mut items) =
+            complete::complete(&text, self.tab.editor.cursor_offset(), self.engine(), &tables);
+        // Snippets by name: saved queries in the `snippets` group.
+        let prefix: String = {
+            let line = &self.tab.editor.lines[self.tab.editor.cursor_row];
+            line.chars()
+                .take(self.tab.editor.cursor_col)
+                .skip(self.tab.editor.cursor_col.saturating_sub(prefix_len))
+                .collect()
+        };
+        if !prefix.is_empty() {
+            let lower = prefix.to_lowercase();
+            items.extend(
+                self.library
+                    .queries
+                    .iter()
+                    .filter(|q| q.group == crate::library::SNIPPETS && q.name.to_lowercase().starts_with(&lower))
+                    .map(|q| complete::Candidate {
+                        label: q.name.clone(),
+                        insert: q.sql.trim_end().to_string(),
+                        kind: complete::CandKind::Snippet,
+                        detail: "snippet".into(),
+                    }),
+            );
+        }
+        (!items.is_empty()).then_some(Completion { items, selected: 0, prefix_len })
+    }
+
+    fn open_completion(&mut self) {
+        self.completion = self.compute_completion();
+        if self.completion.is_none() {
+            let loading = self.schema.as_ref().is_some_and(|s| s.loading);
+            let msg = if loading { "No completions yet (schema still loading)" } else { "No completions" };
+            self.editor_note = Some(msg.to_string());
+        }
+    }
+
+    /// Keys for the open popup. Returns false for keys it doesn't handle
+    /// (they go to the editor and the popup refilters).
+    fn handle_completion_key(&mut self, key: KeyEvent) -> bool {
+        let Some(c) = &mut self.completion else { return false };
+        if let Some(i) = list::step(c.selected, c.items.len(), key, Nav::COMPLETION) {
+            c.selected = i;
+            return true;
+        }
+        match key.code {
+            KeyCode::Esc => self.completion = None,
+            KeyCode::Tab | KeyCode::Enter => {
+                let item = c.items[c.selected].insert.clone();
+                let len = c.prefix_len;
+                self.completion = None;
+                // Already typed in full: Enter is a new line, not a choice.
+                let line = &self.tab.editor.lines[self.tab.editor.cursor_row];
+                let typed: String = line
+                    .chars()
+                    .take(self.tab.editor.cursor_col)
+                    .skip(self.tab.editor.cursor_col.saturating_sub(len))
+                    .collect();
+                if key.code == KeyCode::Enter && typed.eq_ignore_ascii_case(&item) {
+                    return false;
+                }
+                self.tab.editor.replace_before_cursor(len, &item);
+                self.edited();
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    pub(super) fn undo(&mut self) {
+        self.focus = Focus::Editor;
+        if self.tab.editor.undo() {
+            self.edited();
+        } else {
+            self.set_status("Nothing to undo".to_string(), false);
+        }
+    }
+
+    pub(super) fn redo(&mut self) {
+        self.focus = Focus::Editor;
+        if self.tab.editor.redo() {
+            self.edited();
+        } else {
+            self.set_status("Nothing to redo".to_string(), false);
+        }
+    }
+
+    pub(super) fn history_older(&mut self) {
+        if let Some(text) = self.history.older(&self.tab.editor.text()) {
+            let text = text.to_string();
+            self.tab.editor.set_text(&text);
+            self.focus = Focus::Editor;
+            self.tab.error_marker = None;
+            self.tab.syntax_hint = None;
+        }
+    }
+
+    pub(super) fn history_newer(&mut self) {
+        if let Some(text) = self.history.newer() {
+            let text = text.to_string();
+            self.tab.editor.set_text(&text);
+            self.focus = Focus::Editor;
+            self.tab.error_marker = None;
+            self.tab.syntax_hint = None;
+        }
+    }
+
+    pub(super) fn handle_results_key(&mut self, key: KeyEvent) {
+        let tabs = [ResultTab::Rows, ResultTab::Messages, ResultTab::Plan];
+        let current = tabs.iter().position(|t| *t == self.tab.result_tab).unwrap_or(0);
+        let switch = match key.code {
+            KeyCode::Char('1') => Some(0),
+            KeyCode::Char('2') => Some(1),
+            KeyCode::Char('3') => Some(2),
+            KeyCode::Char(']') => Some((current + 1) % 3),
+            KeyCode::Char('[') => Some((current + 2) % 3),
+            _ => None,
+        };
+        if let Some(i) = switch {
+            self.tab.result_tab = tabs[i];
+            self.tab.tab_scroll = 0;
+            return;
+        }
+        if self.tab.result_tab != ResultTab::Rows {
+            return self.handle_tab_scroll_key(key);
+        }
+        let Some(results) = &self.tab.grid.results else { return };
+        let cols = results.columns.len();
+        if cols == 0 {
+            return;
+        }
+        match key.code {
+            KeyCode::Char('/') => return self.tab.grid.filter_editing = true,
+            KeyCode::Esc if !self.tab.grid.filter.is_empty() => {
+                self.tab.grid.filter.clear();
+                return self.tab.grid.refresh_view();
+            }
+            KeyCode::Char('s') => return self.cycle_sort(),
+            KeyCode::Char('e') => return self.export(ExportFormat::Csv),
+            KeyCode::Char('J') => return self.export(ExportFormat::Json),
+            KeyCode::Char('i') => return self.export(ExportFormat::Sql),
+            KeyCode::Char('M') => return self.load_more(),
+            KeyCode::Char('c') => return self.start_cell_edit(),
+            KeyCode::Char('a') => return self.start_row_insert(),
+            KeyCode::Char('d') => return self.delete_rows(),
+            KeyCode::Char('C') => return self.copy_markdown(),
+            KeyCode::Char('m') => return self.open_menu(None),
+            KeyCode::Char('z') => return self.toggle_zoom(),
+            KeyCode::Char('>') => return self.step_result_set(true),
+            KeyCode::Char('<') => return self.step_result_set(false),
+            _ => {}
+        }
+        let len = self.tab.grid.view.len();
+        if len == 0 {
+            return;
+        }
+        let current = self.tab.grid.table_state.selected().unwrap_or(0);
+        let row = match key.code {
+            KeyCode::Char('g') => 0,
+            KeyCode::Char('G') => len - 1,
+            _ => list::step(current, len, key, Nav::LIST).unwrap_or(current),
+        };
+        self.tab.grid.table_state.select(Some(row));
+        self.maybe_fetch_more();
+        match key.code {
+            KeyCode::Left | KeyCode::Char('h') => {
+                self.tab.grid.selected_col = self.tab.grid.selected_col.saturating_sub(1);
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                self.tab.grid.selected_col = (self.tab.grid.selected_col + 1).min(cols - 1);
+            }
+            KeyCode::Char('y') => self.copy_cell(),
+            KeyCode::Char('Y') => self.copy_row(),
+            KeyCode::Enter | KeyCode::Char('v') => self.open_cell_view(),
+            KeyCode::Char('x') => self.open_record_view(),
+            KeyCode::Char(' ') => self.toggle_mark(),
+            KeyCode::Char('f') => self.follow_foreign_key(),
+            KeyCode::Char('|') => self.open_pipe_prompt(),
+            KeyCode::Char('o') => self.open_in_viewer(),
+            _ => {}
+        }
+    }
+
+    /// The selected row as shown (after filtering/sorting).
+    pub(super) fn selected_row(&self) -> Option<&Vec<Option<String>>> {
+        let results = self.tab.grid.results.as_ref()?;
+        let idx = *self.tab.grid.view.get(self.tab.grid.table_state.selected()?)?;
+        results.rows.get(idx)
+    }
+
+    pub(super) fn handle_filter_key(&mut self, key: KeyEvent) {
+        match self.tab.grid.filter.handle(key) {
+            InputResult::Submit => self.tab.grid.filter_editing = false,
+            InputResult::Cancel => {
+                self.tab.grid.filter_editing = false;
+                self.tab.grid.filter.clear();
+            }
+            InputResult::Changed => {}
+            InputResult::Moved | InputResult::Ignored => return,
+        }
+        self.tab.grid.refresh_view();
+    }
+
+    /// Ascending → descending → unsorted, on the selected column.
+    pub(super) fn cycle_sort(&mut self) {
+        let col = self.tab.grid.selected_col;
+        self.tab.grid.sort = match self.tab.grid.sort {
+            Some((c, false)) if c == col => Some((col, true)),
+            Some((c, true)) if c == col => None,
+            _ => Some((col, false)),
+        };
+        self.tab.grid.refresh_view();
+    }
+
+    pub(super) fn open_cell_view(&mut self) {
+        let Some(results) = &self.tab.grid.results else { return };
+        let Some(row) = self.selected_row() else { return };
+        let Some(cell) = row.get(self.tab.grid.selected_col) else { return };
+        let title = results.columns[self.tab.grid.selected_col].clone();
+        let text = cell.as_deref().map_or_else(|| NULL_TEXT.to_string(), pretty_value);
+        self.cell_view = Some(CellView::new(title, text));
+    }
+
+    /// `x`: the selected row as one `column  value` line per column.
+    pub(super) fn open_record_view(&mut self) {
+        let Some(results) = &self.tab.grid.results else { return };
+        let Some(row) = self.selected_row() else { return };
+        let name_w = results.columns.iter().map(|c| c.chars().count()).max().unwrap_or(0).min(30);
+        let mut text = String::new();
+        for (name, cell) in results.columns.iter().zip(row) {
+            let value = cell.as_deref().map_or_else(|| NULL_TEXT.to_string(), pretty_value);
+            // Continuation lines of multi-line values line up with the first.
+            let value = value.replace('\n', &format!("\n{:w$}  ", "", w = name_w));
+            let _ = writeln!(text, "{name:<name_w$}  {value}");
+        }
+        let at = self.tab.grid.table_state.selected().unwrap_or(0);
+        let title = format!("ROW {} of {}", at + 1, self.tab.grid.view.len());
+        self.cell_view = Some(CellView { record: true, ..CellView::new(title, text) });
+    }
+
+    pub(super) fn handle_cell_view_key(&mut self, key: KeyEvent) {
+        let Some(view) = &mut self.cell_view else { return };
+        let page = self.editor_height.max(5) as u16;
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q' | 'v') => self.cell_view = None,
+            KeyCode::Down | KeyCode::Char('j') => view.scroll = view.scroll.saturating_add(1),
+            KeyCode::Up | KeyCode::Char('k') => view.scroll = view.scroll.saturating_sub(1),
+            KeyCode::PageDown => view.scroll = view.scroll.saturating_add(page),
+            KeyCode::PageUp => view.scroll = view.scroll.saturating_sub(page),
+            KeyCode::Home => view.scroll = 0,
+            KeyCode::Char('y') if view.sql.is_some() => {
+                let text = view.sql.as_ref().map(|(sql, _)| sql.clone()).unwrap_or_default();
+                self.copy_text(text, "Copied the SQL");
+            }
+            KeyCode::Char('e') if view.sql.is_some() => {
+                let Some((sql, conn)) = view.sql.take() else { return };
+                self.cell_view = None;
+                self.open_tab_on(conn, &sql);
+            }
+            KeyCode::Char('y') if view.record => {
+                let text = view.text.clone();
+                self.copy_text(text, "Copied the row");
+            }
+            KeyCode::Char('y') => self.copy_cell(),
+            KeyCode::Left | KeyCode::Right | KeyCode::Char('h' | 'l') if view.record => {
+                let back = matches!(key.code, KeyCode::Left | KeyCode::Char('h'));
+                let at = self.tab.grid.table_state.selected().unwrap_or(0);
+                let next =
+                    if back { at.saturating_sub(1) } else { (at + 1).min(self.tab.grid.view.len().saturating_sub(1)) };
+                self.tab.grid.table_state.select(Some(next));
+                self.maybe_fetch_more();
+                self.open_record_view();
+            }
+            KeyCode::Char('x') if view.record => self.cell_view = None,
+            _ => {}
+        }
+    }
+
+    pub(super) fn copy_cell(&mut self) {
+        let Some(row) = self.selected_row() else { return };
+        let Some(cell) = row.get(self.tab.grid.selected_col) else { return };
+        let text = cell.clone().unwrap_or_default();
+        let status = format!("Copied cell ({} chars)", text.chars().count());
+        self.copy_text(text, &status);
+    }
+
+    pub(super) fn copy_row(&mut self) {
+        let Some(cells) = self.selected_row() else { return };
+        let text =
+            cells.iter().map(|c| c.as_deref().unwrap_or("").replace(['\t', '\n'], " ")).collect::<Vec<_>>().join("\t");
+        self.copy_text(text, "Copied row (tab-separated)");
+    }
+
+    /// Writes the rows as shown to a CSV or JSON file in the current folder.
+    pub(super) fn export(&mut self, format: ExportFormat) {
+        let Some(results) = &self.tab.grid.results else { return };
+        let ext = match format {
+            ExportFormat::Csv => "csv",
+            ExportFormat::Json => "json",
+            ExportFormat::Sql => "sql",
+        };
+        let dir = match self.settings.export_dir.as_deref() {
+            Some(d) if d.starts_with("~/") => dirs::home_dir().unwrap_or_default().join(&d[2..]),
+            Some(d) => PathBuf::from(d),
+            None => PathBuf::new(),
+        };
+        let path = dir.join(format!("podelis-export-{}.{ext}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+        let truncated = results.truncated() || self.row_stream.is_some();
+        let rows = self.tab.grid.view.len();
+        let engine = self.engine();
+        let text = match format {
+            ExportFormat::Csv => crate::export::csv(results, &self.tab.grid.view),
+            ExportFormat::Json => crate::export::json(results, &self.tab.grid.view),
+            ExportFormat::Sql => {
+                // INSERT INTO the query's table when it reads just one.
+                let table = self
+                    .tab
+                    .last_sql
+                    .as_ref()
+                    .and_then(|(sql, _)| analyze::edit_source(&parse(sql, engine)))
+                    .map_or_else(
+                        || "result".to_string(),
+                        |s| match s.schema {
+                            Some(schema) => format!("{}.{}", engine.quote_ident(&schema), engine.quote_ident(&s.table)),
+                            None => engine.quote_ident(&s.table),
+                        },
+                    );
+                crate::export::sql_inserts(results, &self.tab.grid.view, &table, engine)
+            }
+        };
+        match std::fs::write(&path, text) {
+            Ok(()) => {
+                let mut note = format!(" ({rows} rows");
+                if truncated {
+                    let _ = write!(note, " of {}; M loads more", results.total_rows);
+                } else if !self.tab.grid.filter.is_empty() {
+                    note.push_str(", filtered");
+                }
+                note.push(')');
+                let shown = std::fs::canonicalize(&path).unwrap_or(path);
+                self.set_status(format!("Exported to {}{note}", shown.display()), false);
+            }
+            Err(e) => self.set_status(format!("Export failed: {e}"), true),
+        }
+    }
+
+    pub(super) fn toggle_schema(&mut self) {
+        self.schema_visible = !self.schema_visible;
+        if self.schema_visible {
+            self.focus = Focus::Schema;
+            if self.schema.is_none() {
+                self.load_catalog();
+            }
+        } else if self.focus == Focus::Schema {
+            self.focus = Focus::Editor;
+        }
+    }
+
+    /// (Re)loads the catalog in the background, keeping the current one
+    /// visible meanwhile.
+    pub(super) fn load_catalog(&mut self) {
+        let Some(db) = self.database.clone() else { return };
+        self.schema.get_or_insert_with(SchemaPanel::default).loading = true;
+        let send = self.sender();
+        let system = self.settings.system_tables;
+        tokio::spawn(async move {
+            // A `SET sql_mode` may have changed what lint rules should see.
+            db.refresh_sql_mode().await;
+            send(DbEventKind::Catalog(db.catalog(system).await.map_err(|e| crate::db::error_message(&e))));
+            // Listing routines may need privileges the user lacks: then
+            // the section just stays empty.
+            send(DbEventKind::Routines(db.routines().await.unwrap_or_default()));
+        });
+    }
+
+    /// Shows or hides the database's own catalog tables, for this session.
+    pub(super) fn toggle_system_tables(&mut self) {
+        self.settings.system_tables = !self.settings.system_tables;
+        let shown = if self.settings.system_tables { "Showing" } else { "Hiding" };
+        self.set_status(format!("{shown} system tables"), false);
+        self.load_catalog();
+    }
+
+    pub(super) fn handle_schema_key(&mut self, key: KeyEvent) {
+        let engine = self.engine();
+        let Some(panel) = &mut self.schema else { return };
+        if panel.filter_editing {
+            match panel.filter.handle(key) {
+                InputResult::Submit => panel.filter_editing = false,
+                InputResult::Cancel => {
+                    panel.filter_editing = false;
+                    panel.filter.clear();
+                }
+                InputResult::Changed => {}
+                InputResult::Moved | InputResult::Ignored => return,
+            }
+            panel.selected = step_selectable(&panel.nodes(), 0, 1);
+            return;
+        }
+        match key.code {
+            KeyCode::Char('m') => return self.open_menu(None),
+            KeyCode::Char(' ') => return self.open_palette(false),
+            KeyCode::Char('z') => return self.toggle_zoom(),
+            KeyCode::Char('r') => return self.load_catalog(),
+            KeyCode::Char('.') => return self.toggle_system_tables(),
+            KeyCode::Char('/') => return panel.filter_editing = true,
+            KeyCode::Esc if !panel.filter.is_empty() => {
+                panel.filter.clear();
+                panel.selected = step_selectable(&panel.nodes(), 0, 1);
+                return;
+            }
+            _ => {}
+        }
+        let nodes = panel.nodes();
+        let Some(&node) = nodes.get(panel.selected) else { return };
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => panel.selected = step_selectable(&nodes, panel.selected + 1, 1),
+            KeyCode::Up | KeyCode::Char('k') => {
+                panel.selected = step_selectable(&nodes, panel.selected.saturating_sub(1), -1);
+            }
+            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => match node {
+                SchemaNode::Table(t) => {
+                    let table = &mut panel.tables[t];
+                    table.expanded = !table.expanded || key.code != KeyCode::Enter;
+                    if table.expanded {
+                        self.request_details(t);
+                    }
+                }
+                SchemaNode::Routine(r) => self.show_routine(r),
+                _ => {}
+            },
+            KeyCode::Char('d') => match node {
+                SchemaNode::Routine(r) => self.show_routine(r),
+                _ => {
+                    if let Some(t) = node.table() {
+                        self.show_table_definition(t);
+                    }
+                }
+            },
+            KeyCode::Left | KeyCode::Char('h') => {
+                if let Some(t) = node.table() {
+                    panel.tables[t].expanded = false;
+                    panel.selected = panel.nodes().iter().position(|n| *n == SchemaNode::Table(t)).unwrap_or(0);
+                }
+            }
+            KeyCode::Char('s') => {
+                let Some(t) = node.table() else { return };
+                let info = &panel.tables[t].info;
+                let query = format!(
+                    "SELECT * FROM {}.{} LIMIT 100;",
+                    engine.quote_ident(&info.schema),
+                    engine.quote_ident(&info.name)
+                );
+                if !self.tab.editor.is_empty() {
+                    self.tab.editor.move_end();
+                    self.tab.editor.insert_newline();
+                }
+                self.tab.editor.insert_str(&query);
+                self.edited();
+                self.focus = Focus::Editor;
+            }
+            _ => {}
+        }
+    }
+
+    /// Runs the selection if there is one, otherwise the whole editor.
+    pub(super) fn execute_all(&mut self) {
+        let text = self.tab.editor.text();
+        match self.tab.editor.selection_offsets() {
+            Some((a, b)) => self.execute(text[a..b].to_string(), a),
+            None => self.execute(text, 0),
+        }
+    }
+
+    /// Runs the selection if there is one, otherwise the statement at the cursor.
+    pub(super) fn execute_current(&mut self) {
+        if self.tab.editor.selection().is_some() {
+            return self.execute_all();
+        }
+        let text = self.tab.editor.text();
+        match sql::statement_at(&text, self.tab.editor.cursor_offset(), self.engine()) {
+            Some(stmt) => {
+                let offset = stmt.as_ptr() as usize - text.as_ptr() as usize;
+                self.execute(stmt.to_string(), offset);
+            }
+            None => self.set_status("No statement at cursor".to_string(), true),
+        }
+    }
+
+    /// Checks what `sql` would do against the connection's mode, asking for
+    /// confirmation where needed. `offset`: where `sql` starts in the editor.
+    pub(super) fn execute(&mut self, sql: String, offset: usize) {
+        self.execute_with(sql, offset, RunPurpose::Query);
+    }
+
+    pub(super) fn execute_with(&mut self, sql: String, offset: usize, purpose: RunPurpose) {
+        if self.executing {
+            return;
+        }
+        if self.database.is_none() {
+            return self.set_status(self.not_connected_message(), true);
+        }
+        if sql.trim().is_empty() {
+            self.set_status("Nothing to run".to_string(), true);
+            return;
+        }
+        if matches!(purpose, RunPurpose::Query) && self.ask_for_params(&sql, offset, false) {
+            return;
+        }
+        self.check_and_run(sql, offset, purpose, None);
+    }
+
+    pub(super) fn not_connected_message(&self) -> String {
+        if self.conns.restoring.is_empty() {
+            "This tab isn't connected: Ctrl+O picks a connection".to_string()
+        } else {
+            format!("Still reconnecting to {}…", self.conns.restoring.join(", "))
+        }
+    }
+
+    /// Runs `sql` unless the connection's mode forbids it or it needs
+    /// confirming first. `filled`: the parameters substituted into it.
+    pub(super) fn check_and_run(&mut self, sql: String, offset: usize, purpose: RunPurpose, filled: Option<Filled>) {
+        let infos = analyze::analyze(&parse(&sql, self.engine()));
+        let writes: Vec<&StatementInfo> = infos.iter().filter(|i| i.modifies()).collect();
+        if self.active_mode == ConnectionMode::ReadOnly
+            && let Some(first) = writes.first()
+        {
+            let msg = format!("Read-only connection: not running “{}” (it changes data)", first.summary);
+            return self.set_status(msg, true);
+        }
+        if let Some(msg) = self.tx_mode_refusal(&infos, &purpose) {
+            return self.set_status(msg, true);
+        }
+        let risky: Vec<String> = infos.iter().filter_map(|i| i.risk.map(|r| format!("{r}: {}", i.summary))).collect();
+        let production = self.active_mode == ConnectionMode::Production && !writes.is_empty();
+        if production || !risky.is_empty() {
+            let message = if production {
+                format!("PRODUCTION: {} statement(s) will change data. Run?", writes.len())
+            } else {
+                "This looks destructive. Run anyway?".to_string()
+            };
+            let mut details = risky;
+            if production {
+                details.extend(writes.iter().filter(|w| w.risk.is_none()).map(|w| w.summary.clone()));
+            }
+            details.truncate(6);
+            // Writes can instead run in a transaction, to review first.
+            let offer_transaction = !writes.is_empty()
+                && self.tx_mode == TxMode::AutoCommit
+                && self.txn == TxnState::Idle
+                && matches!(purpose, RunPurpose::Query | RunPurpose::RowChange(_));
+            let action = ConfirmAction::Run { sql, offset, infos, purpose, filled };
+            self.confirm = Some(Confirm { message, details, danger: true, action, offer_transaction });
+            return;
+        }
+        self.run_writes(sql, offset, infos, purpose, filled);
+    }
+
+    /// Re-runs the last query with a larger row limit (read-only queries only,
+    /// since it executes them again).
+    pub(super) fn load_more(&mut self) {
+        if self.row_stream.is_some() {
+            return self.fetch_more(self.settings.row_limit * 10);
+        }
+        let Some(results) = &self.tab.grid.results else { return };
+        if !results.truncated() {
+            return self.set_status("All rows are already loaded".to_string(), false);
+        }
+        if !self.tab.last_query_infos.iter().all(|i| i.kind == Kind::Read) {
+            return self.set_status("Only read-only queries can be re-run to load more rows".to_string(), true);
+        }
+        let Some((sql, offset)) = self.tab.last_sql.clone() else { return };
+        self.next_row_limit = Some((results.rows.len() * 10).min(MAX_ROW_LIMIT));
+        let infos = self.tab.last_query_infos.clone();
+        let filled = self.last_run_filled.clone();
+        self.run_now(sql, offset, infos, RunPurpose::Query, filled);
+    }
+
+    /// Shows the plan for the selection or the statement at the cursor,
+    /// without running it.
+    pub(super) fn explain_current(&mut self) {
+        if self.executing || self.database.is_none() {
+            return;
+        }
+        let text = self.tab.editor.text();
+        let stmt = match self.tab.editor.selection_offsets() {
+            Some((a, b)) => text[a..b].trim().trim_end_matches(';').trim().to_string(),
+            None => match sql::statement_at(&text, self.tab.editor.cursor_offset(), self.engine()) {
+                Some(s) => s.to_string(),
+                None => return self.set_status("No statement at cursor".to_string(), true),
+            },
+        };
+        if stmt.to_ascii_uppercase().starts_with("EXPLAIN") {
+            return self.set_status("That's already an EXPLAIN; run it with F6".to_string(), true);
+        }
+        let explain = self.engine().dialect().explain(&stmt);
+        if self.ask_for_params(&explain, 0, true) {
+            return;
+        }
+        let infos = analyze::analyze(&parse(&explain, self.engine()));
+        self.run_now(explain, 0, infos, RunPurpose::Explain, None);
+    }
+
+    pub(super) fn show_plan(&mut self, outcome: &QueryOutcome) {
+        let plan = self
+            .engine()
+            .dialect()
+            .format_plan(&outcome.rows)
+            .unwrap_or_else(|| crate::db::Plan { text: "The server returned no plan.".to_string(), notes: Vec::new() });
+        self.tab.plan = Some(plan);
+        self.tab.result_tab = ResultTab::Plan;
+        // Ready to scroll the plan; `1` goes back to the result.
+        self.focus = Focus::Results;
+        self.tab.tab_scroll = 0;
+        self.set_status("Query plan shown (the statement was not executed)".to_string(), false);
+    }
+
+    /// Keys for the MESSAGES and QUERY PLAN tabs: scrolling. The plan
+    /// scrolls down from its top; messages scroll up from the newest line.
+    fn handle_tab_scroll_key(&mut self, key: KeyEvent) {
+        let page = self.editor_height.max(5) as u16;
+        let delta: i32 = match key.code {
+            KeyCode::Down | KeyCode::Char('j') => 1,
+            KeyCode::Up | KeyCode::Char('k') => -1,
+            KeyCode::PageDown => i32::from(page),
+            KeyCode::PageUp => -i32::from(page),
+            KeyCode::Home => {
+                self.tab.tab_scroll = 0;
+                return;
+            }
+            _ => return,
+        };
+        let delta = if self.tab.result_tab == ResultTab::Messages { -delta } else { delta };
+        self.tab.tab_scroll = self.tab.tab_scroll.saturating_add_signed(delta.clamp(-1000, 1000) as i16);
+    }
+
+    pub(super) fn run_now(
+        &mut self,
+        sql: String,
+        offset: usize,
+        infos: Vec<StatementInfo>,
+        purpose: RunPurpose,
+        filled: Option<Filled>,
+    ) {
+        let Some(db) = self.database.clone() else { return };
+        // A still-open streamed result holds the session: close it (which
+        // cancels it on the server) so this run can start.
+        self.row_stream = None;
+        self.fetching_more = false;
+        self.completion = None;
+        // One read-only statement can be streamed page by page.
+        let stream = matches!(purpose, RunPurpose::Query) && infos.len() == 1 && infos[0].kind == Kind::Read;
+        self.last_run_infos = infos;
+        self.running_purpose = purpose;
+        if matches!(self.running_purpose, RunPurpose::Query) {
+            // Remembered for "load more" and error locations; helper runs
+            // (EXPLAIN, cell edits) don't replace them.
+            self.tab.last_sql = Some((sql.clone(), offset));
+            self.tab.last_query_infos.clone_from(&self.last_run_infos);
+            // History keeps the placeholders, not the values.
+            self.history.push(filled.as_ref().map_or(&sql, |f| &f.original));
+            self.tab.last_run_text = self.tab.editor.text();
+        } else {
+            self.tab.last_run_text.clear();
+        }
+        self.tab.last_run_offset = offset;
+        self.last_run_filled = filled;
+        self.last_activity = Instant::now();
+        self.run_extra.timed_out = None;
+        self.run_extra.started = Some(Instant::now());
+        self.run_extra.deadline =
+            self.connect_form.query_timeout().ok().flatten().map(|limit| (Instant::now() + limit, limit));
+        self.tab.error_marker = None;
+        self.executing = true;
+        self.set_status("Running… (Esc to cancel)".to_string(), false);
+        self.status_in_results = true;
+        let send = self.sender();
+        let row_limit = self.next_row_limit.take().unwrap_or(self.settings.row_limit);
+        tracing::debug!(statements = self.last_run_infos.len(), stream, row_limit, "run");
+        self.task = Some(tokio::spawn(async move {
+            if stream {
+                // No transaction probe: the open stream holds the session,
+                // and a single read can't change the transaction state.
+                match db.run_streaming(&sql, row_limit).await {
+                    Ok((outcome, rows)) => send(DbEventKind::QueryDone(outcome, None, rows)),
+                    Err(e) => {
+                        let txn = after_error(&db, &e).await;
+                        send(DbEventKind::QueryFailed(
+                            crate::db::error_message(&e),
+                            crate::db::error_position(&e),
+                            txn,
+                        ));
+                    }
+                }
+                return;
+            }
+            match db.run(&sql, row_limit).await {
+                Ok(outcome) => {
+                    let txn = db.transaction_state().await;
+                    send(DbEventKind::QueryDone(outcome, txn, None));
+                }
+                Err(e) => {
+                    let txn = after_error(&db, &e).await;
+                    send(DbEventKind::QueryFailed(crate::db::error_message(&e), crate::db::error_position(&e), txn));
+                }
+            }
+        }));
+    }
+
+    /// Asks the open stream for `rows` more rows (once at a time).
+    pub(super) fn fetch_more(&mut self, rows: usize) {
+        let Some(stream) = self.row_stream.clone() else { return };
+        if self.fetching_more {
+            return;
+        }
+        self.fetching_more = true;
+        let send = self.sender();
+        tokio::spawn(async move {
+            match stream.next_page(rows).await {
+                Ok(page) => send(DbEventKind::MoreRows(page)),
+                Err(e) => send(DbEventKind::MoreFailed(e)),
+            }
+        });
+    }
+
+    /// Adds a fetched page to the results, keeping the selection.
+    pub(super) fn append_rows(&mut self, page: Page) {
+        self.fetching_more = false;
+        let Some(results) = &mut self.tab.grid.results else { return };
+        let start = results.rows.len();
+        results.total_rows += page.rows.len() as u64;
+        self.tab.grid.col_widths = widen_columns(std::mem::take(&mut self.tab.grid.col_widths), &page.rows);
+        results.rows.extend(page.rows);
+        if page.done {
+            self.row_stream = None;
+        }
+        let loaded = results.rows.len();
+        if self.tab.grid.sort.is_some() || !self.tab.grid.filter.is_empty() {
+            let selected = self.tab.grid.table_state.selected();
+            self.tab.grid.view = compute_view(results, self.tab.grid.filter.text(), self.tab.grid.sort);
+            self.tab.grid.table_state.select(selected.map(|s| s.min(self.tab.grid.view.len().saturating_sub(1))));
+        } else {
+            self.tab.grid.view.extend(start..loaded);
+        }
+        let more = if self.row_stream.is_some() { " · more as you scroll" } else { " · all rows loaded" };
+        self.set_status(format!("{loaded} rows loaded{more}"), false);
+    }
+
+    /// Near the end of the loaded rows of a streamed result, fetch more.
+    pub(super) fn maybe_fetch_more(&mut self) {
+        const LOOKAHEAD: usize = 50;
+        let near_end = self.tab.grid.table_state.selected().is_some_and(|s| s + LOOKAHEAD >= self.tab.grid.view.len());
+        if near_end {
+            self.fetch_more(self.settings.row_limit);
+        }
+    }
+
+    pub(super) fn cancel_query(&mut self) {
+        if self.cancelling {
+            return;
+        }
+        let Some(db) = self.database.clone() else { return };
+        self.cancelling = true;
+        self.set_status("Cancelling...".to_string(), false);
+        let send = self.sender();
+        tokio::spawn(async move {
+            if let Err(e) = db.cancel().await {
+                send(DbEventKind::CancelFailed(crate::db::error_message(&e)));
+            }
+        });
+    }
+
+    /// Disconnects, asking first if a transaction would be rolled back.
+    pub(super) fn request_disconnect(&mut self) {
+        if self.txn == TxnState::Idle {
+            return self.disconnect();
+        }
+        self.confirm = Some(Confirm {
+            message: "A transaction is open. Disconnect and roll it back?".to_string(),
+            details: vec![],
+            danger: true,
+            action: ConfirmAction::Disconnect,
+            offer_transaction: false,
+        });
+    }
+}
+
+/// The transaction state after a failed run: none once the session was
+/// reopened, otherwise what the server says.
+async fn after_error(db: &Database, err: &anyhow::Error) -> Option<TxnState> {
+    if crate::db::is_reconnected(err) { Some(TxnState::Idle) } else { db.transaction_state().await }
+}
+
+/// The nearest selectable (non-section) row from `from` in direction
+/// `dir`, falling back to the other direction.
+pub(super) fn step_selectable(nodes: &[SchemaNode], from: usize, dir: isize) -> usize {
+    let ok = |i: usize| nodes.get(i).is_some_and(|n| !matches!(n, SchemaNode::Section(_)));
+    let mut i = from.min(nodes.len().saturating_sub(1));
+    loop {
+        if ok(i) {
+            return i;
+        }
+        match i.checked_add_signed(dir) {
+            Some(next) if next < nodes.len() => i = next,
+            _ => break,
+        }
+    }
+    (0..nodes.len())
+        .rev()
+        .find(|&i| ok(i))
+        .filter(|_| dir < 0)
+        .or_else(|| (0..nodes.len()).find(|&i| ok(i)))
+        .unwrap_or(0)
+}

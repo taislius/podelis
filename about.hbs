@@ -1,0 +1,18 @@
+Third-party software in Podėlis
+===============================
+
+Podėlis is built with the open-source crates below. Their licences and
+copyright notices follow, grouped by licence.
+
+{{#each overview}}
+- {{{name}}}: {{count}} crate(s)
+{{/each}}
+{{#each licenses}}
+
+================================================================================
+{{{name}}}
+Used by: {{#each used_by}}{{crate.name}} {{crate.version}}{{#unless @last}}, {{/unless}}{{/each}}
+================================================================================
+
+{{{text}}}
+{{/each}}

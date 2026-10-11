@@ -1,0 +1,50 @@
+name: CI
+
+# Kept small to save Actions minutes: Linux only, docs-only pushes skipped,
+# and a newer push cancels the older run. macOS builds live in
+# platforms.yml, dependency checks in deny.yml.
+on:
+  push:
+    branches: [master]
+    paths-ignore: ["**.md", "docs/**", "packaging/**", "LICENSE"]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Lint & test (live PostgreSQL, MySQL, SQLite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -proot" --health-interval 2s --health-timeout 5s --health-retries 60
+    env:
+      PODELIS_TEST_PG_PORT: 5432
+      PODELIS_TEST_PG_PASSWORD: postgres
+      PODELIS_TEST_MYSQL_PORT: 3306
+      PODELIS_TEST_MYSQL_PASSWORD: root
+    steps:
+      - uses: actions/checkout@v4
+      # Installs the version pinned in rust-toolchain.toml.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked

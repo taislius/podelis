@@ -1,0 +1,20 @@
+---
+source: src/ui/tests.rs
+expression: screen
+---
+" >_  PODĖLIS v0.2.0   │  project  shop ▼                                                  "
+"┌ QUERY RESULT ──────────────────────────────────────────────────── ZOOMED · ran in 4 ms ┐"
+"│ RESULT 3 rows │ MESSAGES │ QUERY PLAN │                                                │"
+"│ #     ID EMAIL            NOTE                                                         │"
+"│     int4 text             text                                                         │"
+"│ 01     1 ana@example.com  ∅                                                            │"
+"│ 02     2 ben@example.com  line one↵line two                                            │"
+"│ 03     3 cleo@example.com {"vip": true}                                                │"
+"│                                                                                        │"
+"│                                                                                        │"
+"│                                                                                        │"
+"│                                                                                        │"
+"│                                                                                        │"
+"│ CELL 01:id  int4   NULL AS ∅                                                   1–3 / 3 │"
+"└────────────────────────────────────────────────────────────────────────────────────────┘"
+" ● prod  db.internal:3306 · MySQL  Zoomed: Tab moves between panes; Ctrl+K z · F12 or Esc…"

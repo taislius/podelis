@@ -1,0 +1,20 @@
+name: Dependencies
+
+# Licences, advisories and sources: when dependencies change, and weekly
+# (new advisories appear without any change here).
+on:
+  push:
+    branches: [master]
+    paths: ["Cargo.toml", "Cargo.lock", "deny.toml"]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

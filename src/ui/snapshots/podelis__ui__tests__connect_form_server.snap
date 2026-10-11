@@ -1,0 +1,26 @@
+---
+source: src/ui/tests.rs
+expression: server
+---
+" >_  PODĖLIS v0.2.0   │  project  shop ▼  / new connection                      "
+"┌ CONNECTIONS ───────────── shop ┐┌ NEW CONNECTION ──────────────── PostgreSQL ┐"
+"│  local   PostgreSQL localhost… ││▸       Name  prod                          │"
+"│  prod   MySQL db.internal/shop ││      Engine  PostgreSQL                    │"
+"│  + New connection              ││        Host  db.internal                   │"
+"│                                ││        Port  3306                          │"
+"│                                ││        User                                │"
+"│                                ││    Password  ••••••                        │"
+"│                                ││  Passwd cmd                                │"
+"│                                ││    Database                                │"
+"│                                ││    SSL mode  prefer                        │"
+"│                                ││        Mode  production                    │"
+"│                                ││ Transaction  manual commit                 │"
+"│                                ││     Timeout                                │"
+"│                                ││     SSH via  me@bastion                    │"
+"│                                ││                                            │"
+"│                                ││ Tip: paste a connection URL to fill the    │"
+"│                                ││ form · Ctrl+T tests the connection step by │"
+"│                                ││ step                                       │"
+"│                                ││                                            │"
+"└────────────────────────────────┘└────────────────────────────────────────────┘"
+"                             ↵  connect   F1  keys                              "

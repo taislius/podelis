@@ -1,0 +1,27 @@
+# cargo-about: generates THIRD-PARTY-LICENSES.txt for release archives
+# (scripts/third-party-licenses.sh). Keep in line with deny.toml.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+]
+# Every release target, so one file covers all the binaries.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# Podelis itself (deny.toml limits AGPL to this crate too).
+[podelis]
+accepted = ["AGPL-3.0-only"]

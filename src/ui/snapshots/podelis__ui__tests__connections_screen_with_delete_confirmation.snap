@@ -1,0 +1,18 @@
+---
+source: src/ui/tests.rs
+expression: "render(&mut app, 80, 14)"
+---
+" >_  PODĖLIS v0.2.0   │  project  shop ▼  / connections                         "
+"┌ CONNECTIONS ───────────── shop ┐┌ SETTINGS ─────────────────────────── MySQL ┐"
+"│  local   PostgreSQL localhost… ││        Name  prod                          │"
+"│▸ prod   MySQL db.internal/shop ││      Engine  MySQL                         │"
+"│  + New connection              ││        Host  db.internal                   │"
+"│                                ││        Port  3306                          │"
+"│                                ││        User                                │"
+"│                                ││    Password  in the keychain               │"
+"│                                ││    Database  shop                          │"
+"│                                ││    SSL mode  prefer                        │"
+"│ Delete 'prod' and its saved    ││        Mode  read-write                    │"
+"│ password? y/n                  ││ Transaction  auto-commit                   │"
+"└────────────────────────────────┘└────────────────────────────────────────────┘"
+"                              ↵  connect   ?  keys                              "

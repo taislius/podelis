@@ -1,0 +1,41 @@
+//! Opening a postgres connection: the pool and the session connection.
+
+use super::super::*;
+
+pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, port: u16) -> Result<(Pool, Session)> {
+    // `new()` would read ~/.pgpass for the default host and user: it's
+    // looked up for this connection's (`db::passwords`, before connecting).
+    let mut opts =
+        PgConnectOptions::new_without_pgpass().port(port).ssl_mode(params.ssl_mode.pg()).application_name("podelis");
+    if params.read_only {
+        opts = opts.options([("default_transaction_read_only", "on")]);
+    }
+    // Leave unset fields to libpq-style defaults (OS user, PGPASSWORD...).
+    if !params.user.is_empty() {
+        opts = opts.username(&params.user);
+    }
+    if !params.password.is_empty() {
+        opts = opts.password(&params.password);
+    }
+    opts = if host.starts_with('/') { opts.socket(host) } else { opts.host(host) };
+    if !params.database.is_empty() {
+        opts = opts.database(&params.database);
+    }
+    let pool = PgPoolOptions::new()
+        .max_connections(3)
+        .acquire_timeout(CONNECT_TIMEOUT)
+        .connect_with(opts)
+        .await
+        .context("failed to connect to database")?;
+    let conn = pool.acquire().await.context("failed to open session")?;
+    Ok((Pool::Postgres(pool), Session::Postgres(conn)))
+}
+
+/// The session's backend process id (for cancelling its queries).
+pub(in crate::db) async fn backend_id(c: &mut PoolConnection<Postgres>) -> Result<i64> {
+    let id: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut **c)
+        .await
+        .context("failed to read backend pid")?;
+    Ok(id.into())
+}

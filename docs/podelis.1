@@ -1,0 +1,405 @@
+.\" Podėlis manual page. Keep the options in step with cli.rs's USAGE (a
+.\" test checks that every option there is listed here).
+.\" View with: man ./docs/podelis.1
+.Dd October 8, 2026
+.Dt PODELIS 1
+.Os
+.Sh NAME
+.Nm podelis
+.Nd terminal SQL client for PostgreSQL, MySQL and SQLite
+.Sh SYNOPSIS
+.Nm
+.Op Fl p Ar project
+.Op Ar connection
+.Nm
+.Op Fl p Ar project
+.Op Ar connection
+.Fl e Ar sql
+.Op Fl f Ar format
+.Op Fl -limit Ar n
+.Op Fl y
+.Op Fl -create
+.Nm
+.Op Fl p Ar project
+.Op Ar connection
+.Fl -import Ar file
+.Op Fl -table Ar name
+.Op Fl y
+.Op Fl -create
+.Nm
+.Op Fl p Ar project
+.Op Ar connection
+.Fl -test
+.Nm
+.Cm doctor
+.Op Fl p Ar project
+.Op Fl -connections
+.Sh DESCRIPTION
+Without
+.Fl e ,
+.Fl -import ,
+.Fl -test
+or
+.Cm doctor ,
+.Nm
+starts its terminal user interface: projects of saved connections, a SQL
+editor with completion and lint warnings, and a result grid.
+Press
+.Ic F1
+for help and
+.Ic Ctrl+K
+for every action; the keys are described in the README.
+Without a
+.Ar connection ,
+it reopens the last session.
+.Pp
+With
+.Fl e
+it runs SQL without the user interface, prints the result to standard
+output and messages to standard error, and exits with a code that says
+what happened (see
+.Sx EXIT STATUS ) .
+It uses the same saved connections, keychain passwords, connection modes
+and timeouts as the user interface (see
+.Sx SAFETY ) .
+.Pp
+.Ar connection
+is one of:
+.Bl -bullet -compact
+.It
+a URL:
+.Li postgres://user@host:port/db ,
+.Li mysql://user@host/db
+or
+.Li sqlite:path ;
+.It
+a SQLite file (a path with a slash, or ending in
+.Pa .db ,
+.Pa .sqlite ,
+.Pa .sqlite3
+or
+.Pa .db3 ) ,
+or
+.Li :memory: ;
+.It
+the name of a saved connection in the project (case-insensitive).
+.El
+.Pp
+For
+.Fl e ,
+.Fl -import
+and
+.Fl -test ,
+it defaults to
+.Ev DATABASE_URL .
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl p , Fl -project Ar name
+Use this project (default: the last one opened).
+Its saved connections are the names
+.Ar connection
+can refer to.
+.It Fl c , Fl -connection Ar connection
+The same as the
+.Ar connection
+argument.
+.It Fl e , Fl -execute Ar sql
+Run
+.Ar sql
+without the user interface and print the result.
+.Ar sql
+may hold several statements.
+.Sq -
+reads it from standard input.
+A script whose statements return no result set (no
+.Li SELECT ,
+no
+.Li RETURNING )
+prints
+.Dq OK: ... row(s) affected
+to standard error.
+.It Fl f , Fl -format Ar format
+The output of
+.Fl e :
+.Cm table
+(aligned columns, the default on a terminal),
+.Cm csv
+(the default otherwise),
+.Cm tsv
+or
+.Cm json
+(an array of objects, one per row; values are strings or
+.Li null ) .
+TSV keeps each row on one line: tabs and line breaks inside values become
+a space and
+.Ql \en ,
+and NULL an empty field.
+For a script with several result sets,
+.Cm table
+and
+.Cm json
+print each one
+.Po
+.Cm json
+as one array per set, one after another, which
+.Xr jq 1
+reads as a stream
+.Pc ;
+.Cm csv
+and
+.Cm tsv
+print only the last, and say on standard error how many they left out.
+.It Fl -limit Ar n
+Print at most
+.Ar n
+rows of each result set.
+A cut result says
+.Dq (first N of M rows)
+on standard error.
+.It Fl y , Fl -yes
+Allow
+.Fl e
+and
+.Fl -import
+to change data on a production connection, and allow destructive
+statements.
+.It Fl -create
+Let
+.Fl e
+or
+.Fl -import
+create a SQLite file that doesn't exist yet (a missing one is usually a
+typo).
+.It Fl -test
+Connect to
+.Ar connection
+step by step (DNS, TCP, login, TLS, latency) and show where it fails,
+with hints for common errors.
+.It Fl -import Ar file
+Load a CSV or TSV file (tab-separated if it ends in
+.Pa .tsv
+or
+.Pa .tab )
+into a table.
+The first line must name the columns.
+A missing table is created with guessed column types; an existing one is
+appended to.
+It all happens in one transaction, so a bad line changes nothing (on
+MySQL, a newly created table stays).
+.It Fl -table Ar name
+The table for
+.Fl -import
+(default: the file's name without its extension).
+.It Fl h , Fl -help
+Print a summary of the options.
+.It Fl V , Fl -version
+Print the version.
+.El
+.Sh COMMANDS
+.Bl -tag -width Ds
+.It Cm doctor Oo Fl p Ar project Oc Op Fl -connections
+Check the local setup: the config files, the keychain,
+.Xr ssh 1 ,
+the terminal, the result viewer and the crash log.
+With
+.Fl -connections ,
+also test every saved connection of the project.
+.El
+.Sh SAFETY
+.Fl e
+and
+.Fl -import
+follow the connection's mode:
+.Bl -tag -width Ds
+.It read-only
+Statements that change data are refused before they are sent, and the
+session is opened read-only on the server (PostgreSQL's
+.Li default_transaction_read_only ,
+MySQL's
+.Li SET SESSION TRANSACTION READ ONLY ,
+a read-only SQLite file).
+.It production
+Changing data needs
+.Fl y .
+.El
+.Pp
+Destructive statements need
+.Fl y
+on any connection:
+.Li DROP ,
+.Li TRUNCATE ,
+.Li DELETE
+or
+.Li UPDATE
+without
+.Li WHERE ,
+and an
+.Li ALTER
+that drops a column or a key.
+.Pp
+.Fl y
+allows both, so a script that needs it for one harmless reason allows
+.Li DROP TABLE
+too.
+.Pp
+These rules catch mistakes; they aren't a security boundary.
+.Nm
+reads the SQL to decide what changes data, so a function that writes
+looks like a read, and a script can switch its own session back to
+read-write.
+For unattended scripts, cron jobs and AI agents, connect as a database
+user that has only the rights the job needs, and use a read-only
+connection as a second layer.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev DATABASE_URL
+The connection for
+.Fl e ,
+.Fl -import
+and
+.Fl -test
+when none is given.
+Use it (or a URL) on servers and in CI, where there may be no keychain
+for saved connections' passwords.
+Without a keychain, a saved connection still connects: with its password
+command, PostgreSQL's
+.Pa ~/.pgpass
+or
+.Ev PGPASSWORD ,
+or MySQL's
+.Ev MYSQL_PWD
+or
+.Pa ~/.my.cnf
+.Pq its Li [client] No or Li [mysql] password: only for the host it names, or this machine if it names none .
+.It Ev PODELIS_CONFIG_DIR
+Use this folder instead of the
+.Pa podelis
+folder of the OS config directory.
+.It Ev PODELIS_LOG
+Write a debug log to
+.Pa podelis.log ,
+for example
+.Li debug
+or
+.Li podelis=trace
+(a tracing-subscriber filter).
+The log includes the SQL run.
+.It Ev PAGER
+The result viewer when
+.Li viewer
+isn't set in
+.Pa config.toml
+(otherwise
+.Li less -S ) .
+.It Ev COLORTERM
+.Li truecolor
+or
+.Li 24bit
+turns on 24-bit colours; otherwise the nearest of the 256 standard
+colours is used.
+.El
+.Sh FILES
+In the
+.Pa podelis
+folder of the OS config directory
+.Pa ( ~/Library/Application Support/podelis
+on macOS,
+.Pa ~/.config/podelis
+on Linux), or in
+.Ev PODELIS_CONFIG_DIR .
+Files are created readable only by their owner.
+.Bl -tag -width Ds
+.It Pa config.toml
+Settings (optional, never written by
+.Nm ) .
+.It Pa connections.toml
+Projects and their connections.
+Passwords are kept in the OS keychain under the service
+.Li podelis ,
+not here.
+A connection's
+.Li password_command ,
+such as
+.Li [\(dqpass\(dq, \(dqshow\(dq, \(dqdb/prod\(dq] ,
+is a program that prints its password instead; it runs without a shell
+and gets the connection in
+.Ev PODELIS_HOST ,
+.Ev PODELIS_PORT ,
+.Ev PODELIS_USER ,
+.Ev PODELIS_DATABASE
+and
+.Ev PODELIS_ENGINE .
+.It Pa history/ Ns Ar project-id Ns Pa .jsonl
+Each project's query history.
+.It Pa drafts/ Ns Ar project-id Ns Pa .json
+Each project's open tabs and session.
+.It Pa queries/ Ns Ar project-id Ns Pa .json
+Each project's saved queries.
+.It Pa podelis.log
+The debug log (only with
+.Ev PODELIS_LOG ) .
+.It Pa crash.log
+What happened if
+.Nm
+crashed.
+.El
+.Sh EXIT STATUS
+For
+.Fl e ,
+.Fl -import
+and
+.Fl -test :
+.Bl -tag -width Ds -compact
+.It 0
+Done.
+.It 1
+The SQL (or the import) failed on the server.
+.It 2
+Usage: a bad option, an unknown project or connection, a missing SQLite
+file.
+.It 3
+Refused: a write on a read-only connection, or a production or
+destructive change without
+.Fl y .
+.It 4
+Couldn't connect: network, login, password command or SSH; for
+.Fl -test ,
+a step failed.
+.It 5
+The connection's query timeout ran out; the query was cancelled.
+.El
+.Pp
+Retrying can help with 4 and 5.
+It won't help with 1, 2 or 3.
+A write whose connection broke (4) may or may not have happened, so check
+before running it again.
+.Sh EXAMPLES
+Print a few rows of a saved connection as a table:
+.Dl $ podelis prod -e \(dqselect id, email from users limit 5\(dq
+.Pp
+Export to CSV from another project:
+.Dl $ podelis -p shop prod -e \(dqselect * from orders\(dq -f csv > orders.csv
+.Pp
+Run SQL from standard input against a SQLite file:
+.Dl $ echo \(dqselect count(*) from events\(dq | podelis app.db -e -
+.Pp
+Every result set of a script, as one JSON array:
+.Dl $ podelis prod -e \(dqselect 1 a; select 2 b\(dq -f json | jq -s
+.Pp
+In CI, with the password from a secret:
+.Dl $ DATABASE_URL=postgres://report:$PGPASSWORD@db/shop podelis -e \(dqselect 1\(dq
+.Pp
+Load a CSV file into a new table, creating the database:
+.Dl $ podelis new.db --create --import users.csv
+.Pp
+Find out why a connection fails:
+.Dl $ podelis --test prod
+.Sh SEE ALSO
+.Xr jq 1 ,
+.Xr less 1 ,
+.Xr mysql 1 ,
+.Xr psql 1 ,
+.Xr sqlite3 1 ,
+.Xr ssh 1
+.Pp
+.Lk https://github.com/taislius/podelis

@@ -1,0 +1,18 @@
+---
+source: src/ui/tests.rs
+expression: "render(&mut app, 160, 14)"
+---
+" >_  PODĖLIS v0.2.0   │  project  shop ▼                                                                                                                        "
+"┌ NAVIGATOR ──────────────── 3 objects ┐┎ QUERY ──────┰────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
+"│ / filter schema…                     │┃ SQL Query 1 ┃ +                                                                 ▶ F5 Run   F6 Statement   F7 Explain │"
+"│ ▼ (default database)                 ││  2  where note = null;                                                                                               │"
+"│ TABLES                             2 ││ LINT  = NULL is never true: use IS NULL · null-compare           Transaction:  auto-commit   manual   rollback-only  │"
+"│  ▶ orders                     942.0k │└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
+"│  ▼ users                       24.8k │┌ QUERY RESULT ─────────────────────────────────────────────────────────────────────────────────────────── ran in 4 ms ┐"
+"│      ◇ id                 integer PK ││ RESULT 3 rows │ MESSAGES │ QUERY PLAN │                                                                              │"
+"│      ◇ email                    text ││ #     ID EMAIL            NOTE                                                                                       │"
+"│      ◇ note                     text ││     int4 text             text                                                                                       │"
+"│ VIEWS                              1 ││ 01     1 ana@example.com  ∅                                                                                          │"
+"│  ◇ active_users                 view ││ CELL 01:id  int4   NULL AS ∅                                                                                 1–3 / 3 │"
+"└──────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
+" ● prod  db.internal:3306 · MySQL  3 row(s) in 4 ms                                                                                                             "

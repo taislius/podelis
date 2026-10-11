@@ -1,0 +1,73 @@
+use super::*;
+
+/// (schema, table, column, type, nullable, "PRI" for primary key columns)
+pub(super) type ColumnRow = (String, String, String, String, String, String);
+
+impl Database {
+    /// Every table and view with its columns, in two queries (for the
+    /// schema browser and autocomplete). `system` adds the database's own
+    /// catalog tables.
+    pub async fn catalog(&self, system: bool) -> Result<Vec<(TableInfo, Vec<ColumnInfo>)>> {
+        let tables = self.tables(system).await?;
+        let rows: Vec<ColumnRow> = match &self.0.pool {
+            Pool::Postgres(_) => postgres::queries::column_rows(self, system).await?,
+            Pool::MySql(_) => mysql::queries::column_rows(self, system).await?,
+            Pool::Sqlite(_) => sqlite::queries::column_rows(self, system).await?,
+        };
+        let mut by_table: std::collections::HashMap<(String, String), Vec<ColumnInfo>> =
+            std::collections::HashMap::default();
+        for (schema, table, name, data_type, nullable, key) in rows {
+            by_table.entry((schema, table)).or_default().push(ColumnInfo {
+                primary_key: key == "PRI",
+                name,
+                data_type,
+                nullable: nullable == "YES",
+            });
+        }
+        Ok(tables
+            .into_iter()
+            .map(|t| {
+                let cols = by_table.remove(&(t.schema.clone(), t.name.clone())).unwrap_or_default();
+                (t, cols)
+            })
+            .collect())
+    }
+
+    pub async fn tables(&self, system: bool) -> Result<Vec<TableInfo>> {
+        let rows: Vec<(String, String, String, Option<i64>)> = match &self.0.pool {
+            Pool::Postgres(_) => postgres::queries::table_rows(self, system).await?,
+            Pool::MySql(_) => mysql::queries::table_rows(self, system).await?,
+            Pool::Sqlite(_) => sqlite::queries::table_rows(self, system).await?,
+        };
+        let dialect = self.0.engine.dialect();
+        Ok(rows
+            .into_iter()
+            .map(|(schema, name, kind, rows)| TableInfo {
+                system: dialect.is_system_table(&schema, &name),
+                schema,
+                name,
+                is_view: kind.to_ascii_uppercase().contains("VIEW"),
+                // Postgres reports -1 for tables never analyzed.
+                rows: rows.filter(|n| *n >= 0),
+            })
+            .collect())
+    }
+
+    #[cfg(test)]
+    pub async fn columns(&self, schema: &str, table: &str) -> Result<Vec<ColumnInfo>> {
+        let rows: Vec<(String, String, String)> = match &self.0.pool {
+            Pool::Postgres(_) => postgres::queries::column_info_rows(self, schema, table).await?,
+            Pool::MySql(_) => mysql::queries::column_info_rows(self, schema, table).await?,
+            Pool::Sqlite(_) => sqlite::queries::column_info_rows(self, schema, table).await?,
+        };
+        Ok(rows
+            .into_iter()
+            .map(|(name, data_type, nullable)| ColumnInfo {
+                name,
+                data_type,
+                nullable: nullable == "YES",
+                primary_key: false,
+            })
+            .collect())
+    }
+}

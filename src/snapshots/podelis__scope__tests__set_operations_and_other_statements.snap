@@ -1,0 +1,9 @@
+---
+source: src/scope.rs
+expression: "outline(\"select a from t union select b from u; \\\n             insert into t select * from u; \\\n             delete from t where id in (select t_id from v); \\\n             select * from t, json_each(t.doc)\")"
+---
+select from [t] ctes []
+select from [u] ctes []
+select from [u] ctes []
+select from [v] ctes []
+select from [t, fn()] ctes []
