@@ -40,6 +40,8 @@ jobs:
           name=podelis-${GITHUB_REF_NAME}-${{ matrix.target }}
           mkdir "$name"
           cp README.md LICENSE THIRD-PARTY-LICENSES.txt "$name"/
+          mkdir "$name"/docs
+          cp docs/*.md "$name"/docs/
           cp target/${{ matrix.target }}/release/podelis docs/podelis.1 "$name"/
           tar czf "$name.tar.gz" "$name"
           echo "ASSET=$name.tar.gz" >> "$GITHUB_ENV"

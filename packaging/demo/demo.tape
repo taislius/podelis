@@ -26,6 +26,9 @@ Type "select c.name, sum(o.total) as spent from customers c join orders o on o.c
 Sleep 500ms
 Ctrl+R
 Sleep 2s
+# Esc first: Tab right after a word would complete it.
+Escape
+Sleep 200ms
 Tab
 Sleep 500ms
 Down 2
@@ -47,10 +50,10 @@ Sleep 2s
 Type "r"
 Sleep 1.5s
 
-# Command palette.
+# Command palette: Ctrl+K, then / searches every command by name.
 Ctrl+K
 Sleep 600ms
-Type "format"
-Sleep 800ms
-Escape
-Sleep 1s
+Type "/format"
+Sleep 1.2s
+Enter
+Sleep 2s

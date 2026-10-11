@@ -1,6 +1,6 @@
 #!/bin/sh
 # Runs the same checks as CI. Live database tests run only if the
-# PODELIS_TEST_* variables are set (see README → Development).
+# PODELIS_TEST_* variables are set (see docs/development.md).
 set -eu
 cd "$(dirname "$0")/.."
 

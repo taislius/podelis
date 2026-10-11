@@ -8,7 +8,7 @@ CREATE TABLE orders (
 );
 INSERT INTO customers VALUES
     (1, 'Ona Petraitė', 'ona@example.com', 'LT'),
-    (2, 'Jonas Kazlauskas', 'jonas@example.com', 'LT'),
+    (2, 'Vytautas Daukantas', 'vytautas@example.com', 'LT'),
     (3, 'Emma Schmidt', 'emma@example.com', 'DE'),
     (4, 'Lucas Martin', NULL, 'FR'),
     (5, 'Sofia Rossi', 'sofia@example.com', 'IT');
