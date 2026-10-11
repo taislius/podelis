@@ -447,9 +447,11 @@ async fn live_details(db: &Database, schema: &str, setup: &str) {
     assert!(def.contains("det_parent"), "{def}");
 }
 
+// A table-level FOREIGN KEY: MySQL before 9.0 parses a column's inline
+// REFERENCES and ignores it.
 const DETAILS_TABLES: &str = "CREATE TABLE det_parent (id INTEGER PRIMARY KEY);
-     CREATE TABLE det_child (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES det_parent (id),
-                             email VARCHAR(100) UNIQUE);
+     CREATE TABLE det_child (id INTEGER PRIMARY KEY, parent_id INTEGER, email VARCHAR(100) UNIQUE,
+                             FOREIGN KEY (parent_id) REFERENCES det_parent (id));
      CREATE INDEX det_child_parent ON det_child (parent_id);
      CREATE VIEW det_v AS SELECT id FROM det_parent;";
 

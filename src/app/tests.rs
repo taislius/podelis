@@ -1716,11 +1716,26 @@ async fn rebound_keys_take_effect() {
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("7".to_string())]]);
 }
 
+/// The live PostgreSQL test server as a URL, from the same
+/// `PODELIS_TEST_PG_*` variables as the database tests (CI sets a password).
+fn live_pg_url() -> Option<String> {
+    let var = |name: &str| std::env::var(format!("PODELIS_TEST_PG_{name}")).ok();
+    let port = var("PORT")?;
+    let host = var("HOST").unwrap_or_else(|| "127.0.0.1".into());
+    let user = var("USER").unwrap_or_else(|| "postgres".into());
+    let mut url = url::Url::parse(&format!("postgres://{host}:{port}/postgres")).ok()?;
+    url.set_username(&user).ok()?;
+    if let Some(password) = var("PASSWORD").filter(|p| !p.is_empty()) {
+        url.set_password(Some(&password)).ok()?;
+    }
+    Some(url.to_string())
+}
+
 #[tokio::test]
 async fn queries_are_cancelled_at_the_connection_timeout() {
-    let Some(port) = std::env::var("PODELIS_TEST_PG_PORT").ok() else { return };
+    let Some(url) = live_pg_url() else { return };
     let (mut app, _dir) = test_app();
-    app.connect_form.apply_url(&format!("postgres://postgres@127.0.0.1:{port}/postgres")).unwrap();
+    app.connect_form.apply_url(&url).unwrap();
     app.connect_form.timeout = "1".into();
     let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
     let generation = app.generation;
@@ -1952,9 +1967,9 @@ fn explain_statements_per_engine() {
 
 #[tokio::test]
 async fn explain_analyze_of_a_write_is_rolled_back() {
-    let Some(port) = std::env::var("PODELIS_TEST_PG_PORT").ok() else { return };
+    let Some(url) = live_pg_url() else { return };
     let (mut app, _dir) = test_app();
-    app.connect_form.apply_url(&format!("postgres://postgres@127.0.0.1:{port}/postgres")).unwrap();
+    app.connect_form.apply_url(&url).unwrap();
     let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
     let generation = app.generation;
     app.handle_db_event(DbEvent { generation, kind: DbEventKind::Connected(db) });
