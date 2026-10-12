@@ -457,6 +457,22 @@ fn lint_warning_names_its_rule() {
 }
 
 #[test]
+fn the_footer_says_which_statement_f6_runs() {
+    let (mut app, _dir) = query_app();
+    app.tab.editor.set_text("select 1;\nselect ';' as semi;\n\nselect 3");
+    app.tab.editor.set_cursor((1, 3));
+    assert_snapshot!(render(&mut app, 100, 24));
+    // A blank line goes with the statement before it, as F6 picks it.
+    app.tab.editor.set_cursor((2, 0));
+    assert!(render(&mut app, 100, 24).contains("stmt 2/3"));
+    // F6 runs a selection instead, and one statement needs no count.
+    app.tab.editor.select_all();
+    assert!(!render(&mut app, 100, 24).contains("stmt "));
+    app.tab.editor.set_text("select 1;");
+    assert!(!render(&mut app, 100, 24).contains("stmt "));
+}
+
+#[test]
 fn production_confirmation_dialog_and_badges() {
     let (mut app, _dir) = query_app();
     app.active_mode = ConnectionMode::Production;

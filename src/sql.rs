@@ -280,14 +280,42 @@ pub fn split_statements(text: &str, engine: Engine) -> Vec<&str> {
 /// after a `;`, or in blank space between statements, picks the statement
 /// before it (falling back to the one after).
 pub fn statement_at(text: &str, offset: usize, engine: Engine) -> Option<&str> {
-    let segments = statement_segments(text, engine);
-    let idx = segments.iter().position(|(full, _)| offset <= full.end).unwrap_or(segments.len().saturating_sub(1));
-    if let Some(code) = &segments[idx].1
-        && offset >= code.start
-    {
-        return Some(&text[code.clone()]);
+    Statements::of(text, engine).at(offset).map(|r| &text[r])
+}
+
+/// A text's statements, to ask which one the cursor is in.
+pub struct Statements {
+    segments: Vec<(Range<usize>, Option<Range<usize>>)>,
+}
+
+impl Statements {
+    pub fn of(text: &str, engine: Engine) -> Self {
+        Statements { segments: statement_segments(text, engine) }
     }
-    segments[..idx].iter().rev().chain(segments[idx..].iter()).find_map(|(_, code)| code.clone()).map(|c| &text[c])
+
+    /// The segment holding the statement at `offset`, as `statement_at`
+    /// picks it.
+    fn pick(&self, offset: usize) -> Option<usize> {
+        let segments = &self.segments;
+        let idx = segments.iter().position(|(full, _)| offset <= full.end).unwrap_or(segments.len().saturating_sub(1));
+        if segments[idx].1.as_ref().is_some_and(|code| offset >= code.start) {
+            return Some(idx);
+        }
+        (0..idx).rev().chain(idx..segments.len()).find(|&i| segments[i].1.is_some())
+    }
+
+    /// The byte range of the statement at `offset`.
+    fn at(&self, offset: usize) -> Option<Range<usize>> {
+        self.segments[self.pick(offset)?].1.clone()
+    }
+
+    /// Which statement is at `offset`, and how many there are: `(3, 7)`.
+    pub fn position(&self, offset: usize) -> Option<(usize, usize)> {
+        let idx = self.pick(offset)?;
+        let count =
+            |segments: &[(Range<usize>, Option<Range<usize>>)]| segments.iter().filter(|s| s.1.is_some()).count();
+        Some((count(&self.segments[..=idx]), count(&self.segments)))
+    }
 }
 
 pub const KEYWORDS: &[&str] = &[
@@ -547,6 +575,12 @@ mod tests {
         assert_eq!(statement_at(sql, sql.len(), PG), Some("select 3"));
         assert_eq!(statement_at("  ;  select 9", 0, PG), Some("select 9"));
         assert_eq!(statement_at("", 0, PG), None);
+        // The position counts only real statements, picked the same way.
+        let at = |offset| Statements::of(sql, PG).position(offset);
+        assert_eq!([at(0), at(9), at(12), at(20), at(sql.len())], [1, 1, 2, 2, 3].map(|n| Some((n, 3))));
+        assert_eq!(Statements::of("  ;  select 9; -- done", PG).position(0), Some((1, 1)));
+        assert_eq!(Statements::of("select ';'; select 2", PG).position(0), Some((1, 2)), "a `;` in a string");
+        assert_eq!(Statements::of(" -- nothing", PG).position(0), None);
     }
 
     #[test]

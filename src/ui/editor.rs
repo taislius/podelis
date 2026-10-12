@@ -461,10 +461,20 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
     }
     let right = Line::from(tx_status(app, area.width));
     let right_w = right.width() as u16;
-    let [l, r] = Layout::default()
+    // Which statement F6 runs, when there's more than one and no selection.
+    let position = statement_position(app)
+        .filter(|&(_, total)| total > 1 && area.width >= 60 && app.tab.editor.selection().is_none())
+        .map(|(nth, total)| format!("stmt {nth}/{total}   "))
+        .unwrap_or_default();
+    let [l, middle, r] = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(0), Constraint::Length(right_w.min(area.width))])
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(position.chars().count() as u16),
+            Constraint::Length(right_w.min(area.width)),
+        ])
         .areas(area);
+    f.render_widget(Paragraph::new(Span::styled(position, muted())), middle);
     let left = if let Some(note) = &app.editor_note {
         Line::from(Span::styled(format!(" {}", truncate(note, l.width as usize)), fg(t.text)))
     } else if let Some(hint) = &app.tab.syntax_hint {
@@ -508,6 +518,32 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
     if app.txn == TxnState::Idle {
         app.hits.tx_mode = r;
     }
+}
+
+/// The editor's statements, kept while the text doesn't change: a long
+/// script takes a few milliseconds to split, too much for every frame.
+struct CachedStatements {
+    engine: Engine,
+    text: String,
+    statements: sql::Statements,
+}
+
+thread_local! {
+    static STATEMENTS: RefCell<Option<CachedStatements>> = const { RefCell::new(None) };
+}
+
+/// Which statement the cursor is in, and how many there are.
+fn statement_position(app: &App) -> Option<(usize, usize)> {
+    let text = app.tab.editor.text();
+    let engine = app.engine();
+    STATEMENTS.with_borrow_mut(|cache| {
+        if !cache.as_ref().is_some_and(|c| c.engine == engine && c.text == text) {
+            let statements = sql::Statements::of(&text, engine);
+            *cache = Some(CachedStatements { engine, text, statements });
+        }
+        let cached = cache.as_ref()?;
+        cached.statements.position(app.tab.editor.cursor_offset())
+    })
 }
 
 /// The transaction modes to pick from, or, while a transaction is open,
