@@ -182,8 +182,11 @@ async fn picking_a_database_container_fills_in_a_new_connection() {
     app.handle_key(key(KeyCode::Enter));
     // Opened as `e` would: its saved password is read first.
     assert!(app.loading_profile);
-    let event = app.poll_db_event().await.unwrap();
-    app.handle_db_event(event);
+    // The real container search started by `c` may answer first.
+    while app.loading_profile {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
     assert_eq!(app.connect_form.original_name.as_deref(), Some("shop-db"));
     // Through an SSH tunnel it's another server: not the same connection.
     let mut tunneled = app.store.project(&project_id(&app)).unwrap().connections[0].clone();
