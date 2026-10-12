@@ -2,7 +2,7 @@
 source: src/ui/tests.rs
 expression: "render(&mut app, 120, 20)"
 ---
-" >_  PODĖLIS v0.2.0   │  projects & connections                                                                         "
+" >_  PODĖLIS v0.3.0   │  projects & connections                                                                         "
 "┌ PROJECTS ───────── 2 ┐┌ CONNECTIONS ───────────────────────── shop ┐┌ SETTINGS ────────────────────────── PostgreSQL ┐"
 "│▸ ● shop         open ││  local           PostgreSQL localhost/shop ││        Name  local                             │"
 "│  analytics           ││  ● prod             MySQL db.internal/shop ││      Engine  PostgreSQL                        │"

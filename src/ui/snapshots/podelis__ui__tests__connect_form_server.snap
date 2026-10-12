@@ -2,7 +2,7 @@
 source: src/ui/tests.rs
 expression: server
 ---
-" >_  PODĖLIS v0.2.0   │  project  shop ▼  / new connection                      "
+" >_  PODĖLIS v0.3.0   │  project  shop ▼  / new connection                      "
 "┌ CONNECTIONS ───────────── shop ┐┌ NEW CONNECTION ──────────────── PostgreSQL ┐"
 "│  local   PostgreSQL localhost… ││▸       Name  prod                          │"
 "│  prod   MySQL db.internal/shop ││      Engine  PostgreSQL                    │"

@@ -2,7 +2,7 @@
 source: src/ui/tests.rs
 expression: screen
 ---
-" >_  PODĖLIS v0.2.0   │  project  shop ▼                                                  "
+" >_  PODĖLIS v0.3.0   │  project  shop ▼                                                  "
 "┌ QUERY RESULT ─────────────────────────────────────────────────────────────── ZOOMED ·  ┐"
 "│ RESULT 3 rows │ MESSAGES │ QUERY PLAN │                                                │"
 "│ #     id email            note                                                         │"

@@ -2,14 +2,14 @@
 source: src/ui/tests.rs
 expression: screen
 ---
-" >_  PODĖLIS v0.2.0   │  projects & connections                                           "
+" >_  PODĖLIS v0.3.0   │  projects & connections                                           "
 "                                                                                          "
 "                                                                                          "
 "                                                                                          "
 "                                                                                          "
 "   ┌ Welcome ─────────────────────────────────────────────────────────────────────────┐   "
 "   │                                                                                  │   "
-"   │                                >_  PODĖLIS v0.2.0                                │   "
+"   │                                >_  PODĖLIS v0.3.0                                │   "
 "   │                                                                                  │   "
 "   │              A terminal SQL client for PostgreSQL, MySQL and SQLite              │   "
 "   │                                                                                  │   "
