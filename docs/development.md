@@ -55,3 +55,20 @@ SQLite tests always run. Tests against other live services are opt-in:
 | `PODELIS_TEST_MYSQL_PORT=3306` | MySQL tests (same extra variables; default user `root`). Creates and drops `podelis_test` and `podelis_ro` databases |
 | `PODELIS_TEST_SSH_DEST=host` | SSH tunnel test: reaches the MySQL (or Postgres) test server through `ssh` to this host |
 | `PODELIS_TEST_KEYCHAIN=1` | Round-trips throwaway entries through the real OS keychain |
+
+### On Linux, in Docker
+
+`docker/` runs Podėlis on Debian with the same PostgreSQL and MySQL
+servers as CI, an SSH server for the tunnel test and an unlocked Secret
+Service keychain, so every opt-in test above runs:
+
+```sh
+docker compose -f docker/compose.yaml run --rm dev ./scripts/check.sh  # every check, all live tests
+docker compose -f docker/compose.yaml run --rm dev cargo run           # the app, in this terminal
+docker compose -f docker/compose.yaml run --rm dev                     # a shell
+docker compose -f docker/compose.yaml down -v                          # stop and remove everything
+```
+
+The checkout is mounted, so edits show up without rebuilding; builds go to
+a volume, apart from the macOS `target/`. Inside, the servers are
+`postgres:5432` (password `postgres`) and `mysql:3306` (password `root`).

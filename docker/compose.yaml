@@ -1,0 +1,56 @@
+# Podėlis on Debian, with the same database servers as CI.
+#
+#   docker compose -f docker/compose.yaml run --rm dev                    # a shell
+#   docker compose -f docker/compose.yaml run --rm dev ./scripts/check.sh # every check, all live tests
+#   docker compose -f docker/compose.yaml run --rm dev cargo run          # the app
+#   docker compose -f docker/compose.yaml down -v                         # stop and remove everything
+name: podelis
+
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ..:/podelis
+      - target:/target
+      - registry:/usr/local/cargo/registry
+      - home:/home/dev
+    environment:
+      TERM: ${TERM:-xterm-256color}
+      COLORTERM: ${COLORTERM:-truecolor}
+      PODELIS_TEST_PG_HOST: postgres
+      PODELIS_TEST_PG_PORT: 5432
+      PODELIS_TEST_PG_PASSWORD: postgres
+      PODELIS_TEST_MYSQL_HOST: mysql
+      PODELIS_TEST_MYSQL_PORT: 3306
+      PODELIS_TEST_MYSQL_PASSWORD: root
+      PODELIS_TEST_SSH_DEST: dev@localhost
+      PODELIS_TEST_KEYCHAIN: 1
+    depends_on:
+      postgres: { condition: service_healthy }
+      mysql: { condition: service_healthy }
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: pg_isready -U postgres -h 127.0.0.1
+      interval: 2s
+      retries: 30
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+    # Over TCP: during init the server answers on its socket first.
+    healthcheck:
+      test: mysql -h127.0.0.1 -uroot -proot -e "select 1"
+      interval: 2s
+      retries: 60
+
+volumes:
+  target:
+  registry:
+  home:

@@ -1,0 +1,4 @@
+# The image needs only these; the source is mounted at run time.
+*
+!rust-toolchain.toml
+!docker/entrypoint.sh
