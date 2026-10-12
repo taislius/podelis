@@ -2,6 +2,7 @@
 name = "podelis"
 version = "0.2.0"
 edition = "2024"
+rust-version = "1.94" # sqlx 0.9; rust-toolchain.toml pins the newer compiler used for development
 description = "A terminal UI SQL client for PostgreSQL, MySQL and SQLite"
 license = "AGPL-3.0-only"
 repository = "https://github.com/taislius/podelis"
@@ -56,6 +57,7 @@ cast_possible_wrap = "allow"       # ids/ports cast between integer types of kno
 wildcard_imports = "allow"         # `use super::*` in the app's per-screen modules
 struct_excessive_bools = "allow"   # UI state flags
 items_after_statements = "allow"   # local consts next to where they're used
+assert_is_empty = "allow"          # `assert!(x.is_empty())` reads better than `assert_eq!(x, [] as [T; 0])`
 # Catch leftovers:
 dbg_macro = "warn"
 todo = "warn"

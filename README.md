@@ -136,10 +136,11 @@ brew install taislius/tap/podelis
 
 Prebuilt binaries for Linux and macOS are also attached to each
 [GitHub release](https://github.com/taislius/podelis/releases). Or build from
-source:
+source, with Rust 1.94 or newer (distro packages are often older; get it with
+[rustup](https://rustup.rs)):
 
 ```sh
-cargo install --git https://github.com/taislius/podelis
+cargo install --locked --git https://github.com/taislius/podelis
 ```
 
 ## Run

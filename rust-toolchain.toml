@@ -1,6 +1,6 @@
 # One compiler for local builds and CI, so new lints arrive by choice (bump
 # this deliberately), not because a new stable release came out.
 [toolchain]
-channel = "1.98.1"
+channel = "1.99.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"
