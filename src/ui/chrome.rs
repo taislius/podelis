@@ -463,12 +463,16 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines).block(popup("KEYS", t.accent)), rect);
 }
 
-/// The app's badge: `>_  PODĖLIS v0.2.0`, dark on green.
+/// The version in the badge. Tests draw a fixed one, so a release doesn't
+/// change every snapshot.
+const VERSION: &str = if cfg!(test) { "0.0.0" } else { env!("CARGO_PKG_VERSION") };
+
+/// The app's badge: `>_  PODĖLIS v1.2.3`, dark on green.
 pub(super) fn brand() -> Vec<Span<'static>> {
     let t = theme();
     vec![
         Span::styled(" >_  PODĖLIS ", bold(t.on_accent).bg(t.accent)),
-        Span::styled(concat!("v", env!("CARGO_PKG_VERSION"), " "), fg(t.on_accent).bg(t.accent)),
+        Span::styled(format!("v{VERSION} "), fg(t.on_accent).bg(t.accent)),
     ]
 }
 

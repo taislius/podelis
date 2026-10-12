@@ -2,7 +2,7 @@
 source: src/ui/tests.rs
 expression: "render(&mut app, 100, 30)"
 ---
-" >_  PODĖLIS v0.3.0   │  project  shop ▼                                                            "
+" >_  PODĖLIS v0.0.0   │  project  shop ▼                                                            "
 "┌ NAVIGATOR ────── 3 objects ┐┎ QUERY ──────┰──────────────────────────────────────────────────────┐"
 "│ / filter by name…          │┃ SQL Query 1 ┃ +               ▶ F5 Run   F6 Statement   F7 Explain │"
 "│ ▼ (default database)       ││  1  select id, email, note                                         │"

@@ -2,7 +2,7 @@
 source: src/ui/tests.rs
 expression: "render(&mut app, 80, 22)"
 ---
-" >_  PODĖLIS v0.3.0   │  project  shop ▼  / new connection                      "
+" >_  PODĖLIS v0.0.0   │  project  shop ▼  / new connection                      "
 "┌ CONNECTIONS ───────────── shop ┐┌ NEW CONNECTION ──────────────────── SQLite ┐"
 "│  local   PostgreSQL localhost… ││▸       Name  prod                          │"
 "│  prod   MySQL db.internal/shop ││      Engine  SQLite                        │"
