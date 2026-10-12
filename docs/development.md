@@ -30,13 +30,18 @@ GitHub Actions, kept small to save minutes:
 
 - `ci.yml` — on pushes to master (not docs-only ones): format,
   clippy and tests on Linux against real PostgreSQL and MySQL; a newer push
-  cancels the older run.
+  cancels the older run. A force-push may not start it; run it by hand
+  with `gh workflow run ci.yml --repo taislius/podelis` (or Actions → CI →
+  Run workflow).
 - `platforms.yml` — tests on macOS weekly, on release tags, or
-  by hand (Actions → Platforms → Run workflow).
+  by hand (`gh workflow run platforms.yml --repo taislius/podelis`, or
+  Actions → Platforms → Run workflow).
 - `deny.yml` — `cargo deny` when dependencies change, and weekly.
 - `release.yml` — on a `v*` tag, builds binaries for Linux and macOS and
   attaches them to the release; `packaging/homebrew/podelis.rb`
-  is a formula template for a Homebrew tap.
+  is a formula template for a Homebrew tap. Pushing a moved tag runs it
+  again and replaces the release's files, which breaks the tap's
+  checksums: cancel that run (`gh run cancel <id>`) unless that's wanted.
 
 What the automated tests can't cover (real terminals, remote servers, big
 tables) is in [docs/manual-testing.md](docs/manual-testing.md): data sets
