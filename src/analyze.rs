@@ -134,6 +134,10 @@ fn classify_words(words: &[String]) -> (Kind, Option<&'static str>) {
         "SELECT" | "WITH" | "VALUES" | "TABLE" | "SHOW" | "DESCRIBE" | "DESC" => (Kind::Read, None),
         "EXPLAIN" if has(words, "ANALYZE") && modifies_data(words) => (Kind::Write, None),
         "EXPLAIN" => (Kind::Read, None),
+        // MariaDB's ANALYZE <statement> (EXPLAIN ANALYZE) runs it.
+        "ANALYZE" if matches!(second, "SELECT" | "WITH" | "INSERT" | "UPDATE" | "DELETE" | "REPLACE") => {
+            classify_words(&words[1..])
+        }
         "BEGIN" | "START" => (Kind::Transaction(TxnOp::Begin), None),
         "COMMIT" | "END" => (Kind::Transaction(TxnOp::Commit), None),
         "ROLLBACK" if has(words, "TO") => (Kind::Session, None),
@@ -321,6 +325,13 @@ mod tests {
         assert_eq!(kinds("update t set a = 1 where id = 2", PG), [(Kind::Write, None)]);
         assert_eq!(kinds("create table t (id int)", PG), [(Kind::Ddl, None)]);
         assert_eq!(kinds("set search_path to x; use db", MY)[0].0, Kind::Session);
+    }
+
+    #[test]
+    fn mariadb_analyze_is_the_statement_it_runs() {
+        assert_eq!(kinds("analyze select * from t", MY), [(Kind::Read, None)]);
+        assert_eq!(kinds("analyze delete from t", MY), [(Kind::Write, Some("DELETE without WHERE"))]);
+        assert_eq!(kinds("analyze table t", MY)[0].0, Kind::Write);
     }
 
     #[test]

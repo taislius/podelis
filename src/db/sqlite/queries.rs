@@ -1,6 +1,6 @@
 //! SQLite: catalog, details and session queries.
 
-use super::super::catalog::ColumnRow;
+use super::super::catalog::{ColumnRow, TableRow};
 use super::super::details::{ForeignKey, IndexInfo};
 use super::super::*;
 
@@ -30,16 +30,13 @@ pub(in crate::db) async fn column_rows(db: &Database, system: bool) -> Result<Ve
     })
 }
 
-pub(in crate::db) async fn table_rows(
-    db: &Database,
-    system: bool,
-) -> Result<Vec<(String, String, String, Option<i64>)>> {
+pub(in crate::db) async fn table_rows(db: &Database, system: bool) -> Result<Vec<TableRow>> {
     Ok({
         let mut c = db.sqlite_session().await?;
         sqlx::query_as(
-            "SELECT 'main', name, type, CAST(NULL AS INTEGER) FROM sqlite_master
+            "SELECT 'main', name, type, CAST(NULL AS INTEGER), CAST(NULL AS INTEGER) FROM sqlite_master
                      WHERE type IN ('table', 'view') AND (?1 OR name NOT LIKE 'sqlite_%')
-                     UNION ALL SELECT 'main', 'sqlite_schema', 'table', NULL WHERE ?1
+                     UNION ALL SELECT 'main', 'sqlite_schema', 'table', NULL, NULL WHERE ?1
                      ORDER BY 2",
         )
         .bind(system)

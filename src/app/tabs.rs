@@ -30,9 +30,48 @@ pub struct TabState {
     pub syntax_hint: Option<SyntaxHint>,
     /// The last EXPLAIN output, formatted, for the QUERY PLAN tab.
     pub plan: Option<crate::db::Plan>,
+    /// What that plan is for, and when it was made.
+    pub plan_source: Option<PlanSource>,
     pub result_tab: ResultTab,
-    /// Scroll offset of the MESSAGES / QUERY PLAN tabs.
+    /// Scroll offset of the MESSAGES / QUERY PLAN tabs, down and across.
     pub tab_scroll: u16,
+    pub tab_hscroll: u16,
+    /// A plan that's a table (MySQL's classic EXPLAIN) as a grid, so the
+    /// results' keys work on it. While QUERY PLAN shows it, it's swapped
+    /// into `grid` and this holds the result's grid.
+    pub plan_grid: Option<Box<ResultGrid>>,
+    pub plan_swapped: bool,
+}
+
+/// The statement a plan was made for.
+#[derive(Clone, Debug)]
+pub struct PlanSource {
+    pub sql: String,
+    /// EXPLAIN ANALYZE (it ran) rather than EXPLAIN.
+    pub analyzed: bool,
+    /// The editor line it started on then (from 0).
+    pub line: usize,
+    pub at: chrono::DateTime<chrono::Local>,
+}
+
+impl PlanSource {
+    /// Where the statement is in `text` now: the copy nearest the line it
+    /// was on (lines above it may have come or gone), as a byte offset and
+    /// line. `None` once it's been edited away.
+    pub fn find_in(&self, text: &str) -> Option<(usize, usize)> {
+        if self.sql.is_empty() {
+            return None;
+        }
+        let mut line = 0;
+        let mut counted = 0;
+        text.match_indices(self.sql.as_str())
+            .map(|(at, _)| {
+                line += text[counted..at].matches('\n').count();
+                counted = at;
+                (at, line)
+            })
+            .min_by_key(|&(_, l)| l.abs_diff(self.line))
+    }
 }
 
 fn swap_tab(app: &mut App, state: &mut TabState) {

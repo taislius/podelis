@@ -1,6 +1,7 @@
 mod analyze;
 mod app;
 mod cli;
+mod clipboard;
 mod complete;
 mod containers;
 mod crash;

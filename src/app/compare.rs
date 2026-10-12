@@ -187,7 +187,7 @@ impl App {
         self.log(status.clone(), false);
         self.set_status(status, false);
         self.status_in_results = true;
-        self.tab.result_tab = ResultTab::Rows;
+        self.set_result_tab(ResultTab::Rows);
         self.focus = Focus::Results;
     }
 }

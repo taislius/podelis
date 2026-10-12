@@ -78,6 +78,8 @@ struct Inner {
     version: String,
     /// The session's `sql_mode` (MySQL), refreshed with the catalog.
     sql_mode: std::sync::Mutex<String>,
+    /// Why TLS failed when SSL mode `prefer` fell back to no encryption.
+    tls_failed: Option<String>,
 }
 
 enum Pool {
@@ -180,6 +182,9 @@ pub struct TableInfo {
     pub is_view: bool,
     /// The server's row-count estimate, if it keeps one.
     pub rows: Option<i64>,
+    /// Its size on disk with its indexes, in bytes: an estimate (Postgres
+    /// as of the last VACUUM/ANALYZE), and none for SQLite.
+    pub bytes: Option<i64>,
     /// Part of the database's own catalog (`pg_catalog`, `sqlite_schema`…).
     pub system: bool,
 }
@@ -190,6 +195,21 @@ pub struct ColumnInfo {
     pub data_type: String,
     pub nullable: bool,
     pub primary_key: bool,
+}
+
+/// What went wrong with TLS, if that's why connecting failed: the TLS
+/// library's error, or the handshake on the socket (rustls reports a
+/// rejected protocol version or cipher as an I/O error).
+fn tls_failure(e: &anyhow::Error) -> Option<String> {
+    let looks_tls = |text: &str| {
+        let text = text.to_ascii_lowercase();
+        ["handshake", "alert", "tls", "ssl", "protocol version"].iter().any(|w| text.contains(w))
+    };
+    e.chain().find_map(|cause| match cause.downcast_ref::<sqlx::Error>()? {
+        sqlx::Error::Tls(tls) => Some(tls.to_string()),
+        sqlx::Error::Io(io) if looks_tls(&io.to_string()) => Some(io.to_string()),
+        _ => None,
+    })
 }
 
 impl Database {
@@ -213,10 +233,26 @@ impl Database {
             port = local;
         }
         let host = host.as_str();
-        let (pool, mut session) = match params.engine {
-            Engine::Postgres => postgres::connect::connect(&params, host, port).await?,
-            Engine::MySql => mysql::connect::connect(&params, host, port).await?,
-            Engine::Sqlite => sqlite::connect::connect(&params, host).await?,
+        let open = |params: ConnectParams| async move {
+            match params.engine {
+                Engine::Postgres => postgres::connect::connect(&params, host, port).await,
+                Engine::MySql => mysql::connect::connect(&params, host, port).await,
+                Engine::Sqlite => sqlite::connect::connect(&params, host).await,
+            }
+        };
+        // `prefer` means TLS if the server can: when it offers TLS the
+        // client can't speak (an old MySQL's TLS 1.0/1.1), try without.
+        let (pool, mut session, tls_failed) = match open(params.clone()).await {
+            Err(e) if params.ssl_mode == SslMode::Prefer && !host.starts_with('/') && tls_failure(&e).is_some() => {
+                let why = tls_failure(&e).unwrap_or_default();
+                tracing::warn!(why, "TLS failed; connecting without it (SSL mode prefer)");
+                let (pool, session) = open(ConnectParams { ssl_mode: SslMode::Disable, ..params.clone() }).await?;
+                (pool, session, Some(why))
+            }
+            result => {
+                let (pool, session) = result?;
+                (pool, session, None)
+            }
         };
         let backend_id = session.backend_id().await?;
         let version = session.server_version().await;
@@ -229,7 +265,13 @@ impl Database {
             _tunnel: tunnel,
             version,
             sql_mode: std::sync::Mutex::new(sql_mode),
+            tls_failed,
         })))
+    }
+
+    /// Why TLS failed, if SSL mode `prefer` connected without it.
+    pub fn tls_failed(&self) -> Option<&str> {
+        self.0.tls_failed.as_deref()
     }
 
     pub fn engine(&self) -> Engine {

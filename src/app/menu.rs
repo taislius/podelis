@@ -46,11 +46,18 @@ impl App {
         let (title, items) = match self.focus {
             Focus::Results if self.tab.grid.results.as_ref().is_some_and(|r| !r.columns.is_empty()) => {
                 use KeyCode::Char;
+                // A plan's table: what changes data or needs a query's table is left out.
+                let plan = self.tab.plan_swapped;
+                let for_plan = |item: &MenuItem| {
+                    !plan
+                        || !matches!(item.action, MenuAction::ResultsKey(Char('c' | 'a' | 'd' | 'f' | 'M' | 'i' | '>')))
+                };
                 (
-                    "RESULTS",
+                    if plan { "QUERY PLAN" } else { "RESULTS" },
                     vec![
                         results_item("Show the full value", KeyCode::Enter, "↵"),
                         results_item("Show the row vertically", Char('x'), "x"),
+                        results_item("All rows one column per line (\\G) / table", Char('X'), "X"),
                         results_item("Edit this cell", Char('c'), "c"),
                         results_item("Add a row", Char('a'), "a"),
                         results_item("Mark / unmark this row", Char(' '), "Space"),
@@ -74,18 +81,20 @@ impl App {
                     .chain(
                         (self.tab.grid.result_sets.len() > 1).then(|| results_item("Next result set", Char('>'), ">")),
                     )
+                    .filter(for_plan)
                     .collect(),
                 )
             }
             Focus::Schema if self.schema.is_some() => {
                 use KeyCode::Char;
                 (
-                    "SCHEMA",
+                    "NAVIGATOR",
                     vec![
                         schema_item("Expand / collapse, or show a function", KeyCode::Enter, "↵"),
-                        schema_item("SELECT * into the editor", Char('s'), "s"),
+                        schema_item("SELECT * from it: add to the editor and run", Char('s'), "s"),
                         schema_item("Show the definition", Char('d'), "d"),
                         schema_item("Filter by name", Char('/'), "/"),
+                        schema_item("Order by name, rows or size", Char('o'), "o"),
                         schema_item("Refresh", Char('r'), "r"),
                         schema_item("Show / hide system tables", Char('.'), "."),
                         schema_item("Zoom this pane (and back)", Char('z'), "z"),

@@ -62,6 +62,30 @@ fn toggling_engine_updates_default_port_only() {
 }
 
 #[test]
+fn ctrl_y_copies_the_focused_field_in_the_settings() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Connect;
+    app.connect_form.host = "db.example.com".into();
+    app.connect_form.password = "secret".into();
+    let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    app.connect_form.focus = ConnectField::Host;
+    app.handle_key(ctrl('y'));
+    assert_eq!(app.take_clipboard().as_deref(), Some("db.example.com"));
+    app.connect_form.focus = ConnectField::Password;
+    app.handle_key(ctrl('y'));
+    assert_eq!(app.take_clipboard(), None);
+    app.connect_form.focus = ConnectField::Mode;
+    app.handle_key(ctrl('y'));
+    assert_eq!(app.take_clipboard().as_deref(), Some(app.connect_form.mode.label()));
+    // Ctrl+C and Ctrl+Q quit.
+    app.handle_key(ctrl('c'));
+    assert!(app.should_quit);
+    app.should_quit = false;
+    app.handle_key(ctrl('q'));
+    assert!(app.should_quit);
+}
+
+#[test]
 fn sqlite_form_shows_only_file_fields() {
     let mut form = ConnectForm::new();
     form.cycle_engine(false);
@@ -1958,14 +1982,14 @@ async fn connection_info_keepalive_and_diagnostics() {
 
 #[test]
 fn explain_statements_per_engine() {
-    assert!(Engine::Sqlite.dialect().explain_analyze("select 1").is_none());
+    assert!(Engine::Sqlite.dialect().explain_analyze("select 1", "").is_none());
     assert_eq!(
-        Engine::Postgres.dialect().explain_analyze("select 1").unwrap(),
+        Engine::Postgres.dialect().explain_analyze("select 1", "").unwrap(),
         "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) select 1"
     );
-    assert_eq!(Engine::Postgres.dialect().explain("select 1"), "EXPLAIN (FORMAT JSON) select 1");
-    assert_eq!(Engine::MySql.dialect().explain("select 1"), "EXPLAIN FORMAT=TREE select 1");
-    assert_eq!(Engine::Sqlite.dialect().explain("select 1"), "EXPLAIN QUERY PLAN select 1");
+    assert_eq!(Engine::Postgres.dialect().explain("select 1", ""), "EXPLAIN (FORMAT JSON) select 1");
+    assert_eq!(Engine::MySql.dialect().explain("select 1", ""), "EXPLAIN FORMAT=TREE select 1");
+    assert_eq!(Engine::Sqlite.dialect().explain("select 1", ""), "EXPLAIN QUERY PLAN select 1");
 }
 
 #[tokio::test]
@@ -2581,4 +2605,171 @@ fn pastes_go_to_the_input_in_front() {
     app.pipe_prompt = Some(LineInput::default());
     app.handle_paste("grep -i\tvilnius");
     assert_eq!(app.pipe_prompt.as_ref().map(LineInput::text), Some("grep -i vilnius"));
+}
+
+#[test]
+fn a_tabular_plan_takes_the_results_keys() {
+    let (mut app, _dir) = test_app();
+    app.connect_form.engine = Engine::MySql;
+    app.show_results_for_tests(outcome(&["id"], &[&[Some("1")], &[Some("2")]]));
+    let plan = outcome(
+        &["id", "select_type", "table", "type", "rows"],
+        &[
+            &[Some("1"), Some("PRIMARY"), Some("orders"), Some("ALL"), Some("5")],
+            &[Some("2"), Some("SUBQUERY"), Some("users"), Some("eq_ref"), Some("1")],
+        ],
+    );
+    app.show_plan(plan);
+    assert!(app.tab.plan_swapped && app.tab.result_tab == ResultTab::Plan);
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().columns.len(), 5);
+    // Results keys work on it: next column, sort, copy the cell.
+    app.handle_results_key(key(KeyCode::Right));
+    app.handle_results_key(key(KeyCode::Char('s')));
+    assert_eq!(app.tab.grid.sort, Some((1, false)));
+    app.handle_results_key(key(KeyCode::Char('y')));
+    assert_eq!(app.take_clipboard().as_deref(), Some("PRIMARY"));
+    // Not the ones that change data.
+    app.handle_results_key(key(KeyCode::Char('c')));
+    assert!(app.cell_edit.is_none() && app.status.contains("not the plan"));
+    // RESULT is the query's grid again; QUERY PLAN the plan's.
+    app.handle_results_key(key(KeyCode::Char('1')));
+    assert!(!app.tab.plan_swapped);
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().columns, ["id"]);
+    app.handle_results_key(key(KeyCode::Char('3')));
+    assert!(app.tab.plan_swapped);
+    // A query's outcome arriving meanwhile goes to the result, not the plan.
+    let generation = app.generation;
+    app.handle_db_event(DbEvent {
+        generation,
+        kind: DbEventKind::QueryDone(outcome(&["n"], &[&[Some("9")]]), None, None),
+    });
+    assert_eq!(app.tab.result_tab, ResultTab::Rows);
+    assert!(!app.tab.plan_swapped);
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().columns, ["n"]);
+    assert_eq!(app.tab.plan_grid.as_ref().unwrap().results.as_ref().unwrap().columns.len(), 5);
+}
+
+#[test]
+fn a_results_filter_stays_with_its_grid() {
+    let (mut app, _dir) = test_app();
+    app.connect_form.engine = Engine::MySql;
+    app.show_results_for_tests(outcome(&["id"], &[&[Some("1")], &[Some("74")]]));
+    app.handle_results_key(key(KeyCode::Char('/')));
+    for c in "74".chars() {
+        app.handle_filter_key(key(KeyCode::Char(c)));
+    }
+    assert_eq!(app.tab.grid.view.len(), 1);
+    app.show_plan(outcome(&["id", "table"], &[&[Some("1"), Some("t")]]));
+    assert!(!app.tab.grid.filter_editing && app.tab.grid.filter.text().is_empty(), "the plan's grid is unfiltered");
+    app.handle_results_key(key(KeyCode::Char('1')));
+    assert_eq!(app.tab.grid.filter.text(), "74");
+    assert!(!app.tab.grid.filter_editing);
+}
+
+#[test]
+fn a_plan_remembers_its_statement_and_time() {
+    let (mut app, _dir) = test_app();
+    app.plan_request = Some(("select * from users where id = 1".into(), true, 0));
+    app.show_plan(outcome(&["QUERY PLAN"], &[&[Some("[]")]]));
+    let source = app.tab.plan_source.clone().unwrap();
+    assert_eq!((source.sql.as_str(), source.analyzed), ("select * from users where id = 1", true));
+    assert!((chrono::Local::now() - source.at).num_seconds() < 5);
+    assert!(app.plan_request.is_none());
+}
+
+#[test]
+fn the_statement_to_explain_and_its_line() {
+    let (mut app, _dir) = test_app();
+    app.tab.editor.set_text("select 1;\n\n  select *\n  from t;\nselect 3");
+    app.tab.editor.set_cursor((3, 3));
+    assert_eq!(app.statement_to_explain(), Some(("select *\n  from t".to_string(), 2)));
+    let source = PlanSource { sql: "select 3".into(), analyzed: false, line: 4, at: chrono::Local::now() };
+    assert_eq!(source.find_in("select 3\nx\nx\nx\nselect 3\nselect 3"), Some((15, 4)), "the copy nearest line 5");
+    assert_eq!(source.find_in("select 4"), None);
+}
+
+#[test]
+fn s_in_the_navigator_adds_the_select_after_everything() {
+    let (mut app, _dir) = test_app();
+    app.schema = Some(SchemaPanel {
+        tables: vec![SchemaTable {
+            info: crate::db::TableInfo {
+                schema: "public".into(),
+                name: "users".into(),
+                is_view: false,
+                rows: None,
+                bytes: None,
+                system: false,
+            },
+            expanded: false,
+            columns: Vec::new(),
+            details: None,
+            details_loading: false,
+        }],
+        selected: 1,
+        ..SchemaPanel::default()
+    });
+    app.focus = Focus::Schema;
+    app.tab.editor.set_text("select a,\n  b\nfrom t;");
+    app.tab.editor.set_cursor((1, 1));
+    app.handle_schema_key(key(KeyCode::Char('s')));
+    assert_eq!(app.tab.editor.text(), "select a,\n  b\nfrom t;\n\nSELECT * FROM public.users LIMIT 100;");
+    assert_eq!((app.focus, app.tab.editor.cursor_row), (Focus::Editor, 4));
+}
+
+#[test]
+fn arrows_in_a_definition_go_to_the_next_table() {
+    let (mut app, _dir) = test_app();
+    let table = |name: &str| SchemaTable {
+        info: crate::db::TableInfo {
+            schema: "main".into(),
+            name: name.into(),
+            is_view: false,
+            rows: None,
+            bytes: None,
+            system: false,
+        },
+        expanded: false,
+        columns: Vec::new(),
+        details: Some(crate::db::TableDetails::default()),
+        details_loading: false,
+    };
+    app.schema = Some(SchemaPanel { tables: vec![table("a"), table("b")], selected: 1, ..SchemaPanel::default() });
+    app.focus = Focus::Schema;
+    app.handle_schema_key(key(KeyCode::Char('d')));
+    assert_eq!(app.cell_view.as_ref().unwrap().title, "TABLE a");
+    app.handle_cell_view_key(key(KeyCode::Right));
+    assert_eq!(app.cell_view.as_ref().unwrap().title, "TABLE b");
+    assert_eq!(app.schema.as_ref().unwrap().selected, 2, "the navigator follows");
+    app.handle_cell_view_key(key(KeyCode::Right));
+    assert_eq!(app.cell_view.as_ref().unwrap().title, "TABLE b", "stays on the last");
+    app.handle_cell_view_key(key(KeyCode::Left));
+    assert_eq!(app.cell_view.as_ref().unwrap().title, "TABLE a");
+    app.handle_cell_view_key(key(KeyCode::Char('y')));
+    assert!(app.take_clipboard().is_some_and(|t| t.contains("main")));
+}
+
+#[tokio::test]
+async fn s_in_the_navigator_runs_only_its_select() {
+    let (mut app, _dir) = Box::pin(connected_app(ConnectionMode::Normal)).await;
+    run_sql(&mut app, "create table people (id integer primary key, name text)").await;
+    run_sql(&mut app, "insert into people values (1, 'Ann')").await;
+    while app.schema.as_ref().is_none_or(|s| s.loading || s.tables.is_empty()) {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    // Other statements in the editor, one of them broken: they're not run.
+    app.tab.editor.set_text("select nope from nowhere;\ndelete from people;");
+    app.tab.editor.set_cursor((0, 3));
+    let panel = app.schema.as_mut().unwrap();
+    panel.selected = panel.nodes().iter().position(|n| matches!(n, SchemaNode::Table(_))).unwrap();
+    app.focus = Focus::Schema;
+    app.handle_key(key(KeyCode::Char('s')));
+    finish(&mut app).await;
+    let results = app.tab.grid.results.as_ref().unwrap();
+    assert_eq!(
+        (results.columns.as_slice(), results.rows.len()),
+        (["id".to_string(), "name".to_string()].as_slice(), 1)
+    );
+    assert_eq!(results.statements, 1, "just the SELECT");
 }

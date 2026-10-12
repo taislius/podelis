@@ -148,6 +148,6 @@ pub(super) fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-pub(super) fn format_elapsed(d: Duration) -> String {
+pub fn format_elapsed(d: Duration) -> String {
     if d.as_millis() < 1000 { format!("{} ms", d.as_millis()) } else { format!("{:.2} s", d.as_secs_f64()) }
 }

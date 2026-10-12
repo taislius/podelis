@@ -1,7 +1,7 @@
 //! MySQL: catalog, details and session queries.
 
 use super::super::activity::Activity;
-use super::super::catalog::ColumnRow;
+use super::super::catalog::{ColumnRow, TableRow};
 use super::super::details::{ForeignKey, IndexInfo};
 use super::super::*;
 
@@ -34,15 +34,13 @@ pub(in crate::db) async fn column_rows(db: &Database, system: bool) -> Result<Ve
     })
 }
 
-pub(in crate::db) async fn table_rows(
-    db: &Database,
-    system: bool,
-) -> Result<Vec<(String, String, String, Option<i64>)>> {
+pub(in crate::db) async fn table_rows(db: &Database, system: bool) -> Result<Vec<TableRow>> {
     let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
     Ok({
         let query = sqlx::query_as(
             "SELECT CAST(table_schema AS CHAR), CAST(table_name AS CHAR),
-                            CAST(table_type AS CHAR), CAST(table_rows AS SIGNED)
+                            CAST(table_type AS CHAR), CAST(table_rows AS SIGNED),
+                            CAST(data_length + index_length AS SIGNED)
                      FROM information_schema.tables
                      WHERE table_schema = DATABASE()
                         OR (? AND table_schema IN ('information_schema', 'performance_schema', 'mysql', 'sys'))

@@ -418,7 +418,14 @@ mod tests {
 
     fn table(schema: &str, name: &str, columns: Vec<ColumnInfo>, indexes: Vec<IndexInfo>) -> TableShape {
         TableShape {
-            info: TableInfo { schema: schema.into(), name: name.into(), is_view: false, rows: None, system: false },
+            info: TableInfo {
+                schema: schema.into(),
+                name: name.into(),
+                is_view: false,
+                rows: None,
+                bytes: None,
+                system: false,
+            },
             columns,
             details: Some(TableDetails { indexes, ..TableDetails::default() }),
         }

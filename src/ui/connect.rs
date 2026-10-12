@@ -89,7 +89,9 @@ pub(super) fn form_lines(form: &Settings, focus: Option<ConnectField>, password:
                 ConnectField::Ssl => ("SSL mode", form.ssl_mode.label()),
                 ConnectField::Mode => ("Mode", form.mode.label()),
                 // Read-only connections don't write, so there's nothing to commit.
-                ConnectField::Transaction if form.mode == ConnectionMode::ReadOnly => ("Transaction", "—"),
+                ConnectField::Transaction if form.mode == ConnectionMode::ReadOnly => {
+                    ("Transaction", "none: read-only")
+                }
                 ConnectField::Transaction => ("Transaction", form.tx_mode.label()),
                 ConnectField::Ssh => ("SSH via", form.ssh),
                 ConnectField::Timeout => ("Timeout", form.timeout),

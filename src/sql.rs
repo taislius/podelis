@@ -77,6 +77,11 @@ pub fn tokenize(text: &str, engine: Engine) -> Vec<Token> {
         } else if c == b';' {
             i += 1;
             TokenKind::Semicolon
+        } else if is_vertical_terminator(b, i) {
+            // The mysql client's `\G`: ends the statement, and its result
+            // shows one column per line.
+            i += 2;
+            TokenKind::Semicolon
         } else {
             i += 1;
             TokenKind::Punct
@@ -84,6 +89,34 @@ pub fn tokenize(text: &str, engine: Engine) -> Vec<Token> {
         tokens.push(Token { kind, range: start..i });
     }
     tokens
+}
+
+/// `\G` at `i`, not followed by more of a word.
+fn is_vertical_terminator(b: &[u8], i: usize) -> bool {
+    b[i] == b'\\' && b.get(i + 1) == Some(&b'G') && !b.get(i + 2).is_some_and(|&c| is_word_byte(c))
+}
+
+/// Whether a statement in `text` ends with `\G` (show its result one
+/// column per line).
+pub fn ends_vertical(text: &str, engine: Engine) -> bool {
+    tokenize(text, engine).iter().any(|t| t.kind == TokenKind::Semicolon && &text[t.range.clone()] == "\\G")
+}
+
+/// `text` for the server: each `\\G` becomes `; ` (or spaces at the end),
+/// the same length, so error positions still point into the editor.
+pub fn without_vertical(text: &str, engine: Engine) -> String {
+    let tokens = tokenize(text, engine);
+    let mut out = text.to_string();
+    for (i, t) in tokens.iter().enumerate() {
+        if t.kind != TokenKind::Semicolon || &text[t.range.clone()] != "\\G" {
+            continue;
+        }
+        let more = tokens[i + 1..]
+            .iter()
+            .any(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Comment | TokenKind::Semicolon));
+        out.replace_range(t.range.clone(), if more { "; " } else { "  " });
+    }
+    out
 }
 
 /// ASCII whitespace as `str::trim` sees it (which, unlike
@@ -454,6 +487,13 @@ mod tests {
     fn splits_simple_statements() {
         assert_eq!(split_statements("select 1; select 2;", PG), ["select 1", "select 2"]);
         assert_eq!(split_statements("select 1", PG), ["select 1"]);
+        // The mysql client's \G ends a statement too, outside strings.
+        let my = Engine::MySql;
+        assert_eq!(split_statements("select 1\\G select '\\G'\\G;", my), ["select 1", "select '\\G'"]);
+        assert_eq!(split_statements("select a\\Gb", my), ["select a\\Gb"]);
+        assert!(ends_vertical("select 1\\G", my) && !ends_vertical("select '\\G'", my));
+        assert_eq!(without_vertical("select 1\\G select 2\\G -- x", my), "select 1;  select 2   -- x");
+        assert_eq!(statement_at("select 1\\G\nselect 2", 3, my), Some("select 1"));
         assert_eq!(split_statements("  -- nothing\n ; ", PG), Vec::<&str>::new());
     }
 

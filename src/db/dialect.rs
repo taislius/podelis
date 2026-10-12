@@ -155,14 +155,15 @@ pub trait Dialect: Sync {
     /// A query returning the server's version string.
     fn version_query(&self) -> &'static str;
 
-    /// The EXPLAIN statement for `stmt` (without its `;`).
-    fn explain(&self, stmt: &str) -> String;
-    /// EXPLAIN ANALYZE (which runs the statement), if the engine has it.
-    fn explain_analyze(&self, _stmt: &str) -> Option<String> {
+    /// The EXPLAIN statement for `stmt` (without its `;`), for a server
+    /// of `version` (as `version_query` returned it).
+    fn explain(&self, stmt: &str, version: &str) -> String;
+    /// EXPLAIN ANALYZE (which runs the statement), if the server has it.
+    fn explain_analyze(&self, _stmt: &str, _version: &str) -> Option<String> {
         None
     }
-    /// The rows an EXPLAIN returned, as a readable tree with notes.
-    fn format_plan(&self, rows: &[Vec<Option<String>>]) -> Option<Plan>;
+    /// The result an EXPLAIN returned, as a readable tree with notes.
+    fn format_plan(&self, columns: &[String], rows: &[Vec<Option<String>>]) -> Option<Plan>;
 
     /// An INSERT of a row with every column at its default.
     fn insert_defaults(&self, table: &str) -> String {

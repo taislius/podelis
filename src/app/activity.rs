@@ -145,22 +145,20 @@ impl App {
             return;
         }
         let engine = self.engine();
-        let text = self.tab.editor.text();
-        let stmt = match self.tab.editor.selection_offsets() {
-            Some((a, b)) => text[a..b].trim().trim_end_matches(';').trim().to_string(),
-            None => match sql::statement_at(&text, self.tab.editor.cursor_offset(), engine) {
-                Some(s) => s.to_string(),
-                None => return self.set_status("No statement at cursor".to_string(), true),
-            },
+        let Some((stmt, line)) = self.statement_to_explain() else {
+            return self.set_status("No statement at cursor".to_string(), true);
         };
-        let Some(explain) = engine.dialect().explain_analyze(&stmt) else {
-            self.set_status("SQLite can't EXPLAIN ANALYZE; showing the plan instead".to_string(), false);
+        let version = self.database.as_ref().map_or("", |db| db.version());
+        let Some(explain) = engine.dialect().explain_analyze(&stmt, version) else {
+            let server = if engine == Engine::Sqlite { "SQLite" } else { "This server" };
+            self.set_status(format!("{server} can't EXPLAIN ANALYZE; showing the plan instead"), false);
             return self.explain_current();
         };
         // Tracking uses the EXPLAIN alone, so the wrapper doesn't look
         // like the user's own transaction ending.
         let infos = analyze::analyze(&parse(&explain, engine));
         let writes = analyze::analyze(&parse(&stmt, engine)).iter().any(StatementInfo::modifies);
+        self.plan_request = Some((stmt.clone(), true, line));
         if !writes {
             return self.run_now(explain, 0, infos, RunPurpose::Explain, None);
         }

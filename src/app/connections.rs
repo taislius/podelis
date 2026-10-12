@@ -658,6 +658,15 @@ impl App {
             match key.code {
                 KeyCode::Char('s') => self.save_connection(),
                 KeyCode::Char('t') => self.test_connection(),
+                KeyCode::Char('y') => self.copy_connect_field(),
+                // Where the terminal doesn't paste by itself.
+                KeyCode::Char('v') => match crate::clipboard::read() {
+                    Ok(text) => self.handle_paste(&text),
+                    Err(e) => {
+                        self.connect_form.error =
+                            Some(format!("Couldn't read the clipboard ({e}): paste with the terminal's keys instead"));
+                    }
+                },
                 // Clearing and deleting a word, as in every input.
                 KeyCode::Char('u' | 'w') => {
                     let form = &mut self.connect_form;
@@ -696,6 +705,31 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Ctrl+Y in the form: copies the focused field's value (not the
+    /// password).
+    pub(super) fn copy_connect_field(&mut self) {
+        let form = &mut self.connect_form;
+        let focus = form.focus;
+        form.error = None;
+        if focus == ConnectField::Password {
+            form.info = Some("The password isn't copied".to_string());
+            return;
+        }
+        let value = match focus {
+            ConnectField::Engine => form.engine.label().to_string(),
+            ConnectField::Ssl => form.ssl_mode.label().to_string(),
+            ConnectField::Mode => form.mode.label().to_string(),
+            ConnectField::Transaction => form.tx_mode().label().to_string(),
+            _ => form.field_mut(focus).map(|f| f.clone()).unwrap_or_default(),
+        };
+        if value.is_empty() {
+            form.info = Some("Nothing to copy: the field is empty".to_string());
+            return;
+        }
+        form.info = Some(format!("Copied: {value}"));
+        self.clipboard = Some(value);
     }
 
     pub(super) fn save_connection(&mut self) {

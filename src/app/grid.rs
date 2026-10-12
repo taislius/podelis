@@ -31,6 +31,10 @@ pub struct ResultGrid {
     pub table_state: TableState,
     /// First result row on screen (the table only builds visible rows).
     pub row_offset: usize,
+    /// Rows shown one column per line, like mysql's `\G` (`X`).
+    pub vertical: bool,
+    /// Only because the run ended with `\G`.
+    pub vertical_by_g: bool,
 }
 
 impl ResultGrid {

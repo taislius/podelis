@@ -170,6 +170,19 @@ pub(super) fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// A size in bytes, e.g. `12.4 MB` (powers of 1024, as `du -h`).
+#[allow(clippy::cast_precision_loss)] // display only, one decimal
+pub(super) fn human_bytes(n: i64) -> String {
+    const UNITS: [&str; 5] = ["B", "kB", "MB", "GB", "TB"];
+    let mut size = n as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 { format!("{n} B") } else { format!("{size:.1} {}", UNITS[unit]) }
+}
+
 /// Compact counts like the design's `24.8k` / `1.1m`.
 #[allow(clippy::cast_precision_loss)] // display only, one decimal
 pub(super) fn human_count(n: i64) -> String {

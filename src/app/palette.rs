@@ -90,9 +90,9 @@ impl Command {
             Command::LoadMore => "M (results)".into(),
             Command::PipeRows => "| (results)".into(),
             Command::OpenRows => "o (results)".into(),
-            Command::RefreshSchema => "r (schema)".into(),
+            Command::RefreshSchema => "r (navigator)".into(),
             Command::Help => "F1".into(),
-            Command::Quit => "Ctrl+C".into(),
+            Command::Quit => "Ctrl+Q".into(),
             Command::SwitchTab(i) if i < 9 => format!("Ctrl+K {}", i + 1),
             Command::CopyDiagnostics | Command::SwitchTab(_) | Command::CompareSchema(_) | Command::CompareRows(_) => {
                 String::new()

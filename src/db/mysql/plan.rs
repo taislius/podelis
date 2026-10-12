@@ -1,6 +1,9 @@
-//! MySQL's `EXPLAIN FORMAT=TREE` / `EXPLAIN ANALYZE` text, with notes on
-//! what stands out: the slowest (or costliest) step, full scans of big
-//! tables and row estimates far off the actual counts.
+//! MySQL's `EXPLAIN FORMAT=TREE` / `EXPLAIN ANALYZE` text, or the classic
+//! `EXPLAIN` table (older MySQL, MariaDB), with notes on what stands out:
+//! the slowest (or costliest) step, full scans of big tables and row
+//! estimates far off the actual counts.
+
+use unicode_width::UnicodeWidthStr;
 
 use crate::db::dialect::{BIG_SCAN_ROWS, Plan, PlanNote, human_rows, misestimated};
 
@@ -100,6 +103,51 @@ pub(super) fn analyze(text: String) -> Plan {
     Plan { text, notes }
 }
 
+/// The classic `EXPLAIN` table (or MariaDB's `ANALYZE`, which adds
+/// `r_rows`), lined up as text: one line per table read, after a header
+/// and a rule.
+pub(super) fn analyze_table(columns: &[String], rows: &[Vec<Option<String>>]) -> Plan {
+    let cell = |row: &[Option<String>], i: usize| row.get(i).cloned().flatten().unwrap_or_default();
+    let widths: Vec<usize> = (0..columns.len())
+        .map(|i| rows.iter().map(|r| cell(r, i).width()).chain([columns[i].width()]).max().unwrap_or(0))
+        .collect();
+    let line = |cells: Vec<String>| {
+        let padded: Vec<String> =
+            cells.iter().zip(&widths).map(|(c, w)| format!("{c}{}", " ".repeat(w - c.width()))).collect();
+        padded.join("  ").trim_end().to_string()
+    };
+    let rule = widths.iter().map(|w| "─".repeat(*w)).collect::<Vec<_>>().join("  ");
+    let mut text = vec![line(columns.to_vec()), rule];
+    text.extend(rows.iter().map(|r| line((0..columns.len()).map(|i| cell(r, i)).collect())));
+
+    let column = |name: &str| columns.iter().position(|c| c.eq_ignore_ascii_case(name));
+    let (table, access, estimate, actual) = (column("table"), column("type"), column("rows"), column("r_rows"));
+    let number = |row: &[Option<String>], i: Option<usize>| i.and_then(|i| cell(row, i).trim().parse::<f64>().ok());
+    let mut notes = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        let note = |text: String| PlanNote { text, line: Some(i + 2) };
+        let name = table.map(|t| cell(row, t)).unwrap_or_default();
+        let read = number(row, actual).or(number(row, estimate));
+        if access.is_some_and(|a| cell(row, a).eq_ignore_ascii_case("ALL")) && read.is_some_and(|r| r >= BIG_SCAN_ROWS)
+        {
+            notes.push(note(format!(
+                "Full table scan on {name} ({} rows): an index on the filtered or joined columns may help",
+                human_rows(read.unwrap_or(0.0))
+            )));
+        }
+        if let (Some(estimated), Some(got)) = (number(row, estimate), number(row, actual))
+            && misestimated(estimated, got)
+        {
+            notes.push(note(format!(
+                "{name}: estimated {} rows, got {}: ANALYZE TABLE may help",
+                human_rows(estimated),
+                human_rows(got)
+            )));
+        }
+    }
+    Plan { text: text.join("\n"), notes }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +172,44 @@ mod tests {
     #[test]
     fn small_plans_have_nothing_to_say() {
         assert!(analyze("-> Table scan on t  (cost=0.35 rows=1)".into()).notes.is_empty());
+    }
+
+    #[test]
+    fn classic_table_is_lined_up_with_notes() {
+        let columns: Vec<String> =
+            ["id", "select_type", "table", "type", "key", "rows", "r_rows", "Extra"].map(String::from).to_vec();
+        let row = |cells: [Option<&str>; 8]| cells.map(|c| c.map(String::from)).to_vec();
+        let rows = vec![
+            row([
+                Some("1"),
+                Some("SIMPLE"),
+                Some("orders"),
+                Some("ALL"),
+                None,
+                Some("50000"),
+                Some("48000.00"),
+                Some("Using where"),
+            ]),
+            row([
+                Some("1"),
+                Some("SIMPLE"),
+                Some("users"),
+                Some("eq_ref"),
+                Some("PRIMARY"),
+                Some("1"),
+                Some("1.00"),
+                None,
+            ]),
+        ];
+        let plan = analyze_table(&columns, &rows);
+        let lines: Vec<&str> = plan.text.lines().collect();
+        assert_eq!(lines[0], "id  select_type  table   type    key      rows   r_rows    Extra");
+        assert_eq!(lines[2], "1   SIMPLE       orders  ALL              50000  48000.00  Using where");
+        assert_eq!(lines[3], "1   SIMPLE       users   eq_ref  PRIMARY  1      1.00");
+        let notes: Vec<(&str, Option<usize>)> = plan.notes.iter().map(|n| (n.text.as_str(), n.line)).collect();
+        assert_eq!(
+            notes,
+            [("Full table scan on orders (48.0k rows): an index on the filtered or joined columns may help", Some(2))]
+        );
     }
 }

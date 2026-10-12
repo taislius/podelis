@@ -1,7 +1,7 @@
 //! PostgreSQL: catalog, details and session queries.
 
 use super::super::activity::Activity;
-use super::super::catalog::ColumnRow;
+use super::super::catalog::{ColumnRow, TableRow};
 use super::super::details::{ForeignKey, IndexInfo};
 use super::super::*;
 
@@ -43,18 +43,23 @@ pub(in crate::db) async fn column_rows(db: &Database, system: bool) -> Result<Ve
         .collect())
 }
 
-pub(in crate::db) async fn table_rows(
-    db: &Database,
-    system: bool,
-) -> Result<Vec<(String, String, String, Option<i64>)>> {
+/// Sizes come from `relpages` (the table, its TOAST table and indexes),
+/// which the catalog keeps: reading each table's files instead would be
+/// slow with tens of thousands of tables.
+pub(in crate::db) async fn table_rows(db: &Database, system: bool) -> Result<Vec<TableRow>> {
     let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
     Ok({
         sqlx::query_as(
-            "SELECT t.table_schema::text, t.table_name::text, t.table_type::text,
-                            (SELECT c.reltuples::bigint FROM pg_class c
-                             JOIN pg_namespace n ON n.oid = c.relnamespace
-                             WHERE n.nspname = t.table_schema AND c.relname = t.table_name)
+            "SELECT t.table_schema::text, t.table_name::text, t.table_type::text, c.reltuples::bigint,
+                            ((c.relpages::bigint
+                              + COALESCE((SELECT tc.relpages FROM pg_class tc WHERE tc.oid = c.reltoastrelid), 0)
+                              + COALESCE((SELECT sum(i.relpages) FROM pg_index x
+                                          JOIN pg_class i ON i.oid = x.indexrelid
+                                          WHERE x.indrelid = c.oid), 0))
+                             * current_setting('block_size')::bigint)::bigint
                      FROM information_schema.tables t
+                     LEFT JOIN pg_namespace n ON n.nspname = t.table_schema
+                     LEFT JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = t.table_name
                      WHERE ($1 OR t.table_schema NOT IN ('pg_catalog', 'information_schema'))
                        AND t.table_schema NOT LIKE 'pg_toast%'
                      ORDER BY t.table_schema, t.table_name",

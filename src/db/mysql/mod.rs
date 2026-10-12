@@ -68,14 +68,30 @@ impl Dialect for MySql {
     fn version_query(&self) -> &'static str {
         "SELECT VERSION()"
     }
-    fn explain(&self, stmt: &str) -> String {
-        format!("EXPLAIN FORMAT=TREE {stmt}")
+    /// FORMAT=TREE where the server has it (MySQL 8.0.16+); older MySQL
+    /// and MariaDB get the classic table.
+    fn explain(&self, stmt: &str, version: &str) -> String {
+        match Server::of(version) {
+            Server::MySql(v) if v < (8, 0, 16) => format!("EXPLAIN {stmt}"),
+            Server::MariaDb => format!("EXPLAIN {stmt}"),
+            Server::MySql(_) => format!("EXPLAIN FORMAT=TREE {stmt}"),
+        }
     }
-    fn explain_analyze(&self, stmt: &str) -> Option<String> {
-        Some(format!("EXPLAIN ANALYZE {stmt}"))
+    /// MySQL 8.0.18+ has EXPLAIN ANALYZE; MariaDB's is ANALYZE (a table
+    /// with the actual rows next to the estimates).
+    fn explain_analyze(&self, stmt: &str, version: &str) -> Option<String> {
+        match Server::of(version) {
+            Server::MySql(v) if v < (8, 0, 18) => None,
+            Server::MariaDb => Some(format!("ANALYZE {stmt}")),
+            Server::MySql(_) => Some(format!("EXPLAIN ANALYZE {stmt}")),
+        }
     }
-    /// FORMAT=TREE is already a readable tree; notes are added.
-    fn format_plan(&self, rows: &[Vec<Option<String>>]) -> Option<Plan> {
+    /// FORMAT=TREE is already a readable tree; the classic table is lined
+    /// up. Notes are added to both.
+    fn format_plan(&self, columns: &[String], rows: &[Vec<Option<String>>]) -> Option<Plan> {
+        if columns.len() > 1 {
+            return (!rows.is_empty()).then(|| plan::analyze_table(columns, rows));
+        }
         Some(plan::analyze(rows.first()?.first()?.clone()?.trim_end().to_string()))
     }
     fn insert_defaults(&self, table: &str) -> String {
@@ -90,6 +106,28 @@ impl Dialect for MySql {
     }
 }
 
+/// The kind of server, from its version string (`8.0.36`, `5.7.44-log`,
+/// `10.11.6-MariaDB-0+deb12u1`).
+#[derive(Debug, PartialEq)]
+enum Server {
+    MySql((u32, u32, u32)),
+    MariaDb,
+}
+
+impl Server {
+    /// A version that can't be read is taken to be a current MySQL.
+    fn of(version: &str) -> Self {
+        if version.to_ascii_lowercase().contains("mariadb") {
+            return Server::MariaDb;
+        }
+        let mut parts = version.split(|c: char| !c.is_ascii_digit()).map(|p| p.parse::<u32>().ok());
+        match (parts.next().flatten(), parts.next().flatten(), parts.next().flatten()) {
+            (Some(major), Some(minor), patch) => Server::MySql((major, minor, patch.unwrap_or(0))),
+            _ => Server::MySql((u32::MAX, 0, 0)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,6 +135,25 @@ mod tests {
     #[test]
     fn mysql_tree_is_passed_through() {
         let rows = vec![vec![Some("-> Table scan on t  (cost=0.35 rows=1)\n".to_string())]];
-        assert_eq!(MySql.format_plan(&rows).unwrap().text, "-> Table scan on t  (cost=0.35 rows=1)");
+        let columns = ["EXPLAIN".to_string()];
+        assert_eq!(MySql.format_plan(&columns, &rows).unwrap().text, "-> Table scan on t  (cost=0.35 rows=1)");
+    }
+
+    #[test]
+    fn older_servers_get_the_classic_explain() {
+        let explain = |version| MySql.explain("SELECT 1", version);
+        assert_eq!(explain("8.0.36"), "EXPLAIN FORMAT=TREE SELECT 1");
+        assert_eq!(explain("8.0.16"), "EXPLAIN FORMAT=TREE SELECT 1");
+        assert_eq!(explain("9.1.0"), "EXPLAIN FORMAT=TREE SELECT 1");
+        assert_eq!(explain(""), "EXPLAIN FORMAT=TREE SELECT 1");
+        assert_eq!(explain("8.0.15"), "EXPLAIN SELECT 1");
+        assert_eq!(explain("5.7.44-log"), "EXPLAIN SELECT 1");
+        assert_eq!(explain("10.11.6-MariaDB-0+deb12u1"), "EXPLAIN SELECT 1");
+
+        let analyze = |version| MySql.explain_analyze("SELECT 1", version);
+        assert_eq!(analyze("8.0.18").as_deref(), Some("EXPLAIN ANALYZE SELECT 1"));
+        assert_eq!(analyze("8.0.17"), None);
+        assert_eq!(analyze("5.6.51"), None);
+        assert_eq!(analyze("11.4.2-MariaDB").as_deref(), Some("ANALYZE SELECT 1"));
     }
 }

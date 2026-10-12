@@ -2,7 +2,7 @@
 //! with row estimates, expanded columns with their types.
 
 use super::*;
-use crate::app::SchemaPanel;
+use crate::app::{SchemaPanel, SchemaSort};
 
 pub(super) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
@@ -11,7 +11,10 @@ pub(super) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
     let info = if app.schema.as_ref().is_some_and(|s| s.loading) {
         "loading…".to_string()
     } else {
-        format!("{count} objects")
+        match app.schema.as_ref().map_or(SchemaSort::Name, |s| s.sort) {
+            SchemaSort::Name => format!("{count} objects"),
+            sort => format!("{count} · by {}", sort.label()),
+        }
     };
     // " NAVIGATOR " plus the info must fit on the top border.
     let info = if area.width as usize >= 14 + info.chars().count() { info } else { String::new() };
@@ -24,6 +27,7 @@ pub(super) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
         .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Min(0)])
         .areas(inner);
 
+    app.hits.schema_filter = filter;
     draw_database_line(f, app, database, focused);
 
     // Filter line.
@@ -32,7 +36,7 @@ pub(super) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
             Line::from([vec![Span::raw(" / ")], input_spans(&s.filter, fg(t.text_bright))].concat())
         }
         Some(s) if !s.filter.is_empty() => Line::styled(format!(" / {}", s.filter.text()), bold(t.accent)),
-        _ => Line::styled(" / filter schema…", dim()),
+        _ => Line::styled(" / filter by name…", dim()),
     };
     f.render_widget(Paragraph::new(line).style(Style::default().bg(t.inset)), filter);
 
@@ -50,11 +54,12 @@ pub(super) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
     let width = tree.width as usize;
     let show_schema = app.engine().capabilities().schemas;
     // Only the rows on screen are built: a big database has tens of
-    // thousands of tables. Scrolled as the list would: the selected row
-    // at the bottom once it's past the first screen.
+    // thousands of tables.
     let nodes = panel.nodes();
     let height = tree.height as usize;
-    let offset = (panel.selected + 1).saturating_sub(height).min(nodes.len().saturating_sub(1));
+    let Some(panel) = &mut app.schema else { return };
+    let offset = panel.scroll_into_view(&nodes, height);
+    let panel = &*panel;
     let items: Vec<ListItem> =
         nodes.into_iter().skip(offset).take(height).map(|node| schema_item(panel, node, width, show_schema)).collect();
 
@@ -131,6 +136,8 @@ fn schema_item(panel: &SchemaPanel, node: SchemaNode, width: usize, show_schema:
             };
             let right = if table.info.is_view {
                 "view".to_string()
+            } else if panel.sort == SchemaSort::Size {
+                table.info.bytes.map(human_bytes).unwrap_or_default()
             } else {
                 table.info.rows.map(human_count).unwrap_or_default()
             };

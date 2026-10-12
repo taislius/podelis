@@ -14,7 +14,7 @@ if it's still empty and unconnected. A `●` marks the open project and the
 connections open in tabs. On a narrow terminal the focused pane and the
 next one show. Clicking a row selects it; clicking it again (or a double
 click) opens it, and clicking a field in the settings focuses it.
-Quitting from here (`q`, `Ctrl+C`) asks first if a transaction is open.
+Quitting from here (`q`, `Ctrl+Q`, `Ctrl+C`) asks first if a transaction is open.
 
 ## Projects
 
@@ -53,10 +53,12 @@ While editing or adding a connection:
 | Key | Action |
 |---|---|
 | `↑`/`↓` | Move between fields (or click one) |
-| `←`/`→` | Change Engine, SSL mode or Mode when that field is focused |
+| `←`/`→` | Change Engine, SSL mode, Mode or Transaction when that field is focused |
 | `Enter` | Connect (in a new tab if this one is connected; the tab you were on keeps its connection) |
 | `Ctrl+S` | Save this connection (settings locally; password in the OS keychain, unless a password command supplies it). Changing the name and saving renames the profile. A new connection is also saved once it connects (unnamed: after its host/database or file) |
 | `Ctrl+T` | Test the connection step by step: SSH, DNS, TCP, login, TLS, session, latency — each with its timing, the failing step with a hint |
+| `Ctrl+Y` | Copy the focused field's value (not the password) |
+| `Ctrl+V` | Paste into the focused field from the system clipboard (`pbpaste`, `wl-paste`, `xclip` or `xsel`), for terminals where `Ctrl+V` doesn't paste; the terminal's own paste works too. A pasted connection URL fills in the whole form |
 | `Esc` | Cancel a connection attempt in progress, otherwise back to the connections (unsaved changes are dropped) |
 
 - **Host** can be a hostname, an IP address (IPv6 with or without brackets)
@@ -65,6 +67,11 @@ While editing or adding a connection:
   form asks only for a file path or `:memory:`. A path that doesn't exist
   is usually a typo, so the form says so and creates a new database only
   when you press Enter again.
+- **SSL mode:** `prefer` (the default) uses TLS when the server offers it.
+  If the server offers TLS this client can't use (an old MySQL 5.x that
+  speaks only TLS 1.0/1.1), it connects without encryption and warns: in
+  the status bar and MESSAGES, under `Ctrl+K u`, and in the `Ctrl+T` test.
+  `require` and the `verify-*` modes never fall back; `disable` doesn't try.
 - **Passwd cmd:** optional. A command that prints the password, run each
   time the connection opens: `pass show db/prod`, `op read
   op://Ops/prod-db/password`, `vault kv get -field=password secret/db/prod`,

@@ -1,4 +1,4 @@
-//! `QUERY`: line-number gutter, highlighted current line, syntax
+//! `QUERY`: line-number gutter, underlined current line, syntax
 //! colours, and an execution-controls bar; plus the autocomplete popup.
 
 use std::cell::RefCell;
@@ -88,15 +88,23 @@ pub(super) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Option<(u
         .collect();
     f.render_widget(Paragraph::new(numbers).style(Style::default().bg(t.inset)), gutter);
 
-    // Current line background.
-    if cursor_row >= scroll_row && ((cursor_row - scroll_row) as u16) < text_area.height {
-        let y = text_area.y + (cursor_row - scroll_row) as u16;
-        let row = Rect { x: gutter.right(), y, width: code.right().saturating_sub(gutter.right()), height: 1 };
-        f.render_widget(Block::default().style(Style::default().bg(t.active)), row);
-    }
-
     let lines = editor_lines(app, scroll_row, text_area.height as usize);
     f.render_widget(Paragraph::new(lines).scroll((0, app.tab.editor.scroll_col as u16)), text_area);
+
+    // The current line: a faint underline across the pane, under the text
+    // (cells already underlined, e.g. an error, keep theirs).
+    if cursor_row >= scroll_row && ((cursor_row - scroll_row) as u16) < text_area.height {
+        let y = text_area.y + (cursor_row - scroll_row) as u16;
+        let buf = f.buffer_mut();
+        for x in gutter.right()..code.right() {
+            if let Some(cell) = buf.cell_mut((x, y))
+                && !cell.modifier.contains(Modifier::UNDERLINED)
+            {
+                cell.modifier.insert(Modifier::UNDERLINED);
+                cell.underline_color = t.line;
+            }
+        }
+    }
 
     draw_controls(f, app, controls);
 
@@ -447,6 +455,7 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
     f.render_widget(Block::default().style(Style::default().bg(t.inset)), area);
     app.hits.tx_mode = Rect::default();
+    app.hits.syntax_hint = Rect::default();
     if let Some(bar) = &app.find {
         return draw_find_bar(f, app, bar, area);
     }
@@ -469,6 +478,11 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
             Some((nth, total)) if total > 1 => format!("{label} {nth}/{total}"),
             _ => label.to_string(),
         };
+        // Which line it's about: often not the one being edited.
+        let label = match hint.offset {
+            Some(offset) => format!("{label} line {}", app.tab.editor.pos_of_offset(offset).0 + 1),
+            None => label,
+        };
         let message = one_line(&hint.message);
         let room = (l.width as usize).saturating_sub(label.chars().count() + 4);
         // The rule's name, so it's clear which check fired, when the message fits beside it.
@@ -486,6 +500,10 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
     };
     f.render_widget(Paragraph::new(left), l);
     f.render_widget(Paragraph::new(right).alignment(Alignment::Right), r);
+    // Clicking a hint goes to where it points.
+    if app.editor_note.is_none() && app.tab.syntax_hint.as_ref().is_some_and(|h| h.offset.is_some()) {
+        app.hits.syntax_hint = l;
+    }
     // Clicking the write modes cycles them.
     if app.txn == TxnState::Idle {
         app.hits.tx_mode = r;

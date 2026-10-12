@@ -24,6 +24,8 @@ impl Database {
         }
         if let Some(tls) = self.tls_info().await {
             out.push(("TLS".to_string(), tls));
+        } else if let Some(why) = self.tls_failed() {
+            out.push(("TLS".to_string(), format!("none: TLS failed ({why}), so SSL mode prefer connected without it")));
         }
         out
     }

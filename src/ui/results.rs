@@ -1,5 +1,5 @@
 //! `QUERY RESULT`: tabs (rows / messages / plan), the table with a
-//! row-number column and two-line headers, and a footer.
+//! row-number column and underlined headers, and a footer.
 
 use super::*;
 
@@ -56,15 +56,13 @@ fn class_style(class: TypeClass) -> Style {
 pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
     let focused = app.focus == Focus::Results;
-    let info = match (&app.tab.grid.results, app.executing) {
-        (_, true) => "running…".to_string(),
-        (Some(r), false) => format!("ran in {} ms", r.elapsed.as_millis()),
-        (None, false) => String::new(),
-    };
+    // How long it ran is the result's, in its footer.
+    let info = if app.executing { "running…".to_string() } else { String::new() };
     let info = if app.zoomed { format!("ZOOMED · {info}") } else { info };
     let block = pane("Query result", &info, focused);
     app.hits.results = area;
     app.hits.result_rows = Rect::default();
+    app.hits.plan_source = Rect::default();
     let inner = block.inner(area);
     f.render_widget(block, area);
     let [tabs, body, footer] = Layout::default()
@@ -75,8 +73,28 @@ pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
     draw_tabs(f, app, tabs);
     f.render_widget(Block::default().style(Style::default().bg(t.inset)), footer);
     match app.tab.result_tab {
-        ResultTab::Messages => draw_messages(f, app, body),
-        ResultTab::Plan => draw_plan(f, app, body),
+        ResultTab::Messages => {
+            let widest = draw_messages(f, app, body);
+            draw_across_footer(f, app, footer, widest, body.width);
+        }
+        // A plan that's a table: what it's for, its notes, then the grid
+        // with the results' keys.
+        ResultTab::Plan if app.tab.plan_swapped => {
+            let body = draw_plan_source(f, app, body);
+            let notes = plan_note_lines(app, body.width);
+            let height = (notes.len() as u16).min(body.height / 2);
+            let [top, rest] = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(height), Constraint::Min(0)])
+                .areas(body);
+            f.render_widget(Paragraph::new(notes), top);
+            draw_rows(f, app, rest, footer);
+        }
+        ResultTab::Plan => {
+            let body = draw_plan_source(f, app, body);
+            let widest = draw_plan(f, app, body);
+            draw_across_footer(f, app, footer, widest, body.width);
+        }
         ResultTab::Rows => draw_rows(f, app, body, footer),
     }
     // The last run's outcome (or progress), until the next key; the cell
@@ -94,7 +112,9 @@ pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
     f.render_widget(Block::default().style(Style::default().bg(t.inset)), area);
-    let rows = app.tab.grid.results.as_ref().map(|r| {
+    // The result's grid, even while a plan's table is shown in its place.
+    let result_grid = if app.tab.plan_swapped { app.tab.plan_grid.as_deref() } else { Some(&app.tab.grid) };
+    let rows = result_grid.and_then(|g| g.results.as_ref()).map(|r| {
         if r.columns.is_empty() {
             format!("{} affected", r.rows_affected.unwrap_or(0))
         } else if app.row_stream.is_some() {
@@ -122,8 +142,8 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     let width = |spans: &[Span]| spans.iter().map(Span::width).sum::<usize>() as u16;
     let start = area.x;
     // A script's result sets: which one is shown.
-    let label = if app.tab.grid.result_sets.len() > 1 {
-        format!("RESULT {}/{}", app.tab.grid.result_set + 1, app.tab.grid.result_sets.len())
+    let label = if let Some(g) = result_grid.filter(|g| g.result_sets.len() > 1) {
+        format!("RESULT {}/{}", g.result_set + 1, g.result_sets.len())
     } else {
         "RESULT".into()
     };
@@ -142,7 +162,11 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     app.hits.result_tabs = tab_hits;
     app.hits.result_tabs_y = area.y;
 
-    let right = if app.tab.grid.filter_editing {
+    // The filter is the grid's: shown with it, not over MESSAGES or a text plan.
+    let grid_shown = app.tab.result_tab == ResultTab::Rows || app.tab.plan_swapped;
+    let right = if !grid_shown {
+        Line::default()
+    } else if app.tab.grid.filter_editing {
         let mut spans = vec![Span::styled("filter: ", bold(t.accent))];
         spans.extend(input_spans(&app.tab.grid.filter, fg(t.text_bright)));
         spans.push(Span::raw(" "));
@@ -162,11 +186,34 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Paragraph::new(right).alignment(Alignment::Right), r);
 }
 
-fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
+/// Scrolls `app`'s tab across no further than the widest line allows.
+fn clamp_across(app: &mut App, widest: usize, width: u16) -> u16 {
+    let most = u16::try_from(widest.saturating_sub(usize::from(width))).unwrap_or(u16::MAX);
+    app.tab.tab_hscroll = app.tab.tab_hscroll.min(most);
+    app.tab.tab_hscroll
+}
+
+/// Under MESSAGES and QUERY PLAN when their lines are wider than the
+/// pane: which columns show, and that ←/→ scroll.
+fn draw_across_footer(f: &mut Frame, app: &App, footer: Rect, widest: usize, width: u16) {
+    let width = usize::from(width);
+    if widest <= width {
+        return;
+    }
+    let from = usize::from(app.tab.tab_hscroll);
+    let to = (from + width).min(widest);
+    let left = if from > 0 { "◀ " } else { "  " };
+    let right = if to < widest { " ▶" } else { "  " };
+    let text = format!("{left}cols {}–{to} of {widest}{right}  ←/→ scroll ", from + 1);
+    f.render_widget(Paragraph::new(Span::styled(text, dim())).alignment(Alignment::Right), footer);
+}
+
+/// Returns the widest line's width.
+fn draw_messages(f: &mut Frame, app: &mut App, area: Rect) -> usize {
     let t = theme();
     if app.messages.is_empty() {
         f.render_widget(Paragraph::new(" No messages yet.").style(dim()), area);
-        return;
+        return 0;
     }
     let lines: Vec<Line> = app
         .messages
@@ -181,33 +228,105 @@ fn draw_messages(f: &mut Frame, app: &App, area: Rect) {
     // Newest at the bottom; scrolling moves up from there.
     let bottom = (lines.len() as u16).saturating_sub(area.height);
     let scroll = bottom.saturating_sub(app.tab.tab_scroll);
-    f.render_widget(Paragraph::new(lines).scroll((scroll, 0)), area);
+    let widest = lines.iter().map(Line::width).max().unwrap_or(0);
+    let across = clamp_across(app, widest, area.width);
+    f.render_widget(Paragraph::new(lines).scroll((scroll, across)), area);
+    widest
 }
 
-fn draw_plan(f: &mut Frame, app: &App, area: Rect) {
+/// Above a plan: the statement it's for, EXPLAIN or EXPLAIN ANALYZE, when
+/// it was made, and whether that statement has been edited since. Returns
+/// the area left below it.
+fn draw_plan_source(f: &mut Frame, app: &mut App, area: Rect) -> Rect {
+    app.hits.plan_source = Rect::default();
+    let t = theme();
+    let Some(source) = app.tab.plan_source.as_ref().filter(|_| app.tab.plan.is_some() && area.height > 2) else {
+        return area;
+    };
+    let [line, rest] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .areas(area);
+    let kind = if source.analyzed { " EXPLAIN ANALYZE " } else { " EXPLAIN " };
+    let when = format!("  {} · {}", source.at.format("%H:%M:%S"), age(chrono::Local::now() - source.at));
+    // Where the statement is in the editor now (lines above it may have
+    // changed); once it's been edited away, where it was, and that the
+    // plan may not be for what's there now.
+    let found = source.find_in(&app.tab.editor.text());
+    let lines = |first: usize| {
+        let last = first + source.sql.matches('\n').count();
+        if last > first { format!("lines {}–{}", first + 1, last + 1) } else { format!("line {}", first + 1) }
+    };
+    let (place, place_style) = match found {
+        Some((_, n)) => (lines(n), fg(t.accent).add_modifier(Modifier::UNDERLINED)),
+        None => (format!("was {} · edited since", lines(source.line)), fg(t.warn)),
+    };
+    let place = format!("  {place}");
+    let room =
+        usize::from(area.width).saturating_sub(kind.chars().count() + place.chars().count() + when.chars().count() + 1);
+    let spans = vec![
+        Span::styled(kind, bold(t.on_accent).bg(if source.analyzed { t.warn } else { t.accent })),
+        Span::styled(format!(" {}", truncate(&one_line(&source.sql), room)), fg(t.text_bright)),
+        Span::styled("  ", Style::default()),
+        Span::styled(place.trim_start().to_string(), place_style),
+        Span::styled(when, dim()),
+    ];
+    f.render_widget(Paragraph::new(Line::from(spans)), line);
+    if found.is_some() {
+        app.hits.plan_source = line;
+    }
+    rest
+}
+
+/// How long ago, roughly: `12 s ago`, `5 min ago`, `2 h ago`, `3 days ago`.
+fn age(d: chrono::TimeDelta) -> String {
+    let s = d.num_seconds().max(0);
+    match s {
+        0..5 => "just now".to_string(),
+        5..60 => format!("{s} s ago"),
+        60..3600 => format!("{} min ago", s / 60),
+        3600..86400 => format!("{} h ago", s / 3600),
+        _ => format!("{} days ago", s / 86400),
+    }
+}
+
+/// The plan's notes, numbered (the same number marks its step), then a
+/// blank line; nothing without notes.
+fn plan_note_lines(app: &App, width: u16) -> Vec<Line<'static>> {
+    let t = theme();
+    let Some(plan) = &app.tab.plan else { return Vec::new() };
+    let mut lines = Vec::new();
+    let room = usize::from(width).saturating_sub(5).max(20);
+    for (i, note) in plan.notes.iter().enumerate() {
+        for (j, part) in wrap_words(&note.text, room).into_iter().enumerate() {
+            let label = if j == 0 {
+                Span::styled(format!(" {} ", i + 1), bold(t.on_accent).bg(t.warn))
+            } else {
+                Span::raw("   ")
+            };
+            lines.push(Line::from(vec![label, Span::styled(format!(" {part}"), fg(t.warn))]));
+        }
+    }
+    if !plan.notes.is_empty() {
+        lines.push(Line::default());
+    }
+    lines
+}
+
+/// Returns the widest line's width.
+fn draw_plan(f: &mut Frame, app: &mut App, area: Rect) -> usize {
     let t = theme();
     match &app.tab.plan {
-        None => f.render_widget(
-            Paragraph::new(" Press F7 in the editor to see the plan for the statement at the cursor.").style(dim()),
-            area,
-        ),
+        None => {
+            f.render_widget(
+                Paragraph::new(" Press F7 in the editor to see the plan for the statement at the cursor.").style(dim()),
+                area,
+            );
+            0
+        }
         Some(plan) => {
             // What stands out first, numbered; the same number marks its step.
-            let mut lines: Vec<Line> = Vec::new();
-            let room = (area.width as usize).saturating_sub(5).max(20);
-            for (i, note) in plan.notes.iter().enumerate() {
-                for (j, part) in wrap_words(&note.text, room).into_iter().enumerate() {
-                    let label = if j == 0 {
-                        Span::styled(format!(" {} ", i + 1), bold(t.on_accent).bg(t.warn))
-                    } else {
-                        Span::raw("   ")
-                    };
-                    lines.push(Line::from(vec![label, Span::styled(format!(" {part}"), fg(t.warn))]));
-                }
-            }
-            if !plan.notes.is_empty() {
-                lines.push(Line::default());
-            }
+            let mut lines = plan_note_lines(app, area.width);
             for (n, l) in plan.text.lines().enumerate() {
                 let trimmed = l.trim_start();
                 let marks: Vec<String> = (1..=plan.notes.len())
@@ -227,7 +346,10 @@ fn draw_plan(f: &mut Frame, app: &App, area: Rect) {
                 }
                 lines.push(line);
             }
-            f.render_widget(Paragraph::new(lines).scroll((app.tab.tab_scroll, 0)), area);
+            let widest = lines.iter().map(Line::width).max().unwrap_or(0);
+            let across = clamp_across(app, widest, area.width);
+            f.render_widget(Paragraph::new(lines).scroll((app.tab.tab_scroll, across)), area);
+            widest
         }
     }
 }
@@ -240,11 +362,15 @@ fn draw_rows(f: &mut Frame, app: &mut App, area: Rect, footer: Rect) {
     };
     if results.columns.is_empty() {
         let mut msg = results.rows_affected.map_or_else(|| " OK".to_string(), |n| format!(" {n} row(s) affected"));
+        msg = format!("{msg} in {}", crate::app::format_elapsed(results.elapsed));
         if let Some(note) = &app.tab.grid.result_note {
             msg = format!("{msg} — {note}");
         }
         f.render_widget(Paragraph::new(msg).style(bold(t.ok)), area);
         return;
+    }
+    if app.tab.grid.vertical {
+        return draw_vertical(f, app, area, footer);
     }
 
     let num_width = (app.tab.grid.view.len().max(1).to_string().len().max(2) + 2) as u16;
@@ -257,33 +383,30 @@ fn draw_rows(f: &mut Frame, app: &mut App, area: Rect, footer: Rect) {
         .map(|i| type_class(results.column_types.get(i).map_or("", String::as_str)))
         .collect();
 
-    // Two-line headers: NAME over type; the sorted column picked out.
-    let mut header_cells =
-        vec![Cell::from(Text::from(vec![Line::from(" #"), Line::default()])).style(dim().bg(t.inset))];
+    // Headers like the QUERY PLAN's table: the name, then a rule under the
+    // column (the selected cell's type is in the footer). The sorted column
+    // is picked out.
+    let rule = |width: u16, style: Style| Line::from(Span::styled("─".repeat(usize::from(width)), style));
+    let mut header_cells = vec![Cell::from(Text::from(vec![
+        Line::from(Span::styled(" #", dim())),
+        rule(num_width.saturating_sub(1), dim()).right_aligned(),
+    ]))];
     for (i, name) in results.columns[visible.clone()].iter().enumerate() {
         let col = offset + i;
         let sorted = match app.tab.grid.sort {
             Some((c, desc)) if c == col => Some(if desc { " ▼" } else { " ▲" }),
             _ => None,
         };
-        // sqlx names types it doesn't know (e.g. custom enums) "?".
-        // Unknown types: "?" from sqlx, "NULL" for SQLite expressions.
-        let ty = results
-            .column_types
-            .get(col)
-            .filter(|t| *t != "?" && !t.eq_ignore_ascii_case("null"))
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
-        let (name_style, bg) = if sorted.is_some() { (bold(t.accent), t.active) } else { (bold(t.text), t.inset) };
-        let mut first = Line::from(vec![Span::styled(name.to_uppercase(), name_style)]);
+        let (name_style, rule_style) =
+            if sorted.is_some() { (bold(t.accent), fg(t.accent)) } else { (fg(t.text_bright), fg(t.text)) };
+        let mut first = Line::from(vec![Span::styled(name.clone(), name_style)]);
         if let Some(arrow) = sorted {
             first.push_span(Span::styled(arrow, fg(t.accent)));
         }
-        let text = Text::from(vec![first, Line::from(Span::styled(ty, dim()))]);
-        let text = if classes[col] == TypeClass::Number { text.alignment(Alignment::Right) } else { text };
-        header_cells.push(Cell::from(text).style(Style::default().bg(bg)));
+        let first = if classes[col] == TypeClass::Number { first.right_aligned() } else { first };
+        header_cells.push(Cell::from(Text::from(vec![first, rule(app.tab.grid.col_widths[col], rule_style)])));
     }
-    let header = Row::new(header_cells).height(2).style(Style::default().bg(t.inset));
+    let header = Row::new(header_cells).height(2);
 
     // Only the rows on screen are built: a streamed result can hold far
     // more rows than fit, and building them all every frame is slow.
@@ -341,6 +464,75 @@ fn draw_rows(f: &mut Frame, app: &mut App, area: Rect, footer: Rect) {
         .collect();
 
     draw_rows_footer(f, app, footer, offset, count);
+}
+
+/// The rows one column per line, like mysql's `\G`: a `*** 3. row ***`
+/// heading, then `name: value` lines. Scrolled so the selected field shows,
+/// with its row's heading when it fits.
+fn draw_vertical(f: &mut Frame, app: &mut App, area: Rect, footer: Rect) {
+    let t = theme();
+    let grid = &mut app.tab.grid;
+    let Some(results) = &grid.results else { return };
+    let cols = results.columns.len();
+    let block = cols + 1;
+    let height = usize::from(area.height).max(1);
+    let selected = grid.table_state.selected().unwrap_or(0).min(grid.view.len().saturating_sub(1));
+    // Whole rows that fit; the selected one among them.
+    let fit = (height / block).max(1);
+    if selected < grid.row_offset {
+        grid.row_offset = selected;
+    } else if selected >= grid.row_offset + fit {
+        grid.row_offset = selected + 1 - fit;
+    }
+    let first = grid.row_offset;
+    // Within a row taller than the pane: down to the selected field.
+    let field_line = (selected - first) * block + 1 + grid.selected_col.min(cols - 1);
+    let scroll = (field_line + 1).saturating_sub(height);
+
+    let names = results
+        .columns
+        .iter()
+        .map(|c| unicode_width::UnicodeWidthStr::width(c.as_str()))
+        .max()
+        .unwrap_or(0)
+        .min(usize::from(area.width) / 3);
+    let room = usize::from(area.width).saturating_sub(names + 3);
+    let rule = usize::from(area.width).min(64);
+    let shown = grid.view.len().min(first + fit + 1);
+    let mut lines = Vec::new();
+    for (n, &i) in grid.view[first..shown].iter().enumerate() {
+        let n = first + n;
+        let current = n == selected;
+        let marked = grid.marked.contains(&i);
+        let heading = format!("{:*^rule$}", format!(" {}. row{} ", n + 1, if marked { " ●" } else { "" }));
+        lines.push(Line::from(Span::styled(heading, if current { bold(t.accent) } else { dim() })));
+        for (c, name) in results.columns.iter().enumerate() {
+            let name = format!("{:>names$}", truncate(name, names));
+            let value = match &results.rows[i][c] {
+                Some(v) => Span::styled(
+                    one_line(&display_prefix(v, room + 1)),
+                    class_style(type_class(results.column_types.get(c).map_or("", String::as_str))),
+                ),
+                None => Span::styled(NULL_SYMBOL, dim()),
+            };
+            let picked = current && c == grid.selected_col;
+            let line = Line::from(vec![
+                Span::styled(format!(" {name}"), if picked { bold(t.accent) } else { muted() }),
+                Span::styled(": ", dim()),
+                value,
+            ]);
+            lines.push(if picked {
+                line.style(bold(t.text_bright).bg(t.selected))
+            } else if current {
+                line.style(Style::default().bg(t.active))
+            } else {
+                line
+            });
+        }
+    }
+    f.render_widget(Paragraph::new(lines).scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0)), area);
+    app.hits.result_cols.clear();
+    draw_rows_footer(f, app, footer, 0, cols);
 }
 
 /// The row-number cell: `●` and highlighted when marked.
@@ -402,11 +594,22 @@ fn draw_rows_footer(f: &mut Frame, app: &App, footer: Rect, offset: usize, count
     } else if results.truncated() {
         right.push(Span::styled("  · M loads more", dim()));
     }
-    if count < results.columns.len() {
+    // Which columns show, with arrows where more are hidden.
+    let total = results.columns.len();
+    if count < total {
+        let left = if offset > 0 { "◀ " } else { "" };
+        let right_more = if offset + count < total { " ▶" } else { "" };
+        right.push(Span::styled("  · ", dim()));
         right.push(Span::styled(
-            format!("  · cols {}–{} of {}", offset + 1, offset + count, results.columns.len()),
-            dim(),
+            format!("{left}cols {}–{} of {total}{right_more}", offset + 1, offset + count),
+            fg(t.text),
         ));
+    } else {
+        right.push(Span::styled(format!("  · {total} cols"), dim()));
+    }
+    // The query's time (not a plan's: that's the EXPLAIN's).
+    if !app.tab.plan_swapped {
+        right.push(Span::styled(format!("  · {}", crate::app::format_elapsed(results.elapsed)), dim()));
     }
     right.push(Span::raw(" "));
     let right = Line::from(right);
@@ -442,6 +645,15 @@ const NULL_SYMBOL: &str = "∅";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ages_read_roughly() {
+        let age = |s| age(chrono::TimeDelta::seconds(s));
+        assert_eq!(
+            [age(2), age(42), age(150), age(7300), age(200_000)],
+            ["just now", "42 s ago", "2 min ago", "2 h ago", "2 days ago"]
+        );
+    }
 
     #[test]
     fn words_wrap_at_the_width() {

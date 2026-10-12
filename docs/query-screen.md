@@ -34,13 +34,15 @@ Keys that work directly:
 |---|---|
 | `F5` / `Ctrl+R` / `Ctrl+Enter`¹ | Run the selection, or everything in the editor (or click **▶ F5 Run** right of the tabs; *Statement* and *Explain* are there too) |
 | `F6` | Run the selection, or the statement under the cursor |
-| `F7` | Show the plan for the selection / statement under the cursor (not executed) |
-| `Shift+F7` | `EXPLAIN ANALYZE`: runs the statement and shows actual times and rows (writes ask first and are rolled back) |
+| `F7` | Show the plan for the selection / statement under the cursor (not executed). MySQL 8.0.16+ shows `FORMAT=TREE`; older MySQL and MariaDB show the classic `EXPLAIN` table |
+| `Shift+F7` | `EXPLAIN ANALYZE`: runs the statement and shows actual times and rows (writes ask first and are rolled back). MySQL needs 8.0.18+; MariaDB runs `ANALYZE` |
 | `F8` / `Shift+F8` | Commit / roll back the open transaction |
 | `Esc` | Cancel the running query (not supported for SQLite) |
 | `Ctrl+P` / `Ctrl+N` | Previous / next query from history |
 | `Tab` / `Shift+Tab` | Cycle focus: editor → results → schema (`Tab` right after a word completes it instead; `Esc` then `Tab` still moves on) |
-| `Ctrl+C` | Quit (copies instead when text is selected in the editor) |
+| `Ctrl+↑` / `Ctrl+↓` | Move the border between the editor and the results up / down |
+| `Ctrl+←` / `Ctrl+→` | Move the navigator's border left / right (from the navigator or the results; in the editor they move by word) |
+| `Ctrl+Q` / `Ctrl+C` | Quit (`Ctrl+C` copies instead when text is selected in the editor) |
 | `F1` | Every key |
 
 The function keys from earlier versions still work: `F2` navigator, `F3`
@@ -115,9 +117,10 @@ When focused:
 | Key | Action |
 |---|---|
 | `↑`/`↓`/`PageUp`/`PageDown`/`Home`/`End` | Move between rows |
-| `←`/`→` | Move between columns (scrolls sideways) |
+| `←`/`→`, `0` / `$` | Move between columns, or to the first / last (scrolls sideways; `Shift`+wheel or a sideways wheel too). The footer shows which columns are on screen (`◀ cols 4–9 of 30 ▶`) |
 | `Enter` / `v` | Show the full value of the cell (JSON pretty-printed) |
-| `x` | Show the row vertically, one `column  value` line each; `←`/`→` previous / next row |
+| `x` | Show the row vertically, one `column  value` line each. `↑`/`↓` scroll it and then go on to the previous / next row; `←`/`→` go straight to the previous / next row |
+| `X` | All rows one column per line, like the mysql client's `\G` (`*** 1. row ***`, then `name: value`), or back to the table. `↑`/`↓` go field by field into the next row, `PageUp`/`PageDown` a row at a time. Ending a statement with `\G` instead of `;` (`select * from users\G`) shows its result this way; the next run without it goes back to the table |
 | `f` | Follow the foreign key in the selected cell: opens the referenced row in a new tab |
 | `\|` | Pipe the rows shown through a shell command (`grep -i vilnius`, `sort -t$'\t' -k3 -n`, `jq '.[].email'`, `mlr --itsv --opprint stats1 -a sum -f total`…) and show its output |
 | `o` | Open the rows shown in the viewer: `$PAGER` (else `less -S`), or `viewer` from `config.toml`, e.g. VisiData |
@@ -132,6 +135,19 @@ When focused:
 | `e` / `J` / `i` | Export the rows shown as CSV / JSON / SQL `INSERT` statements to `podelis-export-<timestamp>.<ext>` (in the current directory, or `export_dir`) |
 | `M` | Load 10× more rows (streamed results fetch the next pages; scripts are re-run with a bigger limit, read-only ones only) |
 | `[` / `]`, `1` `2` `3` (or click a tab) | Switch between the RESULT, MESSAGES and QUERY PLAN tabs (`F7` opens the plan with the results focused; `1` goes back) |
+| `↑`/`↓`/`PageUp`/`PageDown`, `←`/`→`, `Home` / `0` | In MESSAGES and QUERY PLAN: scroll down and across, back to the top / the left edge. A plan wider than the pane says which columns show in the footer |
+
+Above the plan: the statement it's for (`EXPLAIN` or `EXPLAIN ANALYZE`),
+its lines in the editor (`lines 12–15`; click them to go there), when the plan was made and
+how long ago. Once that statement is no longer in the editor as it was, it
+says `was lines 12–15 · edited since`.
+
+A plan that comes as a table (MySQL before 8.0.16 and MariaDB: the classic
+`EXPLAIN` columns) shows in QUERY PLAN as a grid like the result's, under its
+notes, and takes the same keys: moving, `s` sort, `/` filter, `x` / `X`,
+`y` / `Y` / `C` copy, `e` / `J` export, `|` and `o`. Editing, adding,
+deleting, following a foreign key and loading more are for query results
+only.
 
 **Snippets** are saved queries in the `snippets` group (save one with
 `Ctrl+S` as `snippets/recent orders`). Typing the start of a snippet's name
@@ -191,18 +207,19 @@ Copying uses the OSC 52 terminal escape sequence, which works locally and
 over SSH in most modern terminals. In tmux, enable it with
 `set -g set-clipboard on`.
 
-## Schema browser
+## Navigator
 
 When focused:
 
 | Key | Action |
 |---|---|
-| `↑`/`↓` | Move |
-| `/` | Filter tables, views and functions by name |
-| `Enter` / `→` | Expand a table: its columns (with `→ table.column` for foreign keys) and indexes; on a function, show its definition |
+| `↑`/`↓`, `PageUp`/`PageDown`, `Home`/`End` (`g`/`G`) | Move by a row, a page, or to the first / last |
+| `/` | Filter tables, views and functions by name (or click the filter line) |
+| `o` | Order the tables by name, by rows, or by size on disk (indexes included; the size then shows instead of the rows). Both are the server's estimates; SQLite has no sizes |
+| `Enter` / `→` | Expand a table: its columns (with `→ table.column` for foreign keys) and indexes, scrolled into view; on a function, show its definition |
 | `←` | Collapse |
-| `d` | Show the definition: `CREATE VIEW`, the function source, or a table's columns, keys and indexes (SQLite: its `CREATE TABLE`) |
-| `s` | Insert `SELECT * FROM <table> LIMIT 100;` into the editor |
+| `d` | Show the definition: `CREATE VIEW`, the function source, or a table's columns, keys and indexes (SQLite: its `CREATE TABLE`). In it, `←`/`→` show the previous / next table's (the navigator's selection follows), `y` copies it |
+| `s` | Add `SELECT * FROM <table> LIMIT 100;` at the end of the editor and run it (only it, as `F6` would) |
 | `r` | Refresh (also happens automatically after DDL, `USE` and `SET`) |
 | `.` | Show or hide system tables (`pg_catalog` and `information_schema`; MySQL's `information_schema`, `performance_schema`, `mysql` and `sys`; SQLite's `sqlite_schema` and `sqlite_*`) in a SYSTEM section |
 | `Space` | The `Ctrl+K` command menu |

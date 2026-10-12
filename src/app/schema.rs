@@ -49,18 +49,49 @@ impl App {
         let engine = self.engine();
         let Some(panel) = &mut self.schema else { return };
         let Some(table) = panel.tables.get(t) else { return };
+        let title = format!("{} {}", if table.info.is_view { "VIEW" } else { "TABLE" }, table.info.name);
         if table.details.is_none() {
             panel.show_definition_of = Some((table.info.schema.clone(), table.info.name.clone()));
+            // Browsing: the popup says so rather than showing the last one.
+            if self.cell_view.as_ref().is_some_and(|v| v.browse) {
+                self.cell_view = Some(CellView::definition(title, "Loading…".to_string()));
+            }
             return self.request_details(t);
         }
-        let title = format!("{} {}", if table.info.is_view { "VIEW" } else { "TABLE" }, table.info.name);
-        self.cell_view = Some(CellView::new(title, table_definition(engine, table)));
+        self.cell_view = Some(CellView::definition(title, table_definition(engine, table)));
+    }
+
+    /// ←/→ in a navigator definition: the previous or next table's, view's
+    /// or function's, selecting it in the navigator too.
+    pub(super) fn step_definition(&mut self, back: bool) {
+        let Some(panel) = &mut self.schema else { return };
+        let nodes = panel.nodes();
+        let browsable = |n: &SchemaNode| matches!(n, SchemaNode::Table(_) | SchemaNode::Routine(_));
+        let next = if back {
+            nodes[..panel.selected.min(nodes.len())].iter().rposition(browsable)
+        } else {
+            nodes.iter().skip(panel.selected + 1).position(browsable).map(|i| i + panel.selected + 1)
+        };
+        let Some(i) = next else { return };
+        panel.selected = i;
+        match nodes[i] {
+            SchemaNode::Table(t) => self.show_table_definition(t),
+            SchemaNode::Routine(r) => {
+                if let Some(view) = &mut self.cell_view {
+                    view.text = "Loading…".to_string();
+                    view.scroll = 0;
+                }
+                self.show_routine(r);
+            }
+            _ => {}
+        }
     }
 
     pub(super) fn show_routine(&mut self, r: usize) {
         let Some(db) = self.database.clone() else { return };
         let Some(routine) = self.schema.as_ref().and_then(|p| p.routines.get(r)).cloned() else { return };
         let send = self.sender();
+        self.routine_definition_pending = true;
         tokio::spawn(async move {
             let title = format!("{} {}", routine.kind.to_uppercase(), routine.name);
             let result = db.routine_definition(&routine).await.map_err(|e| crate::db::error_message(&e));

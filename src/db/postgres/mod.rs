@@ -67,13 +67,13 @@ impl Dialect for Postgres {
     fn version_query(&self) -> &'static str {
         "SHOW server_version"
     }
-    fn explain(&self, stmt: &str) -> String {
+    fn explain(&self, stmt: &str, _version: &str) -> String {
         format!("EXPLAIN (FORMAT JSON) {stmt}")
     }
-    fn explain_analyze(&self, stmt: &str) -> Option<String> {
+    fn explain_analyze(&self, stmt: &str, _version: &str) -> Option<String> {
         Some(format!("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {stmt}"))
     }
-    fn format_plan(&self, rows: &[Vec<Option<String>>]) -> Option<Plan> {
+    fn format_plan(&self, _columns: &[String], rows: &[Vec<Option<String>>]) -> Option<Plan> {
         plan::format(rows.first()?.first()?.as_deref()?)
     }
     fn real_type(&self) -> &'static str {

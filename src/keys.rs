@@ -103,9 +103,9 @@ impl Action {
             Action::OpenConnection => "open connection",
             Action::Disconnect => "disconnect",
             Action::RenameTab => "rename tab",
-            Action::Library => "library",
-            Action::Commit => "commit",
-            Action::Rollback => "roll back",
+            Action::Library => "SQL library (saved queries, snippets)",
+            Action::Commit => "commit the transaction",
+            Action::Rollback => "roll back the transaction",
             Action::Comment => "comment lines",
             Action::Format => "format SQL",
             Action::ConnectionInfo => "connection info",
@@ -124,6 +124,21 @@ impl Action {
     /// Every action, in a sensible order.
     pub fn all() -> impl Iterator<Item = Action> {
         ACTIONS.iter().map(|(a, _, _)| *a)
+    }
+
+    /// About the editor's text (its statement, lines or cursor) or its tab:
+    /// the Ctrl+K menu lists them only while the editor has the keys.
+    pub fn is_editor_action(self) -> bool {
+        matches!(
+            self,
+            Action::RenameTab
+                | Action::Explain
+                | Action::ExplainAnalyze
+                | Action::Comment
+                | Action::Format
+                | Action::InsertSnippet
+                | Action::NextWarning
+        )
     }
 
     /// Tab and library actions work from every pane and over popups.

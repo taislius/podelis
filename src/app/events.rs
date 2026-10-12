@@ -21,7 +21,14 @@ impl App {
             }
             return;
         }
-        match event.kind {
+        // Outcomes land in the result's grid, not a plan's shown in its place.
+        self.unswap_plan_grid();
+        self.apply_event(event.kind);
+        self.sync_plan_grid();
+    }
+
+    fn apply_event(&mut self, kind: DbEventKind) {
+        match kind {
             DbEventKind::PasswordLoaded(profile, password, note) => {
                 self.loading_profile = false;
                 self.stash_active_form();
@@ -96,10 +103,14 @@ impl App {
             DbEventKind::TableDetails { schema, table, result } => self.apply_details(&schema, &table, result),
             DbEventKind::SchemaCompared { other, result } => self.schema_compared(&other, result),
             DbEventKind::RowsCompared { other, result } => self.rows_compared(&other, *result),
-            DbEventKind::Definition(title, result) => match result {
-                Ok(text) => self.cell_view = Some(CellView::new(title, text)),
-                Err(e) => self.set_status(e, true),
-            },
+            DbEventKind::Definition(title, result) => {
+                let browse = std::mem::take(&mut self.routine_definition_pending);
+                match result {
+                    Ok(text) if browse => self.cell_view = Some(CellView::definition(title, text)),
+                    Ok(text) => self.cell_view = Some(CellView::new(title, text)),
+                    Err(e) => self.set_status(e, true),
+                }
+            }
         }
     }
 
@@ -132,6 +143,14 @@ impl App {
             self.connection_summary = format!("[{project}] {}", self.connect_form.summary());
             self.set_status(said, is_error);
         }
+        // SSL mode `prefer` gave up on TLS: say so, it's not what was asked.
+        let tls_failed = self.database.as_ref().and_then(|db| db.tls_failed().map(str::to_string));
+        if let Some(why) = tls_failed {
+            let ssh = if self.connect_form.ssh.trim().is_empty() { "" } else { " (the SSH tunnel still encrypts)" };
+            let warning = format!("Not encrypted: TLS isn't possible with this server, so it connected without{ssh}");
+            self.log(format!("{warning}. TLS failed: {why}"), true);
+            self.set_status(format!("{warning} · details in MESSAGES"), true);
+        }
     }
 
     pub(super) fn on_query_done(&mut self, outcome: QueryOutcome, txn: Option<TxnState>, stream: Option<RowStream>) {
@@ -157,10 +176,19 @@ impl App {
         match std::mem::take(&mut self.running_purpose) {
             RunPurpose::Query => {
                 self.show_results(outcome);
+                // `\G` turns the vertical layout on for its result; the next
+                // run without it turns it off again (`X` keeps it on).
+                let grid = &mut self.tab.grid;
+                if self.run_extra.vertical {
+                    (grid.vertical, grid.vertical_by_g) = (true, true);
+                } else if std::mem::take(&mut grid.vertical_by_g) {
+                    grid.vertical = false;
+                }
                 if let Some(prefix) = self.run_extra.status_prefix.take() {
                     self.status = format!("{prefix} · {}", self.status);
                 }
                 self.tab.result_tab = ResultTab::Rows;
+                self.tab.tab_scroll = 0;
                 if stream.is_some() {
                     self.status.push_str(" · more load as you scroll");
                 }
@@ -168,7 +196,7 @@ impl App {
                 let status = self.status.clone();
                 self.log(status, false);
             }
-            RunPurpose::Explain => self.show_plan(&outcome),
+            RunPurpose::Explain => self.show_plan(outcome),
             RunPurpose::CellEdit { row, col, value } => self.apply_cell_edit(&outcome, row, col, value),
             RunPurpose::TxControl(command) => self.transaction_ended(command),
             RunPurpose::RowChange(what) => self.rows_changed(what, &outcome),

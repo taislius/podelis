@@ -41,6 +41,21 @@ async fn live_db(engine: Engine) -> Option<Database> {
     Some(Database::connect(params).await.expect("connect"))
 }
 
+#[test]
+fn tls_failures_are_told_from_other_connect_errors() {
+    let io = |text: &str| -> anyhow::Error {
+        anyhow::Error::from(sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, text.to_string())))
+            .context("failed to connect to database")
+    };
+    assert_eq!(
+        super::tls_failure(&io("received fatal alert: HandshakeFailure")).as_deref(),
+        Some("received fatal alert: HandshakeFailure")
+    );
+    assert!(super::tls_failure(&io("Connection refused (os error 111)")).is_none());
+    let denied = anyhow::Error::from(sqlx::Error::Protocol("Access denied for user".into()));
+    assert!(super::tls_failure(&denied).is_none());
+}
+
 fn cells(o: &QueryOutcome) -> Vec<Vec<Option<&str>>> {
     o.rows.iter().map(|r| r.iter().map(|c| c.as_deref()).collect()).collect()
 }
@@ -67,10 +82,15 @@ async fn live_common(db: &Database) {
     assert_eq!(cells(&o), vec![vec![Some(tricky)]]);
 
     // EXPLAIN output formats as a plan on every engine.
-    let o = db.run(&db.engine().dialect().explain("SELECT id FROM t WHERE id = 1"), DEFAULT_ROW_LIMIT).await.unwrap();
-    let plan = db.engine().dialect().format_plan(&o.rows).unwrap().text;
+    let o = db
+        .run(&db.engine().dialect().explain("SELECT id FROM t WHERE id = 1", db.version()), DEFAULT_ROW_LIMIT)
+        .await
+        .unwrap();
+    let plan = db.engine().dialect().format_plan(&o.columns, &o.rows).unwrap().text;
     let expected = match db.engine() {
         Engine::Postgres => "Scan on t",
+        // The classic table on MySQL before 8.0.16 and MariaDB.
+        Engine::MySql if db.engine().dialect().explain("", db.version()) == "EXPLAIN " => "select_type",
         Engine::MySql => "-> ",
         Engine::Sqlite => "SCAN t",
     };
@@ -192,6 +212,7 @@ async fn live_mysql() {
     let catalog = db.catalog(false).await.unwrap();
     let people = catalog.iter().find(|(t, _)| t.name == "people").unwrap();
     assert_eq!(people.1.len(), 2);
+    assert!(people.0.bytes.is_some(), "MySQL keeps data_length + index_length");
     assert!(catalog.iter().all(|(t, _)| !t.system));
     let catalog = db.catalog(true).await.unwrap();
     let tables = catalog
@@ -220,6 +241,8 @@ async fn live_postgres() {
     let catalog = db.catalog(true).await.unwrap();
     let pg_class = catalog.iter().find(|(t, _)| t.schema == "pg_catalog" && t.name == "pg_class").unwrap();
     assert!(pg_class.0.system && pg_class.1.iter().any(|c| c.name == "relname"));
+    // Sizes from the catalog: pg_class has pages (and indexes).
+    assert!(pg_class.0.bytes.is_some_and(|b| b > 0), "{:?}", pg_class.0.bytes);
     assert!(catalog.iter().all(|(t, _)| t.system == matches!(t.schema.as_str(), "pg_catalog" | "information_schema")));
     let o = db
         .run(
@@ -576,10 +599,12 @@ async fn live_activity(engine: Engine, slow: &str) {
     if engine == Engine::Postgres {
         assert!(result.is_err());
     }
-    let explain = engine.dialect().explain_analyze("SELECT 1").unwrap();
+    // MySQL before 8.0.18 has none.
+    let Some(explain) = engine.dialect().explain_analyze("SELECT 1", db.version()) else { return };
     let o = db.run(&explain, 10).await.unwrap();
-    let plan = engine.dialect().format_plan(&o.rows).unwrap().text;
-    assert!(plan.contains("actual time"), "{plan}");
+    let plan = engine.dialect().format_plan(&o.columns, &o.rows).unwrap().text;
+    // MariaDB's ANALYZE: the actual rows in a column of their own.
+    assert!(plan.contains("actual time") || plan.contains("r_rows"), "{plan}");
 }
 
 #[tokio::test]

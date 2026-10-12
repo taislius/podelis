@@ -28,8 +28,8 @@ pub use input::{InputResult, LineInput};
 use list::Nav;
 pub use overlay::Overlay;
 pub use params::ParamForm;
-pub use tabs::TabState;
 pub use tabs::{LibraryItem, LibraryView, TabMeta, TabPrompt, TabPromptKind};
+pub use tabs::{PlanSource, TabState};
 use vim::Vim;
 pub use vim::VimMode;
 
@@ -64,8 +64,8 @@ mod vim;
 
 use connections::looks_like_url;
 pub use connections::{ConnectField, ConnectForm, fields_for};
-pub use results::{NULL_TEXT, display_prefix, visible_columns};
-use results::{column_widths, compute_view, format_elapsed, one_line, pretty_value, widen_columns};
+pub use results::{NULL_TEXT, display_prefix, format_elapsed, visible_columns};
+use results::{column_widths, compute_view, one_line, pretty_value, widen_columns};
 pub use review::TxMode;
 #[cfg(test)]
 pub use session::Splash;
@@ -129,6 +129,35 @@ impl SchemaSection {
     }
 }
 
+/// The order of the navigator's tables (`o` cycles it).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SchemaSort {
+    #[default]
+    Name,
+    /// Most rows first (the server's estimate).
+    Rows,
+    /// Biggest on disk first, indexes included.
+    Size,
+}
+
+impl SchemaSort {
+    pub fn next(self) -> Self {
+        match self {
+            SchemaSort::Name => SchemaSort::Rows,
+            SchemaSort::Rows => SchemaSort::Size,
+            SchemaSort::Size => SchemaSort::Name,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SchemaSort::Name => "name",
+            SchemaSort::Rows => "rows",
+            SchemaSort::Size => "size",
+        }
+    }
+}
+
 /// One visible row of the schema tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SchemaNode {
@@ -164,9 +193,37 @@ pub struct SchemaPanel {
     pub routines: Vec<RoutineInfo>,
     /// A table whose definition opens once its details arrive.
     pub show_definition_of: Option<(String, String)>,
+    pub sort: SchemaSort,
+    /// The first row on screen, and how many fit (as last drawn).
+    pub scroll: usize,
+    pub page: usize,
 }
 
 impl SchemaPanel {
+    /// Scrolls so the selected row shows, with an expanded table's
+    /// columns and indexes as far as they fit (the table stays on screen),
+    /// for `height` rows. Returns the first row to show.
+    pub fn scroll_into_view(&mut self, nodes: &[SchemaNode], height: usize) -> usize {
+        self.page = height.max(1);
+        let selected = self.selected.min(nodes.len().saturating_sub(1));
+        if let Some(SchemaNode::Table(t)) = nodes.get(selected) {
+            let children = nodes[selected + 1..].iter().take_while(|n| n.table() == Some(*t)).count();
+            let wanted = (selected + children + 1).saturating_sub(self.page).min(selected);
+            self.scroll = self.scroll.max(wanted);
+        }
+        if selected < self.scroll {
+            // A section's heading comes along with its first table.
+            let heading = selected.checked_sub(1).filter(|&i| matches!(nodes[i], SchemaNode::Section(_)));
+            self.scroll = heading.unwrap_or(selected);
+        }
+        if selected >= self.scroll + self.page {
+            self.scroll = selected + 1 - self.page;
+        }
+        // No empty space below the last row.
+        self.scroll = self.scroll.min(nodes.len().saturating_sub(self.page));
+        self.scroll
+    }
+
     /// The visible rows: a TABLES section, then VIEWS, then SYSTEM (if
     /// loaded), each with its (filtered) tables and the columns of expanded
     /// ones.
@@ -176,9 +233,16 @@ impl SchemaPanel {
         let mut buf = String::new();
         let mut shown = |name: &str| needle.is_empty() || results::contains_ignoring_case(name, &needle, &mut buf);
         for section in [SchemaSection::Tables, SchemaSection::Views, SchemaSection::System] {
-            let matching: Vec<usize> = (0..self.tables.len())
+            let mut matching: Vec<usize> = (0..self.tables.len())
                 .filter(|&t| section.holds(&self.tables[t].info) && shown(&self.tables[t].info.name))
                 .collect();
+            // Biggest first; unknown sizes last. The sort is stable, so
+            // ties stay by name.
+            match self.sort {
+                SchemaSort::Name => {}
+                SchemaSort::Rows => matching.sort_by_key(|&t| std::cmp::Reverse(self.tables[t].info.rows)),
+                SchemaSort::Size => matching.sort_by_key(|&t| std::cmp::Reverse(self.tables[t].info.bytes)),
+            }
             if matching.is_empty() {
                 continue;
             }
@@ -327,6 +391,8 @@ pub enum ExportFormat {
 #[derive(Clone, Debug, Default)]
 pub struct Hits {
     pub schema: Option<Rect>,
+    /// The schema's filter line (a click starts typing in it).
+    pub schema_filter: Rect,
     /// The schema tree's rows, and the index of the first one shown.
     pub schema_list: Rect,
     pub schema_offset: usize,
@@ -338,6 +404,10 @@ pub struct Hits {
     pub editor_text: Rect,
     /// The write modes in the editor's footer.
     pub tx_mode: Rect,
+    /// The line above a plan saying what it's for (a click goes there).
+    pub plan_source: Rect,
+    /// The syntax hint under the editor (a click goes to what it's about).
+    pub syntax_hint: Rect,
     /// Editor tab strip: (row, then each tab's x range and index).
     pub tabs: Vec<(u16, u16, usize)>,
     pub tabs_y: u16,
@@ -376,6 +446,8 @@ struct RunExtra {
     status_prefix: Option<String>,
     /// When it started, to announce a long run's end.
     started: Option<Instant>,
+    /// It ended a statement with `\G`: show the result one column per line.
+    vertical: bool,
 }
 
 /// What a run's result is for.
@@ -453,11 +525,21 @@ pub struct CellView {
     /// SQL that comes with the text (a schema comparison's), and the
     /// connection it's for: `y` copies it, `e` opens it in a tab there.
     pub sql: Option<(String, u64)>,
+    /// How far it scrolls, as last drawn (the text wraps to the popup).
+    pub max_scroll: u16,
+    /// A definition opened from the navigator (`d`): ←/→ show the previous
+    /// or next table's, view's or function's.
+    pub browse: bool,
 }
 
 impl CellView {
     pub fn new(title: String, text: String) -> Self {
-        CellView { title, text, scroll: 0, record: false, sql: None }
+        CellView { title, text, scroll: 0, record: false, sql: None, max_scroll: u16::MAX, browse: false }
+    }
+
+    /// A navigator definition (`d`), browsable with ←/→.
+    pub fn definition(title: String, text: String) -> Self {
+        CellView { browse: true, ..CellView::new(title, text) }
     }
 }
 
@@ -596,6 +678,16 @@ pub struct App {
     pub schema_shown: bool,
     /// The focused pane fills the screen (`z`, Ctrl+K z / F12).
     pub zoomed: bool,
+    /// A function's definition on its way is for the navigator's popup.
+    routine_definition_pending: bool,
+    /// The statement of the EXPLAIN on its way, and whether it's ANALYZE.
+    /// And the editor line it starts on.
+    plan_request: Option<(String, bool, usize)>,
+    /// Pane sizes moved with Ctrl+arrows: the navigator's width (`None`
+    /// for a quarter of the screen) and the editor's share of the height,
+    /// in percent.
+    pub schema_width: Option<u16>,
+    pub editor_percent: u16,
     /// Clickable areas from the last frame.
     pub hits: Hits,
     /// For double clicks and drags: the last click (time, column, row), and
@@ -745,6 +837,10 @@ impl App {
             pending_follow: false,
             dragging: false,
             zoomed: false,
+            routine_definition_pending: false,
+            plan_request: None,
+            schema_width: None,
+            editor_percent: 40,
             schema_shown: false,
             schema: None,
             schema_visible: false,
@@ -965,6 +1061,11 @@ impl App {
         self.show_results(outcome);
     }
 
+    #[cfg(test)]
+    pub fn show_plan_for_tests(&mut self, outcome: QueryOutcome) {
+        self.show_plan(outcome);
+    }
+
     fn show_results(&mut self, outcome: QueryOutcome) {
         self.close_cell_popups();
         let sets = self.tab.grid.show(outcome);
@@ -1008,7 +1109,7 @@ impl App {
         let status =
             format!("Result set {}/{}{from}: {} row(s)", index + 1, self.tab.grid.result_sets.len(), next.total_rows);
         self.set_status(status, false);
-        self.tab.result_tab = ResultTab::Rows;
+        self.set_result_tab(ResultTab::Rows);
     }
 
     /// The next (or previous) result set, wrapping around.
@@ -1087,8 +1188,10 @@ impl App {
             return;
         }
         let ctrl_c = key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');
+        // Ctrl+Q quits too, from anywhere (Ctrl+C copies a selection).
+        let ctrl_q = key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q');
         if let Some(confirm) = self.confirm.take() {
-            // A second Ctrl+C confirms quitting.
+            // A second Ctrl+C or Ctrl+Q confirms quitting.
             if confirm.offer_transaction
                 && matches!(key.code, KeyCode::Char('t' | 'T'))
                 && let ConfirmAction::Run { sql, offset, filled, .. } = confirm.action
@@ -1096,7 +1199,7 @@ impl App {
                 return self.run_in_transaction(&sql, offset, filled, RunPurpose::Query);
             }
             let yes = matches!(key.code, KeyCode::Char('y' | 'Y'))
-                || (ctrl_c && matches!(confirm.action, ConfirmAction::Quit));
+                || ((ctrl_c || ctrl_q) && matches!(confirm.action, ConfirmAction::Quit));
             if !yes {
                 self.set_status("Cancelled".to_string(), false);
                 return;
@@ -1111,6 +1214,9 @@ impl App {
                 ConfirmAction::LeaveProject(target, panes) => self.go_to_project(target, panes),
             }
             return;
+        }
+        if ctrl_q {
+            return self.request_quit();
         }
         if ctrl_c {
             // With text selected in the editor, Ctrl+C copies instead of

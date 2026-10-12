@@ -89,11 +89,39 @@ impl App {
             _ => {}
         }
 
+        if key.modifiers == KeyModifiers::CONTROL && self.resize_panes(key.code) {
+            return;
+        }
         match self.focus {
             Focus::Editor => self.handle_editor_key(key),
             Focus::Results => self.handle_results_key(key),
             Focus::Schema => self.handle_schema_key(key),
         }
+    }
+
+    /// Ctrl+↑/↓ move the border between the editor and the results;
+    /// Ctrl+←/→ move the navigator's (not from the editor, where they move
+    /// by word). True if handled.
+    fn resize_panes(&mut self, code: KeyCode) -> bool {
+        const STEP: u16 = 5;
+        if self.zoomed {
+            return false;
+        }
+        match code {
+            KeyCode::Up => self.editor_percent = self.editor_percent.saturating_sub(STEP).max(10),
+            KeyCode::Down => self.editor_percent = (self.editor_percent + STEP).min(90),
+            KeyCode::Left | KeyCode::Right if self.focus != Focus::Editor && self.schema_shown => {
+                // From the width drawn, border included (the limits it's
+                // drawn within depend on the screen).
+                let Some(area) = self.hits.schema else { return false };
+                self.schema_width = Some(match code {
+                    KeyCode::Left => area.width.saturating_sub(2),
+                    _ => area.width + 2,
+                });
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// Pastes into what has the typing: the popup in front, else the cell
@@ -484,12 +512,14 @@ impl App {
             _ => None,
         };
         if let Some(i) = switch {
-            self.tab.result_tab = tabs[i];
-            self.tab.tab_scroll = 0;
-            return;
+            return self.set_result_tab(tabs[i]);
         }
-        if self.tab.result_tab != ResultTab::Rows {
+        if !self.grid_shown() {
             return self.handle_tab_scroll_key(key);
+        }
+        // A plan's table can be looked at, not changed.
+        if self.tab.plan_swapped && matches!(key.code, KeyCode::Char('c' | 'a' | 'd' | 'f' | 'M' | 'i' | '<' | '>')) {
+            return self.set_status("That's for query results, not the plan".to_string(), true);
         }
         let Some(results) = &self.tab.grid.results else { return };
         let cols = results.columns.len();
@@ -515,11 +545,15 @@ impl App {
             KeyCode::Char('z') => return self.toggle_zoom(),
             KeyCode::Char('>') => return self.step_result_set(true),
             KeyCode::Char('<') => return self.step_result_set(false),
+            KeyCode::Char('X') => return self.toggle_vertical(),
             _ => {}
         }
         let len = self.tab.grid.view.len();
         if len == 0 {
             return;
+        }
+        if self.tab.grid.vertical && self.vertical_move(key.code, len, cols) {
+            return self.maybe_fetch_more();
         }
         let current = self.tab.grid.table_state.selected().unwrap_or(0);
         let row = match key.code {
@@ -536,6 +570,8 @@ impl App {
             KeyCode::Right | KeyCode::Char('l') => {
                 self.tab.grid.selected_col = (self.tab.grid.selected_col + 1).min(cols - 1);
             }
+            KeyCode::Char('0' | '^') => self.tab.grid.selected_col = 0,
+            KeyCode::Char('$') => self.tab.grid.selected_col = cols - 1,
             KeyCode::Char('y') => self.copy_cell(),
             KeyCode::Char('Y') => self.copy_row(),
             KeyCode::Enter | KeyCode::Char('v') => self.open_cell_view(),
@@ -546,6 +582,36 @@ impl App {
             KeyCode::Char('o') => self.open_in_viewer(),
             _ => {}
         }
+    }
+
+    /// `X`: the rows one column per line (like mysql's `\G`), or the table.
+    pub(super) fn toggle_vertical(&mut self) {
+        let grid = &mut self.tab.grid;
+        grid.vertical = !grid.vertical;
+        grid.vertical_by_g = false;
+        let msg = if grid.vertical { "One column per line (X: back to the table)" } else { "Table view" };
+        self.set_status(msg.to_string(), false);
+    }
+
+    /// Moving in the vertical layout: ↑/↓ go field by field, on into the
+    /// next or previous row; PageUp/PageDown a whole row. True if handled.
+    fn vertical_move(&mut self, code: KeyCode, len: usize, cols: usize) -> bool {
+        let grid = &mut self.tab.grid;
+        let row = grid.table_state.selected().unwrap_or(0);
+        let col = grid.selected_col;
+        let (row, col) = match code {
+            KeyCode::Down | KeyCode::Char('j') if col + 1 < cols => (row, col + 1),
+            KeyCode::Down | KeyCode::Char('j') if row + 1 < len => (row + 1, 0),
+            KeyCode::Up | KeyCode::Char('k') if col > 0 => (row, col - 1),
+            KeyCode::Up | KeyCode::Char('k') if row > 0 => (row - 1, cols - 1),
+            KeyCode::Down | KeyCode::Up | KeyCode::Char('j' | 'k') => (row, col),
+            KeyCode::PageDown => ((row + 1).min(len - 1), col),
+            KeyCode::PageUp => (row.saturating_sub(1), col),
+            _ => return false,
+        };
+        grid.table_state.select(Some(row));
+        grid.selected_col = col;
+        true
     }
 
     /// The selected row as shown (after filtering/sorting).
@@ -605,9 +671,28 @@ impl App {
         self.cell_view = Some(CellView { record: true, ..CellView::new(title, text) });
     }
 
+    /// The previous or next row in the row view (`x`), from its top.
+    fn step_record(&mut self, back: bool) {
+        let at = self.tab.grid.table_state.selected().unwrap_or(0);
+        let next = if back { at.saturating_sub(1) } else { (at + 1).min(self.tab.grid.view.len().saturating_sub(1)) };
+        if next == at {
+            return;
+        }
+        self.tab.grid.table_state.select(Some(next));
+        self.maybe_fetch_more();
+        self.open_record_view();
+    }
+
     pub(super) fn handle_cell_view_key(&mut self, key: KeyEvent) {
         let Some(view) = &mut self.cell_view else { return };
         let page = self.editor_height.max(5) as u16;
+        // A row (`x`): past its end ↓ goes on to the next row, and ↑ above
+        // its start to the previous one.
+        let down = matches!(key.code, KeyCode::Down | KeyCode::Char('j'));
+        let up = matches!(key.code, KeyCode::Up | KeyCode::Char('k'));
+        if view.record && ((down && view.scroll >= view.max_scroll) || (up && view.scroll == 0)) {
+            return self.step_record(up);
+        }
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q' | 'v') => self.cell_view = None,
             KeyCode::Down | KeyCode::Char('j') => view.scroll = view.scroll.saturating_add(1),
@@ -624,19 +709,20 @@ impl App {
                 self.cell_view = None;
                 self.open_tab_on(conn, &sql);
             }
+            KeyCode::Char('y') if view.browse => {
+                let text = view.text.clone();
+                self.copy_text(text, "Copied the definition");
+            }
             KeyCode::Char('y') if view.record => {
                 let text = view.text.clone();
                 self.copy_text(text, "Copied the row");
             }
             KeyCode::Char('y') => self.copy_cell(),
+            KeyCode::Left | KeyCode::Right | KeyCode::Char('h' | 'l') if view.browse => {
+                self.step_definition(matches!(key.code, KeyCode::Left | KeyCode::Char('h')));
+            }
             KeyCode::Left | KeyCode::Right | KeyCode::Char('h' | 'l') if view.record => {
-                let back = matches!(key.code, KeyCode::Left | KeyCode::Char('h'));
-                let at = self.tab.grid.table_state.selected().unwrap_or(0);
-                let next =
-                    if back { at.saturating_sub(1) } else { (at + 1).min(self.tab.grid.view.len().saturating_sub(1)) };
-                self.tab.grid.table_state.select(Some(next));
-                self.maybe_fetch_more();
-                self.open_record_view();
+                self.step_record(matches!(key.code, KeyCode::Left | KeyCode::Char('h')));
             }
             KeyCode::Char('x') if view.record => self.cell_view = None,
             _ => {}
@@ -771,6 +857,7 @@ impl App {
             KeyCode::Char('r') => return self.load_catalog(),
             KeyCode::Char('.') => return self.toggle_system_tables(),
             KeyCode::Char('/') => return panel.filter_editing = true,
+            KeyCode::Char('o') => return self.cycle_schema_sort(),
             KeyCode::Esc if !panel.filter.is_empty() => {
                 panel.filter.clear();
                 panel.selected = step_selectable(&panel.nodes(), 0, 1);
@@ -782,6 +869,12 @@ impl App {
         let Some(&node) = nodes.get(panel.selected) else { return };
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => panel.selected = step_selectable(&nodes, panel.selected + 1, 1),
+            KeyCode::PageDown => panel.selected = step_selectable(&nodes, panel.selected + panel.page.max(1), -1),
+            KeyCode::PageUp => {
+                panel.selected = step_selectable(&nodes, panel.selected.saturating_sub(panel.page.max(1)), 1);
+            }
+            KeyCode::Home | KeyCode::Char('g') => panel.selected = step_selectable(&nodes, 0, 1),
+            KeyCode::End | KeyCode::Char('G') => panel.selected = step_selectable(&nodes, nodes.len(), -1),
             KeyCode::Up | KeyCode::Char('k') => {
                 panel.selected = step_selectable(&nodes, panel.selected.saturating_sub(1), -1);
             }
@@ -818,16 +911,47 @@ impl App {
                     engine.quote_ident(&info.schema),
                     engine.quote_ident(&info.name)
                 );
-                if !self.tab.editor.is_empty() {
-                    self.tab.editor.move_end();
-                    self.tab.editor.insert_newline();
-                }
-                self.tab.editor.insert_str(&query);
+                // After everything, a blank line apart: never inside another
+                // statement. Then it runs, alone (as F6 would).
+                let ed = &mut self.tab.editor;
+                let text = ed.text();
+                ed.clear_selection();
+                ed.move_doc_end();
+                let gap = if text.trim().is_empty() || text.ends_with("\n\n") {
+                    ""
+                } else if text.ends_with('\n') {
+                    "\n"
+                } else {
+                    "\n\n"
+                };
+                ed.insert_str(&format!("{gap}{query}"));
                 self.edited();
                 self.focus = Focus::Editor;
+                if self.database.is_some() {
+                    self.execute_current();
+                }
             }
             _ => {}
         }
+    }
+
+    /// `o` in the navigator: orders the tables by name, rows or size,
+    /// keeping the selected one selected.
+    fn cycle_schema_sort(&mut self) {
+        let sizes = self.engine() != Engine::Sqlite;
+        let Some(panel) = &mut self.schema else { return };
+        let before = panel.nodes().get(panel.selected).copied();
+        panel.sort = panel.sort.next();
+        // SQLite keeps no sizes: there's nothing to order by.
+        if panel.sort == SchemaSort::Size && !sizes {
+            panel.sort = panel.sort.next();
+        }
+        let nodes = panel.nodes();
+        panel.selected = before.and_then(|n| nodes.iter().position(|m| *m == n)).unwrap_or(0);
+        panel.selected = step_selectable(&nodes, panel.selected, 1);
+        panel.scroll = 0;
+        let order = panel.sort.label();
+        self.set_status(format!("Navigator ordered by {order}"), false);
     }
 
     /// Runs the selection if there is one, otherwise the whole editor.
@@ -950,18 +1074,15 @@ impl App {
         if self.executing || self.database.is_none() {
             return;
         }
-        let text = self.tab.editor.text();
-        let stmt = match self.tab.editor.selection_offsets() {
-            Some((a, b)) => text[a..b].trim().trim_end_matches(';').trim().to_string(),
-            None => match sql::statement_at(&text, self.tab.editor.cursor_offset(), self.engine()) {
-                Some(s) => s.to_string(),
-                None => return self.set_status("No statement at cursor".to_string(), true),
-            },
+        let Some((stmt, line)) = self.statement_to_explain() else {
+            return self.set_status("No statement at cursor".to_string(), true);
         };
         if stmt.to_ascii_uppercase().starts_with("EXPLAIN") {
             return self.set_status("That's already an EXPLAIN; run it with F6".to_string(), true);
         }
-        let explain = self.engine().dialect().explain(&stmt);
+        let version = self.database.as_ref().map_or("", |db| db.version());
+        let explain = self.engine().dialect().explain(&stmt, version);
+        self.plan_request = Some((stmt, false, line));
         if self.ask_for_params(&explain, 0, true) {
             return;
         }
@@ -969,24 +1090,124 @@ impl App {
         self.run_now(explain, 0, infos, RunPurpose::Explain, None);
     }
 
-    pub(super) fn show_plan(&mut self, outcome: &QueryOutcome) {
+    /// Shows `tab` in the results pane: the QUERY PLAN's table, if it has
+    /// one, takes the grid's place while it's shown.
+    pub(super) fn set_result_tab(&mut self, tab: ResultTab) {
+        // A filter being typed stays with its grid.
+        self.tab.grid.filter_editing = false;
+        self.tab.result_tab = tab;
+        self.tab.tab_scroll = 0;
+        self.tab.tab_hscroll = 0;
+        self.sync_plan_grid();
+    }
+
+    /// Swaps the plan's grid in or out to match the tab shown.
+    pub(super) fn sync_plan_grid(&mut self) {
+        let want = self.tab.result_tab == ResultTab::Plan && self.tab.plan_grid.is_some();
+        if want != self.tab.plan_swapped
+            && let Some(other) = &mut self.tab.plan_grid
+        {
+            std::mem::swap(&mut self.tab.grid, other);
+            self.tab.plan_swapped = want;
+            self.cell_edit = None;
+        }
+    }
+
+    /// The result's own grid back in place (before a run's outcome lands).
+    pub(super) fn unswap_plan_grid(&mut self) {
+        if self.tab.plan_swapped
+            && let Some(other) = &mut self.tab.plan_grid
+        {
+            std::mem::swap(&mut self.tab.grid, other);
+            self.tab.plan_swapped = false;
+        }
+    }
+
+    /// Whether the pane shows a grid of rows: the result, or a plan's table.
+    pub(super) fn grid_shown(&self) -> bool {
+        self.tab.result_tab == ResultTab::Rows || self.tab.plan_swapped
+    }
+
+    /// Shows the statement the plan is for in the editor, selected and
+    /// scrolled to from its first line, if it's still there.
+    pub(super) fn go_to_plan_statement(&mut self) {
+        let text = self.tab.editor.text();
+        let Some(source) = self.tab.plan_source.clone() else { return };
+        let Some((offset, line)) = source.find_in(&text) else {
+            return self.set_status("The plan's statement isn't in the editor any more".to_string(), true);
+        };
+        let ed = &mut self.tab.editor;
+        let start = ed.pos_of_offset(offset);
+        let end = ed.pos_of_offset(offset + source.sql.len());
+        // The cursor at its start (so the view starts there), the rest selected.
+        ed.set_cursor(start);
+        ed.set_anchor(Some(end));
+        ed.scroll_row = start.0.saturating_sub(1);
+        self.completion = None;
+        // Zoomed, the editor is what's shown now.
+        self.focus = Focus::Editor;
+        let last = line + source.sql.matches('\n').count();
+        let lines =
+            if last > line { format!("lines {}–{}", line + 1, last + 1) } else { format!("line {}", line + 1) };
+        self.set_status(format!("The plan's statement, {lines} (F7 explains it again)"), false);
+    }
+
+    /// The selection, or the statement at the cursor, to EXPLAIN, and the
+    /// editor line it starts on (from 0).
+    pub(super) fn statement_to_explain(&self) -> Option<(String, usize)> {
+        let text = self.tab.editor.text();
+        let (start, stmt) = if let Some((a, b)) = self.tab.editor.selection_offsets() {
+            let selected = &text[a..b];
+            let lead = selected.len() - selected.trim_start().len();
+            (a + lead, selected.trim().trim_end_matches(';').trim())
+        } else {
+            let s = sql::statement_at(&text, self.tab.editor.cursor_offset(), self.engine())?;
+            (s.as_ptr() as usize - text.as_ptr() as usize, s)
+        };
+        Some((stmt.to_string(), text[..start].matches('\n').count()))
+    }
+
+    pub(super) fn show_plan(&mut self, outcome: QueryOutcome) {
         let plan = self
             .engine()
             .dialect()
-            .format_plan(&outcome.rows)
+            .format_plan(&outcome.columns, &outcome.rows)
             .unwrap_or_else(|| crate::db::Plan { text: "The server returned no plan.".to_string(), notes: Vec::new() });
         self.tab.plan = Some(plan);
-        self.tab.result_tab = ResultTab::Plan;
+        self.tab.plan_source = self.plan_request.take().map(|(sql, analyzed, line)| PlanSource {
+            sql,
+            analyzed,
+            line,
+            at: chrono::Local::now(),
+        });
+        // A plan with columns (MySQL's classic EXPLAIN) is a grid too.
+        self.unswap_plan_grid();
+        self.tab.plan_grid = (outcome.columns.len() > 1 && self.engine() != Engine::Sqlite).then(|| {
+            let mut grid = Box::<ResultGrid>::default();
+            grid.show(outcome);
+            grid.table_state.select(Some(0));
+            grid
+        });
+        self.set_result_tab(ResultTab::Plan);
         // Ready to scroll the plan; `1` goes back to the result.
         self.focus = Focus::Results;
-        self.tab.tab_scroll = 0;
         self.set_status("Query plan shown (the statement was not executed)".to_string(), false);
     }
 
     /// Keys for the MESSAGES and QUERY PLAN tabs: scrolling. The plan
     /// scrolls down from its top; messages scroll up from the newest line.
+    /// ←/→ scroll across (drawing stops at the widest line).
     fn handle_tab_scroll_key(&mut self, key: KeyEvent) {
         let page = self.editor_height.max(5) as u16;
+        match key.code {
+            KeyCode::Left | KeyCode::Char('h') => return self.scroll_tab_across(-1),
+            KeyCode::Right | KeyCode::Char('l') => return self.scroll_tab_across(1),
+            KeyCode::Char('0') => {
+                self.tab.tab_hscroll = 0;
+                return;
+            }
+            _ => {}
+        }
         let delta: i32 = match key.code {
             KeyCode::Down | KeyCode::Char('j') => 1,
             KeyCode::Up | KeyCode::Char('k') => -1,
@@ -994,12 +1215,19 @@ impl App {
             KeyCode::PageUp => -i32::from(page),
             KeyCode::Home => {
                 self.tab.tab_scroll = 0;
+                self.tab.tab_hscroll = 0;
                 return;
             }
             _ => return,
         };
         let delta = if self.tab.result_tab == ResultTab::Messages { -delta } else { delta };
         self.tab.tab_scroll = self.tab.tab_scroll.saturating_add_signed(delta.clamp(-1000, 1000) as i16);
+    }
+
+    /// Scrolls the MESSAGES / QUERY PLAN text a few columns left or right.
+    pub(super) fn scroll_tab_across(&mut self, dir: i16) {
+        const STEP: i16 = 8;
+        self.tab.tab_hscroll = self.tab.tab_hscroll.saturating_add_signed(dir * STEP);
     }
 
     pub(super) fn run_now(
@@ -1020,7 +1248,9 @@ impl App {
         let stream = matches!(purpose, RunPurpose::Query) && infos.len() == 1 && infos[0].kind == Kind::Read;
         self.last_run_infos = infos;
         self.running_purpose = purpose;
+        self.run_extra.vertical = false;
         if matches!(self.running_purpose, RunPurpose::Query) {
+            self.run_extra.vertical = sql::ends_vertical(&sql, self.engine());
             // Remembered for "load more" and error locations; helper runs
             // (EXPLAIN, cell edits) don't replace them.
             self.tab.last_sql = Some((sql.clone(), offset));
@@ -1045,6 +1275,7 @@ impl App {
         let send = self.sender();
         let row_limit = self.next_row_limit.take().unwrap_or(self.settings.row_limit);
         tracing::debug!(statements = self.last_run_infos.len(), stream, row_limit, "run");
+        let sql = if self.run_extra.vertical { sql::without_vertical(&sql, self.engine()) } else { sql };
         self.task = Some(tokio::spawn(async move {
             if stream {
                 // No transaction probe: the open stream holds the session,
@@ -1117,6 +1348,10 @@ impl App {
     /// Near the end of the loaded rows of a streamed result, fetch more.
     pub(super) fn maybe_fetch_more(&mut self) {
         const LOOKAHEAD: usize = 50;
+        // The stream's rows are the result's, not the plan's.
+        if self.tab.plan_swapped {
+            return;
+        }
         let near_end = self.tab.grid.table_state.selected().is_some_and(|s| s + LOOKAHEAD >= self.tab.grid.view.len());
         if near_end {
             self.fetch_more(self.settings.row_limit);

@@ -69,7 +69,11 @@ impl App {
     /// Whether the main loop should tick every second (a query is running,
     /// or keep-alive checks are on).
     pub fn wants_ticks(&self) -> bool {
-        self.executing || self.activity.is_some() || (self.settings.keepalive > 0 && self.database.is_some())
+        self.executing
+            || self.activity.is_some()
+            || (self.settings.keepalive > 0 && self.database.is_some())
+            // A plan's age, kept current.
+            || (self.tab.result_tab == ResultTab::Plan && self.tab.plan_source.is_some())
     }
 
     /// Pings an idle connection every `keepalive` seconds: notices a dropped

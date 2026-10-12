@@ -257,6 +257,16 @@ async fn login_and_session(params: &ConnectParams, steps: &mut Vec<Step>) {
                 Step::new("TLS", StepState::Skipped, "off (SSL mode disable)", None)
             }
             None if params.ssh.is_some() => Step::new("TLS", StepState::Ok, "not used; the SSH tunnel encrypts", None),
+            None if db.tls_failed().is_some() => Step::new(
+                "TLS",
+                StepState::Warn,
+                format!(
+                    "not encrypted: TLS isn't possible with this server ({}), so `prefer` connected without it. \
+                     Set SSL mode to `disable` to skip trying, or connect over SSH",
+                    db.tls_failed().unwrap_or_default()
+                ),
+                None,
+            ),
             None => Step::new(
                 "TLS",
                 StepState::Warn,

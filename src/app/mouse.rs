@@ -71,6 +71,11 @@ impl App {
                     self.open_menu(Some((x, y)));
                 }
             }
+            // Shift turns the wheel sideways (in the results).
+            MouseEventKind::ScrollDown if ev.modifiers.contains(KeyModifiers::SHIFT) => self.wheel_across(x, y, 1),
+            MouseEventKind::ScrollUp if ev.modifiers.contains(KeyModifiers::SHIFT) => self.wheel_across(x, y, -1),
+            MouseEventKind::ScrollRight => self.wheel_across(x, y, 1),
+            MouseEventKind::ScrollLeft => self.wheel_across(x, y, -1),
             MouseEventKind::ScrollDown => self.wheel(x, y, true),
             MouseEventKind::ScrollUp => self.wheel(x, y, false),
             _ => {}
@@ -112,9 +117,21 @@ impl App {
             if tab == ResultTab::Rows && self.tab.result_tab == ResultTab::Rows && self.tab.grid.result_sets.len() > 1 {
                 return self.step_result_set(true);
             }
-            self.tab.result_tab = tab;
-            self.tab.tab_scroll = 0;
+            return self.set_result_tab(tab);
+        }
+        // A syntax hint: to the spot in the editor it's about.
+        if inside(hits.syntax_hint, x, y)
+            && let Some(offset) = self.tab.syntax_hint.as_ref().and_then(|h| h.offset)
+        {
+            let pos = self.tab.editor.pos_of_offset(offset);
+            self.tab.editor.clear_selection();
+            self.tab.editor.set_cursor(pos);
+            self.focus = Focus::Editor;
             return;
+        }
+        // The line above a plan: to its statement in the editor.
+        if inside(hits.plan_source, x, y) {
+            return self.go_to_plan_statement();
         }
         if inside(hits.tx_mode, x, y) {
             return self.cycle_tx_mode();
@@ -152,7 +169,7 @@ impl App {
             self.focus = Focus::Editor;
             return;
         }
-        if inside(hits.result_rows, x, y) && self.tab.result_tab == ResultTab::Rows {
+        if inside(hits.result_rows, x, y) && self.grid_shown() {
             self.focus = Focus::Results;
             let row = self.tab.grid.row_offset + (y - hits.result_rows.y) as usize;
             if row < self.tab.grid.view.len() {
@@ -172,31 +189,58 @@ impl App {
             return;
         }
         if hits.schema.is_some_and(|r| inside(r, x, y)) {
-            self.focus = Focus::Schema;
-            if !inside(hits.schema_list, x, y) {
-                return;
+            self.click_schema(x, y, double);
+        }
+    }
+
+    /// A click in the navigator: its filter line, or a row of the tree.
+    fn click_schema(&mut self, x: u16, y: u16, double: bool) {
+        let hits = &self.hits;
+        self.focus = Focus::Schema;
+        if inside(hits.schema_filter, x, y) {
+            if let Some(panel) = &mut self.schema {
+                panel.filter_editing = true;
             }
-            let index = hits.schema_offset + (y - hits.schema_list.y) as usize;
-            let Some(panel) = &mut self.schema else { return };
-            let nodes = panel.nodes();
-            let Some(&node) = nodes.get(index) else { return };
-            if matches!(node, SchemaNode::Section(_)) {
-                return;
-            }
-            panel.selected = index;
-            if double {
-                match node {
-                    SchemaNode::Table(t) => {
-                        panel.tables[t].expanded = !panel.tables[t].expanded;
-                        if panel.tables[t].expanded {
-                            self.request_details(t);
-                        }
+            return;
+        }
+        if !inside(hits.schema_list, x, y) {
+            return;
+        }
+        let index = hits.schema_offset + (y - hits.schema_list.y) as usize;
+        let Some(panel) = &mut self.schema else { return };
+        let nodes = panel.nodes();
+        let Some(&node) = nodes.get(index) else { return };
+        if matches!(node, SchemaNode::Section(_)) {
+            return;
+        }
+        panel.selected = index;
+        if double {
+            match node {
+                SchemaNode::Table(t) => {
+                    panel.tables[t].expanded = !panel.tables[t].expanded;
+                    if panel.tables[t].expanded {
+                        self.request_details(t);
                     }
-                    SchemaNode::Routine(r) => self.show_routine(r),
-                    _ => {}
                 }
+                SchemaNode::Routine(r) => self.show_routine(r),
+                _ => {}
             }
         }
+    }
+
+    /// A sideways wheel over the results: the next column, or the plan
+    /// and messages scrolled across.
+    fn wheel_across(&mut self, x: u16, y: u16, dir: i16) {
+        if !inside(self.hits.results, x, y) {
+            return;
+        }
+        if !self.grid_shown() {
+            return self.scroll_tab_across(dir);
+        }
+        let cols = self.tab.grid.results.as_ref().map_or(0, |r| r.columns.len());
+        let col = self.tab.grid.selected_col;
+        self.tab.grid.selected_col =
+            if dir > 0 { (col + 1).min(cols.saturating_sub(1)) } else { col.saturating_sub(1) };
     }
 
     fn wheel(&mut self, x: u16, y: u16, down: bool) {
@@ -207,7 +251,7 @@ impl App {
                 if down { self.tab.editor.move_down() } else { self.tab.editor.move_up() }
             }
         } else if inside(hits.results, x, y) {
-            if self.tab.result_tab != ResultTab::Rows {
+            if !self.grid_shown() {
                 let delta = if down { WHEEL_LINES as i16 } else { -(WHEEL_LINES as i16) };
                 let delta = if self.tab.result_tab == ResultTab::Messages { -delta } else { delta };
                 self.tab.tab_scroll = self.tab.tab_scroll.saturating_add_signed(delta);

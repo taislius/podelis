@@ -240,6 +240,7 @@ fn key_hints(app: &App, width: u16) -> Vec<Span<'static>> {
                 ("s", "select"),
                 ("d", "definition"),
                 ("/", "filter"),
+                ("o", "order"),
                 ("r", "refresh"),
                 ("m", "menu"),
                 ("?", "keys"),
@@ -331,6 +332,7 @@ pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String
                 vec![
                     ("↵ · v", "full value of the cell"),
                     ("x · f", "row vertically · follow foreign key"),
+                    ("X · …\\G", "all rows one column per line (end a query with \\G)"),
                     ("| · o", "pipe rows through a command · open in viewer"),
                     ("s · /", "sort · filter"),
                     ("[ · ] · 1 2 3", "rows / messages / plan tabs"),
@@ -344,12 +346,14 @@ pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String
                 ],
             ),
             (
-                "Schema",
+                "Navigator",
                 vec![
                     ("↵ · → / ←", "expand / collapse"),
-                    ("s", "SELECT the table into the editor"),
+                    ("s", "SELECT the table (added to the editor and run)"),
                     ("d", "definition of the table, view or function"),
                     ("/ · r", "filter · refresh"),
+                    ("o", "order by name, rows or size"),
+                    ("PgUp · PgDn", "a page up · down"),
                     (".", "show / hide system tables"),
                     ("z · m", "zoom · menu of what you can do here"),
                     ("Space", "command menu (like Ctrl+K)"),
@@ -370,7 +374,7 @@ pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String
                 vec![
                     ("Tab / Shift+Tab", "next / previous pane (in the editor after a word: Esc Tab)"),
                     (k(Action::ToggleSchema), "show/hide the navigator"),
-                    (k(Action::Zoom), "zoom the pane to full screen (z in results/schema)"),
+                    (k(Action::Zoom), "zoom the pane to full screen (z in results/navigator)"),
                 ],
             ),
             (
@@ -430,7 +434,7 @@ pub(super) fn pane_keys(app: &App) -> (&'static str, Vec<(String, String)>) {
     let title = match app.focus {
         Focus::Editor => "Editor",
         Focus::Results => "Results",
-        Focus::Schema => "Schema",
+        Focus::Schema => "Navigator",
     };
     help_sections(app).into_iter().find(|(t, _)| *t == title).unwrap_or((title, Vec::new()))
 }

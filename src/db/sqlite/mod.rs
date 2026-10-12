@@ -52,10 +52,10 @@ impl Dialect for Sqlite {
     fn version_query(&self) -> &'static str {
         "SELECT sqlite_version()"
     }
-    fn explain(&self, stmt: &str) -> String {
+    fn explain(&self, stmt: &str, _version: &str) -> String {
         format!("EXPLAIN QUERY PLAN {stmt}")
     }
-    fn format_plan(&self, rows: &[Vec<Option<String>>]) -> Option<Plan> {
+    fn format_plan(&self, _columns: &[String], rows: &[Vec<Option<String>>]) -> Option<Plan> {
         let notes = plan_notes(rows.iter().map(|r| r.get(3).cloned().flatten().unwrap_or_default()));
         Some(Plan { text: plan_tree(rows), notes })
     }

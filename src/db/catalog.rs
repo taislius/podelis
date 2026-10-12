@@ -3,6 +3,9 @@ use super::*;
 /// (schema, table, column, type, nullable, "PRI" for primary key columns)
 pub(super) type ColumnRow = (String, String, String, String, String, String);
 
+/// (schema, table, type, estimated rows, estimated bytes)
+pub(super) type TableRow = (String, String, String, Option<i64>, Option<i64>);
+
 impl Database {
     /// Every table and view with its columns, in two queries (for the
     /// schema browser and autocomplete). `system` adds the database's own
@@ -34,7 +37,7 @@ impl Database {
     }
 
     pub async fn tables(&self, system: bool) -> Result<Vec<TableInfo>> {
-        let rows: Vec<(String, String, String, Option<i64>)> = match &self.0.pool {
+        let rows: Vec<TableRow> = match &self.0.pool {
             Pool::Postgres(_) => postgres::queries::table_rows(self, system).await?,
             Pool::MySql(_) => mysql::queries::table_rows(self, system).await?,
             Pool::Sqlite(_) => sqlite::queries::table_rows(self, system).await?,
@@ -42,13 +45,14 @@ impl Database {
         let dialect = self.0.engine.dialect();
         Ok(rows
             .into_iter()
-            .map(|(schema, name, kind, rows)| TableInfo {
+            .map(|(schema, name, kind, rows, bytes)| TableInfo {
                 system: dialect.is_system_table(&schema, &name),
                 schema,
                 name,
                 is_view: kind.to_ascii_uppercase().contains("VIEW"),
                 // Postgres reports -1 for tables never analyzed.
                 rows: rows.filter(|n| *n >= 0),
+                bytes: bytes.filter(|n| *n >= 0),
             })
             .collect())
     }
