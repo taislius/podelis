@@ -47,10 +47,18 @@ podelis prod --import export.tsv --table events -y # into "events", on a product
 ```
 
 `--import file.csv` creates the table (named after the file, or
-`--table`) with guessed column types if it doesn't exist, and appends to
-it if it does. It all happens in one transaction, so a bad line changes
-nothing (on MySQL, a newly created table stays). The first line must name
-the columns; `.tsv` and `.tab` files are tab-separated.
+`--table`) if it doesn't exist, and appends to it if it does. Each new
+column gets the narrowest type its values fit: integer, decimal, boolean
+(`true`/`false`), date (`2026-10-13`), timestamp (`2026-10-13 10:00`, with
+seconds and fractions or a `T`) or text. Numbers with leading zeros
+(`007`) stay text. It all happens in one transaction, so a bad line changes
+nothing (on MySQL, a newly created table stays), and the error names the
+line. PostgreSQL loads the rows with `COPY`, which is many times faster.
+
+The first line must name the columns, and an empty field is NULL. `.tsv`
+and `.tab` files are tab-separated and not quoted: a `"` is part of the
+value, and `\N` is NULL, as in IMDb's files and PostgreSQL's `COPY`
+output.
 
 Podėlis talks to databases and leaves files to the tools made for them:
 query CSV/JSON files with [Miller](https://miller.readthedocs.io), `jq`,

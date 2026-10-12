@@ -33,7 +33,7 @@ Keys that work directly:
 | Key | Action |
 |---|---|
 | `F5` / `Ctrl+R` / `Ctrl+Enter`¹ | Run the selection, or everything in the editor (or click **▶ F5 Run** right of the tabs; *Statement* and *Explain* are there too) |
-| `F6` | Run the selection, or the statement under the cursor |
+| `F6` | Run the selection, or the statement under the cursor. With several statements in the editor, its footer says which one that is (`stmt 2/3`) |
 | `F7` | Show the plan for the selection / statement under the cursor (not executed). MySQL 8.0.16+ shows `FORMAT=TREE`; older MySQL and MariaDB show the classic `EXPLAIN` table |
 | `Shift+F7` | `EXPLAIN ANALYZE`: runs the statement and shows actual times and rows (writes ask first and are rolled back). MySQL needs 8.0.18+; MariaDB runs `ANALYZE` |
 | `F8` / `Shift+F8` | Commit / roll back the open transaction |

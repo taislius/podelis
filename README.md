@@ -113,7 +113,10 @@ same way tools like `lazygit` do.
   Or a **password command** prints the password: `pass`, 1Password's `op`,
   Vault, a cloud CLI
 - Values are shown as the server formats them, so every type displays —
-  including enums, arrays, intervals, JSON and `NULL`
+  including enums, arrays, intervals, JSON and `NULL`. Binary data is in
+  hex, written as each engine writes it (`\xdeadbeef`, `0xDEADBEEF`,
+  `X'DEADBEEF'`), so exports, pipes and comparisons get the real bytes, and
+  an edited value or an exported `INSERT` goes back as binary
 - **Works with Unix tools:** pipe a result through `grep`, `sort`, `awk`,
   `jq` or Miller without leaving the app (`|`), open it in `less` or
   VisiData (`o`), or run SQL without the UI (`podelis prod -e "select …"

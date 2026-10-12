@@ -183,8 +183,16 @@ or
 .Pa .tab )
 into a table.
 The first line must name the columns.
-A missing table is created with guessed column types; an existing one is
-appended to.
+An empty field is NULL.
+TSV files aren't quoted, and
+.Ql \eN
+in them is NULL too (as in IMDb's files and
+.Ql COPY
+output).
+A missing table is created with guessed column types (integer, decimal,
+boolean, date, timestamp or text); an existing one is appended to.
+PostgreSQL loads the rows with
+.Ql COPY .
 It all happens in one transaction, so a bad line changes nothing (on
 MySQL, a newly created table stays).
 .It Fl -table Ar name
