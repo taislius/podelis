@@ -36,7 +36,7 @@ fn live_params(engine: Engine) -> Option<ConnectParams> {
     })
 }
 
-async fn live_db(engine: Engine) -> Option<Database> {
+pub(crate) async fn live_db(engine: Engine) -> Option<Database> {
     let params = live_params(engine)?;
     Some(Database::connect(params).await.expect("connect"))
 }

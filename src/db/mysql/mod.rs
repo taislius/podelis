@@ -100,6 +100,10 @@ impl Dialect for MySql {
     fn real_type(&self) -> &'static str {
         "DOUBLE"
     }
+    /// With microseconds: a plain `DATETIME` would round fractions away.
+    fn timestamp_type(&self) -> &'static str {
+        "DATETIME(6)"
+    }
     fn modify_column(&self, table: &str, column: &str, data_type: &str, nullable: bool) -> Option<String> {
         let null = if nullable { "NULL" } else { "NOT NULL" };
         Some(format!("ALTER TABLE {table} MODIFY COLUMN {column} {data_type} {null}"))

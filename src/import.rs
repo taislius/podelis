@@ -1,56 +1,103 @@
 //! `--import file.csv`: loads a CSV/TSV file into a table, creating it with
-//! guessed column types if it doesn't exist. Rows go in batches inside one
-//! transaction, so a failure leaves the table as it was.
+//! guessed column types if it doesn't exist. It all happens in one
+//! transaction, so a failure leaves the table as it was. PostgreSQL gets
+//! the rows through `COPY`; the others in batches of `INSERT`s.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use chrono::{NaiveDate, NaiveDateTime};
 
 use crate::db::{Database, Engine, sql_literal};
 
 const BATCH: usize = 500;
 
+/// How much `COPY` data to send at a time.
+const COPY_CHUNK: usize = 1 << 20;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ColType {
     Integer,
     Real,
+    Boolean,
+    Date,
+    Timestamp,
     Text,
 }
 
 impl ColType {
     fn sql(self, engine: Engine) -> &'static str {
+        let dialect = engine.dialect();
         match self {
-            ColType::Integer => engine.dialect().integer_type(),
-            ColType::Real => engine.dialect().real_type(),
+            ColType::Integer => dialect.integer_type(),
+            ColType::Real => dialect.real_type(),
+            ColType::Boolean => dialect.boolean_type(),
+            ColType::Date => "DATE",
+            ColType::Timestamp => dialect.timestamp_type(),
             ColType::Text => "TEXT",
         }
     }
 
-    /// The narrowest type that still fits `value` (empty fits anything).
-    fn widen(self, value: &str) -> ColType {
-        if value.is_empty() || self == ColType::Text {
-            return self;
-        }
+    /// The narrowest type for one value (not empty).
+    fn of(value: &str) -> ColType {
         // "007" or "0123" are codes (zip codes, ids), not numbers.
         let digits = value.strip_prefix('-').unwrap_or(value);
         if digits.len() > 1 && digits.starts_with('0') && !digits.starts_with("0.") {
             return ColType::Text;
         }
-        let int = value.parse::<i64>().is_ok();
-        match self {
-            ColType::Integer if int => ColType::Integer,
-            _ if value.parse::<f64>().is_ok_and(f64::is_finite) && !value.starts_with('.') => ColType::Real,
+        if value.parse::<i64>().is_ok() {
+            ColType::Integer
+        } else if value.parse::<f64>().is_ok_and(f64::is_finite) && !value.starts_with('.') {
+            ColType::Real
+        } else if value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false") {
+            ColType::Boolean
+        } else if NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok() {
+            ColType::Date
+        } else if ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M"]
+            .iter()
+            .any(|f| NaiveDateTime::parse_from_str(value, f).is_ok())
+        {
+            ColType::Timestamp
+        } else {
+            ColType::Text
+        }
+    }
+
+    /// A type that fits values of both.
+    fn join(self, other: ColType) -> ColType {
+        match (self, other) {
+            (a, b) if a == b => a,
+            (ColType::Integer | ColType::Real, ColType::Integer | ColType::Real) => ColType::Real,
+            (ColType::Date | ColType::Timestamp, ColType::Date | ColType::Timestamp) => ColType::Timestamp,
             _ => ColType::Text,
         }
     }
+
+    /// Written into SQL as it is, not as a string.
+    fn bare(self) -> bool {
+        matches!(self, ColType::Integer | ColType::Real | ColType::Boolean)
+    }
 }
 
+fn is_tsv(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("tsv") || e.eq_ignore_ascii_case("tab"))
+}
+
+/// TSV files don't quote: a `"` is part of the value (film titles in
+/// published data sets, `COPY`'s output).
 fn reader(path: &Path) -> Result<csv::Reader<std::fs::File>> {
-    let tab = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("tsv") || e.eq_ignore_ascii_case("tab"));
+    let tsv = is_tsv(path);
     csv::ReaderBuilder::new()
-        .delimiter(if tab { b'\t' } else { b',' })
+        .delimiter(if tsv { b'\t' } else { b',' })
+        .quoting(!tsv)
         .from_path(path)
         .with_context(|| format!("can't read {}", path.display()))
+}
+
+/// An empty field is NULL, and in a TSV file so is `\N` (how PostgreSQL's
+/// `COPY` and many published data sets write it).
+fn is_null(value: &str, tsv: bool) -> bool {
+    value.is_empty() || (tsv && value == "\\N")
 }
 
 /// A table name from a file name: `sales 2026.csv` → `sales_2026`.
@@ -70,6 +117,7 @@ pub struct Imported {
 
 pub async fn import(db: &Database, path: &Path, table: &str) -> Result<Imported> {
     let engine = db.engine();
+    let tsv = is_tsv(path);
     // First pass: the header and each column's type.
     let mut rdr = reader(path)?;
     let header: Vec<String> = rdr.headers()?.iter().map(|h| h.trim().to_string()).collect();
@@ -77,23 +125,27 @@ pub async fn import(db: &Database, path: &Path, table: &str) -> Result<Imported>
         !header.is_empty() && header.iter().all(|h| !h.is_empty()),
         "the first line must name every column"
     );
-    let mut types = vec![ColType::Integer; header.len()];
-    let mut seen = vec![false; header.len()];
+    let mut guessed: Vec<Option<ColType>> = vec![None; header.len()];
     for (n, record) in rdr.records().enumerate() {
         let record = record.with_context(|| format!("line {}", n + 2))?;
         for (i, value) in record.iter().enumerate().take(header.len()) {
-            types[i] = types[i].widen(value);
-            seen[i] |= !value.is_empty();
+            if !is_null(value, tsv) {
+                let t = ColType::of(value);
+                guessed[i] = Some(guessed[i].map_or(t, |g| g.join(t)));
+            }
         }
     }
-    // Columns with no values at all are text.
-    for (t, s) in types.iter_mut().zip(&seen) {
-        if !s {
-            *t = ColType::Text;
-        }
-    }
-
     let exists = db.tables(false).await?.iter().any(|t| t.name.eq_ignore_ascii_case(table));
+    // Columns with no values at all are text. Into an existing table, only
+    // numbers go in bare: its columns may not be what the file suggests.
+    let types: Vec<ColType> = guessed
+        .iter()
+        .map(|g| match g {
+            Some(t @ (ColType::Integer | ColType::Real)) => *t,
+            Some(t) if !exists => *t,
+            _ => ColType::Text,
+        })
+        .collect();
     let quoted = engine.quote_ident(table);
     let cols: Vec<String> = header.iter().map(|h| engine.quote_ident(h)).collect();
     db.run("BEGIN", 1).await?;
@@ -102,16 +154,33 @@ pub async fn import(db: &Database, path: &Path, table: &str) -> Result<Imported>
             let defs: Vec<String> = cols.iter().zip(&types).map(|(c, t)| format!("{c} {}", t.sql(engine))).collect();
             db.run(&format!("CREATE TABLE {quoted} ({})", defs.join(", ")), 1).await?;
         }
-        // Second pass: the rows, in batches.
+        // Second pass: the rows.
         let mut rdr = reader(path)?;
+        if engine == Engine::Postgres {
+            let width = header.len();
+            let mut records = rdr.records().enumerate();
+            let chunks = std::iter::from_fn(move || {
+                let mut chunk = Vec::new();
+                while chunk.len() < COPY_CHUNK {
+                    let Some((n, record)) = records.next() else { break };
+                    match record {
+                        Ok(record) => copy_line(&record, width, tsv, &mut chunk),
+                        Err(e) => return Some(Err(anyhow::Error::from(e).context(format!("line {}", n + 2)))),
+                    }
+                }
+                (!chunk.is_empty()).then_some(Ok(chunk))
+            });
+            let sql = format!("COPY {quoted} ({}) FROM STDIN", cols.join(", "));
+            return db.copy_in(&sql, 2, chunks).await;
+        }
         let mut batch = Vec::with_capacity(BATCH);
         let mut rows = 0u64;
         for (n, record) in rdr.records().enumerate() {
             let record = record.with_context(|| format!("line {}", n + 2))?;
             let values: Vec<String> = (0..header.len())
                 .map(|i| match record.get(i).unwrap_or("") {
-                    "" => "NULL".to_string(),
-                    v if types[i] != ColType::Text => v.to_string(),
+                    v if is_null(v, tsv) => "NULL".to_string(),
+                    v if types[i].bare() => v.to_string(),
                     v => sql_literal(v, engine),
                 })
                 .collect();
@@ -138,6 +207,31 @@ pub async fn import(db: &Database, path: &Path, table: &str) -> Result<Imported>
     }
 }
 
+/// A row in `COPY`'s text format: tab-separated, `\N` for NULL, and
+/// backslashes, tabs and line breaks escaped.
+fn copy_line(record: &csv::StringRecord, width: usize, tsv: bool, out: &mut Vec<u8>) {
+    for i in 0..width {
+        if i > 0 {
+            out.push(b'\t');
+        }
+        match record.get(i).unwrap_or("") {
+            v if is_null(v, tsv) => out.extend_from_slice(b"\\N"),
+            v => {
+                for &b in v.as_bytes() {
+                    match b {
+                        b'\\' => out.extend_from_slice(b"\\\\"),
+                        b'\t' => out.extend_from_slice(b"\\t"),
+                        b'\n' => out.extend_from_slice(b"\\n"),
+                        b'\r' => out.extend_from_slice(b"\\r"),
+                        b => out.push(b),
+                    }
+                }
+            }
+        }
+    }
+    out.push(b'\n');
+}
+
 async fn insert(db: &Database, table: &str, cols: &[String], batch: &mut Vec<String>) -> Result<u64> {
     if batch.is_empty() {
         return Ok(0);
@@ -155,13 +249,74 @@ mod tests {
 
     #[test]
     fn guesses_types_and_names() {
-        let t = |values: &[&str]| values.iter().fold(ColType::Integer, |t, v| t.widen(v));
-        assert_eq!(t(&["1", "", "42"]), ColType::Integer);
+        let t = |values: &[&str]| values.iter().map(|v| ColType::of(v)).reduce(ColType::join).unwrap();
+        assert_eq!(t(&["1", "42"]), ColType::Integer);
         assert_eq!(t(&["1", "2.5"]), ColType::Real);
         assert_eq!(t(&["1", "x"]), ColType::Text);
         assert_eq!(t(&["007"]), ColType::Text, "leading zeros are codes, not numbers");
+        assert_eq!(t(&["true", "FALSE"]), ColType::Boolean);
+        assert_eq!(t(&["true", "1"]), ColType::Text);
+        assert_eq!(t(&["2026-10-13", "2020-02-29"]), ColType::Date);
+        assert_eq!(t(&["2026-10-13", "2026-10-13 10:00:00.5", "2026-10-13T10:00"]), ColType::Timestamp);
+        assert_eq!(t(&["2026-02-30"]), ColType::Text, "not a real date");
+        assert_eq!(t(&["2026-10-13", "13/10/2026"]), ColType::Text);
         assert_eq!(table_name_for(Path::new("/data/Sales 2026.csv")), "sales_2026");
         assert_eq!(table_name_for(Path::new("2026.csv")), "t_2026");
+    }
+
+    #[test]
+    fn copy_lines_escape_and_mark_nulls() {
+        let mut out = Vec::new();
+        let record = csv::StringRecord::from(vec!["a\\b", "tab\there", "", "\\N", "line\nbreak\r"]);
+        copy_line(&record, 6, true, &mut out);
+        assert_eq!(String::from_utf8(out).unwrap(), "a\\\\b\ttab\\there\t\\N\t\\N\tline\\nbreak\\r\t\\N\n");
+    }
+
+    /// A file with every guessed type, into PostgreSQL (`COPY`) and MySQL
+    /// (`INSERT`s), then a bad value: nothing changes, and the error names
+    /// its line.
+    #[tokio::test]
+    async fn live_imports_guess_types_on_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("pets.csv");
+        std::fs::write(
+            &csv,
+            "id,name,active,born,seen,score\n1,\"Rex\tthe \\ dog\",true,2020-01-02,2026-10-13 10:00:00.123456,1.5\n\
+             2,Žąsis,FALSE,2019-12-31,2026-10-13T11:30,2\n3,,,,,\n",
+        )
+        .unwrap();
+        let bad = dir.path().join("bad.csv");
+        std::fs::write(&bad, "id,born\n4,2020-01-01\n5,not a date\n").unwrap();
+        for engine in [Engine::Postgres, Engine::MySql] {
+            let Some(db) = crate::db::tests::live_db(engine).await else { continue };
+            if engine == Engine::MySql {
+                db.run("CREATE DATABASE IF NOT EXISTS podelis_import; USE podelis_import", 1).await.unwrap();
+            }
+            db.run("DROP TABLE IF EXISTS pets_import", 1).await.unwrap();
+            assert_eq!(import(&db, &csv, "pets_import").await.unwrap(), Imported { rows: 3, created: true });
+            let o = db.run("SELECT * FROM pets_import ORDER BY id", 10).await.unwrap();
+            let types: Vec<String> = o.column_types.iter().map(|t| t.to_lowercase()).collect();
+            assert_eq!(o.rows[0][1].as_deref(), Some("Rex\tthe \\ dog"), "{engine:?}");
+            assert_eq!(o.rows[1][1].as_deref(), Some("Žąsis"), "{engine:?}");
+            assert_eq!(o.rows[2][1..], [None, None, None, None, None], "{engine:?}");
+            if engine == Engine::Postgres {
+                assert_eq!(types[1..], ["text", "bool", "date", "timestamp", "float8"]);
+                assert_eq!(o.rows[1][2].as_deref(), Some("false"));
+                assert_eq!(o.rows[0][4].as_deref(), Some("2026-10-13 10:00:00.123456"));
+            } else {
+                assert_eq!(o.rows[1][2].as_deref(), Some("0"), "BOOLEAN is TINYINT(1)");
+                assert_eq!(o.rows[0][4].as_deref(), Some("2026-10-13 10:00:00.123456"));
+                assert_eq!(o.rows[1][4].as_deref(), Some("2026-10-13 11:30:00.000000"));
+            }
+            // A bad value in an existing table: nothing goes in.
+            let err = import(&db, &bad, "pets_import").await.unwrap_err();
+            if engine == Engine::Postgres {
+                assert!(format!("{err:#}").starts_with("line 3: "), "{err:#}");
+            }
+            let count = db.run("SELECT count(*) FROM pets_import", 1).await.unwrap();
+            assert_eq!(count.rows[0][0].as_deref(), Some("3"), "{engine:?}");
+            db.run("DROP TABLE pets_import", 1).await.unwrap();
+        }
     }
 
     #[tokio::test]
@@ -191,5 +346,16 @@ mod tests {
         std::fs::write(&bad, "id,name\n1,a\n2,b,extra\n").unwrap();
         assert!(import(&db, &bad, "pets").await.is_err());
         assert_eq!(db.run("SELECT count(*) FROM pets", 1).await.unwrap().rows[0][0].as_deref(), Some("6"));
+
+        // TSV as IMDb writes it: quotes are part of the value, `\N` is NULL.
+        let tsv = dir.path().join("movies.tsv");
+        std::fs::write(&tsv, "id\ttitle\tyear\n1\tThe \"Best\" Movie\t1999\n2\t\"Quoted start\t\\N\n3\tAfter\t2002\n")
+            .unwrap();
+        assert_eq!(import(&db, &tsv, "movies").await.unwrap(), Imported { rows: 3, created: true });
+        let o = db.run("SELECT title, year, typeof(year) FROM movies ORDER BY id", 10).await.unwrap();
+        let col = |c: usize| o.rows.iter().map(|r| r[c].clone()).collect::<Vec<_>>();
+        assert_eq!(col(0), [Some("The \"Best\" Movie".into()), Some("\"Quoted start".into()), Some("After".into())]);
+        assert_eq!(col(1), [Some("1999".into()), None, Some("2002".into())]);
+        assert_eq!(col(2)[0].as_deref(), Some("integer"), "a `\\N` doesn't make the column text");
     }
 }

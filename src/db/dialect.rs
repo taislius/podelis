@@ -169,11 +169,18 @@ pub trait Dialect: Sync {
     fn insert_defaults(&self, table: &str) -> String {
         format!("INSERT INTO {table} DEFAULT VALUES")
     }
-    /// Column types for imported integers and decimals.
+    /// Column types for imported integers, decimals, booleans and
+    /// timestamps (dates are `DATE` everywhere).
     fn integer_type(&self) -> &'static str {
         "BIGINT"
     }
     fn real_type(&self) -> &'static str;
+    fn boolean_type(&self) -> &'static str {
+        "BOOLEAN"
+    }
+    fn timestamp_type(&self) -> &'static str {
+        "TIMESTAMP"
+    }
 
     /// A statement changing a column's type and nullability to these, if
     /// the engine can do that in place (SQLite can't). Names are quoted.

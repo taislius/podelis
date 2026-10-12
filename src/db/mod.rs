@@ -25,6 +25,7 @@ use crate::sql;
 
 mod activity;
 mod catalog;
+mod copy;
 mod details;
 mod diagnose;
 mod dialect;
@@ -38,7 +39,7 @@ mod postgres;
 mod run;
 mod sqlite;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod tunnel;
 
 pub use activity::Activity;
