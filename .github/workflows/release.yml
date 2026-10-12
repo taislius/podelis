@@ -59,3 +59,43 @@ jobs:
           files: |
             ${{ env.ASSET }}
             ${{ env.ASSET }}.sha256
+
+  # Points the Homebrew tap at the new release. Needs a token that can push
+  # to taislius/homebrew-tap (a fine-grained one with Contents: read and
+  # write on that repository) as the HOMEBREW_TAP_TOKEN secret; without it,
+  # or for a pre-release tag (v1.0.0-rc.1), this is skipped.
+  homebrew:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Check
+        id: check
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then echo "No HOMEBREW_TAP_TOKEN secret: skipping the tap."
+          elif [[ "$GITHUB_REF_NAME" == *-* ]]; then echo "A pre-release: skipping the tap."
+          else echo "update=yes" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.update == 'yes'
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.update == 'yes'
+        with:
+          repository: taislius/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Update the formula
+        if: steps.check.outputs.update == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          gh release download "$GITHUB_REF_NAME" --pattern '*.sha256' --dir sums
+          ./scripts/homebrew-formula.sh "$version" sums > tap/Formula/podelis.rb
+          ruby -c tap/Formula/podelis.rb
+          cd tap
+          git diff --quiet && { echo "The tap already has $version."; exit 0; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Podėlis $version"
+          git push

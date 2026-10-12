@@ -1,6 +1,7 @@
-# Homebrew formula template for a tap (e.g. github.com/taislius/homebrew-tap,
-# as Formula/podelis.rb). After tagging a release, replace VERSION (in the
-# URLs, e.g. 0.2.0) and the SHA256 values from the release's .sha256 files.
+# Homebrew formula template for the tap (github.com/taislius/homebrew-tap,
+# as Formula/podelis.rb). scripts/homebrew-formula.sh fills in VERSION (in
+# the URLs, e.g. 0.3.0) and the SHA256 values from the release's .sha256
+# files; the release workflow does it and pushes the result to the tap.
 class Podelis < Formula
   desc "Terminal UI SQL client for PostgreSQL, MySQL and SQLite"
   homepage "https://github.com/taislius/podelis"
