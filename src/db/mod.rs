@@ -48,7 +48,9 @@ pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint
 #[cfg(test)]
 pub use dialect::PlanNote;
 pub use dialect::{Dialect, LexerRules, Plan};
-pub use errors::{CheckOutcome, ErrorPos, error_message, error_position, is_broken, is_reconnected, sql_literal};
+pub use errors::{
+    CheckOutcome, ErrorPos, error_message, error_position, is_broken, is_reconnected, sql_literal, value_literal,
+};
 use mysql::cells::mysql_cell;
 pub use options::{ConnectParams, ConnectionMode, Engine, PasswordSource, SslMode, TxMode};
 use postgres::cells::pg_cell;

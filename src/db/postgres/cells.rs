@@ -30,8 +30,6 @@ pub(in crate::db) fn pg_cell(row: &PgRow, idx: usize) -> Option<String> {
                 "f" => "false".to_string(),
                 other => other.to_string(),
             },
-            // Text-format bytea is `\x` followed by two hex digits per byte.
-            "BYTEA" => format!("<{} bytes>", text.len().saturating_sub(2) / 2),
             _ => text.to_string(),
         });
     }
@@ -58,7 +56,7 @@ pub(in crate::db) fn pg_binary_cell(row: &PgRow, idx: usize) -> Option<String> {
         serde_json::Value,
     );
     if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(idx) {
-        return v.map(|b| format!("<{} bytes>", b.len()));
+        return v.map(|b| Engine::Postgres.dialect().hex(&b));
     }
     Some("<unsupported>".to_string())
 }

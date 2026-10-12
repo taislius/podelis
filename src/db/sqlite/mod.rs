@@ -6,11 +6,22 @@ pub(super) mod cells;
 pub(super) mod connect;
 pub(super) mod queries;
 
-use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan, PlanNote};
+use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan, PlanNote, hex_digits};
 
 pub struct Sqlite;
 
 impl Dialect for Sqlite {
+    /// `X'DEADBEEF'`, as SQLite's `quote()` writes it.
+    fn hex(&self, bytes: &[u8]) -> String {
+        format!("X'{}'", hex_digits(bytes, true))
+    }
+    fn is_binary_type(&self, ty: &str) -> bool {
+        ty.eq_ignore_ascii_case("BLOB")
+    }
+    fn binary_literal(&self, shown: &str) -> Option<String> {
+        let digits = shown.strip_prefix("X'")?.strip_suffix('\'')?;
+        (digits.len() % 2 == 0 && digits.chars().all(|c| c.is_ascii_hexdigit())).then(|| shown.to_string())
+    }
     fn label(&self) -> &'static str {
         "SQLite"
     }

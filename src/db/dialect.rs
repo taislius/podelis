@@ -29,6 +29,16 @@ pub const BIG_SCAN_ROWS: f64 = 10_000.0;
 pub const MISESTIMATE_FACTOR: f64 = 10.0;
 
 /// "1.2k", "3.4M": row counts in notes.
+/// `bytes` as hex digits, two per byte.
+pub fn hex_digits(bytes: &[u8], upper: bool) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = if upper { write!(out, "{b:02X}") } else { write!(out, "{b:02x}") };
+    }
+    out
+}
+
 pub fn human_rows(n: f64) -> String {
     match n {
         n if n >= 1e6 => format!("{:.1}M", n / 1e6),
@@ -144,6 +154,22 @@ pub trait Dialect: Sync {
     /// A string literal.
     fn string_literal(&self, value: &str) -> String {
         format!("'{}'", value.replace('\'', "''"))
+    }
+
+    /// How a binary value is shown, in the engine's own notation:
+    /// PostgreSQL's `\xdeadbeef`, which is also what its server sends.
+    fn hex(&self, bytes: &[u8]) -> String {
+        format!("\\x{}", hex_digits(bytes, false))
+    }
+    /// Whether a result column of type `ty` (as the driver names it) holds
+    /// binary data.
+    fn is_binary_type(&self, ty: &str) -> bool {
+        ty.eq_ignore_ascii_case("BYTEA")
+    }
+    /// A binary value as `hex` shows it, as a literal, when a string
+    /// literal won't do (PostgreSQL reads `'\x…'` as `bytea`).
+    fn binary_literal(&self, _shown: &str) -> Option<String> {
+        None
     }
 
     /// The socket file to connect to for a Unix socket `path` given in the

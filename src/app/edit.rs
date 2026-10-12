@@ -59,15 +59,16 @@ impl App {
         if pk.is_empty() {
             return Err(format!("{} has no primary key", source.table));
         }
+        let engine = self.engine();
+        let ty = |i: usize| results.column_types.get(i).map_or("", |t| t);
         let mut key = Vec::new();
         for k in pk {
             let i = position(&k.name)
                 .filter(|_| selectable(&k.name))
                 .ok_or_else(|| format!("the result doesn't include the primary key column {}", k.name))?;
-            let value = results.rows[row][i].clone().ok_or("the primary key value is NULL")?;
-            key.push((k.name.clone(), value));
+            let value = results.rows[row][i].as_deref().ok_or("the primary key value is NULL")?;
+            key.push((k.name.clone(), crate::db::value_literal(value, ty(i), engine)));
         }
-        let engine = self.engine();
         let table_name = match &source.schema {
             Some(s) => format!("{}.{}", engine.quote_ident(s), engine.quote_ident(&table.info.name)),
             None => engine.quote_ident(&table.info.name),
@@ -78,6 +79,7 @@ impl App {
             column: column.clone(),
             table: table_name,
             key,
+            column_type: ty(col).to_string(),
             nullable: info.nullable,
             text: LineInput::new(results.rows[row][col].clone().unwrap_or_default()),
         })
@@ -108,9 +110,10 @@ impl App {
     fn save_cell_edit(&mut self, value: Option<String>) {
         let Some(edit) = self.cell_edit.take() else { return };
         let engine = self.engine();
-        let literal = |v: Option<&str>| v.map_or_else(|| "NULL".to_string(), |v| crate::db::sql_literal(v, engine));
-        let condition: Vec<String> =
-            edit.key.iter().map(|(k, v)| format!("{} = {}", engine.quote_ident(k), literal(Some(v)))).collect();
+        let literal = |v: Option<&str>| {
+            v.map_or_else(|| "NULL".to_string(), |v| crate::db::value_literal(v, &edit.column_type, engine))
+        };
+        let condition: Vec<String> = edit.key.iter().map(|(k, v)| format!("{} = {v}", engine.quote_ident(k))).collect();
         let sql = format!(
             "UPDATE {} SET {} = {} WHERE {}",
             edit.table,

@@ -6,6 +6,18 @@ pub fn sql_literal(value: &str, engine: Engine) -> String {
     engine.dialect().string_literal(value)
 }
 
+/// A literal for `value` from a result column of type `ty`: a binary
+/// value in the engine's hex notation, anything else as a string.
+pub fn value_literal(value: &str, ty: &str, engine: Engine) -> String {
+    let dialect = engine.dialect();
+    if dialect.is_binary_type(ty)
+        && let Some(literal) = dialect.binary_literal(value)
+    {
+        return literal;
+    }
+    dialect.string_literal(value)
+}
+
 /// What the server said about a statement it prepared but didn't run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CheckOutcome {

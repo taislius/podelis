@@ -99,7 +99,8 @@ pub fn json(outcome: &QueryOutcome, view: &[usize]) -> String {
 }
 
 /// One `INSERT INTO table (...) VALUES (...);` per row in `view` order.
-/// Numbers in numeric columns stay unquoted; NULL stays NULL.
+/// Numbers in numeric columns stay unquoted, binary values are written in
+/// hex, and NULL stays NULL.
 pub fn sql_inserts(outcome: &QueryOutcome, view: &[usize], table: &str, engine: Engine) -> String {
     let numeric = |i: usize| {
         let ty = outcome.column_types.get(i).map(|t| t.to_ascii_uppercase()).unwrap_or_default();
@@ -115,7 +116,7 @@ pub fn sql_inserts(outcome: &QueryOutcome, view: &[usize], table: &str, engine: 
             .map(|(i, v)| match v {
                 None => "NULL".to_string(),
                 Some(v) if numeric(i) && v.parse::<f64>().is_ok() => v.clone(),
-                Some(v) => crate::db::sql_literal(v, engine),
+                Some(v) => crate::db::value_literal(v, outcome.column_types.get(i).map_or("", |t| t), engine),
             })
             .collect();
         let _ = writeln!(out, "INSERT INTO {table} ({columns}) VALUES ({});", values.join(", "));
@@ -269,6 +270,13 @@ mod tests {
             sql_inserts(&o, &[1, 0], "public.people", Engine::Postgres),
             "INSERT INTO public.people (id, \"Name\", note) VALUES (2, 'Bo', 'x');\n\
              INSERT INTO public.people (id, \"Name\", note) VALUES (1, 'O''Neil', NULL);\n"
+        );
+        // Binary values go in as hex literals, not as text.
+        let mut o = outcome(&["b", "t"], &[&[Some("0xDEADBEEF"), Some("0xDEADBEEF")]]);
+        o.column_types = vec!["BLOB".into(), "TEXT".into()];
+        assert_eq!(
+            sql_inserts(&o, &[0], "t", Engine::MySql),
+            "INSERT INTO t (b, t) VALUES (0xDEADBEEF, '0xDEADBEEF');\n"
         );
     }
 

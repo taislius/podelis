@@ -92,7 +92,8 @@ impl App {
         for (name, pos) in &table.key {
             let pos = pos.ok_or_else(|| format!("the result doesn't include the primary key column {name}"))?;
             let value = results.rows[row][pos].as_deref().ok_or("a primary key value is NULL")?;
-            parts.push(format!("{} = {}", engine.quote_ident(name), crate::db::sql_literal(value, engine)));
+            let ty = results.column_types.get(pos).map_or("", |t| t);
+            parts.push(format!("{} = {}", engine.quote_ident(name), crate::db::value_literal(value, ty, engine)));
         }
         Ok(parts.join(" AND "))
     }

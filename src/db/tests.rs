@@ -192,7 +192,7 @@ async fn live_mysql() {
         .unwrap();
     assert_eq!(
         cells(&o),
-        vec![vec![Some("1.50"), Some("2024-02-29"), Some("<2 bytes>"), Some("{\"k\": 1}"), Some("žąsis")]]
+        vec![vec![Some("1.50"), Some("2024-02-29"), Some("0x00FF"), Some("{\"k\": 1}"), Some("žąsis")]]
     );
     let o = db
         .run(
@@ -254,7 +254,7 @@ async fn live_postgres() {
         .unwrap();
     assert_eq!(
         cells(&o),
-        vec![vec![Some("true"), Some("<2 bytes>"), Some("1 day"), Some("{1,2}"), Some("1.50"), Some("{\"k\": 1}")]]
+        vec![vec![Some("true"), Some("\\x00ff"), Some("1 day"), Some("{1,2}"), Some("1.50"), Some("{\"k\": 1}")]]
     );
     let o = db.run("BEGIN; SET LOCAL search_path TO pg_catalog; SHOW search_path", DEFAULT_ROW_LIMIT).await.unwrap();
     assert_eq!(cells(&o), vec![vec![Some("pg_catalog")]]);
@@ -297,7 +297,7 @@ async fn live_sqlite() {
     let db = Database::connect(sqlite_params(&path, false)).await.unwrap();
     live_common(&db).await;
     let o = db.run("SELECT 1, 2.5, 'žąsis', X'00FF', NULL", DEFAULT_ROW_LIMIT).await.unwrap();
-    assert_eq!(cells(&o), vec![vec![Some("1"), Some("2.5"), Some("žąsis"), Some("<2 bytes>"), None]]);
+    assert_eq!(cells(&o), vec![vec![Some("1"), Some("2.5"), Some("žąsis"), Some("X'00FF'"), None]]);
     db.run("CREATE TABLE people (id INTEGER NOT NULL, nick TEXT); CREATE VIEW v AS SELECT 1", DEFAULT_ROW_LIMIT)
         .await
         .unwrap();
@@ -615,4 +615,47 @@ async fn live_activity_postgres() {
 #[tokio::test]
 async fn live_activity_mysql() {
     live_activity(Engine::MySql, "SELECT SLEEP(10) AS podelis_activity_test").await;
+}
+
+/// Binary values show in each engine's hex notation, and that text goes
+/// back into SQL as a literal equal to the stored value (for editing cells
+/// and `INSERT` exports).
+#[tokio::test]
+async fn binary_values_show_in_hex_and_go_back_as_literals() {
+    let dir = tempfile::tempdir().unwrap();
+    for engine in [Engine::Postgres, Engine::MySql, Engine::Sqlite] {
+        let db = if engine == Engine::Sqlite {
+            Database::connect(sqlite_params(&dir.path().join("b.db"), false)).await.unwrap()
+        } else {
+            let Some(db) = live_db(engine).await else { continue };
+            db
+        };
+        // A NUL, 0xFF, a quote and a backslash.
+        let (create, insert, shown) = match engine {
+            Engine::Postgres => ("CREATE TEMP TABLE bin_t (b bytea)", r"'\x00ff275c'", r"\x00ff275c"),
+            Engine::MySql => ("CREATE TEMPORARY TABLE podelis_test.bin_t (b blob)", "X'00FF275C'", "0x00FF275C"),
+            Engine::Sqlite => ("CREATE TEMP TABLE bin_t (b blob)", "X'00FF275C'", "X'00FF275C'"),
+        };
+        if engine == Engine::MySql {
+            db.run("CREATE DATABASE IF NOT EXISTS podelis_test; USE podelis_test", 1).await.unwrap();
+        }
+        db.run(&format!("{create}; INSERT INTO bin_t VALUES ({insert}), ({insert})"), 1).await.unwrap();
+        let o = db.run("SELECT b FROM bin_t", DEFAULT_ROW_LIMIT).await.unwrap();
+        assert_eq!(o.rows[0][0].as_deref(), Some(shown), "{engine:?}");
+        let literal = value_literal(shown, &o.column_types[0], engine);
+        let o = db.run(&format!("SELECT count(*) FROM bin_t WHERE b = {literal}"), 1).await.unwrap();
+        assert_eq!(o.rows[0][0].as_deref(), Some("2"), "{engine:?}: {literal}");
+        db.run("DROP TABLE bin_t", 1).await.unwrap();
+    }
+}
+
+#[test]
+fn binary_literals_only_for_binary_columns_in_hex() {
+    assert_eq!(value_literal("0xDEADBEEF", "BLOB", Engine::MySql), "0xDEADBEEF");
+    assert_eq!(value_literal("0x", "VARBINARY", Engine::MySql), "X''");
+    assert_eq!(value_literal("0xDEADBEEF", "TEXT", Engine::MySql), "'0xDEADBEEF'", "text that looks like hex");
+    assert_eq!(value_literal("hello", "BLOB", Engine::MySql), "'hello'", "typed in by hand");
+    assert_eq!(value_literal("X'00FF'", "BLOB", Engine::Sqlite), "X'00FF'");
+    assert_eq!(value_literal("X'0FF'", "BLOB", Engine::Sqlite), "'X''0FF'''", "odd digits");
+    assert_eq!(value_literal(r"\x00ff", "BYTEA", Engine::Postgres), r"'\x00ff'");
 }

@@ -476,8 +476,10 @@ pub struct CellEdit {
     pub column: String,
     /// Quoted, possibly schema-qualified table name.
     pub table: String,
-    /// Primary key column names and this row's values.
+    /// Primary key column names and this row's values, as literals.
     pub key: Vec<(String, String)>,
+    /// The column's type, as the result names it.
+    pub column_type: String,
     pub nullable: bool,
     pub text: LineInput,
 }

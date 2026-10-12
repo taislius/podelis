@@ -5,7 +5,7 @@ pub(super) mod connect;
 mod plan;
 pub(super) mod queries;
 
-use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan};
+use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan, hex_digits};
 
 pub struct MySql;
 
@@ -64,6 +64,22 @@ impl Dialect for MySql {
     }
     fn string_literal(&self, value: &str) -> String {
         format!("'{}'", value.replace('\\', "\\\\").replace('\'', "''"))
+    }
+    /// `0xDEADBEEF`, as the `mysql` client shows it.
+    fn hex(&self, bytes: &[u8]) -> String {
+        format!("0x{}", hex_digits(bytes, true))
+    }
+    fn is_binary_type(&self, ty: &str) -> bool {
+        ["BINARY", "VARBINARY", "TINYBLOB", "BLOB", "MEDIUMBLOB", "LONGBLOB", "GEOMETRY"]
+            .iter()
+            .any(|t| ty.eq_ignore_ascii_case(t))
+    }
+    fn binary_literal(&self, shown: &str) -> Option<String> {
+        let digits = shown.strip_prefix("0x")?;
+        if digits.is_empty() {
+            return Some("X''".into());
+        }
+        digits.chars().all(|c| c.is_ascii_hexdigit()).then(|| shown.to_string())
     }
     fn version_query(&self) -> &'static str {
         "SELECT VERSION()"
