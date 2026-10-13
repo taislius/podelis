@@ -5,7 +5,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 
-use crate::db::{ColumnInfo, Engine, ForeignKey, IndexInfo, QueryOutcome, TableDetails, TableInfo};
+use crate::db::{
+    ColumnInfo, Engine, ForeignKey, IndexInfo, QueryOutcome, TableDetails, TableInfo, same_type, translate_type,
+};
 
 /// One side's table: its columns and, when loaded, indexes and foreign keys.
 pub struct TableShape {
@@ -65,6 +67,26 @@ fn index_label(index: &IndexInfo) -> String {
     format!("{unique}index {} ({})", index.name, index.columns)
 }
 
+/// `CREATE INDEX` for `index` on `table`: its own definition on the same
+/// engine, else one built from its columns.
+fn index_sql(index: &IndexInfo, table: &str, engine: Engine, same_engine: bool) -> String {
+    let stmt = match &index.definition {
+        Some(def) if same_engine => def.trim_end_matches(';').to_string(),
+        _ if index.columns.is_empty() => format!("-- {}: an expression index, copy it by hand", index.name),
+        _ => {
+            let cols: Vec<String> = index.columns.split(',').map(|c| engine.quote_ident(c.trim())).collect();
+            let unique = if index.unique { "UNIQUE " } else { "" };
+            format!("CREATE {unique}INDEX {} ON {table} ({})", engine.quote_ident(&index.name), cols.join(", "))
+        }
+    };
+    if stmt.starts_with("--") { stmt } else { format!("{stmt};") }
+}
+
+/// A note for a column whose type the other engine has nothing like.
+fn untranslatable(column: &ColumnInfo, engine: Engine) -> String {
+    format!("-- column {} {}: {} has no such type; add it by hand", column.name, column.data_type, engine.label())
+}
+
 fn fk_key(fk: &ForeignKey) -> String {
     format!("{}→{}", fk.column.to_lowercase(), fk.target.to_lowercase())
 }
@@ -78,8 +100,9 @@ struct TableChanges {
 // Each kind of difference (columns, indexes, keys) is a few lines; split up
 // they'd need the same half-dozen arguments each.
 #[allow(clippy::too_many_lines)]
-fn table_changes(here: &TableShape, there: &TableShape, other: Side, same_engine: bool) -> TableChanges {
+fn table_changes(here: &TableShape, there: &TableShape, this: Side, other: Side) -> TableChanges {
     let engine = other.engine;
+    let same_engine = this.engine == engine;
     let dialect = engine.dialect();
     let table = qualified(engine, &there.info.schema, &there.info.name);
     let mut lines = Vec::new();
@@ -93,10 +116,18 @@ fn table_changes(here: &TableShape, there: &TableShape, other: Side, same_engine
                 lines.push(format!("column {} {}: only here", column.name, column.data_type));
                 let null = if column.nullable { "" } else { " NOT NULL" };
                 let note = if column.nullable { "" } else { "  -- needs a DEFAULT if the table has rows" };
-                sql.push(format!("ALTER TABLE {table} ADD COLUMN {name} {}{null};{note}", column.data_type));
+                sql.push(match translate_type(this.engine, &column.data_type, engine) {
+                    Some(ty) => format!("ALTER TABLE {table} ADD COLUMN {name} {ty}{null};{note}"),
+                    None => untranslatable(column, engine),
+                });
             }
             Some(theirs) => {
-                let type_differs = !column.data_type.eq_ignore_ascii_case(&theirs.data_type);
+                // Across engines, the same type under another name isn't a difference.
+                let type_differs = if same_engine {
+                    !column.data_type.eq_ignore_ascii_case(&theirs.data_type)
+                } else {
+                    !same_type(this.engine, &column.data_type, engine, &theirs.data_type)
+                };
                 if type_differs {
                     lines
                         .push(format!("column {}: {} here, {} there", column.name, column.data_type, theirs.data_type));
@@ -120,8 +151,12 @@ fn table_changes(here: &TableShape, there: &TableShape, other: Side, same_engine
                     ));
                     sql.push(format!("-- the primary key of {table} differs: change it by hand"));
                 }
-                if (type_differs || column.nullable != theirs.nullable) && same_engine {
-                    match dialect.modify_column(&table, &name, &column.data_type, column.nullable) {
+                if type_differs || column.nullable != theirs.nullable {
+                    let Some(ty) = translate_type(this.engine, &column.data_type, engine) else {
+                        sql.push(untranslatable(column, engine));
+                        continue;
+                    };
+                    match dialect.modify_column(&table, &name, &ty, column.nullable) {
                         Some(stmt) => sql.push(format!("{stmt};")),
                         None => sql.push(format!(
                             "-- {} can't change column {name} in place: rebuild {table}",
@@ -144,16 +179,7 @@ fn table_changes(here: &TableShape, there: &TableShape, other: Side, same_engine
         let a_keys: HashSet<String> = a_idx.iter().map(index_key).collect();
         for index in a_idx.iter().filter(|i| !b_keys.contains(&index_key(i))) {
             lines.push(format!("{}: only here", index_label(index)));
-            let stmt = match &index.definition {
-                Some(def) if same_engine => def.trim_end_matches(';').to_string(),
-                _ if index.columns.is_empty() => format!("-- {}: an expression index, copy it by hand", index.name),
-                _ => {
-                    let cols: Vec<String> = index.columns.split(',').map(|c| engine.quote_ident(c.trim())).collect();
-                    let unique = if index.unique { "UNIQUE " } else { "" };
-                    format!("CREATE {unique}INDEX {} ON {table} ({})", engine.quote_ident(&index.name), cols.join(", "))
-                }
-            };
-            sql.push(if stmt.starts_with("--") { stmt } else { format!("{stmt};") });
+            sql.push(index_sql(index, &table, engine, same_engine));
         }
         for index in b_idx.iter().filter(|i| !a_keys.contains(&index_key(i))) {
             lines.push(format!("{}: only there", index_label(index)));
@@ -181,33 +207,36 @@ fn table_changes(here: &TableShape, there: &TableShape, other: Side, same_engine
 }
 
 /// `CREATE TABLE` (or `CREATE VIEW`) for a table only on this side, written
-/// for the other side's schema.
-fn create(table: &TableShape, schema: &str, engine: Engine) -> Vec<String> {
+/// for the other side's schema and engine.
+fn create(table: &TableShape, schema: &str, from: Engine, engine: Engine) -> Vec<String> {
     let name = qualified(engine, schema, &table.info.name);
+    let same_engine = from == engine;
     if table.info.is_view {
         return match table.details.as_ref().and_then(|d| d.definition.as_deref()) {
-            Some(def) => vec![format!("CREATE VIEW {name} AS {};", def.trim().trim_end_matches(';'))],
-            None => vec![format!("-- view {name}: copy its definition by hand")],
+            Some(def) if same_engine => vec![format!("CREATE VIEW {name} AS {};", def.trim().trim_end_matches(';'))],
+            _ => vec![format!("-- view {name}: copy its definition by hand")],
         };
     }
-    let mut cols: Vec<String> = table
-        .columns
-        .iter()
-        .map(|c| {
-            let null = if c.nullable { "" } else { " NOT NULL" };
-            format!("  {} {}{null}", engine.quote_ident(&c.name), c.data_type)
-        })
-        .collect();
+    let mut cols = Vec::new();
+    for c in &table.columns {
+        let Some(ty) = translate_type(from, &c.data_type, engine) else {
+            return vec![format!(
+                "-- table {name}: column {} {} has no such type on {}; create it by hand",
+                c.name,
+                c.data_type,
+                engine.label()
+            )];
+        };
+        let null = if c.nullable { "" } else { " NOT NULL" };
+        cols.push(format!("  {} {ty}{null}", engine.quote_ident(&c.name)));
+    }
     let pk: Vec<String> = table.columns.iter().filter(|c| c.primary_key).map(|c| engine.quote_ident(&c.name)).collect();
     if !pk.is_empty() {
         cols.push(format!("  PRIMARY KEY ({})", pk.join(", ")));
     }
     let mut out = vec![format!("CREATE TABLE {name} (\n{}\n);", cols.join(",\n"))];
     for index in table.details.iter().flat_map(|d| &d.indexes).filter(|i| !i.primary) {
-        out.push(match &index.definition {
-            Some(def) => format!("{};", def.trim_end_matches(';')),
-            None => format!("-- {}: create it by hand", index_label(index)),
-        });
+        out.push(index_sql(index, &name, engine, same_engine));
     }
     out
 }
@@ -228,7 +257,7 @@ pub fn schema_diff(here: &[TableShape], there: &[TableShape], this: Side, other:
         match theirs.get(key) {
             None => missing.push((key.clone(), *table)),
             Some(other_table) => {
-                let changes = table_changes(table, other_table, other, same_engine);
+                let changes = table_changes(table, other_table, this, other);
                 if changes.lines.is_empty() {
                     same += 1;
                 } else {
@@ -274,31 +303,30 @@ pub fn schema_diff(here: &[TableShape], there: &[TableShape], this: Side, other:
 
     let mut sql =
         format!("-- Makes {} match {}. Review it first: drops are left commented out.\n", other.name, this.name);
-    if same_engine {
-        for (_, table) in &missing {
-            let schema = if by_name { their_schema.as_str() } else { table.info.schema.as_str() };
-            for stmt in create(table, schema, other.engine) {
-                let _ = writeln!(sql, "\n{stmt}");
-            }
-        }
-        for (_, changes) in &altered {
-            let _ = writeln!(sql);
-            for stmt in &changes.sql {
-                let _ = writeln!(sql, "{stmt}");
-            }
-        }
-        for (_, table) in &extra {
-            let what = if table.info.is_view { "VIEW" } else { "TABLE" };
-            let _ =
-                write!(sql, "\n-- DROP {what} {};\n", qualified(other.engine, &table.info.schema, &table.info.name));
-        }
-    } else {
+    if !same_engine {
         let _ = writeln!(
             sql,
-            "-- The connections use different engines ({} and {}): align them by hand.",
+            "-- From {} to {}: types are written as {} names them; views and some types need you.",
             this.engine.label(),
+            other.engine.label(),
             other.engine.label()
         );
+    }
+    for (_, table) in &missing {
+        let schema = if by_name { their_schema.as_str() } else { table.info.schema.as_str() };
+        for stmt in create(table, schema, this.engine, other.engine) {
+            let _ = writeln!(sql, "\n{stmt}");
+        }
+    }
+    for (_, changes) in &altered {
+        let _ = writeln!(sql);
+        for stmt in &changes.sql {
+            let _ = writeln!(sql, "{stmt}");
+        }
+    }
+    for (_, table) in &extra {
+        let what = if table.info.is_view { "VIEW" } else { "TABLE" };
+        let _ = write!(sql, "\n-- DROP {what} {};\n", qualified(other.engine, &table.info.schema, &table.info.name));
     }
     let differences = missing.len() + extra.len() + altered.iter().map(|(_, c)| c.lines.len()).sum::<usize>();
     SchemaDiff { report, sql, differences }
@@ -489,12 +517,101 @@ mod tests {
         let diff = schema_diff(&here, &there, PG, PG_PROD);
         assert_eq!(diff.differences, 0);
         assert!(diff.report.ends_with("The schemas match: 1 tables and views."), "{}", diff.report);
+    }
 
+    /// PostgreSQL against MySQL: the same types under other names match, and
+    /// the SQL uses MySQL's names (or says when there's none).
+    #[test]
+    fn schemas_across_engines() {
         let my = Side { name: "mysql", engine: Engine::MySql };
-        let there = [table("main", "u", vec![], vec![])];
+        let mut indexed = index("people_name", "name");
+        indexed.definition = Some("CREATE INDEX people_name ON public.people USING btree (name)".into());
+        let here = [
+            table(
+                "public",
+                "people",
+                vec![
+                    col("id", "int4", false, true),
+                    col("name", "varchar(120)", true, false),
+                    col("born", "timestamp", true, false),
+                    col("note", "varchar(40)", true, false),
+                    col("tags", "text[]", true, false),
+                ],
+                vec![indexed],
+            ),
+            table(
+                "public",
+                "cities",
+                vec![col("id", "int8", false, true), col("seen", "timestamptz", true, false)],
+                vec![],
+            ),
+        ];
+        let there = [table(
+            "shop",
+            "people",
+            vec![
+                col("id", "int", false, true),
+                col("name", "varchar(120)", true, false),
+                col("born", "datetime(6)", true, false),
+                col("note", "varchar(20)", true, false),
+            ],
+            vec![],
+        )];
         let diff = schema_diff(&here, &there, PG, my);
-        assert!(diff.sql.contains("different engines"), "{}", diff.sql);
-        assert!(!diff.sql.contains("CREATE TABLE"), "{}", diff.sql);
+        assert!(
+            diff.report.contains(
+                "DIFFERENT\n  people\n    column note: varchar(40) here, varchar(20) there\n    \
+                                  column tags text[]: only here\n    index people_name (name): only here\n"
+            ),
+            "{}",
+            diff.report
+        );
+        for expected in [
+            "From PostgreSQL to MySQL",
+            "CREATE TABLE shop.cities (\n  id bigint NOT NULL,\n  seen timestamp(6),\n  PRIMARY KEY (id)\n);",
+            "ALTER TABLE shop.people MODIFY COLUMN note varchar(40)",
+            "-- column tags text[]: MySQL has no such type; add it by hand",
+            "CREATE INDEX people_name ON shop.people (name);",
+        ] {
+            assert!(diff.sql.contains(expected), "missing {expected:?} in\n{}", diff.sql);
+        }
+        assert!(!diff.sql.contains("USING btree"), "PostgreSQL's own index SQL: {}", diff.sql);
+    }
+
+    /// The same CREATE TABLE on live PostgreSQL and MySQL compares as equal,
+    /// and a different length doesn't.
+    #[tokio::test]
+    async fn live_schemas_across_engines() {
+        let ddl = "CREATE TABLE same_t (id int PRIMARY KEY, big bigint, small smallint, name varchar(120), \
+                   code char(3), note text, price numeric(10,2), ratio double precision, ok boolean, \
+                   day date, at time, seen DECIMAL(5,0))";
+        let mut shapes = Vec::new();
+        for engine in [Engine::Postgres, Engine::MySql] {
+            let Some(db) = crate::db::tests::live_db(engine).await else { return };
+            if engine == Engine::MySql {
+                db.run("CREATE DATABASE IF NOT EXISTS podelis_test; USE podelis_test", 1).await.unwrap();
+            }
+            db.run("DROP TABLE IF EXISTS same_t", 1).await.unwrap();
+            db.run(ddl, 1).await.unwrap();
+            let catalog = db.catalog(false).await.unwrap();
+            let (info, columns) = catalog.into_iter().find(|(t, _)| t.name == "same_t").unwrap();
+            shapes.push(vec![TableShape { info, columns, details: None }]);
+            // Postgres's catalog gives lengths too, so it sees them change.
+            db.run("ALTER TABLE same_t ADD COLUMN later varchar(10)", 1).await.unwrap();
+            if engine == Engine::Postgres {
+                db.run("ALTER TABLE same_t ALTER COLUMN later TYPE varchar(20)", 1).await.unwrap();
+            }
+            let catalog = db.catalog(false).await.unwrap();
+            let (info, columns) = catalog.into_iter().find(|(t, _)| t.name == "same_t").unwrap();
+            shapes.push(vec![TableShape { info, columns, details: None }]);
+            db.run("DROP TABLE same_t", 1).await.unwrap();
+        }
+        let my = Side { name: "mysql", engine: Engine::MySql };
+        let diff = schema_diff(&shapes[0], &shapes[2], PG, my);
+        assert_eq!(diff.differences, 0, "{}", diff.report);
+        let diff = schema_diff(&shapes[1], &shapes[3], PG, my);
+        assert!(diff.report.contains("column later: varchar(20) here, varchar(10) there"), "{}", diff.report);
+        assert_eq!(diff.differences, 1, "{}", diff.report);
     }
 
     fn result(columns: &[&str], rows: &[&[&str]]) -> QueryOutcome {

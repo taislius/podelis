@@ -41,6 +41,7 @@ mod sqlite;
 #[cfg(test)]
 pub(crate) mod tests;
 mod tunnel;
+mod types;
 
 pub use activity::Activity;
 pub use details::{ForeignKey, IndexInfo, RoutineInfo, TableDetails};
@@ -56,6 +57,7 @@ pub use options::{ConnectParams, ConnectionMode, Engine, PasswordSource, SslMode
 use postgres::cells::pg_cell;
 use sqlite::cells::sqlite_cell;
 use tunnel::{Tunnel, open_tunnel};
+pub use types::{same_type, translate_type};
 
 /// Default for the rows kept in memory per result set. Rows beyond the limit
 /// are still read from the server (so multi-statement scripts run to
