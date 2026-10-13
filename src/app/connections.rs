@@ -33,10 +33,15 @@ const SERVER_FIELDS: [ConnectField; 13] = [
     ConnectField::Ssh,
 ];
 
-/// SQLite has no server: just a file path (shown in the Host field). Its
-/// queries can't be cancelled, so there's no timeout either.
-const FILE_FIELDS: [ConnectField; 5] =
-    [ConnectField::Name, ConnectField::Engine, ConnectField::Host, ConnectField::Mode, ConnectField::Transaction];
+/// SQLite has no server: just a file path (shown in the Host field).
+const FILE_FIELDS: [ConnectField; 6] = [
+    ConnectField::Name,
+    ConnectField::Engine,
+    ConnectField::Host,
+    ConnectField::Mode,
+    ConnectField::Transaction,
+    ConnectField::Timeout,
+];
 
 /// The fields a connection to `engine` has, in order.
 pub fn fields_for(engine: Engine) -> &'static [ConnectField] {
@@ -271,10 +276,10 @@ impl ConnectForm {
         Ok(())
     }
 
-    /// The query timeout, if one is set (SQLite queries can't be cancelled).
+    /// The query timeout, if one is set.
     pub fn query_timeout(&self) -> Result<Option<Duration>, String> {
         let text = self.timeout.trim().trim_end_matches('s').trim();
-        if text.is_empty() || self.engine.is_file_based() {
+        if text.is_empty() {
             return Ok(None);
         }
         match text.parse::<u64>() {

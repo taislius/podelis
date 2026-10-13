@@ -91,7 +91,7 @@ fn sqlite_form_shows_only_file_fields() {
     form.cycle_engine(false);
     assert_eq!(form.engine, Engine::Sqlite);
     assert!(form.host.is_empty() && form.port.is_empty());
-    assert_eq!(form.visible_fields().len(), 5);
+    assert_eq!(form.visible_fields().len(), 6);
     assert!(form.params().unwrap_err().contains("file"));
     form.host = "/tmp/x.db".into();
     form.mode = ConnectionMode::ReadOnly;
@@ -766,6 +766,20 @@ async fn results_filter_sort_view_and_load_more() {
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Char('M')));
     assert!(!app.executing && app.status_is_error);
+}
+
+/// A SQLite connection's timeout stops a query that runs too long.
+#[tokio::test]
+async fn sqlite_queries_time_out() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    app.connect_form.timeout = "1".into();
+    app.tab.editor.set_text("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n");
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(app.executing);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    app.tick_running();
+    tokio::time::timeout(Duration::from_secs(5), finish(&mut app)).await.expect("the query was stopped");
+    assert!(app.status.starts_with("Timed out after 1 s"), "{}", app.status);
 }
 
 /// "Export all rows" writes every row of a streamed result, not just those

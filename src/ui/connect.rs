@@ -143,7 +143,7 @@ pub(super) fn form_message(form: &ConnectForm) -> (String, Style) {
         ConnectField::PasswordCommand => {
             "Optional: a command that prints the password, e.g. pass show db/prod or op read op://vault/db/password. Runs without a shell"
         }
-        ConnectField::Timeout => "Optional: seconds a query may run before it's cancelled on the server, e.g. 30",
+        ConnectField::Timeout => "Optional: seconds a query may run before it's cancelled, e.g. 30",
         ConnectField::Ssh => {
             "Optional: user@host[:port] or an ~/.ssh/config alias. Uses your ssh keys/agent; no password prompts"
         }
