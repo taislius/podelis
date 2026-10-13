@@ -66,9 +66,9 @@ same way tools like `lazygit` do.
   cursor positions, the focused pane and expanded tables. Results aren't
   re-run. If reconnecting takes a moment, a small card shows which
   connections are back; the first run starts with a welcome screen
-- **Query parameters:** `:customer_id` (any engine), `$1` (Postgres) or `?`
-  (MySQL, SQLite) placeholders are asked for before running, and the values
-  remembered
+- **Query parameters:** `:customer_id` (any engine), `$1` (Postgres), `?`
+  (MySQL, SQLite) or SQLite's `?2`, `@name` and `$name` placeholders are
+  asked for before running, and the values remembered
 - **Errors:** the position the server reports is underlined in the editor.
   After a pause in typing, each statement is *prepared* (checked, never run)
   by the connected server, so syntax errors and unknown tables/columns show

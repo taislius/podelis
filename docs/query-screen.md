@@ -69,7 +69,8 @@ connections and cursors come back after a restart (unless
 `restore_session = false`); results don't, press `F5` to re-run.
 
 **Query parameters.** Running SQL with placeholders — `:name` in any
-engine, `$1` on Postgres, `?` on MySQL/SQLite — first asks for their values
+engine, `$1` on Postgres, `?` on MySQL/SQLite, and SQLite's `?2`, `@name`
+and `$name` — first asks for their values
 (placeholders in strings, comments and `::type` casts don't count). Numbers
 and `NULL` go in as written, anything else as a quoted string, and a value
 starting with `=` is inserted as raw SQL (`=now()`). Values are remembered

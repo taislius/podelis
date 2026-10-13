@@ -99,8 +99,8 @@ While editing or adding a connection:
   `auto-commit`, `manual commit` or `rollback-only`. Unless you pick one,
   production connections start in manual commit and others in
   auto-commit. `Ctrl+K x` switches it while connected.
-- **Timeout:** optional, in seconds. A query running longer is cancelled
-  on the server (PostgreSQL, MySQL).
+- **Timeout:** optional, in seconds. A query running longer is cancelled:
+  on the server for PostgreSQL and MySQL, and stopped in place for SQLite.
 - **SSH via:** optional. `user@host`, `user@host:port` or a host alias from
   `~/.ssh/config`. Podėlis runs your system `ssh -N -L …`, so your keys,
   agent, `~/.ssh/config` and known_hosts all apply. It can't answer
