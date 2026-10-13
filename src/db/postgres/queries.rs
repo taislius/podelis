@@ -11,7 +11,13 @@ pub(in crate::db) async fn column_rows(db: &Database, system: bool) -> Result<Ve
     let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
     let rows: Vec<ColumnRow> = {
         sqlx::query_as(
-            "SELECT c.table_schema::text, c.table_name::text, c.column_name::text, c.udt_name::text,
+            "SELECT c.table_schema::text, c.table_name::text, c.column_name::text,
+                            c.udt_name::text || CASE
+                                WHEN c.character_maximum_length IS NOT NULL
+                                    THEN '(' || c.character_maximum_length || ')'
+                                WHEN c.udt_name = 'numeric' AND c.numeric_precision IS NOT NULL
+                                    THEN '(' || c.numeric_precision || ',' || c.numeric_scale || ')'
+                                ELSE '' END,
                             c.is_nullable::text,
                             CASE WHEN pk.column_name IS NULL THEN '' ELSE 'PRI' END
                      FROM information_schema.columns c
@@ -33,11 +39,14 @@ pub(in crate::db) async fn column_rows(db: &Database, system: bool) -> Result<Ve
         .fetch_all(p)
         .await?
     };
-    // Array types are named `_int4` etc.; show them as `int4[]`.
+    // Array types are named `_int4` etc.; show them as `int4[]`. Lengths and
+    // precision come along (`varchar(120)`, `numeric(10,2)`), so comparing
+    // schemas sees them change, and `char(3)` is called that, not `bpchar`.
     Ok(rows
         .into_iter()
         .map(|(schema, table, column, ty, nullable, key)| {
             let ty = ty.strip_prefix('_').map_or_else(|| ty.clone(), |element| format!("{element}[]"));
+            let ty = ty.strip_prefix("bpchar").map_or_else(|| ty.clone(), |rest| format!("char{rest}"));
             (schema, table, column, ty, nullable, key)
         })
         .collect())
