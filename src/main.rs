@@ -147,9 +147,13 @@ fn restore_input_modes(enhanced: bool, mouse: bool) {
     }
 }
 
-/// Copies via the OSC 52 escape sequence, which works locally and over SSH
-/// in most modern terminals (tmux needs `set -g set-clipboard on`).
+/// Copies with the system's clipboard tool where there is one (any size, any
+/// terminal), else via the OSC 52 escape sequence, which works over SSH in
+/// most modern terminals (tmux needs `set -g set-clipboard on`).
 fn copy_to_clipboard(text: String) {
+    if clipboard::write(&text).is_ok() {
+        return;
+    }
     let _ = execute!(
         stdout(),
         CopyToClipboard { content: text, destination: ClipboardSelection(vec![ClipboardType::Clipboard]) }

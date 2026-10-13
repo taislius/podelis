@@ -1006,8 +1006,16 @@ impl App {
 
     /// Queues `text` for the system clipboard and reports it in the status bar.
     fn copy_text(&mut self, text: String, status: &str) {
+        // Over SSH the terminal carries the copy, and many drop a big one.
+        let status = if crate::clipboard::over_ssh() && text.len() > crate::clipboard::OSC52_LIMIT {
+            #[allow(clippy::cast_precision_loss)] // display only
+            let kb = text.len() as f64 / 1000.0;
+            format!("{status} ({kb:.0} kB: over SSH, a copy this big may not reach your clipboard; export it instead)")
+        } else {
+            status.to_string()
+        };
         self.clipboard = Some(text);
-        self.set_status(status.to_string(), false);
+        self.set_status(status, false);
     }
 
     /// Adds a line to the MESSAGES tab (keeps the last 200).
