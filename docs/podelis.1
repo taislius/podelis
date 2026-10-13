@@ -177,11 +177,16 @@ Connect to
 step by step (DNS, TCP, login, TLS, latency) and show where it fails,
 with hints for common errors.
 .It Fl -import Ar file
-Load a CSV or TSV file (tab-separated if it ends in
-.Pa .tsv
-or
-.Pa .tab )
-into a table.
+Load a CSV or TSV file into a table; a name ending in
+.Pa .gz
+is read compressed.
+The separator is found from the file (see
+.Fl -delimiter ) ;
+in a file separated by
+.Ql \&;
+a decimal comma
+.Pq Ql 12,50
+is read as a decimal point.
 The first line must name the columns.
 An empty field is NULL.
 TSV files aren't quoted, and
@@ -200,7 +205,21 @@ MySQL, a newly created table stays).
 .It Fl -table Ar name
 The table for
 .Fl -import
-(default: the file's name without its extension).
+(default: the file's name without its extensions).
+.It Fl -delimiter Ar c
+The separator for
+.Fl -import :
+one character, or
+.Ql tab .
+By default it's a tab for
+.Pa .tsv
+and
+.Pa .tab
+files, and otherwise whichever of
+.Ql \&; ,
+tab and
+.Ql \&,
+the first line has most of.
 .It Fl h , Fl -help
 Print a summary of the options.
 .It Fl V , Fl -version

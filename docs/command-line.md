@@ -44,6 +44,8 @@ result says `(first N of M rows)` on stderr.
 ```sh
 podelis app.db --import users.csv                  # into the table "users"
 podelis prod --import export.tsv --table events -y # into "events", on a production connection
+podelis app.db --import title.basics.tsv.gz        # compressed, into "title_basics"
+podelis app.db --import data.txt --delimiter '|'   # another separator
 ```
 
 `--import file.csv` creates the table (named after the file, or
@@ -62,7 +64,13 @@ the file is read twice, once to guess the types and once to load it.
 The first line must name the columns, and an empty field is NULL. `.tsv`
 and `.tab` files are tab-separated and not quoted: a `"` is part of the
 value, and `\N` is NULL, as in IMDb's files and PostgreSQL's `COPY`
-output.
+output. Other files are separated by whichever of `;`, tab and `,` their
+first line has most of; `--delimiter` sets it instead (one character, or
+`tab`). Files separated by `;` usually come from where `,` is the decimal
+mark (Excel in Lithuanian, German…), so there `12,50` is read as 12.50. A
+name ending in `.gz` is read compressed, as published data sets often
+come. The file must be UTF-8; convert others first, e.g. `iconv -f
+windows-1257 -t utf-8 old.csv > new.csv`.
 
 Podėlis talks to databases and leaves files to the tools made for them:
 query CSV/JSON files with [Miller](https://miller.readthedocs.io), `jq`,

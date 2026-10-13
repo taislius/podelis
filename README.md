@@ -55,7 +55,9 @@ same way tools like `lazygit` do.
 - **Compare two connections** open in tabs (Ctrl+K, type “compare”):
   - the **schema**: tables, views, columns, indexes and foreign keys only
     on one side or different, with the SQL that makes the other side match
-    (drops left commented out) — `e` opens it in a tab on that connection
+    (drops left commented out) — `e` opens it in a tab on that connection.
+    Across engines (say PostgreSQL and MySQL) the same type under another
+    name isn't a difference, and the SQL uses the other engine's names
   - the **rows** the statement at the cursor returns on each (reads only):
     matched by the first column when it identifies them, the result shows
     rows only here (`−`), only there (`+`) and changed pairs (`≠`)
