@@ -36,9 +36,11 @@ Options:
                          doesn't exist yet (a missing one is usually a typo)
       --test             Test CONNECTION step by step (DNS, TCP, login,
                          TLS…) and show where it fails
-      --import <file>    Load a CSV/TSV file into a table (created with
-                         guessed types if missing); see --table
+      --import <file>    Load a CSV/TSV file (or .gz) into a table (created
+                         with guessed types if missing); see --table
       --table <name>     Table for --import (default: from the file name)
+      --delimiter <c>    Separator for --import: one character, or tab
+                         (default: from the file's first line)
   -h, --help             Show this help
   -V, --version          Show the version
 
@@ -62,6 +64,8 @@ pub struct Args {
     pub test: bool,
     pub import: Option<String>,
     pub table: Option<String>,
+    /// `--delimiter`: the separator for `--import`.
+    pub delimiter: Option<u8>,
     pub doctor: bool,
     /// `doctor --connections`.
     pub test_connections: bool,
@@ -96,6 +100,14 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> ParseOutcome {
             }
             "--import" => value(&arg).map(|v| out.import = Some(v)),
             "--table" => value(&arg).map(|v| out.table = Some(v)),
+            "--delimiter" => value(&arg).and_then(|v| {
+                out.delimiter = Some(match v.as_str() {
+                    "tab" | "\\t" | "\t" => b'\t',
+                    v if v.len() == 1 && v.is_ascii() => v.as_bytes()[0],
+                    _ => return Err(format!("--delimiter takes one character or tab, not '{v}'")),
+                });
+                Ok(())
+            }),
             "--test" => {
                 out.test = true;
                 Ok(())
@@ -444,7 +456,7 @@ async fn import_inner(args: &Args, store: &ConnectionStore) -> Result<(), Failur
             shown = Some(std::time::Instant::now());
         }
     };
-    let result = crate::import::import(&db, &file, &table, &mut show).await;
+    let result = crate::import::import(&db, &file, &table, args.delimiter, &mut show).await;
     if shown.is_some() {
         let _ = write!(std::io::stderr(), "\r\x1b[K");
     }
@@ -514,6 +526,12 @@ mod tests {
         assert!(matches!(args(&["-f", "xml"]), ParseOutcome::Exit(2, _)));
         assert!(matches!(args(&["a", "b"]), ParseOutcome::Exit(2, _)));
         assert!(matches!(args(&["-V"]), ParseOutcome::Exit(0, v) if v.starts_with("podelis ")));
+        let delimiter = |d: &str| match args(&["--delimiter", d]) {
+            ParseOutcome::Run(a) => a.delimiter,
+            ParseOutcome::Exit(..) => None,
+        };
+        assert_eq!([";", "|", "tab", "\\t", "\t"].map(delimiter), (*b";|\t\t\t").map(Some));
+        assert!(matches!(args(&["--delimiter", "ab"]), ParseOutcome::Exit(2, _)));
     }
 
     #[test]

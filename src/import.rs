@@ -3,10 +3,15 @@
 //! transaction, so a failure leaves the table as it was. PostgreSQL gets
 //! the rows through `COPY`; the others in batches of `INSERT`s.
 
+use std::borrow::Cow;
+use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, NaiveDateTime};
+use flate2::read::MultiGzDecoder;
 
 use crate::db::{Database, Engine, sql_literal};
 
@@ -95,30 +100,124 @@ fn is_timestamptz(value: &str) -> bool {
         .any(|f| DateTime::parse_from_str(&value, f).is_ok())
 }
 
-fn is_tsv(path: &Path) -> bool {
-    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("tsv") || e.eq_ignore_ascii_case("tab"))
+/// The file's name without a `.gz`: `title.basics.tsv.gz` → `title.basics.tsv`.
+fn uncompressed_name(path: &Path) -> &Path {
+    match path.extension() {
+        Some(e) if e.eq_ignore_ascii_case("gz") => path.file_stem().map_or(path, Path::new),
+        _ => path,
+    }
 }
 
-/// TSV files don't quote: a `"` is part of the value (film titles in
-/// published data sets, `COPY`'s output).
-fn reader(path: &Path) -> Result<csv::Reader<std::fs::File>> {
-    let tsv = is_tsv(path);
-    csv::ReaderBuilder::new()
-        .delimiter(if tsv { b'\t' } else { b',' })
-        .quoting(!tsv)
-        .from_path(path)
-        .with_context(|| format!("can't read {}", path.display()))
+/// A file's bytes, decompressed if its name ends in `.gz`. `read` counts the
+/// bytes taken from the file itself, so progress is right for both.
+fn open(path: &Path, read: &Arc<AtomicU64>) -> Result<Box<dyn Read + Send>> {
+    let file = std::fs::File::open(path).with_context(|| format!("can't read {}", path.display()))?;
+    let counted = Counted { file, read: Arc::clone(read) };
+    Ok(if uncompressed_name(path) == path { Box::new(counted) } else { Box::new(MultiGzDecoder::new(counted)) })
 }
 
-/// An empty field is NULL, and in a TSV file so is `\N` (how PostgreSQL's
-/// `COPY` and many published data sets write it).
-fn is_null(value: &str, tsv: bool) -> bool {
-    value.is_empty() || (tsv && value == "\\N")
+struct Counted {
+    file: std::fs::File,
+    read: Arc<AtomicU64>,
 }
 
-/// A table name from a file name: `sales 2026.csv` → `sales_2026`.
+impl Read for Counted {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.file.read(buf)?;
+        self.read.fetch_add(n as u64, Ordering::Relaxed);
+        Ok(n)
+    }
+}
+
+/// How a file is laid out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Format {
+    delimiter: u8,
+}
+
+impl Format {
+    /// `delimiter` if given; else a tab for `.tsv` and `.tab` files; else
+    /// whichever of `;`, tab and `,` the first line has most of (`,` when
+    /// none or tied).
+    fn of(path: &Path, delimiter: Option<u8>) -> Result<Format> {
+        if let Some(delimiter) = delimiter {
+            return Ok(Format { delimiter });
+        }
+        let name = uncompressed_name(path);
+        if name.extension().is_some_and(|e| e.eq_ignore_ascii_case("tsv") || e.eq_ignore_ascii_case("tab")) {
+            return Ok(Format { delimiter: b'\t' });
+        }
+        let mut first = Vec::new();
+        open(path, &Arc::default())?.take(1 << 20).read_to_end(&mut first).context("reading the first line")?;
+        if name == path && first.starts_with(&[0x1f, 0x8b]) {
+            let file = path.file_name().unwrap_or_default().to_string_lossy();
+            anyhow::bail!("{file} is compressed with gzip: name it {file}.gz to import it");
+        }
+        let line = first.split(|&b| b == b'\n').next().unwrap_or_default();
+        #[allow(clippy::naive_bytecount)] // one line, once
+        let count = |d: u8| line.iter().filter(|&&b| b == d).count();
+        let delimiter = b";\t".iter().copied().find(|&d| count(d) > count(b',')).unwrap_or(b',');
+        Ok(Format { delimiter })
+    }
+
+    /// Tab-separated files don't quote: a `"` is part of the value (film
+    /// titles in published data sets, `COPY`'s output).
+    fn tsv(self) -> bool {
+        self.delimiter == b'\t'
+    }
+
+    /// An empty field is NULL, and in a TSV file so is `\N` (how
+    /// PostgreSQL's `COPY` and many published data sets write it).
+    fn is_null(self, value: &str) -> bool {
+        value.is_empty() || (self.tsv() && value == "\\N")
+    }
+
+    /// A number as SQL writes it. Files separated by `;` come from where
+    /// `,` is the decimal mark (Excel in much of Europe): `12,50` is 12.50.
+    fn number(self, value: &str) -> Cow<'_, str> {
+        let decimal_comma = self.delimiter == b';'
+            && value.split_once(',').is_some_and(|(whole, part)| {
+                let whole = whole.strip_prefix('-').unwrap_or(whole);
+                !whole.is_empty()
+                    && !part.is_empty()
+                    && whole.bytes().all(|b| b.is_ascii_digit())
+                    && part.bytes().all(|b| b.is_ascii_digit())
+            });
+        if decimal_comma { Cow::Owned(value.replacen(',', ".", 1)) } else { Cow::Borrowed(value) }
+    }
+
+    fn reader(self, path: &Path, read: &Arc<AtomicU64>) -> Result<csv::Reader<Box<dyn Read + Send>>> {
+        Ok(csv::ReaderBuilder::new().delimiter(self.delimiter).quoting(!self.tsv()).from_reader(open(path, read)?))
+    }
+}
+
+/// A CSV error in words, with its line.
+fn explain(e: csv::Error, line: u64, delimiter: u8) -> anyhow::Error {
+    match e.kind() {
+        csv::ErrorKind::UnequalLengths { pos, expected_len, len } => {
+            let line = pos.as_ref().map_or(line, csv::Position::line);
+            let shown = if delimiter == b'\t' { "tab".to_string() } else { format!("{}", char::from(delimiter)) };
+            let hint = if *expected_len == 1 || *len == 1 {
+                format!("; is the separator something other than {shown}? --delimiter sets it")
+            } else {
+                String::new()
+            };
+            anyhow::anyhow!("line {line} has {len} fields, but the header has {expected_len}{hint}")
+        }
+        csv::ErrorKind::Utf8 { pos, .. } => {
+            let line = pos.as_ref().map_or(line, csv::Position::line);
+            anyhow::anyhow!(
+                "line {line} isn't UTF-8 text; convert the file first, e.g. iconv -f windows-1257 -t utf-8 file.csv > utf8.csv"
+            )
+        }
+        _ => anyhow::Error::from(e).context(format!("line {line}")),
+    }
+}
+
+/// A table name from a file name: `sales 2026.csv` → `sales_2026`,
+/// `title.basics.tsv.gz` → `title_basics`.
 pub fn table_name_for(path: &Path) -> String {
-    let stem = path.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let stem = uncompressed_name(path).file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
     let name: String = stem.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
     let name = name.trim_matches('_').to_string();
     if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) { format!("t_{name}") } else { name }
@@ -169,17 +268,24 @@ const PROGRESS_ROWS: u64 = 10_000;
 
 /// A file's rows after the header, with how far into the file they are.
 struct Rows {
-    reader: csv::Reader<std::fs::File>,
+    reader: csv::Reader<Box<dyn Read + Send>>,
     record: csv::StringRecord,
+    format: Format,
+    /// Bytes read from the file so far.
+    read: Arc<AtomicU64>,
     /// Rows read so far.
     count: u64,
 }
 
 impl Rows {
-    fn open(path: &Path) -> Result<(Vec<String>, Rows)> {
-        let mut reader = reader(path)?;
-        let header = reader.headers()?.iter().map(|h| h.trim().to_string()).collect();
-        Ok((header, Rows { reader, record: csv::StringRecord::new(), count: 0 }))
+    fn open(path: &Path, format: Format) -> Result<(Vec<String>, Rows)> {
+        let read = Arc::default();
+        let mut reader = format.reader(path, &read)?;
+        let header = match reader.headers() {
+            Ok(h) => h.iter().map(|h| h.trim().to_string()).collect(),
+            Err(e) => return Err(explain(e, 1, format.delimiter)),
+        };
+        Ok((header, Rows { reader, record: csv::StringRecord::new(), format, read, count: 0 }))
     }
 
     /// The next row, or `None` at the end of the file. An error names the
@@ -191,7 +297,7 @@ impl Rows {
                 Some(Ok(&self.record))
             }
             Ok(false) => None,
-            Err(e) => Some(Err(anyhow::Error::from(e).context(format!("line {}", self.count + 2)))),
+            Err(e) => Some(Err(explain(e, self.count + 2, self.format.delimiter))),
         }
     }
 
@@ -201,7 +307,7 @@ impl Rows {
     }
 
     fn progress(&self, stage: Stage, size: u64) -> Progress {
-        Progress { stage, bytes: self.reader.position().byte(), size, rows: self.count }
+        Progress { stage, bytes: self.read.load(Ordering::Relaxed), size, rows: self.count }
     }
 }
 
@@ -209,13 +315,14 @@ pub async fn import(
     db: &Database,
     path: &Path,
     table: &str,
+    delimiter: Option<u8>,
     progress: &mut (dyn FnMut(Progress) + Send),
 ) -> Result<Imported> {
     let engine = db.engine();
-    let tsv = is_tsv(path);
+    let format = Format::of(path, delimiter)?;
     let size = std::fs::metadata(path).map_or(0, |m| m.len());
     // First pass: the header and each column's type.
-    let (header, mut rows) = Rows::open(path)?;
+    let (header, mut rows) = Rows::open(path, format)?;
     anyhow::ensure!(
         !header.is_empty() && header.iter().all(|h| !h.is_empty()),
         "the first line must name every column"
@@ -223,8 +330,8 @@ pub async fn import(
     let mut guessed: Vec<Option<ColType>> = vec![None; header.len()];
     while let Some(record) = rows.next() {
         for (i, value) in record?.iter().enumerate().take(header.len()) {
-            if !is_null(value, tsv) {
-                let t = ColType::of(value);
+            if !format.is_null(value) {
+                let t = ColType::of(&format.number(value));
                 guessed[i] = Some(guessed[i].map_or(t, |g| g.join(t)));
             }
         }
@@ -253,16 +360,16 @@ pub async fn import(
             db.run(&format!("CREATE TABLE {quoted} ({})", defs.join(", ")), 1).await?;
         }
         // Second pass: the rows.
-        let (_, mut rows) = Rows::open(path)?;
+        let (_, mut rows) = Rows::open(path, format)?;
         if engine == Engine::Postgres {
-            let width = header.len();
+            let types = &types;
             let progress = &mut *progress;
             let chunks = std::iter::from_fn(move || {
                 let mut chunk = Vec::new();
                 while chunk.len() < COPY_CHUNK {
                     match rows.next() {
                         None => break,
-                        Some(Ok(record)) => copy_line(record, width, tsv, &mut chunk),
+                        Some(Ok(record)) => copy_line(record, types, format, &mut chunk),
                         Some(Err(e)) => return Some(Err(e)),
                     }
                 }
@@ -278,8 +385,8 @@ pub async fn import(
             let record = record?;
             let values: Vec<String> = (0..header.len())
                 .map(|i| match record.get(i).unwrap_or("") {
-                    v if is_null(v, tsv) => "NULL".to_string(),
-                    v if types[i].bare() => v.to_string(),
+                    v if format.is_null(v) => "NULL".to_string(),
+                    v if types[i].bare() => format.number(v).into_owned(),
                     v => sql_literal(v, engine),
                 })
                 .collect();
@@ -311,15 +418,16 @@ pub async fn import(
 }
 
 /// A row in `COPY`'s text format: tab-separated, `\N` for NULL, and
-/// backslashes, tabs and line breaks escaped.
-fn copy_line(record: &csv::StringRecord, width: usize, tsv: bool, out: &mut Vec<u8>) {
-    for i in 0..width {
+/// backslashes, tabs and line breaks escaped. Numbers as SQL writes them.
+fn copy_line(record: &csv::StringRecord, types: &[ColType], format: Format, out: &mut Vec<u8>) {
+    for (i, ty) in types.iter().enumerate() {
         if i > 0 {
             out.push(b'\t');
         }
         match record.get(i).unwrap_or("") {
-            v if is_null(v, tsv) => out.extend_from_slice(b"\\N"),
+            v if format.is_null(v) => out.extend_from_slice(b"\\N"),
             v => {
+                let v = if ty.bare() { format.number(v) } else { Cow::Borrowed(v) };
                 for &b in v.as_bytes() {
                     match b {
                         b'\\' => out.extend_from_slice(b"\\\\"),
@@ -351,7 +459,7 @@ mod tests {
     use super::*;
 
     async fn import_quietly(db: &Database, path: &Path, table: &str) -> Result<Imported> {
-        import(db, path, table, &mut |_| {}).await
+        import(db, path, table, None, &mut |_| {}).await
     }
 
     #[test]
@@ -380,6 +488,80 @@ mod tests {
         assert_eq!(t(&["2026-10-13", "13/10/2026"]), ColType::Text);
         assert_eq!(table_name_for(Path::new("/data/Sales 2026.csv")), "sales_2026");
         assert_eq!(table_name_for(Path::new("2026.csv")), "t_2026");
+        assert_eq!(table_name_for(Path::new("title.basics.tsv.gz")), "title_basics");
+    }
+
+    #[test]
+    fn decimal_commas_only_in_semicolon_files() {
+        let semi = Format { delimiter: b';' };
+        assert_eq!(semi.number("12,50"), "12.50");
+        assert_eq!(semi.number("-3,1"), "-3.1");
+        for kept in ["12", "1,234,5", ",5", "5,", "a,b", "1.5"] {
+            assert_eq!(semi.number(kept), kept);
+        }
+        assert_eq!(Format { delimiter: b',' }.number("12,50"), "12,50");
+    }
+
+    /// Separators, decimal commas, `.gz` files and what's said when a file
+    /// doesn't fit.
+    #[tokio::test]
+    async fn imports_files_as_they_come() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = |name: &str, bytes: &[u8]| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let db = Database::connect(crate::db::ConnectParams {
+            engine: Engine::Sqlite,
+            host: dir.path().join("f.db").to_string_lossy().into_owned(),
+            port: 0,
+            user: String::new(),
+            password: String::new(),
+            database: String::new(),
+            ssl_mode: crate::db::SslMode::Disable,
+            read_only: false,
+            ssh: None,
+            password_command: Vec::new(),
+        })
+        .await
+        .unwrap();
+        let rows = |sql: &str| {
+            let db = db.clone();
+            let sql = sql.to_string();
+            async move { db.run(&sql, 100).await.unwrap().rows }
+        };
+
+        // Excel in Lithuanian: `;` between fields, `,` before decimals.
+        let semi = file("pinigai.csv", "id;vardas;suma\n1;Jonas;12,50\n2;\"Ona; Petrė\";3\n".as_bytes());
+        assert_eq!(Format::of(&semi, None).unwrap(), Format { delimiter: b';' });
+        import_quietly(&db, &semi, "pinigai").await.unwrap();
+        let r = rows("SELECT vardas, suma, typeof(suma) FROM pinigai ORDER BY id").await;
+        assert_eq!(r[0], [Some("Jonas".into()), Some("12.5".into()), Some("real".into())]);
+        assert_eq!(r[1][0].as_deref(), Some("Ona; Petrė"));
+
+        // Compressed, and named for what's inside.
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut gz, b"id\ttitle\n1\t\"Quoted\n2\t\\N\n").unwrap();
+        let tsv_gz = file("m.tsv.gz", &gz.finish().unwrap());
+        import_quietly(&db, &tsv_gz, &table_name_for(&tsv_gz)).await.unwrap();
+        assert_eq!(rows("SELECT title FROM m ORDER BY id").await, [[Some("\"Quoted".into())], [None]]);
+        let hidden = file("hidden.csv", &std::fs::read(&tsv_gz).unwrap());
+        let err = import_quietly(&db, &hidden, "hidden").await.unwrap_err().to_string();
+        assert!(err.contains("compressed with gzip") && err.contains("hidden.csv.gz"), "{err}");
+
+        // A separator set by hand, and what's said when it's wrong.
+        let pipes = file("pipes.csv", b"id|name\n1|a, b\n");
+        let err = import_quietly(&db, &pipes, "pipes").await.unwrap_err().to_string();
+        assert!(err.contains("line 2 has 2 fields, but the header has 1"), "{err}");
+        assert!(err.contains("--delimiter"), "{err}");
+        import(&db, &pipes, "pipes", Some(b'|'), &mut |_| {}).await.unwrap();
+        assert_eq!(rows("SELECT name FROM pipes").await, [[Some("a, b".into())]]);
+
+        // Windows-1257: "Šiauliai".
+        let cp1257 = file("miestai.csv", b"id,miestas\n1,\xd0iauliai\n");
+        let err = import_quietly(&db, &cp1257, "miestai").await.unwrap_err().to_string();
+        assert!(err.starts_with("line 2 isn't UTF-8") && err.contains("iconv"), "{err}");
     }
 
     #[test]
@@ -394,7 +576,7 @@ mod tests {
     fn copy_lines_escape_and_mark_nulls() {
         let mut out = Vec::new();
         let record = csv::StringRecord::from(vec!["a\\b", "tab\there", "", "\\N", "line\nbreak\r"]);
-        copy_line(&record, 6, true, &mut out);
+        copy_line(&record, &[ColType::Text; 6], Format { delimiter: b'\t' }, &mut out);
         assert_eq!(String::from_utf8(out).unwrap(), "a\\\\b\ttab\\there\t\\N\t\\N\tline\\nbreak\\r\t\\N\n");
     }
 
