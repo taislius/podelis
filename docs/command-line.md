@@ -50,10 +50,14 @@ podelis prod --import export.tsv --table events -y # into "events", on a product
 `--table`) if it doesn't exist, and appends to it if it does. Each new
 column gets the narrowest type its values fit: integer, decimal, boolean
 (`true`/`false`), date (`2026-10-13`), timestamp (`2026-10-13 10:00`, with
-seconds and fractions or a `T`) or text. Numbers with leading zeros
+seconds and fractions or a `T`) or text. A timestamp with a time zone
+(`…Z`, `…+02:00`) is `TIMESTAMPTZ` on PostgreSQL and stays text on MySQL
+and SQLite, which would drop the offset. Numbers with leading zeros
 (`007`) stay text. It all happens in one transaction, so a bad line changes
 nothing (on MySQL, a newly created table stays), and the error names the
 line. PostgreSQL loads the rows with `COPY`, which is many times faster.
+On a terminal, a line shows how far it's got (`loading 45% · 2.7M rows`);
+the file is read twice, once to guess the types and once to load it.
 
 The first line must name the columns, and an empty field is NULL. `.tsv`
 and `.tab` files are tab-separated and not quoted: a `"` is part of the

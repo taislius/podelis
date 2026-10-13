@@ -190,7 +190,9 @@ in them is NULL too (as in IMDb's files and
 .Ql COPY
 output).
 A missing table is created with guessed column types (integer, decimal,
-boolean, date, timestamp or text); an existing one is appended to.
+boolean, date, timestamp, timestamp with time zone on PostgreSQL, or text);
+an existing one is appended to.
+On a terminal, a line shows how far it has got.
 PostgreSQL loads the rows with
 .Ql COPY .
 It all happens in one transaction, so a bad line changes nothing (on

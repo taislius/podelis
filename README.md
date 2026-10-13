@@ -85,7 +85,7 @@ same way tools like `lazygit` do.
   and temp tables persist between runs. Run a whole `;`-separated script:
   each statement that returns rows gets its own **result set** (`<` / `>`
   switch, `RESULT 2/3` shows which), the last one first. Cancel a running
-  query on the server (`pg_cancel_backend` / `KILL QUERY`)
+  query on the server (`pg_cancel_backend` / `KILL QUERY`; SQLite interrupts it)
 - **Results:** type-aware columns, sideways scrolling, sort, filter, a
   full-value view (JSON pretty-printed), copy cell/row, CSV, JSON and SQL
   `INSERT` export,

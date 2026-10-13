@@ -37,7 +37,7 @@ Keys that work directly:
 | `F7` | Show the plan for the selection / statement under the cursor (not executed). MySQL 8.0.16+ shows `FORMAT=TREE`; older MySQL and MariaDB show the classic `EXPLAIN` table |
 | `Shift+F7` | `EXPLAIN ANALYZE`: runs the statement and shows actual times and rows (writes ask first and are rolled back). MySQL needs 8.0.18+; MariaDB runs `ANALYZE` |
 | `F8` / `Shift+F8` | Commit / roll back the open transaction |
-| `Esc` | Cancel the running query (not supported for SQLite) |
+| `Esc` | Cancel the running query |
 | `Ctrl+P` / `Ctrl+N` | Previous / next query from history |
 | `Tab` / `Shift+Tab` | Cycle focus: editor → results → schema (`Tab` right after a word completes it instead; `Esc` then `Tab` still moves on) |
 | `Ctrl+↑` / `Ctrl+↓` | Move the border between the editor and the results up / down |
