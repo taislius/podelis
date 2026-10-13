@@ -179,17 +179,11 @@ impl App {
 
     /// Formats the selection, or the whole text.
     pub(super) fn format_sql(&mut self) {
-        use sqlformat::{FormatOptions, Indent, QueryParams};
-        let options = FormatOptions {
-            indent: Indent::Spaces(2),
-            max_inline_arguments: Some(80),
-            max_inline_top_level: Some(80),
-            dialect: self.engine().dialect().formatter(),
-            ..FormatOptions::default()
-        };
         let text = self.tab.editor.text();
         let (start, end) = self.tab.editor.selection_offsets().unwrap_or((0, text.len()));
-        let formatted = sqlformat::format(&text[start..end], &QueryParams::None, &options);
+        let Some(formatted) = crate::sql::format(&text[start..end], self.engine()) else {
+            return self.set_status("Can't format this safely: it would change more than spacing".to_string(), true);
+        };
         if formatted.trim() == text[start..end].trim() {
             return self.set_status("Already formatted".to_string(), false);
         }

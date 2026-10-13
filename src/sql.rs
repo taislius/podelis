@@ -318,6 +318,78 @@ impl Statements {
     }
 }
 
+/// `text` laid out for reading, or `None` if that can't be done safely.
+/// Strings and quoted names (with a prefix such as `E` or `U&` touching
+/// them) and block comments are set aside before formatting and put back
+/// as they were: the formatter would rewrite inside `$$` bodies and split
+/// `U&'…'`. If anything but spacing still differs afterwards, it's refused.
+pub fn format(text: &str, engine: Engine) -> Option<String> {
+    let tokens = tokenize(text, engine);
+    let mut kept: Vec<Range<usize>> = Vec::new();
+    for (i, t) in tokens.iter().enumerate() {
+        let block_comment = t.kind == TokenKind::Comment && text[t.range.clone()].starts_with("/*");
+        if !matches!(t.kind, TokenKind::String | TokenKind::QuotedIdent) && !block_comment {
+            continue;
+        }
+        let mut start = t.range.start;
+        for prev in tokens[..i].iter().rev() {
+            let prefix = prev.kind == TokenKind::Word || &text[prev.range.clone()] == "&";
+            if prev.range.end != start || !prefix || block_comment {
+                break;
+            }
+            start = prev.range.start;
+        }
+        // A prefix already kept with an earlier string: `'a''b'` is one token anyway.
+        while kept.last().is_some_and(|k| k.end > start) {
+            kept.pop();
+        }
+        kept.push(start..t.range.end);
+    }
+    let mut tag = String::from("podelis_kept_");
+    while text.contains(&tag) {
+        tag.insert(0, 'x');
+    }
+    let placeholder = |n: usize| format!("{tag}{n}_");
+    let mut masked = String::with_capacity(text.len());
+    let mut at = 0;
+    for (n, range) in kept.iter().enumerate() {
+        masked.push_str(&text[at..range.start]);
+        masked.push_str(&placeholder(n));
+        at = range.end;
+    }
+    masked.push_str(&text[at..]);
+
+    let options = sqlformat::FormatOptions {
+        indent: sqlformat::Indent::Spaces(2),
+        max_inline_arguments: Some(80),
+        max_inline_top_level: Some(80),
+        dialect: engine.dialect().formatter(),
+        ..sqlformat::FormatOptions::default()
+    };
+    let mut formatted = sqlformat::format(&masked, &sqlformat::QueryParams::None, &options);
+    for (n, range) in kept.iter().enumerate().rev() {
+        let name = placeholder(n);
+        if formatted.matches(&name).count() != 1 {
+            return None;
+        }
+        formatted = formatted.replacen(&name, &text[range.clone()], 1);
+    }
+    (significant(text, engine) == significant(&formatted, engine)).then_some(formatted)
+}
+
+/// What formatting must keep: every token but whitespace, and comments
+/// without trailing spaces.
+fn significant(text: &str, engine: Engine) -> Vec<(TokenKind, &str)> {
+    tokenize(text, engine)
+        .into_iter()
+        .filter(|t| t.kind != TokenKind::Whitespace)
+        .map(|t| {
+            let s = &text[t.range];
+            (t.kind, if t.kind == TokenKind::Comment { s.trim_end() } else { s })
+        })
+        .collect()
+}
+
 pub const KEYWORDS: &[&str] = &[
     "ADD",
     "ALL",
@@ -581,6 +653,31 @@ mod tests {
         assert_eq!(Statements::of("  ;  select 9; -- done", PG).position(0), Some((1, 1)));
         assert_eq!(Statements::of("select ';'; select 2", PG).position(0), Some((1, 2)), "a `;` in a string");
         assert_eq!(Statements::of(" -- nothing", PG).position(0), None);
+    }
+
+    #[test]
+    fn formatting_keeps_strings_and_names_as_written() {
+        let kept = |sql: &str, part: &str| {
+            let out = format(sql, PG).unwrap_or_else(|| panic!("refused {sql:?}"));
+            assert!(out.contains(part), "{part:?} changed in\n{out}");
+            out
+        };
+        // These came out changed before: the values, a function body, `U&'…'`.
+        kept(
+            "insert into notes values ($$two  spaces\n  and an indented line$$, $q$it's   here$q$)",
+            "$$two  spaces\n  and an indented line$$",
+        );
+        kept("insert into notes values ($q$it's   here$q$)", "$q$it's   here$q$");
+        kept(
+            "create function f() returns int language plpgsql as $$ begin return 1; end $$",
+            "$$ begin return 1; end $$",
+        );
+        kept("select U&'d\\0061t', E'a\\nb' from t", "U&'d\\0061t'");
+        kept("select \"Full  Name\" from t /* a  comment\n   kept */ where x = 1", "/* a  comment\n   kept */");
+        let out = kept("select a, b from t where c = 'x  y' and d = 1", "'x  y'");
+        assert!(out.contains("\nfrom t\nwhere"), "still laid out: {out}");
+        let my = format("select `a  b`, _utf8mb4'x  y' from `t`", Engine::MySql).unwrap();
+        assert!(my.contains("`a  b`") && my.contains("_utf8mb4'x  y'"), "{my}");
     }
 
     #[test]

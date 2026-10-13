@@ -46,6 +46,43 @@ fn engine() -> impl Strategy<Value = Engine> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(400))]
 
+    /// Formatting never panics and, when it formats, changes nothing but
+    /// spacing.
+    #[test]
+    fn formatting_changes_only_spacing(text in sqlish(), engine in engine()) {
+        if let Some(out) = sql::format(&text, engine) {
+            let words = |s: &str| sql::tokenize(s, engine)
+                .into_iter()
+                .filter(|t| t.kind != sql::TokenKind::Whitespace)
+                .map(|t| s[t.range].trim_end().to_string())
+                .collect::<Vec<_>>();
+            prop_assert_eq!(words(&text), words(&out));
+        }
+    }
+
+    /// Real statements full of awkward strings always format, with every
+    /// string as it was.
+    #[test]
+    fn statements_format_with_their_strings(
+        values in prop::collection::vec(prop_oneof![
+            "'[a-z ]{0,8}'",
+            "\\$\\$[a-z' ;\n]{0,10}\\$\\$",
+            "\\$q\\$[a-z' ]{0,10}\\$q\\$",
+            "E'[a-z ]{0,6}'",
+            "U&'[a-z ]{0,6}'",
+            "\"[A-Za-z ]{1,6}\"",
+            "[0-9]{1,4}",
+        ], 1..5),
+    ) {
+        let sql = format!("select {} from t where x in ({}) order by 1", values.join(", "), values.join(", "));
+        let out = sql::format(&sql, Engine::Postgres);
+        prop_assert!(out.is_some(), "refused {}", sql);
+        let out = out.unwrap();
+        for v in &values {
+            prop_assert_eq!(out.matches(v.as_str()).count(), sql.matches(v.as_str()).count(), "{} in {}", v, out);
+        }
+    }
+
     #[test]
     fn tokens_cover_the_text_exactly(text in sqlish(), engine in engine()) {
         let tokens = sql::tokenize(&text, engine);
