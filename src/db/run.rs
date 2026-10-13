@@ -155,6 +155,7 @@ impl Database {
         let sql_owned = sql.to_string();
         tokio::spawn(async move {
             let mut guard = session.lock_owned().await;
+            db.clear_interrupt();
             match &mut *guard {
                 Session::Postgres(c) => {
                     let stream = sqlx::raw_sql(AssertSqlSafe(sql_owned)).fetch(&mut **c);
@@ -176,9 +177,12 @@ impl Database {
         let (columns, rows, done) = first_rx.await.map_err(|_| anyhow::anyhow!("query task ended"))??;
         let elapsed = start.elapsed();
         // No rows: recover the column names by preparing the statement.
-        let columns = match columns {
-            Some(c) => c,
-            None => self.0.session.lock().await.describe_columns(sql).await.unwrap_or_default(),
+        let columns = if let Some(c) = columns {
+            c
+        } else {
+            let mut session = self.0.session.lock().await;
+            self.clear_interrupt();
+            session.describe_columns(sql).await.unwrap_or_default()
         };
         let (columns, column_types): (Vec<String>, Vec<String>) = columns.into_iter().unzip();
         let outcome = QueryOutcome {
@@ -199,6 +203,7 @@ impl Database {
     pub async fn run(&self, sql: &str, row_limit: usize) -> Result<QueryOutcome> {
         let start = Instant::now();
         let mut session = self.0.session.lock().await;
+        self.clear_interrupt();
         let result = session.run(sql, row_limit).await;
         let mut reconnected = false;
         let elapsed = start.elapsed();
@@ -263,12 +268,11 @@ impl Database {
             Pool::MySql(p) => Session::MySql(p.acquire().await?),
             Pool::Sqlite(p) => Session::Sqlite(p.acquire().await?),
         };
+        session.watch_interrupt(&self.0.interrupt).await?;
         self.0.backend_id.store(session.backend_id().await?, Ordering::SeqCst);
         Ok(())
     }
 
-    /// Asks the server to cancel whatever the session connection is running.
-    /// Uses a separate pool connection, since the session one is busy.
     /// Prepares one statement on the session without running it, so the
     /// server's own parser (and catalog) checks it. Waits briefly for the
     /// session (e.g. a catalog load); errors with "busy" if it stays in use.
@@ -276,6 +280,7 @@ impl Database {
         let mut session = tokio::time::timeout(Duration::from_millis(500), self.0.session.lock())
             .await
             .map_err(|_| anyhow::anyhow!("session busy"))?;
+        self.clear_interrupt();
         let sql = AssertSqlSafe(sql.to_string()).into_sql_str();
         let prepared = match &mut *session {
             Session::Postgres(c) => (&mut **c).prepare(sql).await.map(drop),
@@ -303,12 +308,15 @@ impl Database {
         Ok(CheckOutcome::Problem { message, position, syntax })
     }
 
+    /// Cancels whatever the session connection is running: the server is
+    /// asked over a separate pool connection, since the session one is busy;
+    /// SQLite's progress handler sees the interrupt flag.
     pub async fn cancel(&self) -> Result<()> {
         let id = self.0.backend_id.load(Ordering::SeqCst);
         match &self.0.pool {
             Pool::Postgres(p) => postgres::queries::cancel(p, id).await?,
             Pool::MySql(p) => mysql::queries::cancel(p, id).await?,
-            Pool::Sqlite(_) => anyhow::bail!("cancelling isn't supported for SQLite"),
+            Pool::Sqlite(_) => self.0.interrupt.store(true, Ordering::SeqCst),
         }
         Ok(())
     }
@@ -344,7 +352,23 @@ impl StatementResult {
     }
 }
 
+/// How many SQLite virtual machine steps go between checks for a cancel:
+/// often enough to stop within milliseconds, rarely enough to cost nothing.
+const INTERRUPT_CHECK_STEPS: i32 = 10_000;
+
 impl Session {
+    /// SQLite: stops the running statement once `interrupt` is set. The
+    /// handler stays with the connection.
+    pub(super) async fn watch_interrupt(&mut self, interrupt: &Arc<AtomicBool>) -> Result<()> {
+        if let Session::Sqlite(c) = self {
+            let interrupt = Arc::clone(interrupt);
+            c.lock_handle()
+                .await?
+                .set_progress_handler(INTERRUPT_CHECK_STEPS, move || !interrupt.load(Ordering::SeqCst));
+        }
+        Ok(())
+    }
+
     pub(super) async fn server_version(&mut self) -> String {
         let sql = match self {
             Session::Postgres(_) => Engine::Postgres.dialect().version_query(),

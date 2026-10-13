@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -75,6 +75,9 @@ struct Inner {
     session: Arc<Mutex<Session>>,
     /// Server-side id of the session connection, used to cancel its query.
     backend_id: AtomicI64,
+    /// SQLite has no server to ask: cancelling sets this, and the
+    /// connection's progress handler stops the query when it sees it.
+    interrupt: Arc<AtomicBool>,
     /// Keeps the SSH tunnel process alive; killed when dropped.
     _tunnel: Option<Tunnel>,
     /// The server's version string, e.g. "16.2".
@@ -257,6 +260,8 @@ impl Database {
                 (pool, session, None)
             }
         };
+        let interrupt = Arc::new(AtomicBool::new(false));
+        session.watch_interrupt(&interrupt).await?;
         let backend_id = session.backend_id().await?;
         let version = session.server_version().await;
         let sql_mode = session.sql_mode().await.unwrap_or_default();
@@ -265,6 +270,7 @@ impl Database {
             pool,
             session: Arc::new(Mutex::new(session)),
             backend_id: AtomicI64::new(backend_id),
+            interrupt,
             _tunnel: tunnel,
             version,
             sql_mode: std::sync::Mutex::new(sql_mode),
@@ -291,9 +297,16 @@ impl Database {
         self.0.sql_mode.lock().map(|m| m.clone()).unwrap_or_default()
     }
 
+    /// Forgets a cancel that came when nothing was running (SQLite), so it
+    /// doesn't stop the next query. Called once a query has the session.
+    fn clear_interrupt(&self) {
+        self.0.interrupt.store(false, Ordering::SeqCst);
+    }
+
     /// The SQLite session connection, once it's free. Fails after `close()`.
     async fn sqlite_session(&self) -> Result<MappedMutexGuard<'_, PoolConnection<Sqlite>>> {
         let session = self.0.session.lock().await;
+        self.clear_interrupt();
         MutexGuard::try_map(session, |s| match s {
             Session::Sqlite(c) => Some(c),
             _ => None,

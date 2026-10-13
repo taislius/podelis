@@ -31,7 +31,7 @@ impl Dialect for Sqlite {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             file_based: true,
-            cancel: false,
+            cancel: true,
             activity: false,
             schemas: false,
             routines: false,

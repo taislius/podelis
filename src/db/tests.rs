@@ -172,7 +172,10 @@ async fn live_cancel(db: &Database, slow: &str) {
                 assert_eq!(cells(&o), vec![vec![Some("1")]]);
             }
         }
-        Engine::Sqlite => unreachable!("SQLite can't cancel"),
+        Engine::Sqlite => {
+            let err = result.unwrap().unwrap_err();
+            assert!(format!("{err:#}").contains("interrupted"), "{err:#}");
+        }
     }
     assert_eq!(cells(&db.run("SELECT 7", DEFAULT_ROW_LIMIT).await.unwrap()), vec![vec![Some("7")]]);
 }
@@ -296,6 +299,11 @@ async fn live_sqlite() {
     let path = dir.path().join("t.db");
     let db = Database::connect(sqlite_params(&path, false)).await.unwrap();
     live_common(&db).await;
+    // A query that never ends stops when cancelled; a cancel with nothing
+    // running doesn't stop the next one.
+    live_cancel(&db, "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n").await;
+    db.cancel().await.unwrap();
+    assert_eq!(cells(&db.run("SELECT 8", DEFAULT_ROW_LIMIT).await.unwrap()), vec![vec![Some("8")]]);
     let o = db.run("SELECT 1, 2.5, 'žąsis', X'00FF', NULL", DEFAULT_ROW_LIMIT).await.unwrap();
     assert_eq!(cells(&o), vec![vec![Some("1"), Some("2.5"), Some("žąsis"), Some("X'00FF'"), None]]);
     db.run("CREATE TABLE people (id INTEGER NOT NULL, nick TEXT); CREATE VIEW v AS SELECT 1", DEFAULT_ROW_LIMIT)
@@ -318,7 +326,6 @@ async fn live_sqlite() {
         cols.iter().map(|c| (c.name.as_str(), c.data_type.as_str(), c.nullable)).collect::<Vec<_>>(),
         [("id", "INTEGER", false), ("nick", "TEXT", true)]
     );
-    assert!(db.cancel().await.is_err());
     assert_eq!(db.transaction_state().await, None);
     assert!(db.version().starts_with('3'), "SQLite 3.x: {}", db.version());
     db.close().await;
