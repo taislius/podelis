@@ -207,6 +207,11 @@ pub trait Dialect: Sync {
     fn timestamp_type(&self) -> &'static str {
         "TIMESTAMP"
     }
+    /// Text unless the engine keeps the offset (PostgreSQL); converting
+    /// would change the value.
+    fn timestamptz_type(&self) -> &'static str {
+        "TEXT"
+    }
 
     /// A statement changing a column's type and nullability to these, if
     /// the engine can do that in place (SQLite can't). Names are quoted.

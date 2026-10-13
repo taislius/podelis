@@ -434,7 +434,20 @@ async fn import_inner(args: &Args, store: &ConnectionStore) -> Result<(), Failur
     }
     let table = args.table.clone().unwrap_or_else(|| crate::import::table_name_for(&file));
     let db = connect(&form, args).await?;
-    let result = crate::import::import(&db, &file, &table).await;
+    // On a terminal, a line that keeps saying how far it's got.
+    let terminal = std::io::stderr().is_terminal();
+    let mut shown: Option<std::time::Instant> = None;
+    let mut show = |p: crate::import::Progress| {
+        let end = p.bytes >= p.size;
+        if terminal && (end || shown.is_none_or(|at| at.elapsed() >= std::time::Duration::from_millis(100))) {
+            let _ = write!(std::io::stderr(), "\r\x1b[K{p}");
+            shown = Some(std::time::Instant::now());
+        }
+    };
+    let result = crate::import::import(&db, &file, &table, &mut show).await;
+    if shown.is_some() {
+        let _ = write!(std::io::stderr(), "\r\x1b[K");
+    }
     db.close().await;
     let done = result.map_err(|e| Failure::from_query(&e))?;
     let how = if done.created { "created" } else { "existing" };

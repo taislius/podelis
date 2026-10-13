@@ -47,7 +47,7 @@ pub use details::{ForeignKey, IndexInfo, RoutineInfo, TableDetails};
 pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint};
 #[cfg(test)]
 pub use dialect::PlanNote;
-pub use dialect::{Dialect, LexerRules, Plan};
+pub use dialect::{Dialect, LexerRules, Plan, human_rows};
 pub use errors::{
     CheckOutcome, ErrorPos, error_message, error_position, is_broken, is_reconnected, sql_literal, value_literal,
 };

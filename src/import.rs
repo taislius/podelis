@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime};
 
 use crate::db::{Database, Engine, sql_literal};
 
@@ -22,6 +22,8 @@ enum ColType {
     Boolean,
     Date,
     Timestamp,
+    /// A timestamp with a time zone offset (`Z`, `+02:00`).
+    TimestampTz,
     Text,
 }
 
@@ -34,6 +36,7 @@ impl ColType {
             ColType::Boolean => dialect.boolean_type(),
             ColType::Date => "DATE",
             ColType::Timestamp => dialect.timestamp_type(),
+            ColType::TimestampTz => dialect.timestamptz_type(),
             ColType::Text => "TEXT",
         }
     }
@@ -58,12 +61,15 @@ impl ColType {
             .any(|f| NaiveDateTime::parse_from_str(value, f).is_ok())
         {
             ColType::Timestamp
+        } else if is_timestamptz(value) {
+            ColType::TimestampTz
         } else {
             ColType::Text
         }
     }
 
-    /// A type that fits values of both.
+    /// A type that fits values of both. Timestamps with and without a time
+    /// zone don't mix: which zone the others are in is anyone's guess.
     fn join(self, other: ColType) -> ColType {
         match (self, other) {
             (a, b) if a == b => a,
@@ -77,6 +83,16 @@ impl ColType {
     fn bare(self) -> bool {
         matches!(self, ColType::Integer | ColType::Real | ColType::Boolean)
     }
+}
+
+/// `2026-10-13 10:00:00+02:00`, `2026-10-13T10:00Z`: with seconds or not,
+/// fractions, a space or a `T`, and the offset as `Z`, `+02`, `+0200` or
+/// `+02:00`.
+fn is_timestamptz(value: &str) -> bool {
+    let value = value.strip_suffix('Z').map_or_else(|| value.to_string(), |v| format!("{v}+00:00"));
+    ["%Y-%m-%d %H:%M:%S%.f%#z", "%Y-%m-%dT%H:%M:%S%.f%#z", "%Y-%m-%d %H:%M%#z", "%Y-%m-%dT%H:%M%#z"]
+        .iter()
+        .any(|f| DateTime::parse_from_str(&value, f).is_ok())
 }
 
 fn is_tsv(path: &Path) -> bool {
@@ -115,26 +131,108 @@ pub struct Imported {
     pub created: bool,
 }
 
-pub async fn import(db: &Database, path: &Path, table: &str) -> Result<Imported> {
+/// Which pass an import is in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    /// Reading the file to guess the column types.
+    Reading,
+    /// Sending the rows.
+    Loading,
+}
+
+/// How far an import has come.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Progress {
+    pub stage: Stage,
+    /// How much of the file has been read, of `size` bytes.
+    pub bytes: u64,
+    pub size: u64,
+    pub rows: u64,
+}
+
+/// `reading 45% · 2.7M rows`.
+impl std::fmt::Display for Progress {
+    #[allow(clippy::cast_precision_loss)] // display only, one decimal
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let stage = match self.stage {
+            Stage::Reading => "reading",
+            Stage::Loading => "loading",
+        };
+        let percent = (self.bytes * 100).checked_div(self.size).unwrap_or(100).min(100);
+        let rows = if self.rows == 1 { "row" } else { "rows" };
+        write!(f, "{stage} {percent}% · {} {rows}", crate::db::human_rows(self.rows as f64))
+    }
+}
+
+/// Progress is reported every this many rows, and at the end of each pass.
+const PROGRESS_ROWS: u64 = 10_000;
+
+/// A file's rows after the header, with how far into the file they are.
+struct Rows {
+    reader: csv::Reader<std::fs::File>,
+    record: csv::StringRecord,
+    /// Rows read so far.
+    count: u64,
+}
+
+impl Rows {
+    fn open(path: &Path) -> Result<(Vec<String>, Rows)> {
+        let mut reader = reader(path)?;
+        let header = reader.headers()?.iter().map(|h| h.trim().to_string()).collect();
+        Ok((header, Rows { reader, record: csv::StringRecord::new(), count: 0 }))
+    }
+
+    /// The next row, or `None` at the end of the file. An error names the
+    /// row's line.
+    fn next(&mut self) -> Option<Result<&csv::StringRecord>> {
+        match self.reader.read_record(&mut self.record) {
+            Ok(true) => {
+                self.count += 1;
+                Some(Ok(&self.record))
+            }
+            Ok(false) => None,
+            Err(e) => Some(Err(anyhow::Error::from(e).context(format!("line {}", self.count + 2)))),
+        }
+    }
+
+    /// The line the last row was on (the header is line 1).
+    fn line(&self) -> u64 {
+        self.count + 1
+    }
+
+    fn progress(&self, stage: Stage, size: u64) -> Progress {
+        Progress { stage, bytes: self.reader.position().byte(), size, rows: self.count }
+    }
+}
+
+pub async fn import(
+    db: &Database,
+    path: &Path,
+    table: &str,
+    progress: &mut (dyn FnMut(Progress) + Send),
+) -> Result<Imported> {
     let engine = db.engine();
     let tsv = is_tsv(path);
+    let size = std::fs::metadata(path).map_or(0, |m| m.len());
     // First pass: the header and each column's type.
-    let mut rdr = reader(path)?;
-    let header: Vec<String> = rdr.headers()?.iter().map(|h| h.trim().to_string()).collect();
+    let (header, mut rows) = Rows::open(path)?;
     anyhow::ensure!(
         !header.is_empty() && header.iter().all(|h| !h.is_empty()),
         "the first line must name every column"
     );
     let mut guessed: Vec<Option<ColType>> = vec![None; header.len()];
-    for (n, record) in rdr.records().enumerate() {
-        let record = record.with_context(|| format!("line {}", n + 2))?;
-        for (i, value) in record.iter().enumerate().take(header.len()) {
+    while let Some(record) = rows.next() {
+        for (i, value) in record?.iter().enumerate().take(header.len()) {
             if !is_null(value, tsv) {
                 let t = ColType::of(value);
                 guessed[i] = Some(guessed[i].map_or(t, |g| g.join(t)));
             }
         }
+        if rows.count % PROGRESS_ROWS == 0 {
+            progress(rows.progress(Stage::Reading, size));
+        }
     }
+    progress(rows.progress(Stage::Reading, size));
     let exists = db.tables(false).await?.iter().any(|t| t.name.eq_ignore_ascii_case(table));
     // Columns with no values at all are text. Into an existing table, only
     // numbers go in bare: its columns may not be what the file suggests.
@@ -155,28 +253,29 @@ pub async fn import(db: &Database, path: &Path, table: &str) -> Result<Imported>
             db.run(&format!("CREATE TABLE {quoted} ({})", defs.join(", ")), 1).await?;
         }
         // Second pass: the rows.
-        let mut rdr = reader(path)?;
+        let (_, mut rows) = Rows::open(path)?;
         if engine == Engine::Postgres {
             let width = header.len();
-            let mut records = rdr.records().enumerate();
+            let progress = &mut *progress;
             let chunks = std::iter::from_fn(move || {
                 let mut chunk = Vec::new();
                 while chunk.len() < COPY_CHUNK {
-                    let Some((n, record)) = records.next() else { break };
-                    match record {
-                        Ok(record) => copy_line(&record, width, tsv, &mut chunk),
-                        Err(e) => return Some(Err(anyhow::Error::from(e).context(format!("line {}", n + 2)))),
+                    match rows.next() {
+                        None => break,
+                        Some(Ok(record)) => copy_line(record, width, tsv, &mut chunk),
+                        Some(Err(e)) => return Some(Err(e)),
                     }
                 }
+                progress(rows.progress(Stage::Loading, size));
                 (!chunk.is_empty()).then_some(Ok(chunk))
             });
             let sql = format!("COPY {quoted} ({}) FROM STDIN", cols.join(", "));
             return db.copy_in(&sql, 2, chunks).await;
         }
         let mut batch = Vec::with_capacity(BATCH);
-        let mut rows = 0u64;
-        for (n, record) in rdr.records().enumerate() {
-            let record = record.with_context(|| format!("line {}", n + 2))?;
+        let mut done = 0u64;
+        while let Some(record) = rows.next() {
+            let record = record?;
             let values: Vec<String> = (0..header.len())
                 .map(|i| match record.get(i).unwrap_or("") {
                     v if is_null(v, tsv) => "NULL".to_string(),
@@ -186,13 +285,17 @@ pub async fn import(db: &Database, path: &Path, table: &str) -> Result<Imported>
                 .collect();
             batch.push(format!("({})", values.join(", ")));
             if batch.len() == BATCH {
-                rows += insert(db, &quoted, &cols, &mut batch)
-                    .await
-                    .with_context(|| format!("rows up to line {}", n + 2))?;
+                let line = rows.line();
+                done +=
+                    insert(db, &quoted, &cols, &mut batch).await.with_context(|| format!("rows up to line {line}"))?;
+                if rows.count % PROGRESS_ROWS == 0 {
+                    progress(rows.progress(Stage::Loading, size));
+                }
             }
         }
-        rows += insert(db, &quoted, &cols, &mut batch).await?;
-        anyhow::Ok(rows)
+        done += insert(db, &quoted, &cols, &mut batch).await?;
+        progress(rows.progress(Stage::Loading, size));
+        anyhow::Ok(done)
     }
     .await;
     match result {
@@ -247,6 +350,10 @@ async fn insert(db: &Database, table: &str, cols: &[String], batch: &mut Vec<Str
 mod tests {
     use super::*;
 
+    async fn import_quietly(db: &Database, path: &Path, table: &str) -> Result<Imported> {
+        import(db, path, table, &mut |_| {}).await
+    }
+
     #[test]
     fn guesses_types_and_names() {
         let t = |values: &[&str]| values.iter().map(|v| ColType::of(v)).reduce(ColType::join).unwrap();
@@ -259,9 +366,28 @@ mod tests {
         assert_eq!(t(&["2026-10-13", "2020-02-29"]), ColType::Date);
         assert_eq!(t(&["2026-10-13", "2026-10-13 10:00:00.5", "2026-10-13T10:00"]), ColType::Timestamp);
         assert_eq!(t(&["2026-02-30"]), ColType::Text, "not a real date");
+        assert_eq!(
+            t(&[
+                "2026-10-13T10:00:00Z",
+                "2026-10-13 10:00:00.5+02",
+                "2026-10-13T10:00+0200",
+                "2026-10-13 10:00:00-05:30"
+            ]),
+            ColType::TimestampTz
+        );
+        assert_eq!(t(&["2026-10-13 10:00:00+02:00", "2026-10-13 10:00:00"]), ColType::Text, "zones don't mix");
+        assert_eq!(t(&["2026-10-13 10:00:00+25:00"]), ColType::Text, "not a real offset");
         assert_eq!(t(&["2026-10-13", "13/10/2026"]), ColType::Text);
         assert_eq!(table_name_for(Path::new("/data/Sales 2026.csv")), "sales_2026");
         assert_eq!(table_name_for(Path::new("2026.csv")), "t_2026");
+    }
+
+    #[test]
+    fn progress_reads_as_a_line() {
+        let p = |stage, bytes, size, rows| Progress { stage, bytes, size, rows }.to_string();
+        assert_eq!(p(Stage::Reading, 45, 100, 2_700_000), "reading 45% · 2.7M rows");
+        assert_eq!(p(Stage::Loading, 100, 100, 1), "loading 100% · 1 row");
+        assert_eq!(p(Stage::Loading, 0, 0, 0), "loading 100% · 0 rows", "an empty file");
     }
 
     #[test]
@@ -281,8 +407,9 @@ mod tests {
         let csv = dir.path().join("pets.csv");
         std::fs::write(
             &csv,
-            "id,name,active,born,seen,score\n1,\"Rex\tthe \\ dog\",true,2020-01-02,2026-10-13 10:00:00.123456,1.5\n\
-             2,Žąsis,FALSE,2019-12-31,2026-10-13T11:30,2\n3,,,,,\n",
+            "id,name,active,born,seen,score,at\n\
+             1,\"Rex\tthe \\ dog\",true,2020-01-02,2026-10-13 10:00:00.123456,1.5,2026-10-13T10:00:00Z\n\
+             2,Žąsis,FALSE,2019-12-31,2026-10-13T11:30,2,2026-10-13 12:00:00+02:00\n3,,,,,,\n",
         )
         .unwrap();
         let bad = dir.path().join("bad.csv");
@@ -293,23 +420,27 @@ mod tests {
                 db.run("CREATE DATABASE IF NOT EXISTS podelis_import; USE podelis_import", 1).await.unwrap();
             }
             db.run("DROP TABLE IF EXISTS pets_import", 1).await.unwrap();
-            assert_eq!(import(&db, &csv, "pets_import").await.unwrap(), Imported { rows: 3, created: true });
+            assert_eq!(import_quietly(&db, &csv, "pets_import").await.unwrap(), Imported { rows: 3, created: true });
             let o = db.run("SELECT * FROM pets_import ORDER BY id", 10).await.unwrap();
             let types: Vec<String> = o.column_types.iter().map(|t| t.to_lowercase()).collect();
             assert_eq!(o.rows[0][1].as_deref(), Some("Rex\tthe \\ dog"), "{engine:?}");
             assert_eq!(o.rows[1][1].as_deref(), Some("Žąsis"), "{engine:?}");
-            assert_eq!(o.rows[2][1..], [None, None, None, None, None], "{engine:?}");
+            assert_eq!(o.rows[2][1..], [None, None, None, None, None, None], "{engine:?}");
             if engine == Engine::Postgres {
-                assert_eq!(types[1..], ["text", "bool", "date", "timestamp", "float8"]);
+                assert_eq!(types[1..], ["text", "bool", "date", "timestamp", "float8", "timestamptz"]);
+                db.run("SET TIME ZONE 'UTC'", 1).await.unwrap();
+                let at = db.run("SELECT at FROM pets_import ORDER BY id", 10).await.unwrap();
+                assert_eq!(at.rows[0][0], at.rows[1][0], "the same moment: {:?}", at.rows);
                 assert_eq!(o.rows[1][2].as_deref(), Some("false"));
                 assert_eq!(o.rows[0][4].as_deref(), Some("2026-10-13 10:00:00.123456"));
             } else {
                 assert_eq!(o.rows[1][2].as_deref(), Some("0"), "BOOLEAN is TINYINT(1)");
                 assert_eq!(o.rows[0][4].as_deref(), Some("2026-10-13 10:00:00.123456"));
                 assert_eq!(o.rows[1][4].as_deref(), Some("2026-10-13 11:30:00.000000"));
+                assert_eq!(o.rows[0][6].as_deref(), Some("2026-10-13T10:00:00Z"), "kept as written");
             }
             // A bad value in an existing table: nothing goes in.
-            let err = import(&db, &bad, "pets_import").await.unwrap_err();
+            let err = import_quietly(&db, &bad, "pets_import").await.unwrap_err();
             if engine == Engine::Postgres {
                 assert!(format!("{err:#}").starts_with("line 3: "), "{err:#}");
             }
@@ -337,21 +468,21 @@ mod tests {
             password_command: Vec::new(),
         };
         let db = Database::connect(params).await.unwrap();
-        assert_eq!(import(&db, &csv, "pets").await.unwrap(), Imported { rows: 3, created: true });
-        assert_eq!(import(&db, &csv, "pets").await.unwrap(), Imported { rows: 3, created: false });
+        assert_eq!(import_quietly(&db, &csv, "pets").await.unwrap(), Imported { rows: 3, created: true });
+        assert_eq!(import_quietly(&db, &csv, "pets").await.unwrap(), Imported { rows: 3, created: false });
         let o = db.run("SELECT typeof(id), typeof(weight), name FROM pets WHERE id = 2 LIMIT 1", 10).await.unwrap();
         assert_eq!(o.rows[0], vec![Some("integer".into()), Some("null".into()), Some("Žąsis, the goose".into())]);
         // A bad file changes nothing.
         let bad = dir.path().join("bad.csv");
         std::fs::write(&bad, "id,name\n1,a\n2,b,extra\n").unwrap();
-        assert!(import(&db, &bad, "pets").await.is_err());
+        assert!(import_quietly(&db, &bad, "pets").await.is_err());
         assert_eq!(db.run("SELECT count(*) FROM pets", 1).await.unwrap().rows[0][0].as_deref(), Some("6"));
 
         // TSV as IMDb writes it: quotes are part of the value, `\N` is NULL.
         let tsv = dir.path().join("movies.tsv");
         std::fs::write(&tsv, "id\ttitle\tyear\n1\tThe \"Best\" Movie\t1999\n2\t\"Quoted start\t\\N\n3\tAfter\t2002\n")
             .unwrap();
-        assert_eq!(import(&db, &tsv, "movies").await.unwrap(), Imported { rows: 3, created: true });
+        assert_eq!(import_quietly(&db, &tsv, "movies").await.unwrap(), Imported { rows: 3, created: true });
         let o = db.run("SELECT title, year, typeof(year) FROM movies ORDER BY id", 10).await.unwrap();
         let col = |c: usize| o.rows.iter().map(|r| r[c].clone()).collect::<Vec<_>>();
         assert_eq!(col(0), [Some("The \"Best\" Movie".into()), Some("\"Quoted start".into()), Some("After".into())]);
