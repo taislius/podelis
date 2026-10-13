@@ -106,7 +106,67 @@ pub struct TabPrompt {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LibraryItem {
     Saved(String),
+    /// An AI agent's query, by its index in [`App::agent_log`].
+    Agent(usize),
     History(String),
+}
+
+/// A query an AI agent ran through `podelis mcp`, and what's worth a look
+/// about it (refused, failed, a dry run, rows changed, a lint warning).
+#[derive(Clone, Debug)]
+pub struct AgentQuery {
+    pub entry: crate::agents::Entry,
+    /// Refused, failed, a dry run or rows changed.
+    pub flag: Option<String>,
+    /// The SQL's first lint warning, worked out the first time the row is
+    /// shown: a big log has thousands of entries, the library shows 200.
+    lint: std::cell::OnceCell<Option<String>>,
+    /// The engine to read its SQL by.
+    engine: crate::db::Engine,
+}
+
+impl AgentQuery {
+    fn new(entry: crate::agents::Entry, engine: crate::db::Engine) -> Self {
+        let flag = if let Some(why) = &entry.refused {
+            Some(format!("refused: {why}"))
+        } else if let Some(e) = &entry.error {
+            Some(format!("failed: {e}"))
+        } else if entry.dry_run {
+            Some(format!("dry run: would change {} row(s)", entry.changed.unwrap_or(0)))
+        } else if entry.changed.is_some_and(|n| n > 0) {
+            Some(format!("changed {} row(s)", entry.changed.unwrap_or(0)))
+        } else {
+            None
+        };
+        // Read as the engine it ran on, when the log says.
+        let engine = entry.engine.unwrap_or(engine);
+        Self { entry, flag, lint: std::cell::OnceCell::new(), engine }
+    }
+
+    /// What's worth a look about it, if anything: the flag, else a lint
+    /// warning.
+    pub fn notice(&self) -> Option<&str> {
+        self.flag.as_deref().or_else(|| {
+            self.lint
+                .get_or_init(|| {
+                    let script = crate::parse::parse(&self.entry.sql, self.engine);
+                    crate::lint::lints(&script, "").first().map(|h| h.message.clone())
+                })
+                .as_deref()
+        })
+    }
+
+    /// How it went, briefly: rows read or changed, or what's worth a look.
+    pub fn outcome(&self) -> String {
+        if let Some(notice) = self.notice() {
+            return notice.to_string();
+        }
+        match (self.entry.rows, self.entry.changed) {
+            (Some(rows), _) => format!("{rows} row(s)"),
+            (None, Some(changed)) => format!("{changed} row(s) changed"),
+            _ => "done".to_string(),
+        }
+    }
 }
 
 pub struct LibraryView {
@@ -478,6 +538,7 @@ impl App {
     // ------------------------------------------------------------- library
 
     pub(super) fn open_library(&mut self) {
+        self.load_agent_log();
         self.library_view =
             Some(LibraryView { query: LineInput::default(), selected: 0, confirm_delete: false, insert: false });
     }
@@ -485,6 +546,7 @@ impl App {
     /// Ctrl+E: the library, with Enter inserting a saved query's SQL (or a
     /// history entry) at the cursor. Starts with the snippets group.
     pub(super) fn open_snippets(&mut self) {
+        self.load_agent_log();
         self.library_view = Some(LibraryView {
             query: LineInput::new(library::SNIPPETS),
             selected: 0,
@@ -494,19 +556,61 @@ impl App {
         self.focus = Focus::Editor;
     }
 
+    /// Reads what AI agents ran in this project (`podelis mcp`), newest
+    /// first: again only when the file has changed since, since a big log
+    /// takes a moment to read and check.
+    fn load_agent_log(&mut self) {
+        let engine = self.engine();
+        let path =
+            self.current_project.as_deref().and_then(|id| Some(crate::agents::log_path(self.data_dir.as_ref()?, id)));
+        let stamp = path.as_ref().and_then(|p| {
+            let meta = std::fs::metadata(p).ok()?;
+            Some((p.clone(), meta.modified().ok()?, meta.len()))
+        });
+        if stamp.is_some() && stamp == self.agent_log_stamp {
+            return;
+        }
+        self.agent_log = path
+            .map(|p| crate::agents::read(&p))
+            .unwrap_or_default()
+            .into_iter()
+            .rev()
+            .map(|entry| AgentQuery::new(entry, engine))
+            .collect();
+        self.agent_log_stamp = stamp;
+    }
+
     /// Rows of the library window for its search text: matching saved
-    /// queries, then matching history (newest first, without duplicates).
+    /// queries, then what AI agents ran (newest first; the agent's or the
+    /// connection's name matches too), then matching history (newest
+    /// first, without duplicates).
     pub fn library_items(&self) -> Vec<LibraryItem> {
         let query = self.library_view.as_ref().map_or("", |v| v.query.text());
         let mut items: Vec<LibraryItem> =
             self.library.search(query).into_iter().map(|q| LibraryItem::Saved(q.id.clone())).collect();
+        // Each part has its own limit, so the agents' queries don't push
+        // your history out; every entry is searched, only matches count.
+        let mut by_agents = 0;
+        for (i, agent) in self.agent_log.iter().enumerate() {
+            if by_agents >= 200 {
+                break;
+            }
+            let e = &agent.entry;
+            let flag = agent.flag.as_deref().unwrap_or_default();
+            if library::matches(query, &[&e.sql, &e.agent, &e.connection, flag]) {
+                items.push(LibraryItem::Agent(i));
+                by_agents += 1;
+            }
+        }
         let mut seen = std::collections::HashSet::new();
+        let mut from_history = 0;
         for sql in self.history.entries().iter().rev() {
-            if items.len() >= 300 {
+            if from_history >= 300 {
                 break;
             }
             if library::matches(query, &[sql]) && seen.insert(sql.as_str()) {
                 items.push(LibraryItem::History(sql.clone()));
+                from_history += 1;
             }
         }
         items
@@ -575,6 +679,10 @@ impl App {
                 None => return,
             },
             LibraryItem::History(sql) => sql.clone(),
+            LibraryItem::Agent(i) => match self.agent_log.get(*i) {
+                Some(a) => a.entry.sql.clone(),
+                None => return,
+            },
         };
         self.tab.editor.insert_str(sql.trim_end());
         self.edited();
@@ -594,15 +702,31 @@ impl App {
                 (Some(q.name.clone()), q.sql.clone(), Some(id.clone()))
             }
             LibraryItem::History(sql) => (None, sql.clone(), None),
+            LibraryItem::Agent(i) => {
+                let Some(a) = self.agent_log.get(*i) else { return };
+                // Named for the agent alone: the tab runs it on its own
+                // connection, which may not be where the agent did.
+                let (agent, ran_on) = (a.entry.agent.clone(), a.entry.connection.clone());
+                let sql = a.entry.sql.clone();
+                self.open_sql_in_tab(Some(agent.clone()), &sql, None);
+                return self
+                    .set_status(format!("{agent} ran this on {ran_on}; here it runs on this tab's connection"), false);
+            }
         };
+        self.open_sql_in_tab(name, &sql, saved_id);
+    }
+
+    /// Puts `sql` in the current tab if it's empty and unsaved, otherwise
+    /// in a new tab.
+    fn open_sql_in_tab(&mut self, name: Option<String>, sql: &str, saved_id: Option<String>) {
         let current_blank = self.tab.editor.is_empty() && self.tabs[self.active_tab].saved_id.is_none();
         if current_blank && !self.executing {
             let name = name.unwrap_or_else(|| self.tabs[self.active_tab].name.clone());
             self.tabs[self.active_tab] = TabMeta { name, saved_id, ..self.tabs[self.active_tab].clone() };
-            self.tab.editor.set_text(&sql);
+            self.tab.editor.set_text(sql);
             self.edited();
         } else {
-            self.new_tab(name, &sql, saved_id);
+            self.new_tab(name, sql, saved_id);
         }
         self.focus = Focus::Editor;
     }

@@ -140,12 +140,17 @@ fn draw_library(f: &mut Frame, app: &App, area: Rect) {
 
     let items = app.library_items();
     let saved = items.iter().filter(|i| matches!(i, LibraryItem::Saved(_))).count();
+    let by_agents = items.iter().filter(|i| matches!(i, LibraryItem::Agent(_))).count();
+    let agents_note = if by_agents > 0 { format!("{by_agents} by agents · ") } else { String::new() };
     f.render_widget(
         Paragraph::new(Line::from(
             [
                 vec![Span::styled(" / ", bold(t.accent))],
                 input_spans(&view.query, fg(t.text_bright)),
-                vec![Span::styled(format!("   {saved} saved · {} from history", items.len() - saved), dim())],
+                vec![Span::styled(
+                    format!("   {saved} saved · {agents_note}{} from history", items.len() - saved - by_agents),
+                    dim(),
+                )],
             ]
             .concat(),
         ))
@@ -157,24 +162,44 @@ fn draw_library(f: &mut Frame, app: &App, area: Rect) {
     let rows: Vec<ListItem> = items
         .iter()
         .map(|item| {
+            // An agent's query: when, who and where, the SQL, and how it went
+            // (in orange when it's worth a look).
+            let mut outcome: Option<(String, Style)> = None;
             let (icon, icon_style, group, name, sql) = match item {
                 LibraryItem::Saved(id) => {
                     let Some(q) = app.library.get(id) else { return ListItem::new("") };
                     let group = if q.group.is_empty() { String::new() } else { format!("{}/", q.group) };
                     ("★ ", fg(t.warn), group, q.name.clone(), q.sql.clone())
                 }
+                LibraryItem::Agent(index) => {
+                    let Some(query) = app.agent_log.get(*index) else { return ListItem::new("") };
+                    let entry = &query.entry;
+                    let when = entry.at.get(5..16).unwrap_or(&entry.at).replace('T', " ");
+                    let flagged = query.notice().is_some();
+                    outcome = Some((query.outcome(), if flagged { fg(t.warn) } else { dim() }));
+                    let icon = if flagged { "! " } else { "» " };
+                    let style = if flagged { bold(t.warn) } else { dim() };
+                    let who = format!("{when} {} · {}  ", entry.agent, entry.connection);
+                    (icon, style, who, String::new(), entry.sql.clone())
+                }
                 LibraryItem::History(sql) => ("↺ ", dim(), String::new(), String::new(), sql.clone()),
             };
+            let outcome = outcome.map(|(text, style)| (format!("  {}", truncate(&one_line(&text), 48)), style));
+            let tail = outcome.as_ref().map_or(0, |(text, _)| text.chars().count());
             let preview = one_line(&sql);
             let head_len = 2 + group.chars().count() + name.chars().count() + 2;
-            let preview = truncate(&preview, width.saturating_sub(head_len + 1));
-            ListItem::new(Line::from(vec![
+            let preview = truncate(&preview, width.saturating_sub(head_len + tail + 1));
+            let mut spans = vec![
                 Span::styled(icon, icon_style),
                 Span::styled(group, muted()),
                 Span::styled(name.clone(), bold(t.text_bright)),
                 Span::raw(if name.is_empty() { "" } else { "  " }),
                 Span::styled(preview, if name.is_empty() { fg(t.text) } else { dim() }),
-            ]))
+            ];
+            if let Some((text, style)) = outcome {
+                spans.push(Span::styled(text, style));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
     if rows.is_empty() {
@@ -188,7 +213,7 @@ fn draw_library(f: &mut Frame, app: &App, area: Rect) {
         Line::from(Span::styled(" Delete this saved query? y/n", bold(t.warn)))
     } else {
         Line::from(Span::styled(
-            " type to search name, group and SQL · ↵ open · F4 rename/move · ^D delete · Esc close",
+            " type to search names, SQL and agents · ↵ open · F4 rename/move · ^D delete · Esc close",
             dim(),
         ))
     };

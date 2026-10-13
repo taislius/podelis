@@ -1,0 +1,20 @@
+---
+source: src/ui/tests.rs
+expression: "render(&mut app, 120, 16)"
+---
+" >_  PODĖLIS v0.0.0   │  project  shop ▼                                                                                "
+"┌ NAVIGATOR ────── 3 objects ┐┎ QUERY ──────┰──────────────────────────────────────────────────────────────────────────┐"
+"│ / filter b┌ QUERY LIBRARY ───────────────────────────────────────────────────────────────────────────────┐F7 Explain │"
+"│ ▼ (default│ / █   0 saved · 4 by agents · 0 from history                                                 │           │"
+"│ TABLES    │! 10-13 09:18 claude-code · shop  update users set note = …  dry run: would change 2 row(s)   │           │"
+"│  ▶ orders │! 10-13 09:17 claude-code · shop  select * from users w…  = NULL is never true: use IS NULL   │back-only  │"
+"│  ▼ users  │! 10-13 09:16 claude-code · shop  delete from…  refused: “delete from users” is destructive   │───────────┘"
+"│      ◇ id │» 10-13 09:15 claude-code · shop  select count(*) from orders  42 row(s)                      │───────────┐"
+"│      ◇ ema│                                                                                              │           │"
+"│      ◇ not│                                                                                              │           │"
+"│ VIEWS     │                                                                                              │           │"
+"│  ◇ active_│                                                                                              │           │"
+"│           │ type to search names, SQL and agents · ↵ open · F4 rename/move · ^D delete · Esc close       │           │"
+"│           └──────────────────────────────────────────────────────────────────────────────────────────────┘ls  · 4 ms │"
+"└────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────┘"
+" ● prod  db.internal:3306 · MySQL                                        ^K  keys                                       "

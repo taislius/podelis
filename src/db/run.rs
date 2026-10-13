@@ -204,6 +204,13 @@ impl Database {
         self.run_retrying(sql, row_limit, true).await
     }
 
+    /// Like [`run`], but a statement isn't run again after the connection
+    /// dropped: for SQL inside a transaction opened by an earlier call, which
+    /// the new session doesn't have (it would run outside it).
+    pub async fn run_once(&self, sql: &str, row_limit: usize) -> Result<QueryOutcome> {
+        self.run_retrying(sql, row_limit, false).await
+    }
+
     async fn run_retrying(&self, sql: &str, row_limit: usize, retry_reads: bool) -> Result<QueryOutcome> {
         let start = Instant::now();
         let mut session = self.0.session.lock().await;

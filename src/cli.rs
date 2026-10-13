@@ -14,6 +14,7 @@ use crate::store::{self, ConnectionStore};
 pub const USAGE: &str = "\
 Usage: podelis [OPTIONS] [CONNECTION]
        podelis doctor [-p <project>] [--connections]
+       podelis mcp [-p <project>]
 
 CONNECTION is a URL (postgres://…, mysql://…, sqlite:…), a SQLite file, or
 the name of a saved connection in the project. Without one, Podėlis reopens
@@ -47,6 +48,12 @@ Options:
 doctor checks the local setup (config, keychain, ssh, terminal);
 --connections also tests the project's saved connections.
 
+mcp serves the connections shared with AI agents (\"AI agents\" in a
+connection's settings) over MCP on stdin and stdout: add `podelis mcp` to
+your agent as an MCP server. Each agent call runs in a read-only
+transaction unless a connection allows writes; what agents run is logged
+and shows in the query library (F3).
+
 Exit codes of -e, --import and --test: 0 done, 1 the SQL failed, 2 usage
 (bad option, unknown connection, missing file), 3 refused (read-only,
 production or destructive without --yes), 4 couldn't connect, 5 timed out.";
@@ -67,6 +74,8 @@ pub struct Args {
     /// `--delimiter`: the separator for `--import`.
     pub delimiter: Option<u8>,
     pub doctor: bool,
+    /// `mcp`: serve the shared connections to an AI agent.
+    pub mcp: bool,
     /// `doctor --connections`.
     pub test_connections: bool,
 }
@@ -118,6 +127,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> ParseOutcome {
             }
             "doctor" if !out.doctor && out.connection.is_none() => {
                 out.doctor = true;
+                Ok(())
+            }
+            "mcp" if !out.mcp && out.connection.is_none() => {
+                out.mcp = true;
                 Ok(())
             }
             "-f" | "--format" => value(&arg).and_then(|v| {

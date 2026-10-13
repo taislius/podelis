@@ -780,6 +780,27 @@ async fn history_leaves_out_passwords() {
     assert!(kept.iter().any(|q| q == "select 2") && !kept.iter().any(|q| q.contains("hunter2")), "{kept:?}");
 }
 
+/// A long agent log doesn't push your own history out of the library, and
+/// an older agent query is still found by searching.
+#[test]
+fn agent_queries_leave_room_for_history() {
+    let (mut app, dir) = test_app();
+    app.set_data_dir(dir.path().to_path_buf());
+    let log = crate::agents::log_path(dir.path(), &project_id(&app));
+    for i in 0..350 {
+        let entry = crate::agents::Entry { agent: "bot".into(), sql: format!("select {i}"), ..Default::default() };
+        crate::agents::append(&log, entry).unwrap();
+    }
+    app.history.push("select 'mine'");
+    app.open_library();
+    let items = app.library_items();
+    assert!(items.contains(&LibraryItem::History("select 'mine'".into())));
+    app.library_view.as_mut().unwrap().query = LineInput::new("select 3");
+    let found = app.library_items();
+    let oldest = found.iter().any(|i| matches!(i, LibraryItem::Agent(n) if app.agent_log[*n].entry.sql == "select 3"));
+    assert!(oldest, "the oldest entries are searched too");
+}
+
 /// A SQLite connection's timeout stops a query that runs too long.
 #[tokio::test]
 async fn sqlite_queries_time_out() {

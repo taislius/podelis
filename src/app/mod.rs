@@ -28,7 +28,7 @@ pub use input::{InputResult, LineInput};
 use list::Nav;
 pub use overlay::Overlay;
 pub use params::ParamForm;
-pub use tabs::{LibraryItem, LibraryView, TabMeta, TabPrompt, TabPromptKind};
+pub use tabs::{AgentQuery, LibraryItem, LibraryView, TabMeta, TabPrompt, TabPromptKind};
 pub use tabs::{PlanSource, TabState};
 use vim::Vim;
 pub use vim::VimMode;
@@ -675,6 +675,11 @@ pub struct App {
     pub tab_prompt: Option<TabPrompt>,
     /// Further rows of the current (streamed) result, fetched on demand.
     pub row_stream: Option<RowStream>,
+    /// What AI agents ran in this project, newest first; read when the
+    /// library opens.
+    pub agent_log: Vec<AgentQuery>,
+    /// The agent log file as it was read (path, modified, size).
+    agent_log_stamp: Option<(PathBuf, std::time::SystemTime, u64)>,
     /// "Export all rows" in progress: what stops it, and the file it writes.
     export_task: Option<(tokio::sync::oneshot::Sender<()>, PathBuf)>,
     pub fetching_more: bool,
@@ -833,6 +838,8 @@ impl App {
             library_view: None,
             tab_prompt: None,
             row_stream: None,
+            agent_log: Vec::new(),
+            agent_log_stamp: None,
             export_task: None,
             fetching_more: false,
             completion: None,
@@ -957,6 +964,12 @@ impl App {
         }
         self.current_project = Some(id.to_string());
         self.screen = Screen::Connections;
+    }
+
+    /// Where the app keeps its files, for tests that need them on disk.
+    #[cfg(test)]
+    pub fn set_data_dir(&mut self, dir: PathBuf) {
+        self.data_dir = Some(dir);
     }
 
     fn history_path(&self, project_id: &str) -> Option<PathBuf> {

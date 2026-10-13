@@ -456,6 +456,49 @@ fn lint_warning_names_its_rule() {
     assert_snapshot!(render(&mut app, 160, 14));
 }
 
+/// What AI agents ran shows in the query library (F3), newest first, with
+/// the ones worth a look marked; searching finds them by agent, connection
+/// or SQL, and Enter opens one in a tab named for the agent.
+#[test]
+fn agent_queries_in_the_library() {
+    use crate::agents::{Entry, append, log_path};
+    let (mut app, dir) = query_app();
+    app.set_data_dir(dir.path().to_path_buf());
+    let log = log_path(dir.path(), app.current_project.as_deref().unwrap());
+    let entry = |at: &str, sql: &str| Entry {
+        at: format!("2026-10-13T{at}:00+03:00"),
+        agent: "claude-code".into(),
+        connection: "shop".into(),
+        tool: "query".into(),
+        sql: sql.into(),
+        ms: 3,
+        ..Entry::default()
+    };
+    append(&log, Entry { rows: Some(42), ..entry("09:15", "select count(*) from orders") }).unwrap();
+    append(
+        &log,
+        Entry { refused: Some("“delete from users” is destructive".into()), ..entry("09:16", "delete from users") },
+    )
+    .unwrap();
+    append(&log, Entry { rows: Some(3), ..entry("09:17", "select * from users where email = null") }).unwrap();
+    append(
+        &log,
+        Entry { dry_run: true, changed: Some(2), ..entry("09:18", "update users set note = 'x' where id < 3") },
+    )
+    .unwrap();
+    app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
+    assert_snapshot!(render(&mut app, 120, 16));
+
+    for c in "refused".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    assert_eq!(app.library_items(), [crate::app::LibraryItem::Agent(2)]);
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.tab.editor.text(), "delete from users");
+    assert_eq!(app.tabs[app.active_tab].name, "claude-code");
+    assert!(app.status.contains("ran this on shop; here it runs on this tab's connection"), "{}", app.status);
+}
+
 #[test]
 fn the_footer_says_which_statement_f6_runs() {
     let (mut app, _dir) = query_app();

@@ -1,3 +1,4 @@
+mod agents;
 mod analyze;
 mod app;
 mod cli;
@@ -18,6 +19,7 @@ mod keys;
 mod library;
 mod lint;
 mod logging;
+mod mcp;
 mod params;
 mod parse;
 mod scope;
@@ -59,6 +61,9 @@ async fn main() -> Result<()> {
     };
     let log_path = logging::init();
     let (store, store_warning) = ConnectionStore::load();
+    if args.mcp {
+        std::process::exit(mcp::run(&store, args.project.as_deref()).await);
+    }
     if args.doctor {
         let code = doctor::run(&store, store_warning.as_deref(), args.project.as_deref(), args.test_connections).await;
         std::process::exit(code);
