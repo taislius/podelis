@@ -125,6 +125,7 @@ When focused:
 | `x` | Show the row vertically, one `column  value` line each. `↑`/`↓` scroll it and then go on to the previous / next row; `←`/`→` go straight to the previous / next row |
 | `X` | All rows one column per line, like the mysql client's `\G` (`*** 1. row ***`, then `name: value`), or back to the table. `↑`/`↓` go field by field into the next row, `PageUp`/`PageDown` a row at a time. Ending a statement with `\G` instead of `;` (`select * from users\G`) shows its result this way; the next run without it goes back to the table |
 | `f` | Follow the foreign key in the selected cell: opens the referenced row in a new tab |
+| `b` | Chart the selected column of the rows shown: count, sum, min, max and average, the trend as a sparkline, and a bar per row labelled by another column (the first 200) |
 | `\|` | Pipe the rows shown through a shell command (`grep -i vilnius`, `sort -t$'\t' -k3 -n`, `jq '.[].email'`, `mlr --itsv --opprint stats1 -a sum -f total`…) and show its output |
 | `o` | Open the rows shown in the viewer: `$PAGER` (else `less -S`), or `viewer` from `config.toml`, e.g. VisiData |
 | `s` | Sort by the selected column: ascending → descending → off (numbers by value, then text, then NULLs) |
@@ -171,6 +172,27 @@ connections, or `UPDATE`/`DELETE` without `WHERE`, `DROP`…), press `t`
 instead of `y`: it runs after a `BEGIN`, then shows how many rows changed —
 `c` commits, `r` rolls back, `Esc` leaves the transaction open so you can
 check the changes with SELECTs first (`F8` commits, `Shift+F8` rolls back).
+
+**Watch mode.** Ctrl+K, then "Watch", runs the last query again every 2,
+5, 10, 30 or 60 seconds, like `watch`: for a queue draining, replication
+lag or a migration's progress. Rows new or changed since the run before
+are marked with an orange `◆` (matched by the first column when it tells
+rows apart), and the status bar counts them. Only reads can be watched;
+`Esc` (once it has nothing else to do: a results filter goes first, and
+in vim mode it's vim's), "Stop watching" in Ctrl+K, running something
+else, another tab or an error stops it.
+
+**Schema snapshots.** Ctrl+K, then "Save a schema snapshot", keeps
+the connection's tables, columns, indexes and foreign keys in a file
+(`snapshots/<project>/` in the config folder). "Compare the schema with
+the snapshot: …" (the 20 newest are listed) later shows what changed since, as the comparison of two
+connections does, with the SQL that changes it back.
+
+**Production: whole big tables ask first.** On a production connection, a
+read whose plan reads a whole table of `guard_rows` rows or more (a
+million by default; 0 turns it off) asks before running, naming the table
+and about how many rows. A `LIMIT` that stops the read early (no filter
+or sort in the way) doesn't count.
 
 **Connection info and activity** (command palette, or bind keys to
 `connection_info` / `activity`): the info panel shows the server version,
@@ -226,6 +248,7 @@ When focused:
 | `←` | Collapse |
 | `d` | Show the definition: `CREATE VIEW`, the function source, or a table's columns, keys and indexes (SQLite: its `CREATE TABLE`). In it, `←`/`→` show the previous / next table's (the navigator's selection follows), `y` copies it |
 | `s` | Add `SELECT * FROM <table> LIMIT 100;` at the end of the editor and run it (only it, as `F6` would) |
+| `f` | Related tables: what the table points to and what points to it through foreign keys, two steps each way |
 | `r` | Refresh (also happens automatically after DDL, `USE` and `SET`) |
 | `.` | Show or hide system tables (`pg_catalog` and `information_schema`; MySQL's `information_schema`, `performance_schema`, `mysql` and `sys`; SQLite's `sqlite_schema` and `sqlite_*`) in a SYSTEM section |
 | `Space` | The `Ctrl+K` command menu |

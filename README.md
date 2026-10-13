@@ -36,7 +36,8 @@ same way tools like `lazygit` do.
   commits each statement as it runs, *manual commit* holds every write in
   a transaction for COMMIT or ROLLBACK, and *rollback-only* runs writes,
   shows how many rows they changed and always rolls them back (a dry run).
-  Production connections start in manual commit. Per-connection **query timeouts** cancel runaway
+  Production connections start in manual commit, and a read of a whole
+  big table there asks first. Per-connection **query timeouts** cancel runaway
   queries on the server. An open transaction is shown, and disconnecting or
   quitting asks before rolling it back
 - **Editor:** syntax highlighting, line numbers, undo/redo, selection, word
@@ -61,6 +62,11 @@ same way tools like `lazygit` do.
   - the **rows** the statement at the cursor returns on each (reads only):
     matched by the first column when it identifies them, the result shows
     rows only here (`−`), only there (`+`) and changed pairs (`≠`)
+  - the schema with a **snapshot** saved earlier ("what changed in prod
+    since the release?")
+- **Watch a query:** run it again every few seconds, the rows that changed
+  marked; **chart a column** (`b`) as bars and a sparkline; **related
+  tables** (`f` in the navigator) through foreign keys both ways
 - **Sessions:** on startup Podėlis reopens the last project the way you
   left it — tabs, each tab's connection (passwords from the keychain),
   cursor positions, the focused pane and expanded tables. Results aren't
@@ -123,7 +129,8 @@ same way tools like `lazygit` do.
   you share with it, in read-only transactions unless you allow writes, with
   no passwords and nothing destructive. Agent activity shows everything
   each agent session ran (which agent, which project folder), and the
-  status bar says when an agent was refused or changed data
+  status bar says when an agent was refused or changed data. Or **approve
+  each write** yourself: Podėlis shows it with its dry run, `y` runs it
 - **Works with Unix tools:** pipe a result through `grep`, `sort`, `awk`,
   `jq` or Miller without leaving the app (`|`), open it in `less` or
   VisiData (`o`), or run SQL without the UI (`podelis prod -e "select …"

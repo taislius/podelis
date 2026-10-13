@@ -10,13 +10,15 @@ it ran.
 ## Share a connection
 
 Agents see only the connections you share with them. In the connection's
-settings (`F11`, or Ctrl+K p), set **AI agents**:
+settings (Ctrl+K p, or click the project's name in the top bar), set
+**AI agents**:
 
 | Setting | What agents may do |
 |---|---|
 | not shared | Nothing: they don't see the connection (the default) |
 | read | Read. Each call runs in a read-only transaction on the server, so even a write hidden in a function is refused |
 | read and write | Write too, but never `DROP`, `TRUNCATE` or `UPDATE`/`DELETE` without `WHERE`. On a **production** connection every call is rolled back: a write only runs as a dry run (reporting how many rows it would change), and schema changes not even that |
+| write when you approve | Write too, never anything destructive, but each write waits for your answer in Podėlis, production included (see below) |
 
 A read-only connection stays read-only for agents too. A change to the
 setting applies at once, also to an agent that's already running.
@@ -41,6 +43,34 @@ other servers (`dblink`). That list is a safety net, not a boundary:
 (for reading, `GRANT SELECT` on what they need, no superuser or `FILE`
 privilege). Podėlis's rules then sit on top.
 
+## Approve each write
+
+With **write when you approve**, an agent's write isn't run until you say
+so. Podėlis first runs it as a dry run (rolled back), then asks you, in
+the Podėlis open on that project, with a bell: which agent, on which
+connection, the SQL and how many rows it would change. `y` runs it for
+real; `n` or `Esc` says no (other keys, and a key typed just as it
+appears, don't answer it). The agent waits up to two minutes; with no
+answer it's told to ask you. Reads run without asking.
+
+MySQL commits schema changes at once, so they come without a dry run
+(and so do writes on a MySQL database with tables a rollback can't undo);
+the dialog says so. An approved write shows in the agent activity as
+"approved by you".
+
+This guards against an agent's mistakes, not against an agent set on
+harm: one that can run commands as you could answer for you. For that,
+the database user's rights are the boundary.
+
+## On production: no whole big tables
+
+On a production connection, a query that would read a whole table of a
+million rows or more (by its plan; a `LIMIT` that stops it early doesn't
+count) is refused, telling the agent to
+narrow it with a `WHERE` on an indexed column. The limit is `guard_rows`
+in the [configuration](configuration.md) (0 turns it off); it asks you
+the same in Podėlis.
+
 ## `podelis mcp`
 
 An MCP server over standard input and output, serving the shared
@@ -61,6 +91,7 @@ The agent gets these tools:
 | `connections` | The shared connections: name, engine, production or not, what agents may do |
 | `schema` | Tables and views with their columns and primary keys (filter by name on big databases) |
 | `describe_table` | One table's columns, keys, indexes, foreign keys and (for a view) definition |
+| `related_tables` | The tables a table points to and is pointed to by, through foreign keys, two steps each way: how to join |
 | `query` | Runs SQL; rows as JSON, 100 by default and at most 1000 |
 | `explain` | One statement's plan without running it, and what stands out (as F7 shows) |
 

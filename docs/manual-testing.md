@@ -94,7 +94,8 @@ OS and the server version when something is off.
 
 - [ ] Connect with a URL from the command line, with a saved connection
   (`podelis -p <project> <name>`) and to a SQLite file.
-- [ ] `F11`: projects, connections and settings side by side. `→`/`←`
+- [ ] `Ctrl+K p` (or a click on the project's name): projects, connections
+  and settings side by side. `→`/`←`
   move between the panes, the settings follow the selected connection,
   `Enter` on a connection connects (a new tab if this one is connected),
   `e` edits it in place, `Esc` goes back to the tabs unchanged. At 80

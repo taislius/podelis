@@ -19,6 +19,7 @@ viewer = "vd"               # opens result rows (`o`); `{}` is the file. Default
 keepalive = 0               # seconds between checks of an idle connection (0: off)
 leader_double_space = false # Space twice quickly in the editor opens the Ctrl+K menu
 notify_after = 10           # a query running this many seconds rings and notifies when done (0: off)
+guard_rows = 1000000        # on production, a read of a whole table this big asks first, agents' is refused (0: off)
 
 [keys]                      # rebind query-screen keys (replaces that action's defaults)
 run = ["F5", "Ctrl+Enter"]
