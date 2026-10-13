@@ -1336,8 +1336,12 @@ impl App {
             // (EXPLAIN, cell edits) don't replace them.
             self.tab.last_sql = Some((sql.clone(), offset));
             self.tab.last_query_infos.clone_from(&self.last_run_infos);
-            // History keeps the placeholders, not the values.
-            self.history.push(filled.as_ref().map_or(&sql, |f| &f.original));
+            // History keeps the placeholders, not the values, and no
+            // statement that sets a password.
+            let original = filled.as_ref().map_or(&sql, |f| &f.original);
+            if !sql::sets_password(original, self.engine()) {
+                self.history.push(original);
+            }
             self.tab.last_run_text = self.tab.editor.text();
         } else {
             self.tab.last_run_text.clear();

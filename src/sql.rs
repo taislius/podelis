@@ -318,6 +318,30 @@ impl Statements {
     }
 }
 
+/// Whether a statement in `text` sets a password: `CREATE`/`ALTER USER` or
+/// `ROLE` with `PASSWORD` or `IDENTIFIED`, MySQL's `GRANT … IDENTIFIED BY`
+/// and `SET PASSWORD`. Such statements are kept out of the history, as
+/// the `mysql` client does. Words in strings and quoted names don't count,
+/// so reading a column called `password` isn't one.
+pub fn sets_password(text: &str, engine: Engine) -> bool {
+    split_statements(text, engine).into_iter().any(|statement| {
+        let words: Vec<String> = tokenize(statement, engine)
+            .into_iter()
+            .filter(|t| t.kind == TokenKind::Word)
+            .map(|t| statement[t.range].to_ascii_lowercase())
+            .collect();
+        let has = |w: &str| words.iter().any(|x| x == w);
+        match words.first().map(String::as_str) {
+            Some("create" | "alter") => {
+                words.get(1).is_some_and(|w| w == "user" || w == "role") && (has("password") || has("identified"))
+            }
+            Some("grant") => has("identified"),
+            Some("set") => words.get(1).is_some_and(|w| w == "password"),
+            _ => false,
+        }
+    })
+}
+
 /// `text` laid out for reading, or `None` if that can't be done safely.
 /// Strings and quoted names (with a prefix such as `E` or `U&` touching
 /// them) and block comments are set aside before formatting and put back
@@ -653,6 +677,35 @@ mod tests {
         assert_eq!(Statements::of("  ;  select 9; -- done", PG).position(0), Some((1, 1)));
         assert_eq!(Statements::of("select ';'; select 2", PG).position(0), Some((1, 2)), "a `;` in a string");
         assert_eq!(Statements::of(" -- nothing", PG).position(0), None);
+    }
+
+    #[test]
+    fn statements_that_set_passwords() {
+        let my = Engine::MySql;
+        for (engine, sql) in [
+            (PG, "alter user bob password 'hunter2'"),
+            (PG, "ALTER ROLE bob WITH ENCRYPTED PASSWORD 'x'"),
+            (PG, "create role app login password 'x'"),
+            (PG, "select 1; create user mapping for bob server s options (user 'b', password 'x')"),
+            (my, "CREATE USER 'bob'@'%' IDENTIFIED BY 'pw'"),
+            (my, "alter user current_user() identified by 'pw'"),
+            (my, "grant all on *.* to bob identified by 'pw'"),
+            (my, "SET PASSWORD FOR 'bob'@'%' = 'pw'"),
+        ] {
+            assert!(sets_password(sql, engine), "{sql}");
+        }
+        for (engine, sql) in [
+            (PG, "select password from users where name = 'bob'"),
+            (PG, "update users set password = 'x' where id = 1"),
+            (PG, "create table users (id int, password text)"),
+            (PG, "create table user (password text)"),
+            (PG, "alter table users add column password text"),
+            (PG, "create user bob"),
+            (my, "select 'alter user x identified by y'"),
+            (my, "set names utf8mb4"),
+        ] {
+            assert!(!sets_password(sql, engine), "{sql}");
+        }
     }
 
     #[test]

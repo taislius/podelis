@@ -768,6 +768,17 @@ async fn results_filter_sort_view_and_load_more() {
     assert!(!app.executing && app.status_is_error);
 }
 
+/// Statements that set a password aren't kept in the history.
+#[tokio::test]
+async fn history_leaves_out_passwords() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    run_sql(&mut app, "select 1").await;
+    run_sql(&mut app, "create user bob identified by 'hunter2'").await;
+    run_sql(&mut app, "select 2").await;
+    let kept = app.history.entries();
+    assert!(kept.iter().any(|q| q == "select 2") && !kept.iter().any(|q| q.contains("hunter2")), "{kept:?}");
+}
+
 /// A SQLite connection's timeout stops a query that runs too long.
 #[tokio::test]
 async fn sqlite_queries_time_out() {
