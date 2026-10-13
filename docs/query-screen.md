@@ -74,7 +74,9 @@ and `$name` — first asks for their values
 (placeholders in strings, comments and `::type` casts don't count). Numbers
 and `NULL` go in as written, anything else as a quoted string, and a value
 starting with `=` is inserted as raw SQL (`=now()`). Values are remembered
-for the next run. History keeps the placeholders, not the values.
+for the next run. History keeps the placeholders, not the values, and leaves
+out statements that set a password (`CREATE`/`ALTER USER` or `ROLE … PASSWORD`,
+`IDENTIFIED BY`, `SET PASSWORD`), as the `mysql` client does.
 
 ¹ `Ctrl+Enter` needs a terminal that supports the kitty keyboard protocol
 (kitty, WezTerm, Ghostty, foot, iTerm2 with CSI u enabled). Elsewhere it
@@ -204,9 +206,12 @@ schema item to select it; double-click opens a cell or expands a table; the
 wheel scrolls. Your terminal's own text selection then needs `Shift` (or
 `Option` on macOS); `mouse = false` in `config.toml` turns this off.
 
-Copying uses the OSC 52 terminal escape sequence, which works locally and
-over SSH in most modern terminals. In tmux, enable it with
-`set -g set-clipboard on`.
+Copying uses your system's clipboard tool (`pbcopy`, `wl-copy`, `xclip` or
+`xsel`), which works in any terminal and for any size. Over SSH, or
+without one, it uses the OSC 52 terminal escape sequence, which most
+modern terminals support; in tmux, enable it with `set -g set-clipboard on`.
+Many terminals drop an OSC 52 copy over about 100 kB, so a bigger one over
+SSH says so: export it instead.
 
 ## Navigator
 
