@@ -43,7 +43,7 @@ impl Dialect for MySql {
         }
     }
     fn placeholders(&self) -> Placeholders {
-        Placeholders { dollar: false, question: true }
+        Placeholders { dollar: false, question: true, sqlite: false }
     }
     fn is_system_table(&self, schema: &str, _table: &str) -> bool {
         ["information_schema", "performance_schema", "mysql", "sys"].iter().any(|s| s.eq_ignore_ascii_case(schema))

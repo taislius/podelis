@@ -102,6 +102,9 @@ pub struct Placeholders {
     pub dollar: bool,
     /// `?`
     pub question: bool,
+    /// SQLite's other forms: `?NNN` numbered, and `@name` and `$name`
+    /// besides `:name`.
+    pub sqlite: bool,
 }
 
 /// An engine's SQL, apart from talking to the server.

@@ -45,7 +45,7 @@ impl Dialect for Postgres {
         }
     }
     fn placeholders(&self) -> Placeholders {
-        Placeholders { dollar: true, question: false }
+        Placeholders { dollar: true, question: false, sqlite: false }
     }
     fn is_system_table(&self, schema: &str, _table: &str) -> bool {
         matches!(schema, "pg_catalog" | "information_schema")

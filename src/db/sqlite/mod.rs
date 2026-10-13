@@ -52,7 +52,7 @@ impl Dialect for Sqlite {
         }
     }
     fn placeholders(&self) -> Placeholders {
-        Placeholders { dollar: false, question: true }
+        Placeholders { dollar: false, question: true, sqlite: true }
     }
     fn is_system_table(&self, _schema: &str, table: &str) -> bool {
         table.starts_with("sqlite_")

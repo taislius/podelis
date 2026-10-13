@@ -1,5 +1,6 @@
-//! Query parameters: `:name` placeholders (every engine), `$1` (Postgres)
-//! and `?` (MySQL, SQLite), filled in as literals before the query runs.
+//! Query parameters: `:name` placeholders (every engine), `$1` (Postgres),
+//! `?` (MySQL, SQLite) and SQLite's `?NNN`, `@name` and `$name`, filled in
+//! as literals before the query runs.
 
 use std::ops::Range;
 
@@ -9,7 +10,8 @@ use crate::sql::{self, TokenKind};
 /// One parameter and every place it appears.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Param {
-    /// As written (`:customer_id`, `$1`), or `?1`, `?2`… for `?`s.
+    /// As written (`:customer_id`, `$1`, SQLite's `?2`), or `?1`, `?2`… for
+    /// `?`s.
     pub name: String,
     pub ranges: Vec<Range<usize>>,
 }
@@ -25,8 +27,13 @@ pub fn find(text: &str, engine: Engine) -> Vec<Param> {
         Some(p) => p.ranges.push(range),
         None => params.push(Param { name, ranges: vec![range] }),
     };
+    // A bare `?` is numbered after the highest number so far, as SQLite
+    // does: `?3, ?` is ?3 and ?4.
     let mut questions = 0;
     let placeholders = engine.dialect().placeholders();
+    // The token right after `i`, if it touches it.
+    let touching = |i: usize| tokens.get(i + 1).filter(|n| n.range.start == tokens[i].range.end);
+    let is_name = |s: &str| s.bytes().next().is_some_and(|c| c.is_ascii_alphabetic() || c == b'_');
     for (i, tok) in tokens.iter().enumerate() {
         let word = &text[tok.range.clone()];
         match tok.kind {
@@ -53,8 +60,27 @@ pub fn find(text: &str, engine: Engine) -> Vec<Param> {
                 add(word.to_string(), tok.range.clone());
             }
             TokenKind::Punct if word == "?" && placeholders.question => {
-                questions += 1;
-                add(format!("?{questions}"), tok.range.clone());
+                let numbered = touching(i)
+                    .filter(|n| placeholders.sqlite && n.kind == TokenKind::Number)
+                    .and_then(|n| Some((text[n.range.clone()].parse::<u32>().ok()?, n.range.end)));
+                if let Some((n, end)) = numbered {
+                    questions = questions.max(n);
+                    add(format!("?{n}"), tok.range.start..end);
+                } else {
+                    questions += 1;
+                    add(format!("?{questions}"), tok.range.clone());
+                }
+            }
+            TokenKind::Punct if word == "@" && placeholders.sqlite => {
+                if let Some(next) = touching(i).filter(|n| n.kind == TokenKind::Word && is_name(&text[n.range.clone()]))
+                {
+                    add(format!("@{}", &text[next.range.clone()]), tok.range.start..next.range.end);
+                }
+            }
+            TokenKind::Word
+                if placeholders.sqlite && word.len() > 1 && word.starts_with('$') && is_name(&word[1..]) =>
+            {
+                add(word.to_string(), tok.range.clone());
             }
             _ => {}
         }
@@ -179,6 +205,26 @@ mod tests {
         assert_eq!(names("select ?, ?", Engine::MySql), ["?1", "?2"]);
         assert_eq!(names("select '?', ?", Engine::Sqlite), ["?1"]);
         assert_eq!(names("select $1", Engine::MySql), Vec::<String>::new());
+    }
+
+    /// SQLite's numbered and named forms, numbered as SQLite numbers them,
+    /// and filled whole: `?1` with 7 is `7`, not `71`.
+    #[test]
+    fn sqlite_placeholders_in_every_form() {
+        let text = "select * from t where a = ?1 and b = ?2 and c = @x and d = $y and e = :z and f = ?1";
+        assert_eq!(names(text, Engine::Sqlite), ["?1", "?2", "@x", "$y", ":z"]);
+        let params = find(text, Engine::Sqlite);
+        let values: Vec<String> = ["7", "8", "9", "s", "10"].map(String::from).to_vec();
+        assert_eq!(
+            fill(text, &params, &values, Engine::Sqlite).sql,
+            "select * from t where a = 7 and b = 8 and c = 9 and d = 's' and e = 10 and f = 7"
+        );
+        // A bare `?` comes after the highest number so far.
+        assert_eq!(names("select ?3, ?, ?", Engine::Sqlite), ["?3", "?4", "?5"]);
+        assert_eq!(names("select ?, ?1", Engine::Sqlite), ["?1"]);
+        // Not placeholders: MySQL's variables, names in strings, `$` alone.
+        assert_eq!(names("select @x, @@version, ?", Engine::MySql), ["?1"]);
+        assert_eq!(names("select '@x', '$y', \"?1\", 5 $ 2", Engine::Sqlite), Vec::<String>::new());
     }
 
     #[test]
