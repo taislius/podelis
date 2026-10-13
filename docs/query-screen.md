@@ -99,7 +99,7 @@ When focused:
 | `Ctrl+/` | Comment / uncomment the selected lines (`Ctrl+7` in terminals that send that) |
 | `Ctrl+K i` / `Ctrl+E` | Insert a snippet or saved query at the cursor (the library window, starting at the `snippets` group) |
 | `Ctrl+K m` / right-click | Menu of what you can do in the editor |
-| `Ctrl+K f` | Format the selection, or everything |
+| `Ctrl+K f` | Format the selection, or everything. Strings, quoted names and block comments stay exactly as written; if formatting would change anything but spacing, it's refused |
 | `↑`/`↓`, `Tab`/`Enter`, `Esc` | In the completion list: choose, accept, close |
 
 Pasting is supported (bracketed paste), including multi-line SQL.
@@ -132,7 +132,7 @@ When focused:
 | `C` | Copy the marked rows (or all rows shown) as a Markdown table |
 | `m` / right-click | Menu of everything you can do here, with each action's key |
 | `y` / `Y` | Copy the selected cell / row (tab-separated) |
-| `e` / `J` / `i` | Export the rows shown as CSV / JSON / SQL `INSERT` statements to `podelis-export-<timestamp>.<ext>` (in the current directory, or `export_dir`) |
+| `e` / `J` / `i` | Export the rows shown as CSV / JSON / SQL `INSERT` statements to `podelis-export-<timestamp>.<ext>` (in the current directory, or `export_dir`). For every row of a big result, not just those loaded, use "Export all rows" in the menu (`m`) or Ctrl+K: it writes the rest straight to the file as it arrives, without loading it into the grid; `Esc` stops it |
 | `M` | Load 10× more rows (streamed results fetch the next pages; scripts are re-run with a bigger limit, read-only ones only) |
 | `[` / `]`, `1` `2` `3` (or click a tab) | Switch between the RESULT, MESSAGES and QUERY PLAN tabs (`F7` opens the plan with the results focused; `1` goes back) |
 | `↑`/`↓`/`PageUp`/`PageDown`, `←`/`→`, `Home` / `0` | In MESSAGES and QUERY PLAN: scroll down and across, back to the top / the left edge. A plan wider than the pane says which columns show in the footer |
