@@ -91,7 +91,7 @@ fn sqlite_form_shows_only_file_fields() {
     form.cycle_engine(false);
     assert_eq!(form.engine, Engine::Sqlite);
     assert!(form.host.is_empty() && form.port.is_empty());
-    assert_eq!(form.visible_fields().len(), 6);
+    assert_eq!(form.visible_fields().len(), 7);
     assert!(form.params().unwrap_err().contains("file"));
     form.host = "/tmp/x.db".into();
     form.mode = ConnectionMode::ReadOnly;
@@ -168,6 +168,7 @@ async fn picking_a_database_container_fills_in_a_new_connection() {
             "printenv".into(),
             "POSTGRES_PASSWORD".into(),
         ],
+        agents: crate::db::AgentAccess::None,
         legacy_keychain: false,
     };
     let unpublished = crate::containers::Container { name: "hidden".into(), image: "mysql:9".into(), profile: None };
@@ -1621,6 +1622,7 @@ fn sqlite_profile(name: &str, path: &std::path::Path) -> ConnectionProfile {
         ssh: String::new(),
         timeout: String::new(),
         password_command: Vec::new(),
+        agents: crate::db::AgentAccess::None,
         legacy_keychain: false,
     }
 }

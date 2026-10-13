@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::db::{ConnectionMode, Engine, SslMode, TxMode};
+use crate::db::{AgentAccess, ConnectionMode, Engine, SslMode, TxMode};
 
 const KEYRING_SERVICE: &str = "podelis";
 /// Project that connections saved before projects existed are moved into.
@@ -32,6 +32,9 @@ pub struct ConnectionProfile {
     /// Seconds a query may run before it's cancelled; empty for no limit.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub timeout: String,
+    /// What AI agents may do here (`podelis mcp`); not shared by default.
+    #[serde(default, skip_serializing_if = "AgentAccess::is_none")]
+    pub agents: AgentAccess,
     /// Program and arguments that print the password (e.g. `["pass",
     /// "show", "db/prod"]`); the keychain isn't used for it then.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -410,6 +413,7 @@ mod tests {
             transaction: None,
             ssh: String::new(),
             timeout: String::new(),
+            agents: AgentAccess::None,
             password_command: Vec::new(),
             legacy_keychain: false,
         }

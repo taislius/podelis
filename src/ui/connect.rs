@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::app::{ConnectForm, fields_for};
-use crate::db::{Engine, SslMode};
+use crate::db::{AgentAccess, Engine, SslMode};
 use crate::store::ConnectionProfile;
 
 /// A connection's settings to show, borrowed from the form being edited or
@@ -22,6 +22,7 @@ pub(super) struct Settings<'a> {
     tx_mode: TxMode,
     ssh: &'a str,
     timeout: &'a str,
+    agents: AgentAccess,
 }
 
 impl<'a> From<&'a ConnectForm> for Settings<'a> {
@@ -39,6 +40,7 @@ impl<'a> From<&'a ConnectForm> for Settings<'a> {
             tx_mode: form.tx_mode(),
             ssh: &form.ssh,
             timeout: &form.timeout,
+            agents: form.agents,
         }
     }
 }
@@ -58,6 +60,7 @@ impl<'a> From<&'a ConnectionProfile> for Settings<'a> {
             tx_mode: p.transaction.unwrap_or_else(|| TxMode::for_connection(p.mode)),
             ssh: &p.ssh,
             timeout: &p.timeout,
+            agents: p.agents,
         }
     }
 }
@@ -95,9 +98,11 @@ pub(super) fn form_lines(form: &Settings, focus: Option<ConnectField>, password:
                 ConnectField::Transaction => ("Transaction", form.tx_mode.label()),
                 ConnectField::Ssh => ("SSH via", form.ssh),
                 ConnectField::Timeout => ("Timeout", form.timeout),
+                ConnectField::Agents => ("AI agents", form.agents.label()),
             };
-            let toggle = matches!(field, ConnectField::Engine | ConnectField::Ssl | ConnectField::Mode)
-                || (field == ConnectField::Transaction && form.mode != ConnectionMode::ReadOnly);
+            let toggle =
+                matches!(field, ConnectField::Engine | ConnectField::Ssl | ConnectField::Mode | ConnectField::Agents)
+                    || (field == ConnectField::Transaction && form.mode != ConnectionMode::ReadOnly);
             let focused = focus == Some(field);
             let value_style = match (field, form.mode) {
                 (ConnectField::Mode, ConnectionMode::Production) => bold(t.error),
@@ -132,6 +137,11 @@ pub(super) fn form_message(form: &ConnectForm) -> (String, Style) {
         ConnectField::Transaction if form.mode == ConnectionMode::ReadOnly => {
             "Read-only connections don't change data, so there's nothing to commit"
         }
+        ConnectField::Agents => match form.agents {
+            AgentAccess::None => "Not shared with AI agents (podelis mcp); ←/→ to share it",
+            AgentAccess::Read => "AI agents can read, in a session the server keeps read-only",
+            AgentAccess::Write => "AI agents can write too: never DROP or TRUNCATE, and on production only a dry run",
+        },
         ConnectField::Transaction => match form.tx_mode() {
             TxMode::AutoCommit => "Each statement is committed as it runs (switch any time: Ctrl+K x)",
             TxMode::Manual => "Changes wait for COMMIT (F8) or ROLLBACK (Shift+F8) (switch any time: Ctrl+K x)",

@@ -53,9 +53,9 @@ pub use errors::{
     CheckOutcome, ErrorPos, error_message, error_position, is_broken, is_reconnected, sql_literal, value_literal,
 };
 use mysql::cells::mysql_cell;
-pub use options::{ConnectParams, ConnectionMode, Engine, PasswordSource, SslMode, TxMode};
-pub use run::RunError;
+pub use options::{AgentAccess, ConnectParams, ConnectionMode, Engine, PasswordSource, SslMode, TxMode};
 use postgres::cells::pg_cell;
+pub use run::RunError;
 use sqlite::cells::sqlite_cell;
 use tunnel::{Tunnel, open_tunnel};
 pub use types::{same_type, translate_type};

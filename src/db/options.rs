@@ -117,6 +117,44 @@ impl ConnectionMode {
     }
 }
 
+/// What AI agents may do on a connection, through `podelis mcp`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentAccess {
+    /// Not shared with agents (they don't see it).
+    #[default]
+    None,
+    /// Reads, in a session the server keeps read-only.
+    Read,
+    /// Writes too: never anything destructive, and on a production
+    /// connection only as a dry run.
+    Write,
+}
+
+const AGENT_ACCESS: [AgentAccess; 3] = [AgentAccess::None, AgentAccess::Read, AgentAccess::Write];
+
+impl AgentAccess {
+    pub fn label(self) -> &'static str {
+        match self {
+            AgentAccess::None => "not shared",
+            AgentAccess::Read => "read",
+            AgentAccess::Write => "read and write",
+        }
+    }
+
+    // By reference: serde's `skip_serializing_if` passes one.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn is_none(&self) -> bool {
+        *self == AgentAccess::None
+    }
+
+    pub fn cycle(self, forward: bool) -> AgentAccess {
+        let idx = AGENT_ACCESS.iter().position(|m| *m == self).unwrap_or(0);
+        let n = AGENT_ACCESS.len();
+        AGENT_ACCESS[if forward { (idx + 1) % n } else { (idx + n - 1) % n }]
+    }
+}
+
 /// The connection's transaction mode, chosen with Ctrl+K x.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

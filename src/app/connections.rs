@@ -1,4 +1,5 @@
 use super::*;
+use crate::db::AgentAccess;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectField {
@@ -14,10 +15,11 @@ pub enum ConnectField {
     Mode,
     Transaction,
     Timeout,
+    Agents,
     Ssh,
 }
 
-const SERVER_FIELDS: [ConnectField; 13] = [
+const SERVER_FIELDS: [ConnectField; 14] = [
     ConnectField::Name,
     ConnectField::Engine,
     ConnectField::Host,
@@ -30,17 +32,19 @@ const SERVER_FIELDS: [ConnectField; 13] = [
     ConnectField::Mode,
     ConnectField::Transaction,
     ConnectField::Timeout,
+    ConnectField::Agents,
     ConnectField::Ssh,
 ];
 
 /// SQLite has no server: just a file path (shown in the Host field).
-const FILE_FIELDS: [ConnectField; 6] = [
+const FILE_FIELDS: [ConnectField; 7] = [
     ConnectField::Name,
     ConnectField::Engine,
     ConnectField::Host,
     ConnectField::Mode,
     ConnectField::Transaction,
     ConnectField::Timeout,
+    ConnectField::Agents,
 ];
 
 /// The fields a connection to `engine` has, in order.
@@ -73,6 +77,8 @@ pub struct ConnectForm {
     pub ssh: String,
     /// Query timeout in seconds, as typed; empty for none.
     pub timeout: String,
+    /// What AI agents may do on it (`podelis mcp`).
+    pub agents: AgentAccess,
     pub focus: ConnectField,
     pub error: Option<String>,
     pub info: Option<String>,
@@ -102,6 +108,7 @@ impl ConnectForm {
             transaction: None,
             ssh: String::new(),
             timeout: String::new(),
+            agents: AgentAccess::None,
             focus: ConnectField::Name,
             error: None,
             info: None,
@@ -128,6 +135,7 @@ impl ConnectForm {
             transaction: profile.transaction,
             ssh: profile.ssh.clone(),
             timeout: profile.timeout.clone(),
+            agents: profile.agents,
             ..Self::new()
         }
     }
@@ -151,6 +159,7 @@ impl ConnectForm {
             transaction: self.transaction.filter(|t| *t != TxMode::for_connection(self.mode)),
             ssh: self.ssh.trim().to_string(),
             timeout: self.timeout.trim().to_string(),
+            agents: self.agents,
             password_command: self.password_command_words().unwrap_or_default(),
             legacy_keychain: false,
         }
@@ -159,7 +168,11 @@ impl ConnectForm {
     pub(super) fn field_mut(&mut self, field: ConnectField) -> Option<&mut String> {
         match field {
             ConnectField::Name => Some(&mut self.name),
-            ConnectField::Engine | ConnectField::Ssl | ConnectField::Mode | ConnectField::Transaction => None,
+            ConnectField::Engine
+            | ConnectField::Ssl
+            | ConnectField::Mode
+            | ConnectField::Transaction
+            | ConnectField::Agents => None,
             ConnectField::Ssh => Some(&mut self.ssh),
             ConnectField::Timeout => Some(&mut self.timeout),
             ConnectField::Host => Some(&mut self.host),
@@ -699,6 +712,8 @@ impl App {
             KeyCode::Right if form.focus == ConnectField::Engine => form.cycle_engine(true),
             KeyCode::Left if form.focus == ConnectField::Mode => form.cycle_mode(false),
             KeyCode::Right if form.focus == ConnectField::Mode => form.cycle_mode(true),
+            KeyCode::Left if form.focus == ConnectField::Agents => form.agents = form.agents.cycle(false),
+            KeyCode::Right if form.focus == ConnectField::Agents => form.agents = form.agents.cycle(true),
             KeyCode::Left if form.focus == ConnectField::Transaction => form.cycle_transaction(false),
             KeyCode::Right if form.focus == ConnectField::Transaction => form.cycle_transaction(true),
             KeyCode::Left if form.focus == ConnectField::Ssl => form.ssl_mode = form.ssl_mode.cycle(false),
@@ -727,6 +742,7 @@ impl App {
             ConnectField::Ssl => form.ssl_mode.label().to_string(),
             ConnectField::Mode => form.mode.label().to_string(),
             ConnectField::Transaction => form.tx_mode().label().to_string(),
+            ConnectField::Agents => form.agents.label().to_string(),
             _ => form.field_mut(focus).map(|f| f.clone()).unwrap_or_default(),
         };
         if value.is_empty() {

@@ -264,6 +264,7 @@ mod tests {
             ssh: String::new(),
             timeout: String::new(),
             password_command: Vec::new(),
+            agents: crate::db::AgentAccess::None,
             legacy_keychain: false,
         };
         store.upsert(&project, None, profile).unwrap();

@@ -154,6 +154,7 @@ impl Ps {
                 transaction: None,
                 ssh: String::new(),
                 timeout: String::new(),
+                agents: crate::db::AgentAccess::None,
                 password_command,
                 legacy_keychain: false,
             }
