@@ -234,6 +234,21 @@ the terminal, the result viewer and the crash log.
 With
 .Fl -connections ,
 also test every saved connection of the project.
+.It Cm mcp Op Fl p Ar project
+Serve the project's connections shared with AI agents (the
+.Dq AI agents
+setting of a connection) to an agent over MCP, on standard input and
+output.
+Agents see only those connections, never their passwords.
+Each call runs in a transaction of Podėlis's own, read-only on the server
+unless a connection allows writes; agents can't send
+.Ql SET ,
+.Ql BEGIN
+or
+.Ql COMMIT ,
+destructive statements are refused, and on production connections every
+call is rolled back, so writes only run as a dry run.
+Everything an agent runs is logged, and shows in the query library.
 .El
 .Sh SAFETY
 .Fl e

@@ -119,6 +119,10 @@ same way tools like `lazygit` do.
   hex, written as each engine writes it (`\xdeadbeef`, `0xDEADBEEF`,
   `X'DEADBEEF'`), so exports, pipes and comparisons get the real bytes, and
   an edited value or an exported `INSERT` goes back as binary
+- **For AI agents:** `podelis mcp` gives your coding agent the connections
+  you share with it, in read-only transactions unless you allow writes, with
+  no passwords and nothing destructive; the query library shows everything
+  it ran, with what's worth a look marked
 - **Works with Unix tools:** pipe a result through `grep`, `sort`, `awk`,
   `jq` or Miller without leaving the app (`|`), open it in `less` or
   VisiData (`o`), or run SQL without the UI (`podelis prod -e "select …"
@@ -158,8 +162,9 @@ podelis app.db                  # a SQLite file (a missing one is created only i
 podelis -p shop prod            # a saved connection (password from the keychain)
 ```
 
-Without the UI, for scripts, pipes and agents, see
-[Without the UI](docs/command-line.md).
+Without the UI, for scripts and pipes, see
+[Without the UI](docs/command-line.md); for AI agents, `podelis mcp` (see
+[For AI agents](docs/agents.md)).
 
 From a checkout, `cargo run` (or `cargo run -- -p shop-backend`). No config
 file is needed — the first run starts with a welcome screen.
@@ -174,6 +179,8 @@ file is needed — the first run starts with a welcome screen.
 - [Without the UI](docs/command-line.md): `-e`, `--import`, `--test`,
   `podelis doctor`, exit codes, and use on servers and in CI (also
   `man podelis`)
+- [For AI agents](docs/agents.md): `podelis mcp`, sharing connections with
+  agents safely, and reviewing what they ran
 - [Configuration](docs/configuration.md): `config.toml`, keys, themes, and
   where Podėlis keeps its files
 - [Development](docs/development.md): building, tests, checks and CI; how

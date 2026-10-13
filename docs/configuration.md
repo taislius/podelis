@@ -62,6 +62,8 @@ Linux), or in `$PODELIS_CONFIG_DIR` if set:
   connections and cursors, and the rest of the session (written a moment
   after you stop typing, so a crash loses little).
 - `queries/<project-id>.json` — each project's saved-query library.
+- `agents/<project-id>.jsonl` — what AI agents ran in the project through
+  `podelis mcp` (see [For AI agents](agents.md)), up to about 5 MB.
 - `config.toml` — settings (optional, never written by the app).
 - `podelis.log` — only with `PODELIS_LOG=debug` (or another
   [filter](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
