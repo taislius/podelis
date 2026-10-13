@@ -121,8 +121,9 @@ same way tools like `lazygit` do.
   an edited value or an exported `INSERT` goes back as binary
 - **For AI agents:** `podelis mcp` gives your coding agent the connections
   you share with it, in read-only transactions unless you allow writes, with
-  no passwords and nothing destructive; the query library shows everything
-  it ran, with what's worth a look marked
+  no passwords and nothing destructive. Agent activity shows everything
+  each agent session ran (which agent, which project folder), and the
+  status bar says when an agent was refused or changed data
 - **Works with Unix tools:** pipe a result through `grep`, `sort`, `awk`,
   `jq` or Miller without leaving the app (`|`), open it in `less` or
   VisiData (`o`), or run SQL without the UI (`podelis prod -e "select …"

@@ -72,19 +72,45 @@ be written to steer an agent.
 ## What agents ran
 
 Everything an agent runs through `podelis mcp`, and everything refused, is
-logged with the agent's name, the connection, the SQL and how it went
-(rows, rows changed, time, the error or why it was refused). The log is in
-`agents/<project>.jsonl` in Podėlis's folder (see
+logged with who it was and how it went:
+
+- **who:** the agent as it reports itself (name and version, e.g.
+  `claude-code 2.0.31`), the **session** (one `podelis mcp` run, so one
+  agent's calls stay together), the **folder** it started `podelis mcp` in
+  (usually the project it's working on), and a **name** of your own if you
+  gave one: `podelis mcp --name billing-refactor`, or the `PODELIS_AGENT`
+  environment variable, e.g. in the agent's MCP settings;
+- **what:** the connection, the tool, the SQL, and the outcome: rows, rows
+  changed, time, the error or why it was refused.
+
+The log is in `agents/<project>.jsonl` in Podėlis's folder (see
 [Configuration](configuration.md)), private to you like the history, and
 a statement that sets a password is left out of it.
 
-The **query library** (F3) shows it: after your saved queries, newest
-first, with what's worth a look marked in orange: refused, failed, dry
-runs, rows changed, and lint warnings such as `= NULL`. Type to search by
-SQL, agent or connection; `Enter` opens the SQL in a tab named for the
-agent, where `F7` shows its plan. The tab runs it on its own connection,
-not necessarily the one the agent used: the status line says which that
-was.
+**Agent activity** (Ctrl+K, then type "agent") shows it, apart from your
+own queries:
+
+- the **sessions**, most recently active first: when, the agent and its
+  name, the folder, the connections it used, how many calls, and in orange
+  how many were refused, failed, changed data, or ran as a dry run on
+  production (`!` marks them);
+- `Enter` on a session: its **calls**, newest first: time, connection,
+  tool, outcome, time taken and the SQL, with what's worth a look marked
+  (refused, failed, dry runs, rows changed, lint warnings such as
+  `= NULL`);
+- `Enter` on a call: all of it, the SQL formatted, the error or refusal in
+  full. `o` opens its SQL in a tab named for the agent (where `F7` shows
+  its plan; the tab runs it on its own connection, not necessarily the one
+  the agent used, as the status line says), `y` copies it;
+- `/` searches (agent, name, folder, connection; in a session, the SQL and
+  outcomes), `!` shows only what's worth a look, `Esc` goes back.
+
+When an agent was refused, failed, changed data or ran a dry run since you
+last opened the window, the status bar says so in orange (`agents: 2
+refused · 1 wrote · 1 dry run`) until you look; a click opens the window.
+It's watched while any connection of the project is shared with agents.
+The window shows what was there when it opened: close and open it again
+for newer calls.
 
 It's a record of what your agent did through Podėlis, for checking up on
 it, not an audit: an agent that has a database password of its own, or
