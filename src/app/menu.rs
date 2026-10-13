@@ -10,6 +10,8 @@ pub enum MenuAction {
     Action(Action),
     ResultsKey(KeyCode),
     SchemaKey(KeyCode),
+    /// A palette command without a key of its own.
+    Command(super::palette::Command),
 }
 
 #[derive(Clone, Debug)]
@@ -50,7 +52,11 @@ impl App {
                 let plan = self.tab.plan_swapped;
                 let for_plan = |item: &MenuItem| {
                     !plan
-                        || !matches!(item.action, MenuAction::ResultsKey(Char('c' | 'a' | 'd' | 'f' | 'M' | 'i' | '>')))
+                        || !matches!(
+                            item.action,
+                            MenuAction::ResultsKey(Char('c' | 'a' | 'd' | 'f' | 'M' | 'i' | '>'))
+                                | MenuAction::Command(_)
+                        )
                 };
                 (
                     if plan { "QUERY PLAN" } else { "RESULTS" },
@@ -73,6 +79,11 @@ impl App {
                         results_item("Export as CSV", Char('e'), "e"),
                         results_item("Export as JSON", Char('J'), "J"),
                         results_item("Export as INSERT statements", Char('i'), "i"),
+                        MenuItem {
+                            label: "Export all rows as CSV",
+                            keys: String::new(),
+                            action: MenuAction::Command(super::palette::Command::ExportAll(ExportFormat::Csv)),
+                        },
                         results_item("Load more rows", Char('M'), "M"),
                         results_item("Zoom this pane (and back)", Char('z'), "z"),
                     ]
@@ -149,6 +160,7 @@ impl App {
         self.menu = None;
         match item.action {
             MenuAction::Action(a) => self.run_action(a),
+            MenuAction::Command(command) => self.run_command(command),
             MenuAction::ResultsKey(code) => self.handle_results_key(KeyEvent::new(code, KeyModifiers::NONE)),
             MenuAction::SchemaKey(code) => self.handle_schema_key(KeyEvent::new(code, KeyModifiers::NONE)),
         }

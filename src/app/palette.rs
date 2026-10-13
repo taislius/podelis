@@ -11,6 +11,8 @@ pub enum Command {
     ExportCsv,
     ExportJson,
     ExportInserts,
+    /// Every row, not just those loaded.
+    ExportAll(ExportFormat),
     LoadMore,
     PipeRows,
     OpenRows,
@@ -33,6 +35,9 @@ impl Command {
             Command::ExportCsv,
             Command::ExportJson,
             Command::ExportInserts,
+            Command::ExportAll(ExportFormat::Csv),
+            Command::ExportAll(ExportFormat::Json),
+            Command::ExportAll(ExportFormat::Sql),
             Command::LoadMore,
             Command::PipeRows,
             Command::OpenRows,
@@ -51,6 +56,9 @@ impl Command {
             Command::ExportCsv => "Export rows as CSV",
             Command::ExportJson => "Export rows as JSON",
             Command::ExportInserts => "Export rows as SQL INSERT statements",
+            Command::ExportAll(ExportFormat::Csv) => "Export all rows as CSV (not just those loaded)",
+            Command::ExportAll(ExportFormat::Json) => "Export all rows as JSON (not just those loaded)",
+            Command::ExportAll(ExportFormat::Sql) => "Export all rows as SQL INSERT statements",
             Command::LoadMore => "Load more rows",
             Command::PipeRows => "Pipe rows through a command (grep, sort, jq…)",
             Command::OpenRows => "Open rows in the viewer (less, VisiData…)",
@@ -94,9 +102,11 @@ impl Command {
             Command::Help => "F1".into(),
             Command::Quit => "Ctrl+Q".into(),
             Command::SwitchTab(i) if i < 9 => format!("Ctrl+K {}", i + 1),
-            Command::CopyDiagnostics | Command::SwitchTab(_) | Command::CompareSchema(_) | Command::CompareRows(_) => {
-                String::new()
-            }
+            Command::CopyDiagnostics
+            | Command::ExportAll(_)
+            | Command::SwitchTab(_)
+            | Command::CompareSchema(_)
+            | Command::CompareRows(_) => String::new(),
         }
     }
 }
@@ -229,13 +239,14 @@ impl App {
         }
     }
 
-    fn run_command(&mut self, command: Command) {
+    pub(super) fn run_command(&mut self, command: Command) {
         match command {
             Command::Action(a) => self.run_action(a),
             Command::RecordView => self.open_record_view(),
             Command::ExportCsv => self.export(ExportFormat::Csv),
             Command::ExportJson => self.export(ExportFormat::Json),
             Command::ExportInserts => self.export(ExportFormat::Sql),
+            Command::ExportAll(format) => self.export_all(format),
             Command::LoadMore => self.load_more(),
             Command::PipeRows => self.open_pipe_prompt(),
             Command::OpenRows => self.open_in_viewer(),

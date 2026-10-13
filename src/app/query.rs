@@ -74,6 +74,7 @@ impl App {
             Some(a) => return self.run_action(a),
         }
         match key.code {
+            KeyCode::Esc if self.export_task.is_some() => return self.stop_export(),
             KeyCode::Esc if self.executing => return self.cancel_query(),
             // Esc leaves the zoom, after a results filter (which it clears
             // first) and outside vim mode in the editor (where it's vim's).
@@ -744,9 +745,8 @@ impl App {
         self.copy_text(text, "Copied row (tab-separated)");
     }
 
-    /// Writes the rows as shown to a CSV or JSON file in the current folder.
-    pub(super) fn export(&mut self, format: ExportFormat) {
-        let Some(results) = &self.tab.grid.results else { return };
+    /// `podelis-export-<timestamp>.<ext>` in `export_dir` (or the current folder).
+    fn export_path(&self, format: ExportFormat) -> PathBuf {
         let ext = match format {
             ExportFormat::Csv => "csv",
             ExportFormat::Json => "json",
@@ -757,34 +757,40 @@ impl App {
             Some(d) => PathBuf::from(d),
             None => PathBuf::new(),
         };
-        let path = dir.join(format!("podelis-export-{}.{ext}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+        dir.join(format!("podelis-export-{}.{ext}", chrono::Local::now().format("%Y%m%d-%H%M%S")))
+    }
+
+    /// The table `INSERT` exports go into: the query's, when it reads just one.
+    fn insert_table(&self) -> String {
+        let engine = self.engine();
+        self.tab.last_sql.as_ref().and_then(|(sql, _)| analyze::edit_source(&parse(sql, engine))).map_or_else(
+            || "result".to_string(),
+            |s| match s.schema {
+                Some(schema) => format!("{}.{}", engine.quote_ident(&schema), engine.quote_ident(&s.table)),
+                None => engine.quote_ident(&s.table),
+            },
+        )
+    }
+
+    /// Writes the rows as shown to a CSV or JSON file in the current folder.
+    pub(super) fn export(&mut self, format: ExportFormat) {
+        let path = self.export_path(format);
+        let table = self.insert_table();
+        let Some(results) = &self.tab.grid.results else { return };
         let truncated = results.truncated() || self.row_stream.is_some();
         let rows = self.tab.grid.view.len();
         let engine = self.engine();
         let text = match format {
             ExportFormat::Csv => crate::export::csv(results, &self.tab.grid.view),
             ExportFormat::Json => crate::export::json(results, &self.tab.grid.view),
-            ExportFormat::Sql => {
-                // INSERT INTO the query's table when it reads just one.
-                let table = self
-                    .tab
-                    .last_sql
-                    .as_ref()
-                    .and_then(|(sql, _)| analyze::edit_source(&parse(sql, engine)))
-                    .map_or_else(
-                        || "result".to_string(),
-                        |s| match s.schema {
-                            Some(schema) => format!("{}.{}", engine.quote_ident(&schema), engine.quote_ident(&s.table)),
-                            None => engine.quote_ident(&s.table),
-                        },
-                    );
-                crate::export::sql_inserts(results, &self.tab.grid.view, &table, engine)
-            }
+            ExportFormat::Sql => crate::export::sql_inserts(results, &self.tab.grid.view, &table, engine),
         };
         match std::fs::write(&path, text) {
             Ok(()) => {
                 let mut note = format!(" ({rows} rows");
-                if truncated {
+                if truncated && self.row_stream.is_some() {
+                    note.push_str(" loaded; Ctrl+K “export all” writes every row");
+                } else if truncated {
                     let _ = write!(note, " of {}; M loads more", results.total_rows);
                 } else if !self.tab.grid.filter.is_empty() {
                     note.push_str(", filtered");
@@ -795,6 +801,80 @@ impl App {
             }
             Err(e) => self.set_status(format!("Export failed: {e}"), true),
         }
+    }
+
+    /// Writes every row of the result to a file: those loaded, then the
+    /// rest of the stream page by page, straight to the file rather than
+    /// into the grid. Esc stops it.
+    pub(super) fn export_all(&mut self, format: ExportFormat) {
+        const PAGE: usize = 10_000;
+        if self.export_task.is_some() {
+            return self.set_status("An export is already running (Esc stops it)".to_string(), true);
+        }
+        let Some(results) = &self.tab.grid.results else { return };
+        if self.row_stream.is_none() {
+            if results.truncated() {
+                return self.set_status(
+                    "Only a statement run on its own (F6) can be exported in full; this result was cut at the row limit"
+                        .to_string(),
+                    true,
+                );
+            }
+            return self.export(format);
+        }
+        if self.fetching_more {
+            return self.set_status("Rows are still loading; try again in a moment".to_string(), true);
+        }
+        let Some(stream) = self.row_stream.take() else { return };
+        let path = self.export_path(format);
+        let paged = match format {
+            ExportFormat::Csv => crate::export::Paged::Csv,
+            ExportFormat::Json => crate::export::Paged::Json,
+            ExportFormat::Sql => crate::export::Paged::Inserts { table: self.insert_table(), engine: self.engine() },
+        };
+        let (columns, types, loaded) = (results.columns.clone(), results.column_types.clone(), results.rows.clone());
+        let send = self.sender();
+        let target = path.clone();
+        let (stop, mut stopped) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            let written = async {
+                let file = std::io::BufWriter::new(std::fs::File::create(&target)?);
+                let mut out = crate::export::PagedWriter::new(file, paged, &columns, &types);
+                out.page(loaded)?;
+                loop {
+                    let page = tokio::select! {
+                        page = stream.next_page(PAGE) => page.map_err(|e| anyhow::anyhow!(e))?,
+                        _ = &mut stopped => anyhow::bail!("stopped"),
+                    };
+                    let done = page.done;
+                    out.page(page.rows)?;
+                    send(DbEventKind::ExportProgress(out.rows));
+                    if done {
+                        break;
+                    }
+                }
+                let rows = out.rows;
+                out.finish()?;
+                anyhow::Ok(rows)
+            }
+            .await;
+            // The stream goes with this task, which cancels the query; an
+            // unfinished file isn't left behind.
+            drop(stream);
+            if written.is_err() {
+                let _ = std::fs::remove_file(&target);
+            }
+            send(DbEventKind::ExportDone(target, written.map_err(|e| format!("{e:#}"))));
+        });
+        self.export_task = Some((stop, path));
+        self.set_status("Exporting every row… (Esc stops it)".to_string(), false);
+    }
+
+    /// Stops a running export; it removes its unfinished file.
+    pub(super) fn stop_export(&mut self) {
+        let Some((stop, _)) = self.export_task.take() else { return };
+        let _ = stop.send(());
+        self.set_status("Export stopped; the unfinished file is removed".to_string(), false);
     }
 
     pub(super) fn toggle_schema(&mut self) {
@@ -1240,7 +1320,8 @@ impl App {
     ) {
         let Some(db) = self.database.clone() else { return };
         // A still-open streamed result holds the session: close it (which
-        // cancels it on the server) so this run can start.
+        // cancels it on the server) so this run can start; so does an export.
+        self.stop_export();
         self.row_stream = None;
         self.fetching_more = false;
         self.completion = None;

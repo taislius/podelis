@@ -14,6 +14,12 @@ impl App {
         if let DbEventKind::ContainersFound(request, result) = event.kind {
             return self.containers_found(request, result);
         }
+        // An export goes on while other tabs are used.
+        match event.kind {
+            DbEventKind::ExportProgress(rows) => return self.export_progress(rows),
+            DbEventKind::ExportDone(path, result) => return self.export_done(&path, result),
+            _ => {}
+        }
         if event.generation != self.generation {
             // A connection that finished after being cancelled is still open.
             if let DbEventKind::Connected(db) = event.kind {
@@ -25,6 +31,33 @@ impl App {
         self.unswap_plan_grid();
         self.apply_event(event.kind);
         self.sync_plan_grid();
+    }
+
+    fn export_progress(&mut self, rows: u64) {
+        if self.export_task.is_some() {
+            #[allow(clippy::cast_precision_loss)] // display only, one decimal
+            let rows = crate::db::human_rows(rows as f64);
+            self.set_status(format!("Exporting every row… {rows} so far (Esc stops it)"), false);
+        }
+    }
+
+    fn export_done(&mut self, path: &std::path::Path, result: Result<u64, String>) {
+        // A stopped export's last word arrives after it was removed.
+        if self.export_task.as_ref().is_none_or(|(_, p)| p != path) {
+            return;
+        }
+        self.export_task = None;
+        match result {
+            Ok(rows) => {
+                let shown = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+                self.set_status(format!("Exported all {rows} rows to {}", shown.display()), false);
+            }
+            Err(e) => {
+                let status = format!("Export failed: {}", one_line(&e));
+                self.log(status.clone(), true);
+                self.set_status(status, true);
+            }
+        }
     }
 
     fn apply_event(&mut self, kind: DbEventKind) {
@@ -65,6 +98,8 @@ impl App {
             DbEventKind::QueryDone(outcome, txn, stream) => self.on_query_done(outcome, txn, stream),
             DbEventKind::QueryFailed(err, position, txn) => self.on_query_failed(&err, position, txn),
             DbEventKind::MoreRows(page) => self.append_rows(page),
+            DbEventKind::ExportProgress(rows) => self.export_progress(rows),
+            DbEventKind::ExportDone(path, result) => self.export_done(&path, result),
             DbEventKind::MoreFailed(err) => {
                 self.fetching_more = false;
                 self.row_stream = None;

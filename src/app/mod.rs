@@ -295,6 +295,10 @@ enum DbEventKind {
     QueryDone(QueryOutcome, Option<TxnState>, Option<RowStream>),
     /// Another page of a streamed result.
     MoreRows(Page),
+    /// Rows written so far by "export all rows".
+    ExportProgress(u64),
+    /// "Export all rows" finished: the file, and how many rows (or why not).
+    ExportDone(PathBuf, Result<u64, String>),
     MoreFailed(String),
     QueryFailed(String, Option<ErrorPos>, Option<TxnState>),
     CancelFailed(String),
@@ -671,6 +675,8 @@ pub struct App {
     pub tab_prompt: Option<TabPrompt>,
     /// Further rows of the current (streamed) result, fetched on demand.
     pub row_stream: Option<RowStream>,
+    /// "Export all rows" in progress: what stops it, and the file it writes.
+    export_task: Option<(tokio::sync::oneshot::Sender<()>, PathBuf)>,
     pub fetching_more: bool,
     pub completion: Option<Completion>,
     /// Row limit for the next run only.
@@ -827,6 +833,7 @@ impl App {
             library_view: None,
             tab_prompt: None,
             row_stream: None,
+            export_task: None,
             fetching_more: false,
             completion: None,
             next_row_limit: None,

@@ -124,6 +124,66 @@ pub fn sql_inserts(outcome: &QueryOutcome, view: &[usize], table: &str, engine: 
     out
 }
 
+/// A file format written a page of rows at a time, for results too big to
+/// hold: the same text as [`csv`], [`json`] and [`sql_inserts`] give.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Paged {
+    Csv,
+    Json,
+    Inserts { table: String, engine: Engine },
+}
+
+/// Writes a result's rows to `out` page by page.
+pub struct PagedWriter<W: std::io::Write> {
+    out: W,
+    format: Paged,
+    /// The columns and their types; `rows` holds the page being written.
+    shape: QueryOutcome,
+    pub rows: u64,
+}
+
+impl<W: std::io::Write> PagedWriter<W> {
+    pub fn new(out: W, format: Paged, columns: &[String], column_types: &[String]) -> Self {
+        let shape =
+            QueryOutcome { columns: columns.to_vec(), column_types: column_types.to_vec(), ..QueryOutcome::default() };
+        Self { out, format, shape, rows: 0 }
+    }
+
+    pub fn page(&mut self, rows: Vec<Vec<Option<String>>>) -> std::io::Result<()> {
+        let first = self.rows == 0;
+        self.rows += rows.len() as u64;
+        self.shape.rows = rows;
+        let all: Vec<usize> = (0..self.shape.rows.len()).collect();
+        let text = match &self.format {
+            Paged::Csv => {
+                let text = csv(&self.shape, &all);
+                if first { text } else { text[csv(&self.shape, &[]).len()..].to_string() }
+            }
+            Paged::Json if all.is_empty() => String::new(),
+            Paged::Json => {
+                let text = json(&self.shape, &all);
+                let rows = text.strip_prefix("[\n").and_then(|t| t.strip_suffix("\n]\n")).unwrap_or_default();
+                format!("{}{rows}", if first { "[\n" } else { ",\n" })
+            }
+            Paged::Inserts { table, engine } => sql_inserts(&self.shape, &all, table, *engine),
+        };
+        self.out.write_all(text.as_bytes())
+    }
+
+    /// Ends the file (JSON's closing bracket) and flushes it.
+    pub fn finish(mut self) -> std::io::Result<W> {
+        let end = match (&self.format, self.rows) {
+            (Paged::Json, 0) => "[]\n".to_string(),
+            (Paged::Json, _) => "\n]\n".to_string(),
+            (Paged::Csv, 0) => csv(&self.shape, &[]),
+            _ => String::new(),
+        };
+        self.out.write_all(end.as_bytes())?;
+        self.out.flush()?;
+        Ok(self.out)
+    }
+}
+
 /// Every row in `format`.
 pub fn render_all_rows(outcome: &QueryOutcome, format: Format) -> String {
     render(outcome, &(0..outcome.rows.len()).collect::<Vec<_>>(), format)
@@ -278,6 +338,39 @@ mod tests {
             sql_inserts(&o, &[0], "t", Engine::MySql),
             "INSERT INTO t (b, t) VALUES (0xDEADBEEF, '0xDEADBEEF');\n"
         );
+    }
+
+    /// Written a page at a time, a file reads the same as written at once.
+    #[test]
+    fn pages_add_up_to_the_whole_file() {
+        let mut o =
+            outcome(&["id", "note"], &[&[Some("1"), Some("a,b")], &[Some("2"), None], &[Some("3"), Some("c\"d")]]);
+        o.column_types = vec!["INT4".into(), "TEXT".into()];
+        let all: Vec<usize> = (0..3).collect();
+        let inserts = Paged::Inserts { table: "t".into(), engine: Engine::Postgres };
+        for (format, whole) in [
+            (Paged::Csv, csv(&o, &all)),
+            (Paged::Json, json(&o, &all)),
+            (inserts, sql_inserts(&o, &all, "t", Engine::Postgres)),
+        ] {
+            let mut w = PagedWriter::new(Vec::new(), format.clone(), &o.columns, &o.column_types);
+            w.page(o.rows[..1].to_vec()).unwrap();
+            w.page(Vec::new()).unwrap();
+            w.page(o.rows[1..].to_vec()).unwrap();
+            assert_eq!(w.rows, 3);
+            assert_eq!(String::from_utf8(w.finish().unwrap()).unwrap(), whole, "{format:?}");
+            // No rows at all.
+            let w = PagedWriter::new(Vec::new(), format.clone(), &o.columns, &o.column_types);
+            let empty = String::from_utf8(w.finish().unwrap()).unwrap();
+            assert_eq!(
+                empty,
+                match format {
+                    Paged::Csv => csv(&o, &[]),
+                    Paged::Json => json(&o, &[]),
+                    Paged::Inserts { .. } => String::new(),
+                }
+            );
+        }
     }
 
     #[test]

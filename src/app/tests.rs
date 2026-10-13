@@ -768,6 +768,76 @@ async fn results_filter_sort_view_and_load_more() {
     assert!(!app.executing && app.status_is_error);
 }
 
+/// "Export all rows" writes every row of a streamed result, not just those
+/// loaded, without loading them into the grid; Esc stops it.
+#[tokio::test]
+async fn export_all_rows_of_a_streamed_result() {
+    let (mut app, dir) = connected_app(ConnectionMode::Normal).await;
+    app.settings.row_limit = 10;
+    app.settings.export_dir = Some(dir.path().to_string_lossy().into_owned());
+    let many = "WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 25000) SELECT n FROM s";
+    run_sql(&mut app, many).await;
+    app.focus = Focus::Results;
+    // A plain export says only the loaded rows went, and how to get all.
+    app.handle_key(key(KeyCode::Char('e')));
+    assert!(app.status.contains("10 rows loaded") && app.status.contains("export all"), "{}", app.status);
+    let exports = || {
+        let mut files: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|e| e == "csv"))
+            .collect();
+        files.sort();
+        files
+    };
+    for file in exports() {
+        std::fs::remove_file(file).unwrap();
+    }
+
+    app.export_all(ExportFormat::Csv);
+    loop {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+        if app.export_task.is_none() {
+            break;
+        }
+    }
+    assert!(app.status.starts_with("Exported all 25000 rows to"), "{}", app.status);
+    let text = std::fs::read_to_string(&exports()[0]).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!((lines.len(), lines[0], lines[1], lines[25000]), (25001, "n", "1", "25000"));
+    // The grid kept what it had; nothing more streams.
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows.len(), 10);
+    assert!(app.row_stream.is_none());
+
+    // Stopped part-way: the unfinished file goes.
+    std::fs::remove_file(&exports()[0]).unwrap();
+    run_sql(&mut app, many).await;
+    app.focus = Focus::Results;
+    app.export_all(ExportFormat::Json);
+    assert!(app.export_task.is_some());
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.export_task.is_none() && app.status.contains("Export stopped"), "{}", app.status);
+    // The export cleans up, then says it's done (and that's ignored).
+    loop {
+        let event = app.poll_db_event().await.unwrap();
+        let done = matches!(event.kind, DbEventKind::ExportDone(..));
+        app.handle_db_event(event);
+        if done {
+            break;
+        }
+    }
+    assert!(app.status.contains("Export stopped"), "{}", app.status);
+    let json_files = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "json"))
+        .count();
+    assert_eq!(json_files, 0);
+    // The connection is free for the next query.
+    run_sql(&mut app, "select 42").await;
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][0].as_deref(), Some("42"));
+}
+
 #[tokio::test]
 async fn autocomplete_from_catalog() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
