@@ -24,6 +24,7 @@ const SCHEMA_WIDTH: u16 = 30;
 /// Below this width the schema pane is hidden even when toggled on.
 const SCHEMA_MIN_TOTAL_WIDTH: u16 = 90;
 
+mod agents;
 mod chrome;
 mod connect;
 mod editor;

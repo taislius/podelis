@@ -107,6 +107,9 @@ impl App {
         if inside(hits.connection, x, y) && self.connected() {
             return self.show_connection_info();
         }
+        if inside(hits.agent_note, x, y) {
+            return self.open_agents();
+        }
         // The results pane's tabs.
         if y == hits.result_tabs_y
             && inside(hits.results, x, y)

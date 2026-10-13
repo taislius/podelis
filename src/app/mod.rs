@@ -22,18 +22,20 @@ use crate::parse::{ParsedScript, parse};
 use crate::settings::{EditorMode, Settings};
 use crate::sql;
 use crate::store::{self, ConnectionProfile, ConnectionStore, Project};
+pub use agents::{AgentQuery, AgentsView, short_dir, short_time};
 pub use find::FindBar;
 pub use grid::ResultGrid;
 pub use input::{InputResult, LineInput};
 use list::Nav;
 pub use overlay::Overlay;
 pub use params::ParamForm;
-pub use tabs::{AgentQuery, LibraryItem, LibraryView, TabMeta, TabPrompt, TabPromptKind};
+pub use tabs::{LibraryItem, LibraryView, TabMeta, TabPrompt, TabPromptKind};
 pub use tabs::{PlanSource, TabState};
 use vim::Vim;
 pub use vim::VimMode;
 
 mod activity;
+mod agents;
 mod compare;
 mod connections;
 mod edit;
@@ -402,6 +404,9 @@ pub struct Hits {
     pub schema_offset: usize,
     /// The connection in the status bar (a click shows its info).
     pub connection: Rect,
+    /// The note about what agents did, in the status bar (a click opens
+    /// the agent window).
+    pub agent_note: Rect,
     /// The project's name in the top bar (a click switches project).
     pub project: Rect,
     pub editor: Rect,
@@ -680,6 +685,15 @@ pub struct App {
     pub agent_log: Vec<AgentQuery>,
     /// The agent log file as it was read (path, modified, size).
     agent_log_stamp: Option<(PathBuf, std::time::SystemTime, u64)>,
+    /// The log by agent session, the most recently active first.
+    pub agent_sessions: Vec<crate::agents::Session>,
+    /// What agents did that's worth a look since the window was last open.
+    pub agent_alerts: crate::agents::Alerts,
+    agent_checked: Option<Instant>,
+    /// When the user last looked at what agents did, as last read.
+    agent_seen: Option<String>,
+    /// The agent activity window.
+    pub agents_view: Option<AgentsView>,
     /// "Export all rows" in progress: what stops it, and the file it writes.
     export_task: Option<(tokio::sync::oneshot::Sender<()>, PathBuf)>,
     pub fetching_more: bool,
@@ -840,6 +854,11 @@ impl App {
             row_stream: None,
             agent_log: Vec::new(),
             agent_log_stamp: None,
+            agent_sessions: Vec::new(),
+            agent_alerts: crate::agents::Alerts::default(),
+            agent_checked: None,
+            agent_seen: None,
+            agents_view: None,
             export_task: None,
             fetching_more: false,
             completion: None,
@@ -957,6 +976,7 @@ impl App {
         if self.current_project.as_deref() != Some(id) {
             self.save_draft();
             self.close_all_connections();
+            self.reset_agents();
             self.history = History::load_from(self.history_path(id));
             self.load_tabs(id);
             self.connections_selected = 0;

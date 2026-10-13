@@ -146,8 +146,12 @@ pub(super) fn draw_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
         left.extend(connection_status(app, (area.width as usize / 2).max(24)));
     }
 
-    // Rows and timing are in the results pane.
-    let right: Vec<Span> = Vec::new();
+    // Rows and timing are in the results pane. What agents did that's worth
+    // a look since the agent window was last open (a click opens it).
+    let mut right: Vec<Span> = Vec::new();
+    if let Some(note) = app.agent_note().filter(|_| matches!(app.screen, Screen::Query)) {
+        right.push(Span::styled(format!(" {note} "), bold(t.warn)));
+    }
 
     let left_w = Line::from(left.clone()).width() as u16;
     let right_w = Line::from(right.clone()).width() as u16;
@@ -163,6 +167,7 @@ pub(super) fn draw_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Paragraph::new(Line::from(right)).alignment(Alignment::Right), r);
     // Clicking the connection opens the connection info.
     app.hits.connection = Rect { x: l.x + mode_w, width: l.width.saturating_sub(mode_w), ..l };
+    app.hits.agent_note = if right_w > 0 { r } else { Rect::default() };
 
     // A message takes the middle; otherwise key hints. A run's outcome is
     // in the results pane, unless that's hidden (another pane zoomed).

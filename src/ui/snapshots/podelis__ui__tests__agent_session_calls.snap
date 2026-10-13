@@ -1,0 +1,18 @@
+---
+source: src/ui/tests.rs
+expression: "render(&mut app, 120, 14)"
+---
+" >_  PODĖLIS v0.0.0   │  project  shop ▼                                                                                "
+"┌ NAVIGATOR ────── 3 objects ┐┎ QUERY ──────┰──────────────────────────────────────────────────────────────────────────┐"
+"│ /┌ AGENT ACTIVITY · claude-code ──────────────────────────────────────────────────────────────────────────────────┐n │"
+"│ ▼│ /    3 of 3 calls                                                                                              │  │"
+"│ T│ claude-code 2.0.31 · session 4f1c9a2e · /src/shop · 10-13 09:15 – 10-13 09:18                                  │  │"
+"│  │! 09:18:44  prod  query  dry run: would change 2 row(s)  3 ms  update users set note = 'x' where id < 3         │──┘"
+"│  │! 09:16:30  prod  query  refused: “delete from users” is destructive  3 ms  delete from users                   │──┐"
+"│  │» 09:15:02  shop  query  42 row(s)  3 ms  select count(*) from orders                                           │  │"
+"│  │                                                                                                                │  │"
+"│  │                                                                                                                │  │"
+"│ V│                                                                                                                │  │"
+"│  └─────────────────────────────── ↵ details · o open in a tab · y copy SQL · / search · ! worth a look · Esc back ┘s │"
+"└────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────┘"
+" ● prod  db.internal:3306 · MySQL  3 row(s) in 4 ms                                                                     "

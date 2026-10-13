@@ -62,7 +62,8 @@ async fn main() -> Result<()> {
     let log_path = logging::init();
     let (store, store_warning) = ConnectionStore::load();
     if args.mcp {
-        std::process::exit(mcp::run(&store, args.project.as_deref()).await);
+        let name = args.name.clone().or_else(|| std::env::var("PODELIS_AGENT").ok());
+        std::process::exit(mcp::run(&store, args.project.as_deref(), name).await);
     }
     if args.doctor {
         let code = doctor::run(&store, store_warning.as_deref(), args.project.as_deref(), args.test_connections).await;

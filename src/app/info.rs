@@ -74,6 +74,8 @@ impl App {
             || (self.settings.keepalive > 0 && self.database.is_some())
             // A plan's age, kept current.
             || (self.tab.result_tab == ResultTab::Plan && self.tab.plan_source.is_some())
+            // What agents did, for the status bar's note.
+            || self.watching_agents()
     }
 
     /// Pings an idle connection every `keepalive` seconds: notices a dropped

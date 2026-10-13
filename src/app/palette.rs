@@ -13,6 +13,8 @@ pub enum Command {
     ExportInserts,
     /// Every row, not just those loaded.
     ExportAll(ExportFormat),
+    /// What AI agents did through `podelis mcp`.
+    AgentActivity,
     LoadMore,
     PipeRows,
     OpenRows,
@@ -38,6 +40,7 @@ impl Command {
             Command::ExportAll(ExportFormat::Csv),
             Command::ExportAll(ExportFormat::Json),
             Command::ExportAll(ExportFormat::Sql),
+            Command::AgentActivity,
             Command::LoadMore,
             Command::PipeRows,
             Command::OpenRows,
@@ -59,6 +62,7 @@ impl Command {
             Command::ExportAll(ExportFormat::Csv) => "Export all rows as CSV (not just those loaded)",
             Command::ExportAll(ExportFormat::Json) => "Export all rows as JSON (not just those loaded)",
             Command::ExportAll(ExportFormat::Sql) => "Export all rows as SQL INSERT statements",
+            Command::AgentActivity => "Agent activity: what AI agents ran (podelis mcp)",
             Command::LoadMore => "Load more rows",
             Command::PipeRows => "Pipe rows through a command (grep, sort, jq…)",
             Command::OpenRows => "Open rows in the viewer (less, VisiData…)",
@@ -104,6 +108,7 @@ impl Command {
             Command::SwitchTab(i) if i < 9 => format!("Ctrl+K {}", i + 1),
             Command::CopyDiagnostics
             | Command::ExportAll(_)
+            | Command::AgentActivity
             | Command::SwitchTab(_)
             | Command::CompareSchema(_)
             | Command::CompareRows(_) => String::new(),
@@ -247,6 +252,7 @@ impl App {
             Command::ExportJson => self.export(ExportFormat::Json),
             Command::ExportInserts => self.export(ExportFormat::Sql),
             Command::ExportAll(format) => self.export_all(format),
+            Command::AgentActivity => self.open_agents(),
             Command::LoadMore => self.load_more(),
             Command::PipeRows => self.open_pipe_prompt(),
             Command::OpenRows => self.open_in_viewer(),

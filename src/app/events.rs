@@ -348,6 +348,9 @@ impl App {
     pub fn tick_running(&mut self) {
         self.keepalive_tick();
         self.activity_tick();
+        if self.watching_agents() {
+            self.agents_tick();
+        }
         if let Some((deadline, limit)) = self.run_extra.deadline
             && self.executing
             && Instant::now() >= deadline

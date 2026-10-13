@@ -178,10 +178,28 @@ fn one_line(s: &str) -> String {
 /// One thing an agent did.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
-    /// When, as RFC 3339 local time.
+    /// When it finished (so it's logged in that order), as RFC 3339 local
+    /// time.
     pub at: String,
     /// The MCP client's name (e.g. `claude-code`).
     pub agent: String,
+    /// Its version and display title, as it reported them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_title: Option<String>,
+    /// What the user called this agent (`podelis mcp --name`, or
+    /// `PODELIS_AGENT`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// One `podelis mcp` run: the calls of one agent session (empty in
+    /// entries logged before sessions were).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub session: String,
+    /// The folder the agent started `podelis mcp` in: usually the project
+    /// it's working on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
     pub connection: String,
     /// The connection's engine, to read the SQL by (none if it wasn't one
     /// shared with agents).
@@ -205,8 +223,140 @@ pub struct Entry {
     pub refused: Option<String>,
 }
 
+impl Entry {
+    /// Changed data for real (a dry run changed nothing).
+    pub fn wrote(&self) -> bool {
+        !self.dry_run && self.changed.is_some_and(|n| n > 0)
+    }
+
+    fn when(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+        chrono::DateTime::parse_from_rfc3339(&self.at).ok()
+    }
+}
+
+/// One agent session: the calls of one `podelis mcp` run, newest first.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Session {
+    /// Empty for the entries logged before sessions were ("earlier").
+    pub id: String,
+    pub agent: String,
+    pub version: Option<String>,
+    pub title: Option<String>,
+    pub name: Option<String>,
+    pub dir: Option<String>,
+    /// When it started and was last active (as logged).
+    pub first: String,
+    pub last: String,
+    /// The connections it used, in the order it first did.
+    pub connections: Vec<String>,
+    pub refused: usize,
+    pub failed: usize,
+    /// Calls that changed data.
+    pub wrote: usize,
+    /// Writes run as a dry run (on production), which changed nothing.
+    pub dry_runs: usize,
+    /// Its entries, as indexes into the log the sessions were made from.
+    pub entries: Vec<usize>,
+}
+
+impl Session {
+    /// What to call it: the user's name for it, else the agent's title or
+    /// name.
+    pub fn label(&self) -> &str {
+        self.name.as_deref().or(self.title.as_deref()).unwrap_or(&self.agent)
+    }
+
+    pub fn calls(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+/// The log's entries (newest first) by session, the most recently active
+/// first.
+pub fn sessions<'a>(entries: impl IntoIterator<Item = &'a Entry>) -> Vec<Session> {
+    let mut out: Vec<Session> = Vec::new();
+    for (i, e) in entries.into_iter().enumerate() {
+        let at = if let Some(at) = out.iter().position(|s| s.id == e.session) {
+            at
+        } else {
+            out.push(Session {
+                id: e.session.clone(),
+                agent: e.agent.clone(),
+                version: e.agent_version.clone(),
+                title: e.agent_title.clone(),
+                name: e.name.clone(),
+                dir: e.dir.clone(),
+                last: e.at.clone(),
+                ..Session::default()
+            });
+            out.len() - 1
+        };
+        let s = &mut out[at];
+        s.first.clone_from(&e.at);
+        // Going back in time: what was used earliest ends up first.
+        s.connections.retain(|c| *c != e.connection);
+        s.connections.insert(0, e.connection.clone());
+        s.refused += usize::from(e.refused.is_some());
+        s.failed += usize::from(e.error.is_some());
+        s.wrote += usize::from(e.wrote());
+        s.dry_runs += usize::from(e.dry_run);
+        s.entries.push(i);
+    }
+    // By when they were last active (the log is in order, but entries
+    // written by several agents at once needn't be exactly).
+    let when = |at: &str| chrono::DateTime::parse_from_rfc3339(at).ok();
+    out.sort_by_key(|s| std::cmp::Reverse(when(&s.last)));
+    out
+}
+
+/// What agents did since the user last looked that's worth a look.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Alerts {
+    pub refused: usize,
+    pub failed: usize,
+    pub wrote: usize,
+    pub dry_runs: usize,
+}
+
+impl Alerts {
+    pub fn any(self) -> bool {
+        self.refused + self.failed + self.wrote + self.dry_runs > 0
+    }
+}
+
+/// The alerts among `entries` logged after `seen` (an RFC 3339 time); all
+/// of them if it's never been looked at. An entry whose time can't be read
+/// isn't new once anything has been looked at.
+pub fn alerts_since<'a>(entries: impl IntoIterator<Item = &'a Entry>, seen: Option<&str>) -> Alerts {
+    let seen = seen.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
+    let mut alerts = Alerts::default();
+    for e in entries.into_iter().filter(|e| seen.is_none_or(|seen| e.when().is_some_and(|at| at > seen))) {
+        alerts.refused += usize::from(e.refused.is_some());
+        alerts.failed += usize::from(e.error.is_some());
+        alerts.wrote += usize::from(e.wrote());
+        alerts.dry_runs += usize::from(e.dry_run);
+    }
+    alerts
+}
+
 pub fn log_path(config_dir: &Path, project_id: &str) -> PathBuf {
     config_dir.join("agents").join(format!("{project_id}.jsonl"))
+}
+
+/// When the user last looked at what agents did in a project.
+pub fn seen_path(config_dir: &Path, project_id: &str) -> PathBuf {
+    config_dir.join("agents").join(format!("{project_id}.seen"))
+}
+
+pub fn read_seen(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+pub fn write_seen(path: &Path, at: &str) {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = crate::store::write_atomic(path, at);
 }
 
 /// Adds `entry` to the log, private to the user. A statement that sets a
@@ -303,6 +453,43 @@ mod tests {
             assert!(refused(Write, Normal, sql), "{sql}");
             assert!(refused(Read, Normal, sql), "{sql}");
         }
+    }
+
+    #[test]
+    fn sessions_and_what_is_new() {
+        let entry = |session: &str, at: &str, conn: &str| Entry {
+            session: session.into(),
+            at: format!("2026-10-13T{at}:00+03:00"),
+            agent: "claude-code".into(),
+            connection: conn.into(),
+            ..Entry::default()
+        };
+        // Newest first, as the log is read.
+        let log = [
+            Entry { refused: Some("no".into()), ..entry("b", "10:05", "prod") },
+            Entry { changed: Some(2), ..entry("a", "10:04", "dev") },
+            entry("b", "10:03", "dev"),
+            Entry { dry_run: true, changed: Some(4), ..entry("a", "10:02", "prod") },
+            entry("a", "10:01", "dev"),
+            Entry { at: "not a time".into(), refused: Some("x".into()), ..entry("", "09:00", "dev") },
+        ];
+        let s = sessions(&log);
+        assert_eq!(s.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["b", "a", ""]);
+        assert_eq!(
+            (s[0].first.as_str(), s[0].last.as_str()),
+            ("2026-10-13T10:03:00+03:00", "2026-10-13T10:05:00+03:00")
+        );
+        assert_eq!(s[0].connections, ["dev", "prod"]);
+        // In the order first used: dev at 10:01, prod at 10:02, dev again.
+        assert_eq!(s[1].connections, ["dev", "prod"]);
+        assert_eq!((s[0].calls(), s[0].refused, s[1].wrote, s[1].dry_runs), (2, 1, 1, 1));
+        assert_eq!(s[1].entries, [1, 3, 4]);
+
+        assert_eq!(alerts_since(&log, None), Alerts { refused: 2, failed: 0, wrote: 1, dry_runs: 1 });
+        let since = alerts_since(&log, Some("2026-10-13T10:04:00+03:00"));
+        assert_eq!(since, Alerts { refused: 1, failed: 0, wrote: 0, dry_runs: 0 }, "an unreadable time isn't new");
+        // Another offset, the same moment.
+        assert!(!alerts_since(&log, Some("2026-10-13T07:05:00+00:00")).any());
     }
 
     #[test]

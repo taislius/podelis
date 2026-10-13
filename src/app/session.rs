@@ -163,6 +163,7 @@ impl App {
             self.projects_selected = self.store.projects.iter().position(|p| &p.id == id).unwrap_or(0);
         }
         self.close_all_connections();
+        self.reset_agents();
         // Opening it again reloads its tabs and session from disk.
         self.left_project = self.current_project.take();
         self.menu = None;

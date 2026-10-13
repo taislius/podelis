@@ -234,7 +234,7 @@ the terminal, the result viewer and the crash log.
 With
 .Fl -connections ,
 also test every saved connection of the project.
-.It Cm mcp Op Fl p Ar project
+.It Cm mcp Oo Fl p Ar project Oc Op Fl -name Ar label
 Serve the project's connections shared with AI agents (the
 .Dq AI agents
 setting of a connection) to an agent over MCP, on standard input and
@@ -248,7 +248,13 @@ or
 .Ql COMMIT ,
 destructive statements are refused, and on production connections every
 call is rolled back, so writes only run as a dry run.
-Everything an agent runs is logged, and shows in the query library.
+Everything an agent runs is logged, with the agent's name and version,
+the session and the folder it was started in, and shows in the agent
+activity window.
+.Fl -name
+(or the
+.Ev PODELIS_AGENT
+environment variable) sets what to call the agent in it.
 .El
 .Sh SAFETY
 .Fl e

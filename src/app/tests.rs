@@ -780,25 +780,120 @@ async fn history_leaves_out_passwords() {
     assert!(kept.iter().any(|q| q == "select 2") && !kept.iter().any(|q| q.contains("hunter2")), "{kept:?}");
 }
 
-/// A long agent log doesn't push your own history out of the library, and
-/// an older agent query is still found by searching.
+/// The agent activity window: sessions, a session's calls, a call in full,
+/// opening one in a tab; and the status bar's note until it's looked at.
 #[test]
-fn agent_queries_leave_room_for_history() {
+fn agent_activity_by_session() {
+    use crate::agents::{Entry, append, log_path};
     let (mut app, dir) = test_app();
     app.set_data_dir(dir.path().to_path_buf());
-    let log = crate::agents::log_path(dir.path(), &project_id(&app));
-    for i in 0..350 {
-        let entry = crate::agents::Entry { agent: "bot".into(), sql: format!("select {i}"), ..Default::default() };
-        crate::agents::append(&log, entry).unwrap();
+    let shared = ConnectForm { name: "dev".into(), agents: crate::db::AgentAccess::Read, ..ConnectForm::new() };
+    app.store.upsert(&project_id(&app), None, shared.to_profile()).unwrap();
+    let log = log_path(dir.path(), &project_id(&app));
+    let entry = |session: &str, at: &str, sql: &str| Entry {
+        session: session.into(),
+        at: format!("2026-10-13T{at}:00+03:00"),
+        agent: "claude-code".into(),
+        agent_version: Some("2.0".into()),
+        dir: Some("/src/shop".into()),
+        connection: "dev".into(),
+        tool: "query".into(),
+        sql: sql.into(),
+        ..Entry::default()
+    };
+    append(&log, entry("a", "09:00", "select 1")).unwrap();
+    append(&log, Entry { name: Some("billing".into()), ..entry("b", "10:00", "select * from invoices") }).unwrap();
+    append(&log, Entry { refused: Some("destructive".into()), ..entry("a", "11:00", "delete from users") }).unwrap();
+
+    // Nothing looked at yet: the note says what's worth a look.
+    app.agent_checked = None;
+    app.update_agent_alerts();
+    assert_eq!(app.agent_note().as_deref(), Some("agents: 1 refused"));
+
+    app.open_agents();
+    assert_eq!(app.agent_note(), None, "looked at");
+    let labels: Vec<&str> = app.agents_rows().iter().map(|&i| app.agent_sessions[i].label()).collect();
+    assert_eq!(labels, ["claude-code", "billing"], "the most recently active first");
+    // Only what's worth a look; then search.
+    app.handle_agents_key(key(KeyCode::Char('!')));
+    assert_eq!(app.agents_rows().len(), 1);
+    app.handle_agents_key(key(KeyCode::Char('!')));
+    app.handle_agents_key(key(KeyCode::Char('/')));
+    for c in "billing".chars() {
+        app.handle_agents_key(key(KeyCode::Char(c)));
     }
-    app.history.push("select 'mine'");
-    app.open_library();
-    let items = app.library_items();
-    assert!(items.contains(&LibraryItem::History("select 'mine'".into())));
-    app.library_view.as_mut().unwrap().query = LineInput::new("select 3");
-    let found = app.library_items();
-    let oldest = found.iter().any(|i| matches!(i, LibraryItem::Agent(n) if app.agent_log[*n].entry.sql == "select 3"));
-    assert!(oldest, "the oldest entries are searched too");
+    app.handle_agents_key(key(KeyCode::Enter));
+    assert_eq!(app.agents_rows().len(), 1);
+    app.handle_agents_key(key(KeyCode::Char('/')));
+    app.handle_agents_key(key(KeyCode::Esc));
+
+    // A session's calls, newest first, and one in full.
+    app.handle_agents_key(key(KeyCode::Enter));
+    let calls: Vec<&str> = app.agents_rows().iter().map(|&i| app.agent_log[i].entry.sql.as_str()).collect();
+    assert_eq!(calls, ["delete from users", "select 1"]);
+    app.handle_agents_key(key(KeyCode::Enter));
+    let detail = &app.cell_view.as_ref().unwrap().text;
+    assert!(detail.contains("Agent       claude-code 2.0") && detail.contains("Refused: destructive"), "{detail}");
+    assert_eq!(app.top_overlay(), Some(Overlay::CellView), "in front of the window");
+    app.cell_view = None;
+
+    // Open in a tab: named for the agent; the status says where it ran.
+    app.handle_agents_key(key(KeyCode::Char('o')));
+    assert!(app.agents_view.is_none());
+    assert_eq!(app.tab.editor.text(), "delete from users");
+    assert_eq!(app.tabs[app.active_tab].name, "claude-code");
+    assert!(app.status.contains("ran this on dev"), "{}", app.status);
+
+    // Something new after looking brings the note back.
+    append(&log, Entry { changed: Some(3), ..entry("a", "12:00", "update t set x = 1 where id = 1") }).unwrap();
+    app.agent_checked = None;
+    app.update_agent_alerts();
+    assert_eq!(app.agent_note().as_deref(), Some("agents: 1 wrote"));
+
+    // Another project, nothing shared: no note, nothing from this one.
+    let other = app.store.add_project("other").unwrap();
+    app.open_project(&other);
+    assert_eq!(app.agent_note(), None);
+    assert!(app.agent_log.is_empty() && app.agents_view.is_none());
+}
+
+/// While the agent window is open, new calls don't move its rows; Esc out
+/// of a session found by searching goes back to it, still searched.
+#[test]
+fn agent_window_stays_put() {
+    use crate::agents::{Entry, append, log_path};
+    let (mut app, dir) = test_app();
+    app.set_data_dir(dir.path().to_path_buf());
+    let shared = ConnectForm { name: "dev".into(), agents: crate::db::AgentAccess::Read, ..ConnectForm::new() };
+    app.store.upsert(&project_id(&app), None, shared.to_profile()).unwrap();
+    let log = log_path(dir.path(), &project_id(&app));
+    for (session, at, name) in [("a", "09", "alpha"), ("b", "10", "billing"), ("c", "11", "cron")] {
+        let at = format!("2026-10-13T{at}:00:00+03:00");
+        let entry =
+            Entry { session: session.into(), at, agent: "bot".into(), name: Some(name.into()), ..Entry::default() };
+        append(&log, entry).unwrap();
+    }
+    app.open_agents();
+    app.handle_agents_key(key(KeyCode::Char('/')));
+    for c in "bill".chars() {
+        app.handle_agents_key(key(KeyCode::Char(c)));
+    }
+    app.handle_agents_key(key(KeyCode::Enter));
+    app.handle_agents_key(key(KeyCode::Enter));
+    assert_eq!(app.agents_view.as_ref().unwrap().session.map(|i| app.agent_sessions[i].label()), Some("billing"));
+
+    // Another agent call meanwhile: the open window isn't reloaded.
+    let late = Entry { session: "d".into(), at: "2026-10-13T12:00:00+03:00".into(), ..Entry::default() };
+    append(&log, late).unwrap();
+    app.agent_checked = None;
+    app.agents_tick();
+    assert_eq!(app.agent_sessions.len(), 3);
+
+    app.handle_agents_key(key(KeyCode::Esc));
+    let view = app.agents_view.as_ref().unwrap();
+    assert_eq!(view.filter.text(), "bill");
+    let rows = app.agents_rows();
+    assert_eq!(app.agent_sessions[rows[view.selected]].label(), "billing");
 }
 
 /// A SQLite connection's timeout stops a query that runs too long.

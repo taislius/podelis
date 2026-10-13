@@ -16,6 +16,7 @@ impl App {
             Some(Overlay::RowForm) => return self.handle_row_form_key(key),
             Some(Overlay::Palette) => return self.handle_palette_key(key),
             Some(Overlay::Activity) => return self.handle_activity_key(key),
+            Some(Overlay::Agents) => return self.handle_agents_key(key),
             Some(Overlay::TxPicker) => return self.handle_tx_picker_key(key),
             Some(Overlay::Review) => return self.handle_review_key(key),
             Some(Overlay::ParamForm) => return self.handle_param_key(key),
@@ -160,6 +161,7 @@ impl App {
                 | Overlay::Menu
                 | Overlay::CellView
                 | Overlay::Activity
+                | Overlay::Agents
                 | Overlay::TxPicker
                 | Overlay::Review,
             ) => {}

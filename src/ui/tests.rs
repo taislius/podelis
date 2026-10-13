@@ -456,47 +456,68 @@ fn lint_warning_names_its_rule() {
     assert_snapshot!(render(&mut app, 160, 14));
 }
 
-/// What AI agents ran shows in the query library (F3), newest first, with
-/// the ones worth a look marked; searching finds them by agent, connection
-/// or SQL, and Enter opens one in a tab named for the agent.
+/// The agent activity window: the sessions, then one session's calls; and
+/// the status bar's note about what agents did since it was last open.
 #[test]
-fn agent_queries_in_the_library() {
+fn agent_activity_window() {
     use crate::agents::{Entry, append, log_path};
     let (mut app, dir) = query_app();
     app.set_data_dir(dir.path().to_path_buf());
-    let log = log_path(dir.path(), app.current_project.as_deref().unwrap());
-    let entry = |at: &str, sql: &str| Entry {
-        at: format!("2026-10-13T{at}:00+03:00"),
+    let project = app.current_project.clone().unwrap();
+    let mut shared = app.store.project(&project).unwrap().connections[0].clone();
+    shared.agents = crate::db::AgentAccess::Read;
+    let name = shared.name.clone();
+    app.store.upsert(&project, Some(&name), shared).unwrap();
+    let log = log_path(dir.path(), &project);
+    let entry = |session: &str, at: &str, conn: &str, sql: &str| Entry {
+        session: session.into(),
+        at: format!("2026-10-13T{at}+03:00"),
         agent: "claude-code".into(),
-        connection: "shop".into(),
+        agent_version: Some("2.0.31".into()),
+        dir: Some("/src/shop".into()),
+        connection: conn.into(),
         tool: "query".into(),
         sql: sql.into(),
         ms: 3,
         ..Entry::default()
     };
-    append(&log, Entry { rows: Some(42), ..entry("09:15", "select count(*) from orders") }).unwrap();
+    append(&log, Entry { rows: Some(42), ..entry("4f1c9a2e", "09:15:02", "shop", "select count(*) from orders") })
+        .unwrap();
     append(
         &log,
-        Entry { refused: Some("“delete from users” is destructive".into()), ..entry("09:16", "delete from users") },
+        Entry {
+            name: Some("billing".into()),
+            rows: Some(7),
+            ..entry("77ab01cd", "09:40:10", "shop", "select * from invoices")
+        },
     )
     .unwrap();
-    append(&log, Entry { rows: Some(3), ..entry("09:17", "select * from users where email = null") }).unwrap();
     append(
         &log,
-        Entry { dry_run: true, changed: Some(2), ..entry("09:18", "update users set note = 'x' where id < 3") },
+        Entry {
+            refused: Some("“delete from users” is destructive".into()),
+            ..entry("4f1c9a2e", "09:16:30", "prod", "delete from users")
+        },
     )
     .unwrap();
-    app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
-    assert_snapshot!(render(&mut app, 120, 16));
+    append(
+        &log,
+        Entry {
+            dry_run: true,
+            changed: Some(2),
+            ..entry("4f1c9a2e", "09:18:44", "prod", "update users set note = 'x' where id < 3")
+        },
+    )
+    .unwrap();
+    app.update_agent_alerts();
+    let screen = render(&mut app, 120, 14);
+    assert!(screen.contains("agents: 1 refused · 1 dry run"), "{screen}");
 
-    for c in "refused".chars() {
-        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
-    }
-    assert_eq!(app.library_items(), [crate::app::LibraryItem::Agent(2)]);
-    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.tab.editor.text(), "delete from users");
-    assert_eq!(app.tabs[app.active_tab].name, "claude-code");
-    assert!(app.status.contains("ran this on shop; here it runs on this tab's connection"), "{}", app.status);
+    app.open_agents();
+    assert_snapshot!("agent_sessions", render(&mut app, 120, 14));
+    app.handle_agents_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.handle_agents_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_snapshot!("agent_session_calls", render(&mut app, 120, 14));
 }
 
 #[test]

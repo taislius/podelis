@@ -99,6 +99,12 @@ pub struct Server {
     store: Option<PathBuf>,
     open: Arc<tokio::sync::Mutex<HashMap<String, Open>>>,
     log: PathBuf,
+    /// This run, in the log: one agent session.
+    session: String,
+    /// The folder the agent started it in.
+    dir: Option<String>,
+    /// What the user called the agent (`--name`, `PODELIS_AGENT`).
+    name: Option<String>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -113,29 +119,28 @@ fn failed(s: impl Into<String>) -> Result<CallToolResult, ErrorData> {
     Ok(CallToolResult::error(vec![ContentBlock::text(s.into())]))
 }
 
-/// A log entry for SQL an agent sent to `connection`, stamped now.
-fn new_entry(peer: &Peer<RoleServer>, connection: &str, engine: Option<Engine>, tool: &str, sql: &str) -> Entry {
-    Entry {
-        at: chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
-        agent: agent_name(peer),
-        connection: connection.to_string(),
-        engine,
-        tool: tool.to_string(),
-        sql: sql.trim().to_string(),
-        ..Entry::default()
-    }
-}
-
-fn agent_name(peer: &Peer<RoleServer>) -> String {
-    peer.peer_info().map_or_else(|| "agent".to_string(), |i| i.client_info.name.clone())
-}
-
 #[tool_router]
 impl Server {
     pub fn new(project_id: String, project_name: String, connections: Vec<ConnectionProfile>, log: PathBuf) -> Self {
         let connections = connections.into_iter().filter(|c| c.agents != AgentAccess::None).collect();
-        let open = Arc::default();
-        Self { project_id, project_name, connections, store: None, open, log, tool_router: Self::tool_router() }
+        Self {
+            project_id,
+            project_name,
+            connections,
+            store: None,
+            open: Arc::default(),
+            log,
+            session: uuid::Uuid::new_v4().simple().to_string()[..8].to_string(),
+            dir: std::env::current_dir().ok().map(|d| d.display().to_string()),
+            name: None,
+            tool_router: Self::tool_router(),
+        }
+    }
+
+    /// What the user calls this agent, in the log.
+    pub fn named(mut self, name: Option<String>) -> Self {
+        self.name = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+        self
     }
 
     /// Reads the shared connections from `store` on each call.
@@ -270,7 +275,7 @@ impl Server {
         };
         let _turn = turn.lock().await;
         let engine = db.engine();
-        let mut entry = new_entry(&peer, &profile.name, Some(engine), "query", &args.sql);
+        let mut entry = self.entry(&peer, &profile.name, Some(engine), "query", &args.sql);
         let wrap = match agents::verdict(profile.agents, profile.mode, &args.sql, engine) {
             Verdict::Run(wrap) => wrap,
             Verdict::Refuse(why) => {
@@ -319,7 +324,7 @@ impl Server {
         };
         let _turn = turn.lock().await;
         let engine = db.engine();
-        let mut entry = new_entry(&peer, &profile.name, Some(engine), "explain", &args.sql);
+        let mut entry = self.entry(&peer, &profile.name, Some(engine), "explain", &args.sql);
         // One statement, planned in a read-only transaction: nothing after
         // it can ride along, and nothing in it can write.
         if let Err(why) = agents::explainable(&args.sql, engine) {
@@ -388,6 +393,27 @@ impl Server {
         Ok((open.db.clone(), profile, Arc::clone(&open.turn)))
     }
 
+    /// A log entry for SQL an agent sent to `connection`, stamped now, with
+    /// who sent it: the client as it reported itself, this session, its
+    /// folder and the user's name for it.
+    fn entry(&self, peer: &Peer<RoleServer>, connection: &str, engine: Option<Engine>, tool: &str, sql: &str) -> Entry {
+        let client = peer.peer_info().map(|i| i.client_info.clone());
+        Entry {
+            at: chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+            agent: client.as_ref().map_or_else(|| "agent".to_string(), |c| c.name.clone()),
+            agent_version: client.as_ref().map(|c| c.version.clone()).filter(|v| !v.is_empty()),
+            agent_title: client.and_then(|c| c.title),
+            name: self.name.clone(),
+            session: self.session.clone(),
+            dir: self.dir.clone(),
+            connection: connection.to_string(),
+            engine,
+            tool: tool.to_string(),
+            sql: sql.trim().to_string(),
+            ..Entry::default()
+        }
+    }
+
     /// Logs SQL meant for a connection that couldn't be used (not shared,
     /// or it wouldn't open), and tells the agent why.
     fn not_opened(
@@ -403,13 +429,16 @@ impl Server {
         let entry = Entry {
             refused: shared.is_none().then(|| why.clone()),
             error: shared.is_some().then(|| why.clone()),
-            ..new_entry(peer, connection, shared.map(|c| c.engine), tool, sql)
+            ..self.entry(peer, connection, shared.map(|c| c.engine), tool, sql)
         };
         self.write_log(entry);
         failed(why)
     }
 
-    fn write_log(&self, entry: Entry) {
+    /// Logs `entry`, stamped now: when it finished, so the log is in that
+    /// order (and "seen" in Podėlis can't miss a long call).
+    fn write_log(&self, mut entry: Entry) {
+        entry.at = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
         if let Err(e) = agents::append(&self.log, entry) {
             tracing::warn!(error = %e, "couldn't write the agent log");
         }
@@ -540,7 +569,7 @@ impl ServerHandler for Server {
 
 /// `podelis mcp`: serves the project's shared connections on stdin and
 /// stdout until the agent closes them. Returns the exit code.
-pub async fn run(store: &ConnectionStore, project: Option<&str>) -> i32 {
+pub async fn run(store: &ConnectionStore, project: Option<&str>, name: Option<String>) -> i32 {
     let found = match project {
         Some(p) => store.project_by_name(p),
         None => store.last_project.as_deref().and_then(|id| store.project(id)),
@@ -554,7 +583,8 @@ pub async fn run(store: &ConnectionStore, project: Option<&str>) -> i32 {
     };
     let log = agents::log_path(&store::config_dir(), &project.id);
     let server = Server::new(project.id.clone(), project.name.clone(), project.connections.clone(), log)
-        .reading(store::config_dir().join("connections.toml"));
+        .reading(store::config_dir().join("connections.toml"))
+        .named(name);
     match server.serve(rmcp::transport::stdio()).await {
         Ok(service) => {
             let _ = service.waiting().await;
@@ -653,7 +683,8 @@ mod tests {
                 sqlite("hidden", &hidden, AgentAccess::None, ConnectionMode::Normal),
             ],
             log.clone(),
-        );
+        )
+        .named(Some(" tester ".into()));
         let client = connect(server).await;
         let q = |conn: &str, sql: &str| serde_json::json!({ "connection": conn, "sql": sql });
 
@@ -703,6 +734,13 @@ mod tests {
 
         let entries = agents::read(&log);
         assert!(entries.iter().all(|e| e.agent == "test-agent"));
+        // Who it was: the client as it reported itself, this run, its
+        // folder, and the user's name for it.
+        let first = &entries[0];
+        assert_eq!(first.session.len(), 8);
+        assert!(entries.iter().all(|e| e.session == first.session));
+        assert_eq!((first.agent_version.as_deref(), first.name.as_deref()), (Some("1"), Some("tester")));
+        assert_eq!(first.dir, std::env::current_dir().ok().map(|d| d.display().to_string()));
         let kinds: Vec<(&str, bool, bool, bool)> = entries
             .iter()
             .map(|e| (e.connection.as_str(), e.refused.is_some(), e.error.is_some(), e.dry_run))

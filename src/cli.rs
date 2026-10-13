@@ -14,7 +14,7 @@ use crate::store::{self, ConnectionStore};
 pub const USAGE: &str = "\
 Usage: podelis [OPTIONS] [CONNECTION]
        podelis doctor [-p <project>] [--connections]
-       podelis mcp [-p <project>]
+       podelis mcp [-p <project>] [--name <label>]
 
 CONNECTION is a URL (postgres://…, mysql://…, sqlite:…), a SQLite file, or
 the name of a saved connection in the project. Without one, Podėlis reopens
@@ -42,6 +42,8 @@ Options:
       --table <name>     Table for --import (default: from the file name)
       --delimiter <c>    Separator for --import: one character, or tab
                          (default: from the file's first line)
+      --name <label>     For mcp: what to call this agent in the log
+                         (default: $PODELIS_AGENT, else the agent's own name)
   -h, --help             Show this help
   -V, --version          Show the version
 
@@ -76,6 +78,8 @@ pub struct Args {
     pub doctor: bool,
     /// `mcp`: serve the shared connections to an AI agent.
     pub mcp: bool,
+    /// `mcp --name`: what to call the agent in the log.
+    pub name: Option<String>,
     /// `doctor --connections`.
     pub test_connections: bool,
 }
@@ -109,6 +113,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> ParseOutcome {
             }
             "--import" => value(&arg).map(|v| out.import = Some(v)),
             "--table" => value(&arg).map(|v| out.table = Some(v)),
+            "--name" => value(&arg).map(|v| out.name = Some(v)),
             "--delimiter" => value(&arg).and_then(|v| {
                 out.delimiter = Some(match v.as_str() {
                     "tab" | "\\t" | "\t" => b'\t',
