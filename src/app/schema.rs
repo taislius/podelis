@@ -61,6 +61,23 @@ impl App {
         self.cell_view = Some(CellView::definition(title, table_definition(engine, table)));
     }
 
+    /// `f` in the navigator: the table's neighbours through foreign keys,
+    /// two steps each way.
+    pub(super) fn show_related(&mut self, t: usize) {
+        let Some(db) = self.database.clone() else { return };
+        let Some(table) = self.schema.as_ref().and_then(|p| p.tables.get(t)) else { return };
+        let (schema, name) = (table.info.schema.clone(), table.info.name.clone());
+        let send = self.sender();
+        tokio::spawn(async move {
+            let text = db
+                .links()
+                .await
+                .map(|links| crate::related::describe(&links, &schema, &name))
+                .map_err(|e| format!("Couldn't read the foreign keys: {}", crate::db::error_message(&e)));
+            send(DbEventKind::Definition(format!("RELATED · {name}"), text));
+        });
+    }
+
     /// ←/→ in a navigator definition: the previous or next table's, view's
     /// or function's, selecting it in the navigator too.
     pub(super) fn step_definition(&mut self, back: bool) {

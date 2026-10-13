@@ -193,6 +193,12 @@ pub trait Dialect: Sync {
     }
     /// The result an EXPLAIN returned, as a readable tree with notes.
     fn format_plan(&self, columns: &[String], rows: &[Vec<Option<String>>]) -> Option<Plan>;
+    /// The tables a plan (as `explain` gives it) reads in full, with the
+    /// rows it expects to read where it says. A scan a `LIMIT` stops early
+    /// (nothing in between that needs every row) doesn't count.
+    fn full_scans(&self, _columns: &[String], _rows: &[Vec<Option<String>>]) -> Vec<Scan> {
+        Vec::new()
+    }
 
     /// An INSERT of a row with every column at its default.
     fn insert_defaults(&self, table: &str) -> String {
@@ -248,5 +254,25 @@ impl Engine {
     /// The engine a URL scheme selects.
     pub fn from_scheme(scheme: &str) -> Option<Engine> {
         Engine::ALL.into_iter().find(|e| e.dialect().url_schemes().iter().any(|s| s.eq_ignore_ascii_case(scheme)))
+    }
+}
+
+/// A table a plan reads in full: its schema where the plan says, and the
+/// rows it expects to read where it says.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Scan {
+    pub schema: Option<String>,
+    pub table: String,
+    pub rows: Option<f64>,
+}
+
+impl Scan {
+    pub fn new(table: &str, rows: Option<f64>) -> Self {
+        Scan { schema: None, table: table.to_string(), rows }
+    }
+
+    /// `schema.table`, or the table.
+    pub fn name(&self) -> String {
+        self.schema.as_ref().map_or_else(|| self.table.clone(), |s| format!("{s}.{}", self.table))
     }
 }

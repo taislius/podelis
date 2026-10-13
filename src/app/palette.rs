@@ -26,6 +26,13 @@ pub enum Command {
     SwitchTab(usize),
     /// Compare with another tab's connection (or the only other one).
     CompareSchema(Option<u64>),
+    /// Run the last query again every this many seconds.
+    Watch(u64),
+    /// Save this connection's schema to a file, to compare with later.
+    SnapshotSchema,
+    /// Compare the schema now with a saved snapshot (by its place in the
+    /// list, newest first).
+    CompareSnapshot(usize),
     CompareRows(Option<u64>),
 }
 
@@ -72,6 +79,9 @@ impl Command {
             Command::Quit => "Quit",
             Command::SwitchTab(_) => "Switch to tab",
             Command::CompareSchema(_) => "Compare the schema with another connection",
+            Command::SnapshotSchema => "Save a schema snapshot, to compare with later",
+            Command::Watch(_) => "Watch: run the query again every few seconds",
+            Command::CompareSnapshot(_) => "Compare the schema with a saved snapshot",
             Command::CompareRows(_) => "Compare the query's rows with another connection",
         }
     }
@@ -82,6 +92,12 @@ impl Command {
             Command::SwitchTab(i) => {
                 format!("Switch to tab: {}", app.tabs.get(i).map_or("", |t| t.name.as_str()))
             }
+            Command::Watch(0) => "Stop watching the query".to_string(),
+            Command::Watch(s) => format!("Watch: run the query again every {s} s, marking what changed"),
+            Command::CompareSnapshot(i) => match app.palette.as_ref().and_then(|p| p.snapshots.get(i)) {
+                Some(s) => format!("Compare the schema with the snapshot: {} · {}", s.connection, s.taken),
+                None => self.describe().to_string(),
+            },
             Command::CompareSchema(Some(id)) | Command::CompareRows(Some(id)) => {
                 let name = app.other_connections().into_iter().find(|(i, _)| *i == id).map(|(_, n)| n);
                 let what = if matches!(self, Command::CompareSchema(_)) { "schema" } else { "query's rows" };
@@ -111,6 +127,9 @@ impl Command {
             | Command::AgentActivity
             | Command::SwitchTab(_)
             | Command::CompareSchema(_)
+            | Command::SnapshotSchema
+            | Command::Watch(_)
+            | Command::CompareSnapshot(_)
             | Command::CompareRows(_) => String::new(),
         }
     }
@@ -128,6 +147,9 @@ pub struct Palette {
     /// The menu of letters is shown (it waits for `MENU_DELAY` first).
     pub menu: bool,
     opened: Instant,
+    /// The saved schema snapshots, read once when it opens (it's searched
+    /// on every key).
+    snapshots: Vec<crate::snapshots::Saved>,
 }
 
 impl App {
@@ -139,6 +161,7 @@ impl App {
             searching: false,
             menu: menu_now,
             opened: Instant::now(),
+            snapshots: self.snapshots(),
         });
         if !menu_now {
             let key = self.keymap.short_label(Action::Palette);
@@ -170,9 +193,17 @@ impl App {
             many => many.iter().map(|(id, _)| Some(*id)).collect(),
         };
         let compare = others.iter().flat_map(|id| [Command::CompareSchema(*id), Command::CompareRows(*id)]);
+        // The newest saved schema snapshots, one entry each.
+        let saved = self.palette.as_ref().map_or(0, |p| p.snapshots.len());
+        let snapshots = (0..saved.min(20)).map(Command::CompareSnapshot);
+        // While watching, a way to stop that isn't Esc (vim's in the editor).
+        let watch = if self.watch.is_some() { vec![0] } else { watch::EVERY.to_vec() };
         Command::all()
             .into_iter()
             .chain(compare)
+            .chain(std::iter::once(Command::SnapshotSchema))
+            .chain(watch.into_iter().map(Command::Watch))
+            .chain(snapshots)
             .chain(tabs)
             .filter(|c| {
                 let text = c.text(self).to_lowercase();
@@ -244,6 +275,12 @@ impl App {
         }
     }
 
+    /// What the palette says for `command`.
+    #[cfg(test)]
+    pub(super) fn palette_command_text(&self, command: Command) -> String {
+        command.text(self)
+    }
+
     pub(super) fn run_command(&mut self, command: Command) {
         match command {
             Command::Action(a) => self.run_action(a),
@@ -265,6 +302,10 @@ impl App {
             Command::Quit => self.request_quit(),
             Command::SwitchTab(i) => self.switch_tab(i),
             Command::CompareSchema(id) => self.compare_schema(id),
+            Command::SnapshotSchema => self.snapshot_schema(),
+            Command::Watch(0) => self.stop_watch(""),
+            Command::Watch(s) => self.start_watch(s),
+            Command::CompareSnapshot(i) => self.compare_snapshot(i),
             Command::CompareRows(id) => self.compare_rows(id),
         }
     }

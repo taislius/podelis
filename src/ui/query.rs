@@ -665,11 +665,13 @@ pub(super) fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
         keys.push(Span::styled(" t ", bold(t.on_accent).bg(t.ok)));
         keys.push(Span::styled(" in a transaction, review first   ", fg(t.text)));
     }
+    // An agent's write: only `n` or Esc say no, so typing can't.
+    let agent = matches!(confirm.action, crate::app::ConfirmAction::AgentWrite(_));
     lines.push(Line::from(vec![
         Span::styled(" y ", bold(t.on_accent).bg(color)),
         Span::styled(" yes   ", fg(t.text)),
-        Span::styled(" any other key ", bold(t.text).bg(t.active)),
-        Span::styled(" cancel", muted()),
+        Span::styled(if agent { " n / Esc " } else { " any other key " }, bold(t.text).bg(t.active)),
+        Span::styled(if agent { " no" } else { " cancel" }, muted()),
     ]));
     if !keys.is_empty() {
         lines.push(Line::from(keys));

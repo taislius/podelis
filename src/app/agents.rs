@@ -30,6 +30,8 @@ impl AgentQuery {
             Some(format!("failed: {e}"))
         } else if entry.dry_run {
             Some(format!("dry run: would change {} row(s)", entry.changed.unwrap_or(0)))
+        } else if entry.approved {
+            Some(format!("approved by you: changed {} row(s)", entry.changed.unwrap_or(0)))
         } else if entry.changed.is_some_and(|n| n > 0) {
             Some(format!("changed {} row(s)", entry.changed.unwrap_or(0)))
         } else {
@@ -139,6 +141,49 @@ impl App {
             .as_deref()
             .and_then(|id| self.store.project(id))
             .is_some_and(|p| p.connections.iter().any(|c| c.agents != crate::db::AgentAccess::None))
+    }
+
+    fn pending_dir(&self) -> Option<std::path::PathBuf> {
+        Some(crate::agents::pending_dir(self.data_dir.as_ref()?, self.current_project.as_deref()?))
+    }
+
+    /// Every second: an agent's write waiting for the user's answer is
+    /// asked about (once nothing else is).
+    pub(super) fn approvals_tick(&mut self) {
+        if self.confirm.is_some() {
+            return;
+        }
+        let Some(dir) = self.pending_dir() else { return };
+        let Some(request) = crate::agents::pending(&dir).into_iter().next() else { return };
+        let place = if request.production { " (PRODUCTION)" } else { "" };
+        let mut details: Vec<String> = request.sql.lines().take(12).map(str::to_string).collect();
+        if request.sql.lines().count() > 12 {
+            details.push("…".to_string());
+        }
+        details.push(String::new());
+        details.push(request.dry_run.clone());
+        self.notification = Some(format!("{} asks to write on {}", request.agent, request.connection));
+        self.agent_asked = Some(Instant::now());
+        self.confirm = Some(Confirm {
+            message: format!("{} asks to write on {}{place}. Allow it?", request.agent, request.connection),
+            details,
+            danger: request.production,
+            action: ConfirmAction::AgentWrite(request),
+            offer_transaction: false,
+        });
+    }
+
+    pub(super) fn answer_agent(&mut self, request: &crate::agents::Request, approve: bool) {
+        let Some(dir) = self.pending_dir() else { return };
+        let what = if approve { "Approved" } else { "Said no to" };
+        if crate::agents::answer(&dir, &request.id, approve) {
+            self.set_status(format!("{what} {}'s write on {}", request.agent, request.connection), false);
+        } else {
+            self.set_status(
+                format!("{} stopped waiting for an answer: Agent activity says whether it ran", request.agent),
+                true,
+            );
+        }
     }
 
     /// Every couple of seconds: what agents did since the user last looked.

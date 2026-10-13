@@ -115,6 +115,95 @@ impl App {
         self.cell_view = Some(CellView { sql, ..CellView::new(format!("SCHEMA · {this} ↔ {}", other.name), text) });
     }
 
+    /// The project's schema snapshots, newest first.
+    pub(super) fn snapshots(&self) -> Vec<crate::snapshots::Saved> {
+        match (&self.data_dir, &self.current_project) {
+            (Some(dir), Some(id)) => crate::snapshots::list(&crate::snapshots::dir(dir, id)),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Saves this connection's schema to a file, to compare with later.
+    pub(super) fn snapshot_schema(&mut self) {
+        let Some(db) = self.database.clone() else { return self.set_status(self.not_connected_message(), true) };
+        let (Some(dir), Some(id)) = (&self.data_dir, &self.current_project) else { return };
+        let dir = crate::snapshots::dir(dir, id);
+        let connection = conn_label(&self.connect_form);
+        self.row_stream = None;
+        self.set_status(format!("Saving a snapshot of {connection}'s schema…"), false);
+        let send = self.sender();
+        tokio::spawn(async move {
+            let saved = async {
+                let tables = shapes(&db).await?;
+                let now = chrono::Local::now();
+                let taken = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+                let snapshot = crate::snapshots::Snapshot { connection, engine: db.engine(), taken, tables };
+                let path = crate::snapshots::save(&dir, &snapshot, now).map_err(|e| format!("{e:#}"))?;
+                Ok((path, snapshot.tables.len()))
+            }
+            .await;
+            send(DbEventKind::SnapshotSaved(saved));
+        });
+    }
+
+    pub(super) fn snapshot_saved(&mut self, result: Result<(PathBuf, usize), String>) {
+        match result {
+            Ok((path, tables)) => {
+                let status = format!("Saved a schema snapshot ({tables} tables): {}", path.display());
+                self.log(status.clone(), false);
+                self.set_status(status, false);
+            }
+            Err(e) => self.set_status(format!("Couldn't save a snapshot: {e}"), true),
+        }
+    }
+
+    /// Compares this connection's schema now with snapshot `index` (in
+    /// [`Self::snapshots`]): what changed since.
+    pub(super) fn compare_snapshot(&mut self, index: usize) {
+        let Some(db) = self.database.clone() else { return self.set_status(self.not_connected_message(), true) };
+        let Some(saved) = self.snapshots().into_iter().nth(index) else { return };
+        self.row_stream = None;
+        self.set_status(format!("Comparing with the snapshot of {} from {}…", saved.connection, saved.taken), false);
+        let send = self.sender();
+        tokio::spawn(async move {
+            let result = async {
+                let snapshot = crate::snapshots::load(&saved.path).map_err(|e| format!("{e:#}"))?;
+                Ok((shapes(&db).await?, snapshot))
+            }
+            .await;
+            send(DbEventKind::SnapshotCompared(result));
+        });
+    }
+
+    pub(super) fn snapshot_compared(&mut self, result: Result<(Vec<TableShape>, crate::snapshots::Snapshot), String>) {
+        let (now, snapshot) = match result {
+            Ok(both) => both,
+            Err(e) => return self.set_status(e, true),
+        };
+        let this = format!("{} now", conn_label(&self.connect_form));
+        let then = format!("the snapshot of {} from {}", snapshot.connection, snapshot.taken.replace('T', " "));
+        let diff = diff::schema_diff(
+            &now,
+            &snapshot.tables,
+            Side { name: &this, engine: self.engine() },
+            Side { name: &then, engine: snapshot.engine },
+        );
+        let status = if diff.differences == 0 {
+            format!("No changes since {then}")
+        } else {
+            format!("{} change(s) since {then}", diff.differences)
+        };
+        self.log(status.clone(), false);
+        self.set_status(status, false);
+        // "Only here" is what was added since; the SQL would bring a copy of
+        // the database as it was then up to now.
+        let mut text = diff.report;
+        if !diff.sql.is_empty() {
+            text = format!("{text}\n\nThe changes since, as SQL:\n\n{}", diff.sql);
+        }
+        self.cell_view = Some(CellView::new(format!("SCHEMA · {this} ↔ {then}"), text));
+    }
+
     /// Runs the selection, or the statement at the cursor, on this and
     /// another connection and shows the rows that differ.
     pub(super) fn compare_rows(&mut self, id: Option<u64>) {

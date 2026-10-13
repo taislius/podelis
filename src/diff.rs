@@ -10,6 +10,7 @@ use crate::db::{
 };
 
 /// One side's table: its columns and, when loaded, indexes and foreign keys.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TableShape {
     pub info: TableInfo,
     pub columns: Vec<ColumnInfo>,

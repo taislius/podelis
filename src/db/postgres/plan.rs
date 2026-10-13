@@ -6,7 +6,46 @@ use std::fmt::Write as _;
 
 use serde_json::Value;
 
-use crate::db::dialect::{BIG_SCAN_ROWS, Plan, PlanNote, human_rows, misestimated};
+use crate::db::dialect::{BIG_SCAN_ROWS, Plan, PlanNote, Scan, human_rows, misestimated};
+
+/// The tables a JSON plan reads in full (sequential scans); it doesn't
+/// say how many rows that is, only how many it keeps.
+pub(super) fn full_scans(json: &str) -> Vec<Scan> {
+    /// `limited`: a `Limit` above stops reading early, with nothing in
+    /// between that needs every row first.
+    fn walk(node: &Value, limited: bool, out: &mut Vec<Scan>) {
+        let node_type = node.get("Node Type").and_then(Value::as_str).unwrap_or_default();
+        // A filter may have to read the whole table to find a few rows.
+        let stops_early = limited && node.get("Filter").is_none();
+        if node_type.ends_with("Seq Scan")
+            && !stops_early
+            && let Some(table) = node.get("Relation Name").and_then(Value::as_str)
+        {
+            // Without a filter the planner's rows are the table's.
+            let rows = if node.get("Filter").is_none() { node.get("Plan Rows").and_then(Value::as_f64) } else { None };
+            let schema = node.get("Schema").and_then(Value::as_str).map(str::to_string);
+            out.push(Scan { schema, ..Scan::new(table, rows) });
+        }
+        let limited = match node_type {
+            "Limit" => true,
+            // These read all their input before giving a row.
+            "Sort" | "Incremental Sort" | "Aggregate" | "Hash" | "Materialize" | "WindowAgg" | "SetOp" | "Group"
+            | "Memoize" => false,
+            _ => limited,
+        };
+        for (i, child) in node.get("Plans").and_then(Value::as_array).into_iter().flatten().enumerate() {
+            // A nested loop reads its inner side again for each outer row.
+            walk(child, limited && !(node_type == "Nested Loop" && i > 0), out);
+        }
+    }
+    let mut out = Vec::new();
+    if let Ok(value) = serde_json::from_str::<Value>(json)
+        && let Some(plan) = value.get(0).and_then(|v| v.get("Plan"))
+    {
+        walk(plan, false, &mut out);
+    }
+    out
+}
 
 pub(super) fn format(json: &str) -> Option<Plan> {
     let value: Value = serde_json::from_str(json).ok()?;

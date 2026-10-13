@@ -66,6 +66,18 @@ impl Dialect for Sqlite {
     fn explain(&self, stmt: &str, _version: &str) -> String {
         format!("EXPLAIN QUERY PLAN {stmt}")
     }
+    /// `SCAN t` (or `SCAN TABLE t`) without an index.
+    fn full_scans(&self, _columns: &[String], rows: &[Vec<Option<String>>]) -> Vec<crate::db::dialect::Scan> {
+        rows.iter()
+            .filter_map(|r| r.get(3).cloned().flatten())
+            .filter(|d| d.starts_with("SCAN ") && !d.contains(" USING "))
+            .filter_map(|d| {
+                let rest = d.strip_prefix("SCAN ")?;
+                let rest = rest.strip_prefix("TABLE ").unwrap_or(rest);
+                Some(crate::db::dialect::Scan::new(rest.split_whitespace().next()?, None))
+            })
+            .collect()
+    }
     fn format_plan(&self, _columns: &[String], rows: &[Vec<Option<String>>]) -> Option<Plan> {
         let notes = plan_notes(rows.iter().map(|r| r.get(3).cloned().flatten().unwrap_or_default()));
         Some(Plan { text: plan_tree(rows), notes })

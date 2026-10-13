@@ -422,7 +422,8 @@ fn draw_rows(f: &mut Frame, app: &mut App, area: Rect, footer: Rect) {
     app.tab.grid.row_offset = app.tab.grid.row_offset.min(app.tab.grid.view.len().saturating_sub(1));
     let window = app.tab.grid.row_offset..(app.tab.grid.row_offset + visible_rows).min(app.tab.grid.view.len());
     let body_rows = app.tab.grid.view[window.clone()].iter().zip(window.clone()).map(|(&i, n)| {
-        let mut cells = vec![row_number(app.tab.grid.marked.contains(&i), Some(n) == selected_row, n)];
+        let changed = app.tab.grid.changed_rows.contains(&i);
+        let mut cells = vec![row_number(app.tab.grid.marked.contains(&i), Some(n) == selected_row, n, changed)];
         for (j, v) in results.rows[i][visible.clone()].iter().enumerate() {
             let class = classes[offset + j];
             let cell = match v {
@@ -436,7 +437,9 @@ fn draw_rows(f: &mut Frame, app: &mut App, area: Rect, footer: Rect) {
             };
             cells.push(cell);
         }
-        Row::new(cells)
+        // New or changed since watch mode's run before: bold.
+        let row = Row::new(cells);
+        if changed { row.style(Style::default().add_modifier(Modifier::BOLD)) } else { row }
     });
 
     let mut widths = vec![Constraint::Length(num_width)];
@@ -535,17 +538,27 @@ fn draw_vertical(f: &mut Frame, app: &mut App, area: Rect, footer: Rect) {
     draw_rows_footer(f, app, footer, 0, cols);
 }
 
-/// The row-number cell: `●` and highlighted when marked.
-fn row_number(marked: bool, selected: bool, n: usize) -> Cell<'static> {
+/// The row-number cell: `●` and highlighted when marked, an orange `◆`
+/// when watch mode found it new or changed.
+fn row_number(marked: bool, selected: bool, n: usize, changed: bool) -> Cell<'static> {
     let t = theme();
     let style = if marked {
         bold(t.on_accent).bg(t.warn)
     } else if selected {
         bold(t.accent).bg(t.selected)
+    } else if changed {
+        bold(t.warn)
     } else {
         dim()
     };
-    Cell::from(Span::styled(format!("{}{:0>2}", if marked { "●" } else { " " }, n + 1), style))
+    let sign = if marked {
+        "●"
+    } else if changed {
+        "◆"
+    } else {
+        " "
+    };
+    Cell::from(Span::styled(format!("{sign}{:0>2}", n + 1), style))
 }
 
 /// The footer under the table: the cell-edit prompt when one is open,

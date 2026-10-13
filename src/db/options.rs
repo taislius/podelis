@@ -129,9 +129,12 @@ pub enum AgentAccess {
     /// Writes too: never anything destructive, and on a production
     /// connection only as a dry run.
     Write,
+    /// Writes once the user approves each one in Podėlis (shown with its
+    /// dry run), production included; never anything destructive.
+    Approve,
 }
 
-const AGENT_ACCESS: [AgentAccess; 3] = [AgentAccess::None, AgentAccess::Read, AgentAccess::Write];
+const AGENT_ACCESS: [AgentAccess; 4] = [AgentAccess::None, AgentAccess::Read, AgentAccess::Write, AgentAccess::Approve];
 
 impl AgentAccess {
     pub fn label(self) -> &'static str {
@@ -139,6 +142,7 @@ impl AgentAccess {
             AgentAccess::None => "not shared",
             AgentAccess::Read => "read",
             AgentAccess::Write => "read and write",
+            AgentAccess::Approve => "write when you approve",
         }
     }
 

@@ -5,7 +5,7 @@
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::db::dialect::{BIG_SCAN_ROWS, Plan, PlanNote, human_rows, misestimated};
+use crate::db::dialect::{BIG_SCAN_ROWS, Plan, PlanNote, Scan, human_rows, misestimated};
 
 /// One `-> …` line of the tree.
 struct Step {
@@ -46,6 +46,55 @@ fn parse(line: usize, text: &str) -> Option<Step> {
         actual_rows: actual.and_then(|a| field(a, "rows=")),
         loops: actual.and_then(|a| field(a, "loops=")).unwrap_or(1.0),
     })
+}
+
+/// The tables a tree plan reads in full, with the rows it expects.
+/// A scan a `Limit` above stops early (nothing in between that needs every
+/// row, or filters them) doesn't count.
+pub(super) fn full_scans(text: &str) -> Vec<Scan> {
+    // The steps above the current one: their indent, and whether a limit
+    // stops reading early from there down.
+    let mut above: Vec<(usize, bool)> = Vec::new();
+    let mut out = Vec::new();
+    for step in text.lines().enumerate().filter_map(|(i, l)| parse(i, l)) {
+        while above.last().is_some_and(|(indent, _)| *indent >= step.indent) {
+            above.pop();
+        }
+        let limited = above.last().is_some_and(|(_, limited)| *limited);
+        if let Some(table) = step.head.strip_prefix("Table scan on ")
+            && !limited
+            && !table.starts_with('<')
+        {
+            out.push(Scan::new(table.split_whitespace().next().unwrap_or(table), step.rows));
+        }
+        let head = step.head.as_str();
+        let limited = if head.starts_with("Limit:") {
+            true
+        } else if ["Sort", "Aggregate", "Group aggregate", "Hash", "Materialize", "Window", "Filter", "Temporary table"]
+            .iter()
+            .any(|blocking| head.starts_with(blocking))
+            || head.contains("hash join")
+        {
+            false
+        } else {
+            limited
+        };
+        above.push((step.indent, limited));
+    }
+    out
+}
+
+/// The same from the classic EXPLAIN table: `type` ALL.
+pub(super) fn table_full_scans(columns: &[String], rows: &[Vec<Option<String>>]) -> Vec<Scan> {
+    let at = |name: &str| columns.iter().position(|c| c.eq_ignore_ascii_case(name));
+    let (Some(table), Some(kind), Some(count)) = (at("table"), at("type"), at("rows")) else { return Vec::new() };
+    rows.iter()
+        .filter(|r| r.get(kind).cloned().flatten().is_some_and(|k| k.eq_ignore_ascii_case("ALL")))
+        .filter_map(|r| {
+            let rows = r.get(count).cloned().flatten().and_then(|n| n.parse().ok());
+            Some(Scan::new(&r.get(table).cloned().flatten()?, rows))
+        })
+        .collect()
 }
 
 pub(super) fn analyze(text: String) -> Plan {

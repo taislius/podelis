@@ -110,6 +110,12 @@ impl Dialect for MySql {
         }
         Some(plan::analyze(rows.first()?.first()?.clone()?.trim_end().to_string()))
     }
+    fn full_scans(&self, columns: &[String], rows: &[Vec<Option<String>>]) -> Vec<crate::db::dialect::Scan> {
+        if columns.len() > 1 {
+            return plan::table_full_scans(columns, rows);
+        }
+        rows.first().and_then(|r| r.first()).and_then(|c| c.as_deref()).map(plan::full_scans).unwrap_or_default()
+    }
     fn insert_defaults(&self, table: &str) -> String {
         format!("INSERT INTO {table} () VALUES ()")
     }

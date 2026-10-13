@@ -857,6 +857,61 @@ fn agent_activity_by_session() {
     assert!(app.agent_log.is_empty() && app.agents_view.is_none());
 }
 
+/// An agent's write waiting for the user: asked about with its SQL and dry
+/// run (and a bell); y approves, anything else says no.
+#[test]
+fn agent_writes_wait_for_your_answer() {
+    use crate::agents::{Request, answer, ask, pending_dir, read_answer};
+    let (mut app, dir) = test_app();
+    app.set_data_dir(dir.path().to_path_buf());
+    let shared = ConnectForm { name: "prod".into(), agents: crate::db::AgentAccess::Approve, ..ConnectForm::new() };
+    app.store.upsert(&project_id(&app), None, shared.to_profile()).unwrap();
+    let pending = pending_dir(dir.path(), &project_id(&app));
+    let request = |id: &str| Request {
+        id: id.into(),
+        agent: "billing".into(),
+        connection: "prod".into(),
+        production: true,
+        sql: "update invoices set paid = true\nwhere id = 7".into(),
+        dry_run: "dry run: would change 1 row(s)".into(),
+    };
+    ask(&pending, &request("1")).unwrap();
+    ask(&pending, &request("2")).unwrap();
+    app.approvals_tick();
+    // A key typed as it appears, or any but y / n / Esc, doesn't answer.
+    app.handle_key(key(KeyCode::Char('y')));
+    assert_eq!(read_answer(&pending, "1"), None, "too soon");
+    app.agent_asked = None;
+    app.handle_key(key(KeyCode::Char('x')));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(read_answer(&pending, "1"), None);
+    let confirm = app.confirm.as_ref().unwrap();
+    assert_eq!(confirm.message, "billing asks to write on prod (PRODUCTION). Allow it?");
+    assert_eq!(
+        confirm.details,
+        ["update invoices set paid = true", "where id = 7", "", "dry run: would change 1 row(s)"]
+    );
+    assert!(confirm.danger);
+    assert!(app.take_notification().is_some_and(|n| n.contains("billing asks to write")));
+    app.handle_key(key(KeyCode::Char('y')));
+    assert_eq!(read_answer(&pending, "1"), Some(true));
+    // The next one, once this is answered; Esc says no.
+    app.approvals_tick();
+    app.agent_asked = None;
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(read_answer(&pending, "2"), Some(false));
+    app.approvals_tick();
+    assert!(app.confirm.is_none());
+    // The agent gave up while the question was up.
+    ask(&pending, &request("3")).unwrap();
+    app.approvals_tick();
+    app.agent_asked = None;
+    crate::agents::forget(&pending, "3");
+    app.handle_key(key(KeyCode::Char('y')));
+    assert!(app.status.contains("stopped waiting"), "{}", app.status);
+    assert!(!answer(&pending, "3", true));
+}
+
 /// While the agent window is open, new calls don't move its rows; Esc out
 /// of a session found by searching goes back to it, still searched.
 #[test]
@@ -1286,7 +1341,7 @@ async fn edit_cell(mode: ConnectionMode, select: &str, col: usize) -> (App, temp
 
 #[tokio::test]
 async fn edit_a_cell_by_primary_key() {
-    let (mut app, _dir) = edit_cell(ConnectionMode::Normal, "select * from people order by id", 2).await;
+    let (mut app, _dir) = Box::pin(edit_cell(ConnectionMode::Normal, "select * from people order by id", 2)).await;
     let edit = app.cell_edit.as_ref().expect("prompt opens");
     assert_eq!((edit.column.as_str(), edit.text.text()), ("note", ""));
     type_text(&mut app, r"it's \ fine?");
@@ -1318,23 +1373,23 @@ async fn editing_is_refused_when_rows_cant_be_identified() {
         ("select id, upper(name) as name from people", 1, "computed"),
         ("select p.id, q.name from people p join people q on q.id = p.id", 1, "plain SELECT"),
     ] {
-        let (app, _dir) = edit_cell(ConnectionMode::Normal, select, col).await;
+        let (app, _dir) = Box::pin(edit_cell(ConnectionMode::Normal, select, col)).await;
         assert!(app.cell_edit.is_none(), "{select}");
         assert!(app.status.contains(why), "{select}: {}", app.status);
     }
-    let (app, _dir) = edit_cell(ConnectionMode::ReadOnly, "select * from people", 1).await;
+    let (app, _dir) = Box::pin(edit_cell(ConnectionMode::ReadOnly, "select * from people", 1)).await;
     assert!(app.cell_edit.is_none() && app.status.contains("read-only"), "{}", app.status);
 }
 
 #[tokio::test]
 async fn null_refused_on_not_null_column_and_production_confirms() {
-    let (mut app, _dir) = edit_cell(ConnectionMode::Normal, "select * from people", 1).await;
+    let (mut app, _dir) = Box::pin(edit_cell(ConnectionMode::Normal, "select * from people", 1)).await;
     app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
     assert!(app.status.contains("doesn't allow NULL") && app.cell_edit.is_some());
     app.handle_key(key(KeyCode::Esc));
     assert!(app.cell_edit.is_none());
 
-    let (mut app, _dir) = edit_cell(ConnectionMode::Production, "select * from people", 1).await;
+    let (mut app, _dir) = Box::pin(edit_cell(ConnectionMode::Production, "select * from people", 1)).await;
     type_text(&mut app, "2");
     app.handle_key(key(KeyCode::Enter));
     let confirm = app.confirm.as_ref().expect("production asks first");
@@ -1815,6 +1870,126 @@ async fn until_event(app: &mut App, done: fn(&DbEventKind) -> bool) {
             return;
         }
     }
+}
+
+/// Watch mode runs the query again, marks the rows that changed, and stops
+/// on Esc or when another query runs.
+#[tokio::test]
+async fn watch_mode_marks_what_changed() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    run_sql(&mut app, "create table jobs (id integer primary key, state text); insert into jobs values (1, 'queued')")
+        .await;
+    run_sql(&mut app, "select * from jobs order by id").await;
+    app.start_watch(2);
+    finish(&mut app).await;
+    assert!(app.status.starts_with("Watching every 2 s · run 1"), "{}", app.status);
+
+    let db = app.database.clone().unwrap();
+    db.run("update jobs set state = 'done' where id = 1; insert into jobs values (2, 'queued')", 1).await.unwrap();
+    app.watch.as_mut().unwrap().next = std::time::Instant::now();
+    app.tick_running();
+    finish(&mut app).await;
+    assert!(app.status.contains("run 2 · 2 changed"), "{}", app.status);
+    assert_eq!(app.tab.grid.changed_rows, std::collections::HashSet::from([0, 1]));
+
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.watch.is_none() && app.tab.grid.changed_rows.is_empty());
+    assert_eq!(app.status, "Stopped watching");
+
+    // A write can't be watched; another query stops watching.
+    app.start_watch(2);
+    finish(&mut app).await;
+    run_sql(&mut app, "select 1").await;
+    assert!(app.watch.is_none());
+    run_sql(&mut app, "update jobs set state = 'x' where id = 2").await;
+    app.start_watch(2);
+    assert!(app.status_is_error && app.watch.is_none(), "{}", app.status);
+
+    // Esc clears a results filter first, and is vim's in the editor.
+    run_sql(&mut app, "select * from jobs order by id").await;
+    app.start_watch(2);
+    finish(&mut app).await;
+    app.tab.grid.filter.set("queued");
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.watch.is_some(), "the filter went, not the watch");
+    // The palette stops it from anywhere.
+    app.run_command(crate::app::palette::Command::Watch(0));
+    assert!(app.watch.is_none());
+
+    // It stays with its tab: another tab stops it, and a watch that finds
+    // another query in its place stops instead of running it.
+    app.start_watch(2);
+    finish(&mut app).await;
+    app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert!(app.watch.is_none(), "{}", app.status);
+    run_sql(&mut app, "select 1").await;
+    app.start_watch(2);
+    finish(&mut app).await;
+    app.tab.last_sql = Some(("delete from jobs where id = 1".into(), 0));
+    app.watch.as_mut().unwrap().next = std::time::Instant::now();
+    app.tick_running();
+    assert!(app.watch.is_none() && !app.executing, "{}", app.status);
+}
+
+/// On production, a read that would read a whole big table asks first;
+/// below the limit, or once confirmed, it just runs.
+#[tokio::test]
+async fn heavy_reads_on_production_ask_first() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Production).await;
+    app.settings.guard_rows = 1000;
+    let infos = analyze::analyze(&parse("select 7", Engine::Sqlite));
+    app.guarded("select 7".into(), 0, infos.clone(), None, &[("orders".into(), 52_000_000.0)]);
+    let confirm = app.confirm.as_ref().unwrap();
+    assert_eq!(confirm.details, ["orders: about 52.0M rows, read in full"]);
+    app.handle_key(key(KeyCode::Char('y')));
+    finish(&mut app).await;
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][0].as_deref(), Some("7"));
+    // Small: no question.
+    app.guarded("select 8".into(), 0, infos, None, &[("tiny".into(), 10.0)]);
+    assert!(app.confirm.is_none());
+    finish(&mut app).await;
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][0].as_deref(), Some("8"));
+}
+
+/// `b` charts the selected column of the rows shown.
+#[tokio::test]
+async fn chart_a_result_column() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    run_sql(&mut app, "select 'a' as day, 3 as n union all select 'b', 6").await;
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Char('b')));
+    assert!(app.status_is_error && app.status.contains("day has no numbers"), "{}", app.status);
+    app.handle_key(key(KeyCode::Right));
+    app.handle_key(key(KeyCode::Char('b')));
+    let view = app.cell_view.as_ref().unwrap();
+    assert_eq!(view.title, "CHART · n");
+    assert!(view.text.contains(&format!("b │{} 6", "█".repeat(40))), "{}", view.text);
+}
+
+/// A schema snapshot saved, then the schema changed: comparing with the
+/// snapshot shows what changed since, and the SQL for it.
+#[tokio::test]
+async fn schema_snapshots_show_what_changed_since() {
+    let (mut app, dir) = connected_app(ConnectionMode::Normal).await;
+    app.set_data_dir(dir.path().to_path_buf());
+    run_sql(&mut app, "create table people (id integer primary key, name text)").await;
+    app.snapshot_schema();
+    until_event(&mut app, |k| matches!(k, DbEventKind::SnapshotSaved(_))).await;
+    assert!(app.status.starts_with("Saved a schema snapshot (1 tables)"), "{}", app.status);
+    assert_eq!(app.snapshots().len(), 1);
+    app.open_palette(false);
+    let entry = app.palette_command_text(super::palette::Command::CompareSnapshot(0));
+    app.palette = None;
+    assert!(entry.starts_with("Compare the schema with the snapshot: "), "{entry}");
+
+    run_sql(&mut app, "alter table people add column email text; create table orders (id integer primary key)").await;
+    app.compare_snapshot(0);
+    until_event(&mut app, |k| matches!(k, DbEventKind::SnapshotCompared(_))).await;
+    assert!(app.status.starts_with("2 change(s) since the snapshot"), "{}", app.status);
+    let text = &app.cell_view.as_ref().unwrap().text;
+    assert!(text.contains("ONLY HERE\n  table orders") && text.contains("column email TEXT: only here"), "{text}");
+    assert!(text.contains("people ADD COLUMN email TEXT;"), "{text}");
 }
 
 #[tokio::test]

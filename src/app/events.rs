@@ -137,6 +137,11 @@ impl App {
             }
             DbEventKind::TableDetails { schema, table, result } => self.apply_details(&schema, &table, result),
             DbEventKind::SchemaCompared { other, result } => self.schema_compared(&other, result),
+            DbEventKind::SnapshotSaved(result) => self.snapshot_saved(result),
+            DbEventKind::Guarded { sql, offset, infos, filled, scans } => {
+                self.guarded(sql, offset, infos, filled, &scans);
+            }
+            DbEventKind::SnapshotCompared(result) => self.snapshot_compared(result),
             DbEventKind::RowsCompared { other, result } => self.rows_compared(&other, *result),
             DbEventKind::Definition(title, result) => {
                 let browse = std::mem::take(&mut self.routine_definition_pending);
@@ -210,7 +215,12 @@ impl App {
         }
         match std::mem::take(&mut self.running_purpose) {
             RunPurpose::Query => {
+                let grid = &self.tab.grid;
+                let place = (grid.table_state.selected(), grid.selected_col, grid.row_offset);
                 self.show_results(outcome);
+                if self.watch.is_some() {
+                    self.after_watched_run(place);
+                }
                 // `\G` turns the vertical layout on for its result; the next
                 // run without it turns it off again (`X` keeps it on).
                 let grid = &mut self.tab.grid;
@@ -257,6 +267,7 @@ impl App {
     }
 
     pub(super) fn on_query_failed(&mut self, err: &str, position: Option<ErrorPos>, txn: Option<TxnState>) {
+        self.stop_watch(": the query failed");
         if err.contains("couldn't reconnect") {
             self.connection_lost = true;
         }
@@ -346,9 +357,11 @@ impl App {
     /// Called every second while a query runs: enforces the connection's
     /// timeout and notices background tasks that panicked.
     pub fn tick_running(&mut self) {
+        self.watch_tick();
         self.keepalive_tick();
         self.activity_tick();
         if self.watching_agents() {
+            self.approvals_tick();
             self.agents_tick();
         }
         if let Some((deadline, limit)) = self.run_extra.deadline

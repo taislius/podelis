@@ -44,7 +44,7 @@ mod tunnel;
 mod types;
 
 pub use activity::Activity;
-pub use details::{ForeignKey, IndexInfo, RoutineInfo, TableDetails};
+pub use details::{ForeignKey, IndexInfo, Link, RoutineInfo, TableDetails};
 pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint};
 #[cfg(test)]
 pub use dialect::PlanNote;
@@ -185,6 +185,7 @@ impl RowStream {
 
 type FirstPage = (Option<Vec<(String, String)>>, Vec<Vec<Option<String>>>, bool);
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TableInfo {
     pub schema: String,
     pub name: String,
@@ -198,7 +199,7 @@ pub struct TableInfo {
     pub system: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ColumnInfo {
     pub name: String,
     pub data_type: String,

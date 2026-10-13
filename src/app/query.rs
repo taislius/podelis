@@ -86,6 +86,15 @@ impl App {
             {
                 return self.toggle_zoom();
             }
+            // Esc stops watching, unless it has a job here: clearing a
+            // results filter, or vim's in the editor.
+            KeyCode::Esc
+                if self.watch.is_some()
+                    && (self.focus != Focus::Results || self.tab.grid.filter.is_empty())
+                    && (self.focus != Focus::Editor || self.vim_mode().is_none()) =>
+            {
+                return self.stop_watch("");
+            }
             KeyCode::Tab => return self.cycle_focus(true),
             KeyCode::BackTab => return self.cycle_focus(false),
             _ => {}
@@ -536,6 +545,7 @@ impl App {
                 return self.tab.grid.refresh_view();
             }
             KeyCode::Char('s') => return self.cycle_sort(),
+            KeyCode::Char('b') => return self.chart_column(),
             KeyCode::Char('e') => return self.export(ExportFormat::Csv),
             KeyCode::Char('J') => return self.export(ExportFormat::Json),
             KeyCode::Char('i') => return self.export(ExportFormat::Sql),
@@ -805,6 +815,19 @@ impl App {
         }
     }
 
+    /// `b`: a bar chart of the selected column, for the rows shown.
+    pub(super) fn chart_column(&mut self) {
+        let Some(results) = &self.tab.grid.results else { return };
+        let col = self.tab.grid.selected_col;
+        match crate::chart::chart(results, &self.tab.grid.view, col) {
+            Ok(text) => {
+                let title = format!("CHART · {}", results.columns.get(col).map_or("", String::as_str));
+                self.cell_view = Some(CellView::new(title, text));
+            }
+            Err(e) => self.set_status(e, true),
+        }
+    }
+
     /// Writes every row of the result to a file: those loaded, then the
     /// rest of the stream page by page, straight to the file rather than
     /// into the grid. Esc stops it.
@@ -916,6 +939,7 @@ impl App {
         self.load_catalog();
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per key
     pub(super) fn handle_schema_key(&mut self, key: KeyEvent) {
         let engine = self.engine();
         let Some(panel) = &mut self.schema else { return };
@@ -971,6 +995,11 @@ impl App {
                 SchemaNode::Routine(r) => self.show_routine(r),
                 _ => {}
             },
+            KeyCode::Char('f') => {
+                if let Some(t) = node.table() {
+                    self.show_related(t);
+                }
+            }
             KeyCode::Char('d') => match node {
                 SchemaNode::Routine(r) => self.show_routine(r),
                 _ => {
@@ -1127,7 +1156,60 @@ impl App {
             self.confirm = Some(Confirm { message, details, danger: true, action, offer_transaction });
             return;
         }
+        // A read on production that would read a whole big table asks
+        // first: planned (not run) in the background, then run or asked.
+        let guarded = self.active_mode == ConnectionMode::Production
+            && self.settings.guard_rows > 0
+            && matches!(purpose, RunPurpose::Query)
+            && !infos.is_empty()
+            && infos.iter().all(|i| i.kind == Kind::Read);
+        if guarded && let Some(db) = self.database.clone() {
+            self.set_status("Checking the plan before running on production…".to_string(), false);
+            // Running, as far as the rest of the app goes: nothing else
+            // starts, and Esc stops it.
+            self.executing = true;
+            let send = self.sender();
+            tokio::spawn(async move {
+                let scans = db.full_scans(&sql).await.unwrap_or_default();
+                send(DbEventKind::Guarded { sql, offset, infos, filled, scans });
+            });
+            return;
+        }
         self.run_writes(sql, offset, infos, purpose, filled);
+    }
+
+    /// After the plan of a read on production: runs it, or asks first when
+    /// it would read a whole table of at least `guard_rows` rows.
+    pub(super) fn guarded(
+        &mut self,
+        sql: String,
+        offset: usize,
+        infos: Vec<StatementInfo>,
+        filled: Option<Filled>,
+        scans: &[(String, f64)],
+    ) {
+        self.executing = false;
+        if std::mem::take(&mut self.cancelling) {
+            return self.set_status("Cancelled".to_string(), false);
+        }
+        #[allow(clippy::cast_precision_loss)] // a threshold
+        let limit = self.settings.guard_rows as f64;
+        let heavy: Vec<String> = scans
+            .iter()
+            .filter(|(_, rows)| *rows >= limit)
+            .map(|(table, rows)| format!("{table}: about {} rows, read in full", crate::db::human_rows(*rows)))
+            .collect();
+        if heavy.is_empty() {
+            return self.run_writes(sql, offset, infos, RunPurpose::Query, filled);
+        }
+        self.set_status(String::new(), false);
+        self.confirm = Some(Confirm {
+            message: "PRODUCTION: this reads a whole big table. Run anyway?".to_string(),
+            details: heavy,
+            danger: true,
+            action: ConfirmAction::RunHeavy { sql, offset, infos, filled },
+            offer_transaction: false,
+        });
     }
 
     /// Re-runs the last query with a larger row limit (read-only queries only,
@@ -1320,6 +1402,10 @@ impl App {
         purpose: RunPurpose,
         filled: Option<Filled>,
     ) {
+        // Anything else run stops watch mode.
+        if !self.watch_rerun {
+            self.stop_watch(": another query ran");
+        }
         let Some(db) = self.database.clone() else { return };
         // A still-open streamed result holds the session: close it (which
         // cancels it on the server) so this run can start; so does an export.

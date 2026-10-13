@@ -63,6 +63,7 @@ mod tabs;
 #[cfg(test)]
 mod tests;
 mod vim;
+mod watch;
 
 use connections::looks_like_url;
 pub use connections::{ConnectField, ConnectForm, fields_for};
@@ -337,6 +338,18 @@ enum DbEventKind {
         text: String,
         hint: Option<SyntaxHint>,
     },
+    /// A read on production, planned: the tables it would read in full.
+    Guarded {
+        sql: String,
+        offset: usize,
+        infos: Vec<StatementInfo>,
+        filled: Option<Filled>,
+        scans: Vec<(String, f64)>,
+    },
+    /// A schema snapshot saved: its file and how many tables, or why not.
+    SnapshotSaved(Result<(PathBuf, usize), String>),
+    /// This connection's schema and a saved snapshot of it, to compare.
+    SnapshotCompared(Result<(Vec<crate::diff::TableShape>, crate::snapshots::Snapshot), String>),
     /// Both sides' schemas, for comparing.
     SchemaCompared {
         other: compare::Other,
@@ -367,6 +380,8 @@ const MAX_ROW_LIMIT: usize = 1_000_000;
 
 /// How long typing must pause before the syntax hint is recomputed.
 const LINT_DELAY: Duration = Duration::from_millis(700);
+/// Keys this soon after an agent's write is put to the user don't answer it.
+const AGENT_SETTLE: Duration = Duration::from_millis(800);
 
 /// Which view the results pane shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -503,6 +518,14 @@ pub enum ServerCheck {
 
 /// Something to do once the user answers "y".
 pub enum ConfirmAction {
+    /// A read on production that would read a whole big table: run it as
+    /// it is, without asking again.
+    RunHeavy {
+        sql: String,
+        offset: usize,
+        infos: Vec<StatementInfo>,
+        filled: Option<Filled>,
+    },
     Run {
         sql: String,
         offset: usize,
@@ -516,6 +539,9 @@ pub enum ConfirmAction {
     /// Leave the project, for another one (or the project list); `true`
     /// lands in its connections.
     LeaveProject(Option<String>, bool),
+    /// An agent's write waiting for the user: y approves it, anything else
+    /// says no.
+    AgentWrite(crate::agents::Request),
 }
 
 /// The autocomplete popup.
@@ -692,8 +718,15 @@ pub struct App {
     agent_checked: Option<Instant>,
     /// When the user last looked at what agents did, as last read.
     agent_seen: Option<String>,
+    /// When an agent's write was put to the user: keys in its first moment
+    /// were meant for something else.
+    agent_asked: Option<Instant>,
     /// The agent activity window.
     pub agents_view: Option<AgentsView>,
+    /// Watch mode: the last query run again every few seconds.
+    pub watch: Option<watch::Watch>,
+    /// The run starting now is watch mode's (others stop it).
+    watch_rerun: bool,
     /// "Export all rows" in progress: what stops it, and the file it writes.
     export_task: Option<(tokio::sync::oneshot::Sender<()>, PathBuf)>,
     pub fetching_more: bool,
@@ -858,7 +891,10 @@ impl App {
             agent_alerts: crate::agents::Alerts::default(),
             agent_checked: None,
             agent_seen: None,
+            agent_asked: None,
             agents_view: None,
+            watch: None,
+            watch_rerun: false,
             export_task: None,
             fetching_more: false,
             completion: None,
@@ -1250,6 +1286,26 @@ impl App {
             }
             let yes = matches!(key.code, KeyCode::Char('y' | 'Y'))
                 || ((ctrl_c || ctrl_q) && matches!(confirm.action, ConfirmAction::Quit));
+            if let ConfirmAction::AgentWrite(request) = &confirm.action {
+                // Only y, or n / Esc, answer; and not in the first moment
+                // (a key being typed as it appeared).
+                let settled = self.agent_asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
+                let answer = match key.code {
+                    KeyCode::Char('y' | 'Y') => Some(true),
+                    KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(false),
+                    _ => None,
+                };
+                match answer {
+                    Some(approve) if settled => {
+                        let request = request.clone();
+                        return self.answer_agent(&request, approve);
+                    }
+                    _ => {
+                        self.confirm = Some(confirm);
+                        return;
+                    }
+                }
+            }
             if !yes {
                 self.set_status("Cancelled".to_string(), false);
                 return;
@@ -1258,10 +1314,14 @@ impl App {
                 ConfirmAction::Run { sql, offset, infos, purpose, filled } => {
                     self.run_writes(sql, offset, infos, purpose, filled);
                 }
+                ConfirmAction::RunHeavy { sql, offset, infos, filled } => {
+                    self.run_writes(sql, offset, infos, RunPurpose::Query, filled);
+                }
                 ConfirmAction::Disconnect => self.disconnect(),
                 ConfirmAction::Quit => self.should_quit = true,
                 ConfirmAction::CloseTab => self.close_tab(),
                 ConfirmAction::LeaveProject(target, panes) => self.go_to_project(target, panes),
+                ConfirmAction::AgentWrite(_) => {}
             }
             return;
         }

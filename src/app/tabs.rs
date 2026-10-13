@@ -312,6 +312,7 @@ impl App {
         if self.executing {
             return self.set_status("Wait for the query to finish (or press Esc) before switching tabs".into(), true);
         }
+        self.stop_watch(": another tab");
         // An open stream would hold the session while its tab is hidden.
         self.row_stream = None;
         self.fetching_more = false;

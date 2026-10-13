@@ -141,6 +141,9 @@ pub(super) fn form_message(form: &ConnectForm) -> (String, Style) {
             AgentAccess::None => "Not shared with AI agents (podelis mcp); ←/→ to share it",
             AgentAccess::Read => "AI agents can read, in a session the server keeps read-only",
             AgentAccess::Write => "AI agents can write too: never DROP or TRUNCATE, and on production only a dry run",
+            AgentAccess::Approve => {
+                "AI agents can write once you approve each write here (with its dry run): never DROP or TRUNCATE"
+            }
         },
         ConnectField::Transaction => match form.tx_mode() {
             TxMode::AutoCommit => "Each statement is committed as it runs (switch any time: Ctrl+K x)",

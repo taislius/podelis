@@ -108,6 +108,22 @@ pub(in crate::db) async fn routine_definition(db: &Database, routine: &RoutineIn
     }
 }
 
+/// The foreign keys of the current database (the session's, after a USE).
+pub(in crate::db) async fn link_rows(
+    db: &Database,
+) -> Result<Vec<(String, String, String, String, String, Option<String>)>> {
+    let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
+    let query = sqlx::query_as(
+        "SELECT CAST(table_schema AS CHAR), CAST(table_name AS CHAR), CAST(column_name AS CHAR),
+                    CAST(referenced_table_schema AS CHAR), CAST(referenced_table_name AS CHAR),
+                    CAST(referenced_column_name AS CHAR)
+             FROM information_schema.key_column_usage
+             WHERE table_schema = DATABASE() AND referenced_table_name IS NOT NULL
+             ORDER BY table_name, constraint_name, ordinal_position",
+    );
+    Ok(fetch_all_on_session!(db, p, query))
+}
+
 pub(in crate::db) async fn table_details(p: &MySqlPool, schema: &str, table: &str) -> Result<TableDetails> {
     let indexes: Vec<(String, i64, Option<String>)> = sqlx::query_as(
         "SELECT CAST(index_name AS CHAR), CAST(MAX(non_unique) AS SIGNED),

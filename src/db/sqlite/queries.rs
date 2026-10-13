@@ -64,6 +64,19 @@ pub(in crate::db) async fn column_info_rows(
     })
 }
 
+pub(in crate::db) async fn link_rows(
+    c: &mut sqlx::SqliteConnection,
+) -> Result<Vec<(String, String, String, String, String, Option<String>)>> {
+    Ok(sqlx::query_as(
+        "SELECT 'main', m.name, p.\"from\", 'main', p.\"table\", p.\"to\"
+             FROM sqlite_schema m JOIN pragma_foreign_key_list(m.name) p
+             WHERE m.type = 'table'
+             ORDER BY m.name, p.id, p.seq",
+    )
+    .fetch_all(&mut *c)
+    .await?)
+}
+
 pub(in crate::db) async fn table_details(c: &mut sqlx::SqliteConnection, table: &str) -> Result<TableDetails> {
     let indexes: Vec<SqliteIndexRow> = sqlx::query_as(
         "SELECT il.name, il.\"unique\", il.origin,

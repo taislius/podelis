@@ -667,3 +667,112 @@ fn binary_literals_only_for_binary_columns_in_hex() {
     assert_eq!(value_literal("X'0FF'", "BLOB", Engine::Sqlite), "'X''0FF'''", "odd digits");
     assert_eq!(value_literal(r"\x00ff", "BYTEA", Engine::Postgres), r"'\x00ff'");
 }
+
+/// Every foreign key of the database, on each engine: what related tables
+/// are made from.
+#[tokio::test]
+async fn links_on_each_engine() {
+    let dir = tempfile::tempdir().unwrap();
+    for engine in [Engine::Sqlite, Engine::Postgres, Engine::MySql] {
+        let db = if engine == Engine::Sqlite {
+            Database::connect(sqlite_params(&dir.path().join("l.db"), false)).await.unwrap()
+        } else {
+            let Some(db) = live_db(engine).await else { continue };
+            db
+        };
+        if engine == Engine::MySql {
+            db.run("CREATE DATABASE IF NOT EXISTS podelis_links; USE podelis_links", 1).await.unwrap();
+        }
+        db.run("DROP TABLE IF EXISTS link_child", 1).await.unwrap();
+        db.run("DROP TABLE IF EXISTS link_parent", 1).await.unwrap();
+        db.run("CREATE TABLE link_parent (id INT PRIMARY KEY)", 1).await.unwrap();
+        db.run(
+            "CREATE TABLE link_child (id INT PRIMARY KEY, parent_id INT, FOREIGN KEY (parent_id) REFERENCES link_parent (id))",
+            1,
+        )
+        .await
+        .unwrap();
+        let links = db.links().await.unwrap();
+        let link = links.iter().find(|l| l.table == "link_child").unwrap_or_else(|| panic!("{engine:?}: {links:?}"));
+        assert_eq!(
+            (link.column.as_str(), link.target_table.as_str(), link.target_column.as_deref()),
+            ("parent_id", "link_parent", Some("id")),
+            "{engine:?}"
+        );
+        assert!(crate::related::describe(&links, "", "link_parent").contains("← link_child (parent_id → id)"));
+        db.run("DROP TABLE link_child", 1).await.unwrap();
+        db.run("DROP TABLE link_parent", 1).await.unwrap();
+    }
+}
+
+/// What a heavy-query guard asks about: the tables a read would read in
+/// full, with about how many rows (the plan's estimate, else the catalog's).
+#[tokio::test]
+async fn full_scans_on_live_servers() {
+    for engine in [Engine::Postgres, Engine::MySql] {
+        let Some(db) = live_db(engine).await else { continue };
+        if engine == Engine::MySql {
+            db.run("CREATE DATABASE IF NOT EXISTS podelis_scans; USE podelis_scans", 1).await.unwrap();
+        }
+        db.run("DROP TABLE IF EXISTS scan_big", 1).await.unwrap();
+        db.run("CREATE TABLE scan_big (id INT PRIMARY KEY, note VARCHAR(20))", 1).await.unwrap();
+        let rows: Vec<String> = (1..=2000).map(|i| format!("({i}, 'n{i}')")).collect();
+        db.run(&format!("INSERT INTO scan_big VALUES {}", rows.join(", ")), 1).await.unwrap();
+        db.run(if engine == Engine::Postgres { "ANALYZE scan_big" } else { "ANALYZE TABLE scan_big" }, 1)
+            .await
+            .unwrap();
+        let scans = db.full_scans("SELECT * FROM scan_big WHERE note = 'x'").await.unwrap();
+        let (table, rows) = scans.first().unwrap_or_else(|| panic!("{engine:?}: no full scan found"));
+        assert!(table == "scan_big" || table == "public.scan_big", "{engine:?}: {table}");
+        assert!(*rows > 1000.0, "{engine:?}: {rows}");
+        // By its key: no full scan; writes aren't planned.
+        assert!(db.full_scans("SELECT * FROM scan_big WHERE id = 5").await.unwrap().is_empty(), "{engine:?}");
+        assert!(db.full_scans("DELETE FROM scan_big WHERE note = 'x'").await.unwrap().is_empty(), "{engine:?}");
+        assert!(db.full_scans("SELECT * FROM scan_big LIMIT 5").await.unwrap().is_empty(), "{engine:?}: limited");
+        db.run("DROP TABLE scan_big", 1).await.unwrap();
+    }
+}
+
+#[test]
+fn full_scans_in_plans() {
+    use crate::db::dialect::Scan;
+    let rows = |text: &str| vec![vec![Some(text.to_string())]];
+    let pg = |plan: &str| Engine::Postgres.dialect().full_scans(&["QUERY PLAN".into()], &rows(plan));
+    let scan =
+        |schema: Option<&str>, table: &str, rows| Scan { schema: schema.map(str::to_string), ..Scan::new(table, rows) };
+    let join = r#"[{"Plan": {"Node Type": "Hash Join", "Plans": [
+        {"Node Type": "Seq Scan", "Relation Name": "orders", "Schema": "shop", "Plan Rows": 5000},
+        {"Node Type": "Index Scan", "Relation Name": "customers"}]}}]"#;
+    assert_eq!(pg(join), [scan(Some("shop"), "orders", Some(5000.0))]);
+    // A LIMIT stops a plain scan early; not one with a filter, nor one
+    // under a sort, nor the inner side of a nested loop.
+    let limited = r#"[{"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Seq Scan", "Relation Name": "t", "Plan Rows": 9}]}}]"#;
+    assert!(pg(limited).is_empty());
+    let filtered = r#"[{"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Seq Scan", "Relation Name": "t", "Filter": "(x = 1)", "Plan Rows": 9}]}}]"#;
+    assert_eq!(pg(filtered), [scan(None, "t", None)], "rows to be looked up: the filter's aren't the table's");
+    let sorted = r#"[{"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Sort", "Plans": [{"Node Type": "Seq Scan", "Relation Name": "t", "Plan Rows": 9}]}]}}]"#;
+    assert_eq!(pg(sorted), [scan(None, "t", Some(9.0))]);
+    let nested = r#"[{"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Nested Loop", "Plans": [
+        {"Node Type": "Seq Scan", "Relation Name": "a", "Plan Rows": 9},
+        {"Node Type": "Seq Scan", "Relation Name": "b", "Plan Rows": 9}]}]}}]"#;
+    assert_eq!(pg(nested), [scan(None, "b", Some(9.0))]);
+
+    let my = |plan: &str| Engine::MySql.dialect().full_scans(&["EXPLAIN".into()], &rows(plan));
+    let tree = "-> Filter: (t.x = 1)  (cost=10.5 rows=2)\n    -> Table scan on t  (cost=10.5 rows=5200)";
+    assert_eq!(my(tree), [scan(None, "t", Some(5200.0))]);
+    assert!(my("-> Limit: 5 row(s)  (cost=1 rows=5)\n    -> Table scan on t  (cost=1 rows=5200)").is_empty());
+    let limited_filter = "-> Limit: 5 row(s)\n    -> Filter: (t.x = 1)\n        -> Table scan on t  (cost=1 rows=5200)";
+    assert_eq!(my(limited_filter), [scan(None, "t", Some(5200.0))]);
+    let limited_sort = "-> Limit: 5 row(s)\n    -> Sort: t.x, limit input to 5 row(s) per chunk\n        -> Table scan on t  (cost=1 rows=5200)";
+    assert_eq!(my(limited_sort), [scan(None, "t", Some(5200.0))]);
+    let cols: Vec<String> = ["id", "select_type", "table", "type", "rows"].map(String::from).to_vec();
+    let classic =
+        vec![vec![Some("1".into()), Some("SIMPLE".into()), Some("t".into()), Some("ALL".into()), Some("99".into())]];
+    assert_eq!(Engine::MySql.dialect().full_scans(&cols, &classic), [scan(None, "t", Some(99.0))]);
+    let sqlite = vec![
+        vec![Some("2".into()), Some("0".into()), Some("0".into()), Some("SCAN t".into())],
+        vec![Some("3".into()), Some("0".into()), Some("0".into()), Some("SEARCH u USING INDEX i (x=?)".into())],
+        vec![Some("4".into()), Some("0".into()), Some("0".into()), Some("SCAN v USING COVERING INDEX j".into())],
+    ];
+    assert_eq!(Engine::Sqlite.dialect().full_scans(&[], &sqlite), [scan(None, "t", None)]);
+}

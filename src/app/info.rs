@@ -76,6 +76,7 @@ impl App {
             || (self.tab.result_tab == ResultTab::Plan && self.tab.plan_source.is_some())
             // What agents did, for the status bar's note.
             || self.watching_agents()
+            || self.watch.is_some()
     }
 
     /// Pings an idle connection every `keepalive` seconds: notices a dropped

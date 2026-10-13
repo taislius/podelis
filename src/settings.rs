@@ -73,6 +73,10 @@ pub struct Settings {
     /// Seconds a query must run before its end is announced (a bell and a
     /// desktop notification) while you're in another window; 0 turns it off.
     pub notify_after: u64,
+    /// On production connections, a query that would read a whole table of
+    /// at least this many rows asks first (agents' are refused); 0 turns
+    /// the check off.
+    pub guard_rows: u64,
     /// Key bindings by action name (see `keys.rs`).
     pub keys: HashMap<String, KeySpec>,
 }
@@ -94,6 +98,7 @@ impl Default for Settings {
             keepalive: 0,
             leader_double_space: false,
             notify_after: 10,
+            guard_rows: 1_000_000,
             keys: HashMap::new(),
         }
     }

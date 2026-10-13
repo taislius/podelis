@@ -1,6 +1,7 @@
 mod agents;
 mod analyze;
 mod app;
+mod chart;
 mod cli;
 mod clipboard;
 mod complete;
@@ -22,8 +23,10 @@ mod logging;
 mod mcp;
 mod params;
 mod parse;
+mod related;
 mod scope;
 mod settings;
+mod snapshots;
 mod sql;
 mod store;
 mod theme;

@@ -35,6 +35,9 @@ pub struct ResultGrid {
     pub vertical: bool,
     /// Only because the run ended with `\G`.
     pub vertical_by_g: bool,
+    /// Rows new or changed since watch mode's run before (indices into
+    /// `results.rows`).
+    pub changed_rows: std::collections::HashSet<usize>,
 }
 
 impl ResultGrid {

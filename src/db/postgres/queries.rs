@@ -129,6 +129,26 @@ pub(in crate::db) async fn routine_definition(db: &Database, routine: &RoutineIn
     }
 }
 
+pub(in crate::db) async fn link_rows(
+    p: &PgPool,
+) -> Result<Vec<(String, String, String, String, String, Option<String>)>> {
+    Ok(sqlx::query_as(
+        "SELECT n.nspname::text, t.relname::text, a.attname::text, fn.nspname::text, ft.relname::text, fa.attname::text
+             FROM pg_constraint c
+             JOIN pg_class t ON t.oid = c.conrelid
+             JOIN pg_namespace n ON n.oid = t.relnamespace
+             JOIN pg_class ft ON ft.oid = c.confrelid
+             JOIN pg_namespace fn ON fn.oid = ft.relnamespace
+             CROSS JOIN LATERAL unnest(c.conkey, c.confkey) AS k(col, fcol)
+             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.col
+             JOIN pg_attribute fa ON fa.attrelid = c.confrelid AND fa.attnum = k.fcol
+             WHERE c.contype = 'f' AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+             ORDER BY n.nspname, t.relname, c.conname",
+    )
+    .fetch_all(p)
+    .await?)
+}
+
 pub(in crate::db) async fn table_details(p: &PgPool, schema: &str, table: &str) -> Result<TableDetails> {
     let indexes: Vec<(String, bool, bool, String, String)> = sqlx::query_as(
         "SELECT i.relname::text, ix.indisunique, ix.indisprimary,
@@ -288,4 +308,31 @@ pub(in crate::db) fn prepare_problem(err: &dyn sqlx::error::DatabaseError) -> Op
 pub(in crate::db) async fn cancel(p: &PgPool, id: i64) -> Result<()> {
     sqlx::query("SELECT pg_cancel_backend($1)").bind(id as i32).execute(p).await?;
     Ok(())
+}
+
+/// The JSON plan of `statement` for the heavy-query guard, made on a pool
+/// connection (a failure there can't abort the session's transaction),
+/// with schemas (`VERBOSE`).
+pub(in crate::db) async fn guard_plan(p: &PgPool, statement: &str) -> Option<String> {
+    let sql = format!("EXPLAIN (FORMAT JSON, VERBOSE) {statement}");
+    let row = sqlx::raw_sql(AssertSqlSafe(sql)).fetch_one(p).await.ok()?;
+    row.try_get::<serde_json::Value, _>(0).ok().map(|v| v.to_string())
+}
+
+/// A table's row count as the planner estimates it (none before it was
+/// first analyzed). Without a schema, as the search path finds it.
+pub(in crate::db) async fn estimated_rows(p: &PgPool, schema: Option<&str>, table: &str) -> Option<f64> {
+    let query = match schema {
+        Some(schema) => sqlx::query_scalar::<_, f64>(
+            "SELECT c.reltuples::float8 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = $1 AND c.relname = $2",
+        )
+        .bind(schema)
+        .bind(table),
+        None => sqlx::query_scalar::<_, f64>(
+            "SELECT reltuples::float8 FROM pg_class WHERE oid = to_regclass(quote_ident($1))",
+        )
+        .bind(table),
+    };
+    query.fetch_optional(p).await.ok().flatten().filter(|rows| *rows >= 0.0)
 }
