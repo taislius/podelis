@@ -201,6 +201,10 @@ impl Database {
     }
 
     pub async fn run(&self, sql: &str, row_limit: usize) -> Result<QueryOutcome> {
+        self.run_retrying(sql, row_limit, true).await
+    }
+
+    async fn run_retrying(&self, sql: &str, row_limit: usize, retry_reads: bool) -> Result<QueryOutcome> {
         let start = Instant::now();
         let mut session = self.0.session.lock().await;
         self.clear_interrupt();
@@ -219,7 +223,7 @@ impl Database {
                 let reads_only = crate::analyze::analyze(&crate::parse::parse(sql, self.0.engine))
                     .iter()
                     .all(|i| i.kind == crate::analyze::Kind::Read);
-                if !reads_only {
+                if !reads_only || !retry_reads {
                     return Err(e.context(errors::Reconnected));
                 }
                 reconnected = true;
@@ -308,6 +312,30 @@ impl Database {
         Ok(CheckOutcome::Problem { message, position, syntax })
     }
 
+    /// Runs `sql`, cancelling it once `time_limit` passes. A cancelled query
+    /// is let finish (with its error) first, so the session is free again.
+    /// With `retry` false, a read isn't run again after a reconnect (see
+    /// [`run_once`]).
+    pub async fn run_within(
+        &self,
+        sql: &str,
+        row_limit: usize,
+        time_limit: Option<Duration>,
+        retry: bool,
+    ) -> Result<QueryOutcome, RunError> {
+        let run = self.run_retrying(sql, row_limit, retry);
+        tokio::pin!(run);
+        let Some(limit) = time_limit else { return run.await.map_err(RunError::Failed) };
+        tokio::select! {
+            result = &mut run => result.map_err(RunError::Failed),
+            () = tokio::time::sleep(limit) => {
+                let _ = self.cancel().await;
+                let _ = run.await;
+                Err(RunError::TimedOut(limit))
+            }
+        }
+    }
+
     /// Cancels whatever the session connection is running: the server is
     /// asked over a separate pool connection, since the session one is busy;
     /// SQLite's progress handler sees the interrupt flag.
@@ -331,6 +359,14 @@ impl Database {
             Pool::Sqlite(p) => p.close().await,
         }
     }
+}
+
+/// Why [`Database::run_within`] gave no result.
+#[derive(Debug)]
+pub enum RunError {
+    /// The time limit ran out, and the query was cancelled.
+    TimedOut(Duration),
+    Failed(anyhow::Error),
 }
 
 impl StatementResult {

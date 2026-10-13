@@ -54,6 +54,7 @@ pub use errors::{
 };
 use mysql::cells::mysql_cell;
 pub use options::{ConnectParams, ConnectionMode, Engine, PasswordSource, SslMode, TxMode};
+pub use run::RunError;
 use postgres::cells::pg_cell;
 use sqlite::cells::sqlite_cell;
 use tunnel::{Tunnel, open_tunnel};

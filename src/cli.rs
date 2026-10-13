@@ -268,22 +268,14 @@ async fn execute_inner(args: &Args, store: &ConnectionStore) -> Result<(), Failu
     let db = connect(&form, args).await?;
     let limit = args.limit.unwrap_or(usize::MAX);
     let timeout = form.query_timeout().map_err(Failure::usage)?;
-    let run = db.run(&sql, limit);
-    tokio::pin!(run);
-    let result = match timeout {
-        Some(limit) => tokio::select! {
-            result = &mut run => result,
-            () = tokio::time::sleep(limit) => {
-                let _ = db.cancel().await;
-                let _ = run.await;
-                db.close().await;
-                return Err(Failure(exit::TIMEOUT, format!("timed out after {} s (the connection's limit)", limit.as_secs())));
-            }
-        },
-        None => run.await,
-    };
+    let result = db.run_within(&sql, limit, timeout, true).await;
     db.close().await;
-    let outcome = result.map_err(|e| Failure::from_query(&e))?;
+    let outcome = result.map_err(|e| match e {
+        crate::db::RunError::TimedOut(limit) => {
+            Failure(exit::TIMEOUT, format!("timed out after {} s (the connection's limit)", limit.as_secs()))
+        }
+        crate::db::RunError::Failed(e) => Failure::from_query(&e),
+    })?;
     let format = args.format.unwrap_or(if std::io::stdout().is_terminal() { Format::Table } else { Format::Csv });
     let mut out = std::io::stdout().lock();
     if outcome.columns.is_empty() {
