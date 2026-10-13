@@ -551,7 +551,8 @@ async fn live_begin_in_script_postgres() {
 #[tokio::test]
 async fn live_begin_in_script_mysql() {
     let Some(db) = live_db(Engine::MySql).await else { return };
-    db.run("CREATE DATABASE IF NOT EXISTS podelis_test; USE podelis_test", 10).await.unwrap();
+    // Its own database: live_mysql drops podelis_test when it's done.
+    db.run("CREATE DATABASE IF NOT EXISTS podelis_script; USE podelis_script", 10).await.unwrap();
     live_begin_in_script(&db, "podelis_review").await;
 }
 
@@ -640,11 +641,11 @@ async fn binary_values_show_in_hex_and_go_back_as_literals() {
         // A NUL, 0xFF, a quote and a backslash.
         let (create, insert, shown) = match engine {
             Engine::Postgres => ("CREATE TEMP TABLE bin_t (b bytea)", r"'\x00ff275c'", r"\x00ff275c"),
-            Engine::MySql => ("CREATE TEMPORARY TABLE podelis_test.bin_t (b blob)", "X'00FF275C'", "0x00FF275C"),
+            Engine::MySql => ("CREATE TEMPORARY TABLE bin_t (b blob)", "X'00FF275C'", "0x00FF275C"),
             Engine::Sqlite => ("CREATE TEMP TABLE bin_t (b blob)", "X'00FF275C'", "X'00FF275C'"),
         };
         if engine == Engine::MySql {
-            db.run("CREATE DATABASE IF NOT EXISTS podelis_test; USE podelis_test", 1).await.unwrap();
+            db.run("CREATE DATABASE IF NOT EXISTS podelis_bin; USE podelis_bin", 1).await.unwrap();
         }
         db.run(&format!("{create}; INSERT INTO bin_t VALUES ({insert}), ({insert})"), 1).await.unwrap();
         let o = db.run("SELECT b FROM bin_t", DEFAULT_ROW_LIMIT).await.unwrap();

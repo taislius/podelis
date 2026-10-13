@@ -589,7 +589,8 @@ mod tests {
         for engine in [Engine::Postgres, Engine::MySql] {
             let Some(db) = crate::db::tests::live_db(engine).await else { return };
             if engine == Engine::MySql {
-                db.run("CREATE DATABASE IF NOT EXISTS podelis_test; USE podelis_test", 1).await.unwrap();
+                // Its own database: live_mysql drops podelis_test when it's done.
+                db.run("CREATE DATABASE IF NOT EXISTS podelis_diff; USE podelis_diff", 1).await.unwrap();
             }
             db.run("DROP TABLE IF EXISTS same_t", 1).await.unwrap();
             db.run(ddl, 1).await.unwrap();
