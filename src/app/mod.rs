@@ -660,6 +660,9 @@ pub struct App {
     /// A note about typing (e.g. "No completions") in the editor's footer,
     /// next to where you type; gone with the next key.
     pub editor_note: Option<String>,
+    pub editor_note_is_error: bool,
+    /// Handling a key, click or paste (see `on_input`).
+    handling_input: bool,
     lint_due: Option<Instant>,
     pub settings: Settings,
     pub keymap: crate::keys::KeyMap,
@@ -743,6 +746,8 @@ pub struct App {
     /// The statement of the EXPLAIN on its way, and whether it's ANALYZE.
     /// And the editor line it starts on.
     plan_request: Option<(String, bool, usize)>,
+    /// F7 while a query ran: the statement to plan (and its line) next.
+    queued_plan: Option<(String, usize)>,
     /// Pane sizes moved with Ctrl+arrows: the navigator's width (`None`
     /// for a quarter of the screen) and the editor's share of the height,
     /// in percent.
@@ -856,6 +861,8 @@ impl App {
             #[cfg(test)]
             sandbox: false,
             editor_note: None,
+            editor_note_is_error: false,
+            handling_input: false,
             lint_due: None,
             settings: Settings::default(),
             keymap: crate::keys::KeyMap::default(),
@@ -910,6 +917,7 @@ impl App {
             zoomed: false,
             routine_definition_pending: false,
             plan_request: None,
+            queued_plan: None,
             schema_width: None,
             editor_percent: 40,
             schema_shown: false,
@@ -1059,6 +1067,7 @@ impl App {
 
     fn invalidate_tasks(&mut self) {
         self.generation += 1;
+        self.queued_plan = None;
         if let Some(task) = self.task.take() {
             task.abort();
         }
@@ -1131,10 +1140,37 @@ impl App {
         });
     }
 
+    /// A message for the user: in the editor's footer when it's about
+    /// something done there, otherwise in the status bar.
     fn set_status(&mut self, status: String, is_error: bool) {
+        // Not while the find bar has the footer's place, or from a popup.
+        let editor = self.screen == Screen::Query && self.focus == Focus::Editor;
+        // The completion list belongs to the editor.
+        let popup = self.help_visible || self.top_overlay().is_some_and(|o| o != Overlay::Completion);
+        if self.handling_input && editor && self.find.is_none() && !popup {
+            self.editor_note = Some(status);
+            self.editor_note_is_error = is_error;
+            return;
+        }
         self.status = status;
         self.status_is_error = is_error;
         self.status_in_results = false;
+    }
+
+    /// A run's progress or outcome, in the results pane's footer.
+    fn set_result_status(&mut self, status: String, is_error: bool) {
+        self.status = status;
+        self.status_is_error = is_error;
+        self.status_in_results = true;
+    }
+
+    /// Runs `handle` for a key, click or paste: what it reports while the
+    /// editor has the focus goes to the editor's own footer.
+    fn on_input(&mut self, handle: impl FnOnce(&mut Self)) {
+        // A paste can be handled inside a key (Ctrl+V).
+        let outer = std::mem::replace(&mut self.handling_input, true);
+        handle(self);
+        self.handling_input = outer;
     }
 
     #[cfg(test)]
@@ -1212,6 +1248,10 @@ impl App {
     }
 
     pub fn handle_paste(&mut self, text: &str) {
+        self.on_input(|app| app.paste(text));
+    }
+
+    fn paste(&mut self, text: &str) {
         match self.screen {
             Screen::Query => self.paste_on_query_screen(text),
             Screen::Projects => {
@@ -1241,12 +1281,17 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
+        self.on_input(|app| app.key(key));
+    }
+
+    fn key(&mut self, key: KeyEvent) {
         // Messages last until the next key; the MESSAGES tab keeps outcomes.
         if !self.executing {
             self.status.clear();
             self.status_is_error = false;
         }
         self.editor_note = None;
+        self.editor_note_is_error = false;
         // A key hides the reopening card; a key typed before it showed counts.
         if let Some(splash) = self.splash.take()
             && splash.shown
@@ -1307,6 +1352,7 @@ impl App {
                 }
             }
             if !yes {
+                self.queued_plan = None;
                 self.set_status("Cancelled".to_string(), false);
                 return;
             }

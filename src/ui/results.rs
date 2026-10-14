@@ -101,6 +101,8 @@ pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
     // info comes back after it.
     if app.status_in_results && !app.status.is_empty() && app.cell_edit.is_none() {
         let style = if app.status_is_error { bold(t.error) } else { fg(t.text) };
+        // In place of the cell info: none of it may show through.
+        f.render_widget(Clear, footer);
         f.render_widget(Block::default().style(Style::default().bg(t.inset)), footer);
         f.render_widget(
             Paragraph::new(Span::styled(format!(" {}", truncate(&app.status, footer.width as usize)), style)),

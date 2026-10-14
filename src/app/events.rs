@@ -95,8 +95,14 @@ impl App {
                     form.error = Some(form.connect_failure(&crate::db::with_hint(&err)));
                 }
             }
-            DbEventKind::QueryDone(outcome, txn, stream) => self.on_query_done(outcome, txn, stream),
-            DbEventKind::QueryFailed(err, position, txn) => self.on_query_failed(&err, position, txn),
+            DbEventKind::QueryDone(outcome, txn, stream) => {
+                self.on_query_done(outcome, txn, stream);
+                self.run_queued_plan();
+            }
+            DbEventKind::QueryFailed(err, position, txn) => {
+                self.on_query_failed(&err, position, txn);
+                self.drop_queued_plan();
+            }
             DbEventKind::MoreRows(page) => self.append_rows(page),
             DbEventKind::ExportProgress(rows) => self.export_progress(rows),
             DbEventKind::ExportDone(path, result) => self.export_done(&path, result),

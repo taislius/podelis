@@ -27,15 +27,11 @@ pub(super) fn highlight_style(hl: Highlight) -> Style {
 pub(super) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Option<(u16, u16)> {
     let t = theme();
     let focused = app.focus == Focus::Editor;
-    let info = [
-        app.zoomed.then_some("ZOOMED"),
-        app.executing.then_some("RUNNING…"),
-        app.vim_mode().map(crate::app::VimMode::label),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(" · ");
+    let info = [app.zoomed.then_some("ZOOMED"), app.vim_mode().map(crate::app::VimMode::label)]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ");
     // No line/column readout: the gutter already marks the current line.
     let mut block = pane("Query", &info, focused);
     if app.active_mode == ConnectionMode::Production {
@@ -459,7 +455,12 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
     if let Some(bar) = &app.find {
         return draw_find_bar(f, app, bar, area);
     }
-    let right = Line::from(tx_status(app, area.width));
+    let mut right = Line::from(tx_status(app, area.width));
+    // A message (until the next key) has the room before the write modes.
+    let note_w = app.editor_note.as_deref().map_or(0, |n| Span::raw(one_line(n)).width() as u16 + 3);
+    if note_w > 0 && note_w + right.width() as u16 > area.width {
+        right = Line::default();
+    }
     let right_w = right.width() as u16;
     // Which statement F6 runs, when there's more than one and no selection.
     let position = statement_position(app)
@@ -475,8 +476,10 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
         ])
         .areas(area);
     f.render_widget(Paragraph::new(Span::styled(position, muted())), middle);
+    // The editor's own messages first: what was done here, or why not.
     let left = if let Some(note) = &app.editor_note {
-        Line::from(Span::styled(format!(" {}", truncate(note, l.width as usize)), fg(t.text)))
+        let style = if app.editor_note_is_error { bold(t.error) } else { fg(t.text) };
+        Line::from(Span::styled(format!(" {}", truncate(&one_line(note), l.width as usize)), style))
     } else if let Some(hint) = &app.tab.syntax_hint {
         let (label, color, rule) = match hint.source {
             HintSource::Server => ("SERVER", t.error, ""),

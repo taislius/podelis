@@ -976,7 +976,8 @@ fn run_buttons_sit_right_of_the_tabs_and_click() {
     });
     // It ran (here: there's no database behind the test connection).
     assert_eq!(app.focus, Focus::Editor);
-    assert!(app.status.contains("connect"), "{}", app.status);
+    let note = app.editor_note.as_deref().unwrap_or_default();
+    assert!(note.contains("connect"), "in the editor's footer: {note}");
 }
 
 #[test]
@@ -1248,4 +1249,22 @@ fn monkey_results(round: u64) -> QueryOutcome {
         statements: 1,
         ..QueryOutcome::default()
     }
+}
+
+#[test]
+fn clicking_the_editor_tabs_focuses_the_editor() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let click = |kind, x, y| MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::NONE };
+    let (mut app, _dir) = query_app();
+    // Even while a query runs (the tab can't be switched then).
+    app.executing = true;
+    let _ = render(&mut app, 110, 26);
+    let (tab, y) = (app.hits.tabs[0].0 + 2, app.hits.tabs_y);
+    app.focus = Focus::Results;
+    app.handle_mouse(click(MouseEventKind::Down(MouseButton::Left), tab, y));
+    assert_eq!(app.focus, Focus::Editor);
+    // A right-click there opens the editor's menu, not the results'.
+    app.focus = Focus::Results;
+    app.handle_mouse(click(MouseEventKind::Down(MouseButton::Right), tab, y));
+    assert_eq!(app.menu.as_ref().map(|m| m.title), Some("EDITOR"));
 }

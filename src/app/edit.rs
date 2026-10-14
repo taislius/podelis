@@ -108,6 +108,9 @@ impl App {
 
     /// Runs the UPDATE through the normal safety checks (production asks).
     fn save_cell_edit(&mut self, value: Option<String>) {
+        if self.executing {
+            return self.set_status("A query is running: the edit stays open until it's done".to_string(), true);
+        }
         let Some(edit) = self.cell_edit.take() else { return };
         let engine = self.engine();
         let literal = |v: Option<&str>| {

@@ -162,6 +162,9 @@ impl App {
 
     /// INSERT with the filled-in fields; empty ones get their default.
     fn submit_row_insert(&mut self) {
+        if self.executing {
+            return self.set_status("A query is running: the row stays here until it's done".to_string(), true);
+        }
         let Some(form) = self.row_form.take() else { return };
         let engine = self.engine();
         let filled: Vec<(String, String)> = form

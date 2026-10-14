@@ -226,8 +226,7 @@ impl App {
         let Some((there, other)) = self.compare_target(id) else { return };
         self.row_stream = None;
         self.executing = true;
-        self.set_status(format!("Running on this connection and on {}…", other.name), false);
-        self.status_in_results = true;
+        self.set_result_status(format!("Running on this connection and on {}…", other.name), false);
         let send = self.sender();
         let limit = self.settings.row_limit;
         self.task = Some(tokio::spawn(async move {
@@ -244,6 +243,8 @@ impl App {
     pub(super) fn rows_compared(&mut self, other: &Other, result: Result<(QueryOutcome, QueryOutcome), String>) {
         self.executing = false;
         self.task = None;
+        // A plan asked for meanwhile: the comparison is shown instead.
+        self.queued_plan = None;
         let compared = result.and_then(|(here, there)| {
             let truncated = here.truncated() || there.truncated();
             diff::row_diff(&here, &there).map(|d| (d, truncated, here.rows.len()))
@@ -252,8 +253,7 @@ impl App {
             Ok(d) => d,
             Err(e) => {
                 self.log(e.clone(), true);
-                self.set_status(e, true);
-                self.status_in_results = true;
+                self.set_result_status(e, true);
                 return;
             }
         };
@@ -274,8 +274,7 @@ impl App {
             let _ = write!(status, " (first {rows} rows; row_limit)");
         }
         self.log(status.clone(), false);
-        self.set_status(status, false);
-        self.status_in_results = true;
+        self.set_result_status(status, false);
         self.set_result_tab(ResultTab::Rows);
         self.focus = Focus::Results;
     }

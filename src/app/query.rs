@@ -478,6 +478,7 @@ impl App {
             let loading = self.schema.as_ref().is_some_and(|s| s.loading);
             let msg = if loading { "No completions yet (schema still loading)" } else { "No completions" };
             self.editor_note = Some(msg.to_string());
+            self.editor_note_is_error = false;
         }
     }
 
@@ -1148,7 +1149,7 @@ impl App {
 
     pub(super) fn execute_with(&mut self, sql: String, offset: usize, purpose: RunPurpose) {
         if self.executing {
-            return;
+            return self.set_status("A query is running: wait for it, or Esc stops it".to_string(), true);
         }
         if self.database.is_none() {
             return self.set_status(self.not_connected_message(), true);
@@ -1215,7 +1216,7 @@ impl App {
             && !infos.is_empty()
             && infos.iter().all(|i| i.kind == Kind::Read);
         if guarded && let Some(db) = self.database.clone() {
-            self.set_status("Checking the plan before running on production…".to_string(), false);
+            self.set_result_status("Checking the plan before running on production…".to_string(), false);
             // Running, as far as the rest of the app goes: nothing else
             // starts, and Esc stops it.
             self.executing = true;
@@ -1285,8 +1286,9 @@ impl App {
 
     /// Shows the plan for the selection or the statement at the cursor,
     /// without running it.
+    /// While a query runs, it's made as soon as that finishes.
     pub(super) fn explain_current(&mut self) {
-        if self.executing || self.database.is_none() {
+        if self.database.is_none() {
             return;
         }
         let Some((stmt, line)) = self.statement_to_explain() else {
@@ -1295,6 +1297,34 @@ impl App {
         if stmt.to_ascii_uppercase().starts_with("EXPLAIN") {
             return self.set_status("That's already an EXPLAIN; run it with F6".to_string(), true);
         }
+        if self.executing {
+            self.queued_plan = Some((stmt, line));
+            return self.set_status("The plan follows when the running query finishes (Esc stops both)".into(), false);
+        }
+        self.explain_statement(stmt, line);
+    }
+
+    /// The plan queued while a query ran, now that it's done.
+    /// Not while something still runs (the plan waits) or asks the user
+    /// something (a review, a confirmation: the plan is dropped).
+    pub(super) fn run_queued_plan(&mut self) {
+        if self.executing {
+            return;
+        }
+        let Some((stmt, line)) = self.queued_plan.take() else { return };
+        if !self.popup_open() {
+            self.explain_statement(stmt, line);
+        }
+    }
+
+    /// After a failed run, the queued plan isn't made: the error stays in view.
+    pub(super) fn drop_queued_plan(&mut self) {
+        if self.queued_plan.take().is_some() {
+            self.status.push_str(" · the plan wasn't made");
+        }
+    }
+
+    fn explain_statement(&mut self, stmt: String, line: usize) {
         let version = self.database.as_ref().map_or("", |db| db.version());
         let explain = self.engine().dialect().explain(&stmt, version);
         self.plan_request = Some((stmt, false, line));
@@ -1456,6 +1486,12 @@ impl App {
         // Anything else run stops watch mode.
         if !self.watch_rerun {
             self.stop_watch(": another query ran");
+            // The tab for what's coming, while it runs.
+            match purpose {
+                RunPurpose::Query => self.set_result_tab(ResultTab::Rows),
+                RunPurpose::Explain => self.set_result_tab(ResultTab::Plan),
+                _ => {}
+            }
         }
         let Some(db) = self.database.clone() else { return };
         // A still-open streamed result holds the session: close it (which
@@ -1494,8 +1530,7 @@ impl App {
             self.connect_form.query_timeout().ok().flatten().map(|limit| (Instant::now() + limit, limit));
         self.tab.error_marker = None;
         self.executing = true;
-        self.set_status("Running… (Esc to cancel)".to_string(), false);
-        self.status_in_results = true;
+        self.set_result_status("Running… (Esc to cancel)".to_string(), false);
         let send = self.sender();
         let row_limit = self.next_row_limit.take().unwrap_or(self.settings.row_limit);
         tracing::debug!(statements = self.last_run_infos.len(), stream, row_limit, "run");
@@ -1588,7 +1623,8 @@ impl App {
         }
         let Some(db) = self.database.clone() else { return };
         self.cancelling = true;
-        self.set_status("Cancelling...".to_string(), false);
+        self.queued_plan = None;
+        self.set_result_status("Cancelling...".to_string(), false);
         let send = self.sender();
         tokio::spawn(async move {
             if let Err(e) = db.cancel().await {

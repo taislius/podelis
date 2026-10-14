@@ -499,12 +499,12 @@ fn ctrl_c_copies_on_the_query_screen_and_ctrl_q_quits() {
     app.handle_key(key(KeyCode::Esc));
     app.tab.editor.set_cursor((1, 2));
     app.handle_key(ctrl('c'));
-    assert_eq!((app.take_clipboard().as_deref(), app.status.as_str()), (Some("from t"), "Copied line 2"));
+    assert_eq!((app.take_clipboard().as_deref(), said(&app)), (Some("from t"), "Copied line 2"));
     // An empty line has nothing to copy; Ctrl+C never quits here.
     app.tab.editor.set_cursor((2, 0));
     app.handle_key(ctrl('c'));
     assert!(app.take_clipboard().is_none() && !app.should_quit);
-    assert_eq!(app.status, "Nothing to copy here · Ctrl+Q quits");
+    assert_eq!(said(&app), "Nothing to copy here · Ctrl+Q quits");
     app.handle_key(ctrl('q'));
     assert!(app.should_quit);
 }
@@ -557,7 +557,7 @@ async fn read_only_mode_refuses_writes() {
     let (mut app, _dir) = connected_app(ConnectionMode::ReadOnly).await;
     run_sql(&mut app, "select 1; delete from t where id = 1").await;
     assert!(!app.executing && app.confirm.is_none());
-    assert!(app.status_is_error && app.status.contains("Read-only"), "{}", app.status);
+    assert!(app.editor_note_is_error && said(&app).contains("Read-only"), "{}", said(&app));
     run_sql(&mut app, "select 42").await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("42".to_string())]]);
 }
@@ -618,7 +618,7 @@ async fn tx_modes_auto_manual_and_rollback_only() {
     assert!(app.review.is_none(), "reads don't open a review");
     // Scripts with their own transaction control are refused.
     run_sql(&mut app, "begin; delete from t where id = 1; commit").await;
-    assert!(app.status_is_error && app.status.contains("BEGIN/COMMIT"), "{}", app.status);
+    assert!(app.editor_note_is_error && said(&app).contains("BEGIN/COMMIT"), "{}", said(&app));
 
     // Rollback-only: the write runs, its count is shown, and it is rolled back.
     tx_mode(&mut app, 'r');
@@ -1293,6 +1293,51 @@ async fn f7_shows_the_plan_without_running() {
 }
 
 #[tokio::test]
+async fn runs_show_their_tab_at_once_and_f7_waits_for_a_running_query() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    run_sql(&mut app, "create table t (id integer primary key)").await;
+    // F7 shows QUERY PLAN as it starts, F5 the RESULT tab.
+    app.tab.editor.set_text("select * from t");
+    app.handle_key(key(KeyCode::F(7)));
+    assert!(app.executing && app.tab.result_tab == ResultTab::Plan);
+    finish(&mut app).await;
+    // (Showing the plan moved to the results; back to typing.)
+    app.focus = Focus::Editor;
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(app.executing && app.tab.result_tab == ResultTab::Rows);
+    // While it runs, F5 says why it does nothing, and F7 waits for it.
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(app.editor_note_is_error && said(&app).starts_with("A query is running"), "{}", said(&app));
+    app.tab.editor.set_text("select id from t where id = 1");
+    app.handle_key(key(KeyCode::F(7)));
+    assert!(said(&app).starts_with("The plan follows"), "{}", said(&app));
+    // In the editor's footer: the results pane still says it's running.
+    assert_eq!(app.status, "Running… (Esc to cancel)");
+    // Waits for the query, then the plan made after it.
+    finish(&mut app).await;
+    assert_eq!(app.tab.result_tab, ResultTab::Plan);
+    let plan = app.tab.plan.as_ref().map(|p| p.text.as_str()).expect("plan");
+    assert!(plan.contains("SEARCH t"), "{plan}");
+
+    // A failed query keeps its error in view: the plan isn't made.
+    app.focus = Focus::Editor;
+    app.tab.editor.set_text("select nope from t");
+    app.handle_key(key(KeyCode::F(5)));
+    app.handle_key(key(KeyCode::F(7)));
+    finish(&mut app).await;
+    assert!(app.status.contains("nope") && app.status.ends_with(" · the plan wasn't made"), "{}", app.status);
+    assert!(app.queued_plan.is_none() && app.tab.result_tab != ResultTab::Plan);
+    // Esc stops both the query and the plan waiting for it.
+    app.tab.editor.set_text("select * from t");
+    app.handle_key(key(KeyCode::F(5)));
+    app.handle_key(key(KeyCode::F(7)));
+    assert!(app.queued_plan.is_some());
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.queued_plan.is_none());
+    finish(&mut app).await;
+}
+
+#[tokio::test]
 async fn result_tabs_messages_and_help() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
     run_sql(&mut app, "select 1").await;
@@ -1487,6 +1532,11 @@ async fn insert_export_round_trips_through_the_database() {
 
 fn alt(c: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT)
+}
+
+/// The last message: in the editor's footer, else the status bar.
+fn said(app: &App) -> &str {
+    app.editor_note.as_deref().unwrap_or(&app.status)
 }
 
 fn ctrl(c: char) -> KeyEvent {

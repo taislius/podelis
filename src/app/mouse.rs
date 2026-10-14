@@ -15,6 +15,10 @@ pub(super) fn inside(r: Rect, x: u16, y: u16) -> bool {
 
 impl App {
     pub fn handle_mouse(&mut self, ev: MouseEvent) {
+        self.on_input(|app| app.mouse(ev));
+    }
+
+    fn mouse(&mut self, ev: MouseEvent) {
         let (x, y) = (ev.column, ev.row);
         let click = matches!(ev.kind, MouseEventKind::Down(MouseButton::Left));
         // The project's name in the top bar opens the projects pane.
@@ -165,6 +169,8 @@ impl App {
             return;
         }
         if y == hits.tabs_y && inside(hits.editor, x, y) && self.click_tab_row(&hits, x) {
+            // The tabs are the editor's, even while one can't be switched to.
+            self.focus = Focus::Editor;
             return;
         }
         if inside(hits.editor_text, x, y) {
