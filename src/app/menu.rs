@@ -107,6 +107,11 @@ impl App {
                         results_item("Copy the cell", Char('y'), "y"),
                         results_item("Copy the row (or the marked rows)", Char('Y'), "Y"),
                         results_item("Copy rows as a Markdown table", Char('C'), "C"),
+                        MenuItem {
+                            label: "Copy rows as CSV",
+                            keys: String::new(),
+                            action: MenuAction::Command(super::palette::Command::CopyRows(ExportFormat::Csv)),
+                        },
                         results_item("Follow the foreign key", Char('f'), "f"),
                         results_item("Pipe rows through a command", Char('|'), "|"),
                         results_item("Open rows in the viewer", Char('o'), "o"),
@@ -142,6 +147,7 @@ impl App {
                         schema_item("SELECT * from it: add to the editor and run", Char('s'), "s"),
                         schema_item("Show the definition", Char('d'), "d"),
                         schema_item("Related tables (foreign keys, both ways)", Char('f'), "f"),
+                        schema_item("Copy the name", Char('y'), "y"),
                         schema_item("Filter by name", Char('/'), "/"),
                         schema_item("Order by name, rows or size", Char('o'), "o"),
                         schema_item("Refresh", Char('r'), "r"),
@@ -198,11 +204,7 @@ impl App {
             MenuAction::Command(command) => self.run_command(command),
             MenuAction::ResultsKey(code) => self.handle_results_key(KeyEvent::new(code, KeyModifiers::NONE)),
             MenuAction::SchemaKey(code) => self.handle_schema_key(KeyEvent::new(code, KeyModifiers::NONE)),
-            MenuAction::Clip(Clip::Copy) => {
-                if let Some(text) = self.tab.editor.selected_text() {
-                    self.copy_text(text, "Copied selection");
-                }
-            }
+            MenuAction::Clip(Clip::Copy) => self.copy_focused(),
             MenuAction::Clip(Clip::Cut) => self.cut_selection(),
             MenuAction::Clip(Clip::Paste) => self.paste_clipboard(),
         }

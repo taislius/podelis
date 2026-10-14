@@ -776,3 +776,27 @@ fn full_scans_in_plans() {
     ];
     assert_eq!(Engine::Sqlite.dialect().full_scans(&[], &sqlite), [scan(None, "t", None)]);
 }
+
+/// A plan while the session is busy: on a connection of its own, until the
+/// session's settings change (or for SQLite, never).
+#[tokio::test]
+async fn live_plans_aside_while_the_session_is_busy() {
+    for engine in [Engine::Postgres, Engine::MySql] {
+        let Some(db) = live_db(engine).await else { continue };
+        let explain = engine.dialect().explain("SELECT 1", db.version());
+        // The session busy with a slow query meanwhile.
+        let sleep = if engine == Engine::Postgres { "SELECT pg_sleep(1)" } else { "SELECT SLEEP(1)" };
+        let busy = {
+            let db = db.clone();
+            tokio::spawn(async move { db.run(sleep, DEFAULT_ROW_LIMIT).await })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let started = Instant::now();
+        let plan = db.run_aside(&explain, DEFAULT_ROW_LIMIT).await.unwrap().expect("made aside");
+        assert!(started.elapsed() < Duration::from_millis(900), "didn't wait for the session");
+        assert!(!plan.rows.is_empty(), "{engine:?}: {plan:?}");
+        busy.await.unwrap().unwrap();
+        db.mark_session_changed();
+        assert!(db.run_aside(&explain, DEFAULT_ROW_LIMIT).await.unwrap().is_none());
+    }
+}

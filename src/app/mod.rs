@@ -285,6 +285,9 @@ pub struct ContainerPicker {
 
 pub struct DbEvent {
     generation: u64,
+    /// A run's outcome, by its id: it outlives connection switches (another
+    /// tab shown meanwhile), not a disconnect.
+    run: Option<u64>,
     kind: DbEventKind,
 }
 
@@ -345,6 +348,14 @@ enum DbEventKind {
         infos: Vec<StatementInfo>,
         filled: Option<Filled>,
         scans: Vec<(String, f64)>,
+    },
+    /// A plan made on a connection of its own while a query ran: the
+    /// statement, its line, and the plan (`None`: it couldn't be made there).
+    PlanAside {
+        tab: usize,
+        stmt: String,
+        line: usize,
+        plan: Option<QueryOutcome>,
     },
     /// A schema snapshot saved: its file and how many tables, or why not.
     SnapshotSaved(Result<(PathBuf, usize), String>),
@@ -661,6 +672,8 @@ pub struct App {
     /// next to where you type; gone with the next key.
     pub editor_note: Option<String>,
     pub editor_note_is_error: bool,
+    /// The same for the results pane, with whether it's an error.
+    pub results_note: Option<(String, bool)>,
     /// Handling a key, click or paste (see `on_input`).
     handling_input: bool,
     lint_due: Option<Instant>,
@@ -746,6 +759,12 @@ pub struct App {
     /// The statement of the EXPLAIN on its way, and whether it's ANALYZE.
     /// And the editor line it starts on.
     plan_request: Option<(String, bool, usize)>,
+    /// When the running query (or check, or comparison) started.
+    running_since: Option<Instant>,
+    /// Which run the events in flight are for.
+    run_id: u64,
+    /// The tab a read is running for, while other tabs can be shown.
+    run_owner: Option<usize>,
     /// F7 while a query ran: the statement to plan (and its line) next.
     queued_plan: Option<(String, usize)>,
     /// Pane sizes moved with Ctrl+arrows: the navigator's width (`None`
@@ -862,6 +881,7 @@ impl App {
             sandbox: false,
             editor_note: None,
             editor_note_is_error: false,
+            results_note: None,
             handling_input: false,
             lint_due: None,
             settings: Settings::default(),
@@ -918,6 +938,9 @@ impl App {
             routine_definition_pending: false,
             plan_request: None,
             queued_plan: None,
+            running_since: None,
+            run_id: 0,
+            run_owner: None,
             schema_width: None,
             editor_percent: 40,
             schema_shown: false,
@@ -1061,12 +1084,37 @@ impl App {
         let tx = self.db_tx.clone();
         let generation = self.generation;
         move |kind| {
-            let _ = tx.send(DbEvent { generation, kind });
+            let _ = tx.send(DbEvent { generation, run: None, kind });
         }
+    }
+
+    /// For the running query's outcome (see [`DbEvent::run`]).
+    fn run_sender(&self) -> impl Fn(DbEventKind) + Send + 'static {
+        let tx = self.db_tx.clone();
+        let (generation, run) = (self.generation, Some(self.run_id));
+        move |kind| {
+            let _ = tx.send(DbEvent { generation, run, kind });
+        }
+    }
+
+    /// The tab a read is running for, while other tabs can be shown.
+    pub fn run_owner(&self) -> Option<usize> {
+        self.run_owner.filter(|_| self.executing)
+    }
+
+    /// The run is this tab's (or one no tab can be left during).
+    pub(super) fn running_here(&self) -> bool {
+        self.executing && self.run_owner.is_none_or(|t| t == self.active_tab)
+    }
+
+    /// A run that keeps every tab where it is: a write, a check, a comparison.
+    pub(super) fn blocks_tabs(&self) -> bool {
+        self.executing && self.run_owner.is_none()
     }
 
     fn invalidate_tasks(&mut self) {
         self.generation += 1;
+        self.run_id += 1;
         self.queued_plan = None;
         if let Some(task) = self.task.take() {
             task.abort();
@@ -1140,21 +1188,50 @@ impl App {
         });
     }
 
-    /// A message for the user: in the editor's footer when it's about
-    /// something done there, otherwise in the status bar.
+    /// A message for the user: in the editor's or the results' footer when
+    /// it's about something done there, otherwise in the status bar.
     fn set_status(&mut self, status: String, is_error: bool) {
-        // Not while the find bar has the footer's place, or from a popup.
-        let editor = self.screen == Screen::Query && self.focus == Focus::Editor;
-        // The completion list belongs to the editor.
+        // The completion list belongs to the editor. Not while the find bar
+        // or a cell's prompt has the footer's place.
         let popup = self.help_visible || self.top_overlay().is_some_and(|o| o != Overlay::Completion);
-        if self.handling_input && editor && self.find.is_none() && !popup {
-            self.editor_note = Some(status);
-            self.editor_note_is_error = is_error;
+        let footer = self.handling_input
+            && self.screen == Screen::Query
+            && !popup
+            && match self.focus {
+                Focus::Editor => self.find.is_none(),
+                Focus::Results => self.cell_edit.is_none(),
+                Focus::Schema => false,
+            };
+        if footer {
+            // Gone with the next key: MESSAGES keeps it.
+            if self.messages.last().is_none_or(|m| m.text != status) {
+                self.log(status.clone(), is_error);
+            }
+            if self.focus == Focus::Editor {
+                self.editor_note = Some(status);
+                self.editor_note_is_error = is_error;
+            } else {
+                self.results_note = Some((status, is_error));
+            }
             return;
         }
         self.status = status;
         self.status_is_error = is_error;
         self.status_in_results = false;
+    }
+
+    /// What runs, for the results pane's title: with whole seconds once
+    /// it's been one, so a long run is seen to go on.
+    pub fn running_label(&self) -> Option<String> {
+        if !self.running_here() {
+            return None;
+        }
+        let secs = self.running_since.map_or(0, |since| since.elapsed().as_secs());
+        Some(match secs {
+            0 => "running…".to_string(),
+            1..60 => format!("running… {secs} s"),
+            _ => format!("running… {}:{:02}", secs / 60, secs % 60),
+        })
     }
 
     /// A run's progress or outcome, in the results pane's footer.
@@ -1292,6 +1369,7 @@ impl App {
         }
         self.editor_note = None;
         self.editor_note_is_error = false;
+        self.results_note = None;
         // A key hides the reopening card; a key typed before it showed counts.
         if let Some(splash) = self.splash.take()
             && splash.shown

@@ -177,7 +177,8 @@ impl App {
     }
 
     /// Makes connection `target` the active one, parking the current one.
-    pub(super) fn switch_conn(&mut self, target: Option<u64>) {
+    /// Puts `target`'s state in the app's fields, parking the active one's.
+    pub(super) fn swap_conns(&mut self, target: Option<u64>) {
         if target == self.conns.active {
             return;
         }
@@ -190,6 +191,13 @@ impl App {
             swap_conn(self, &mut slot);
         }
         self.conns.active = target;
+    }
+
+    pub(super) fn switch_conn(&mut self, target: Option<u64>) {
+        if target == self.conns.active {
+            return;
+        }
+        self.swap_conns(target);
         self.connection_lost = false;
         // Events from the other connection's background work no longer
         // apply; restart what was cut short.

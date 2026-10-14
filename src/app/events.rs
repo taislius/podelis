@@ -20,17 +20,50 @@ impl App {
             DbEventKind::ExportDone(path, result) => return self.export_done(&path, result),
             _ => {}
         }
-        if event.generation != self.generation {
-            // A connection that finished after being cancelled is still open.
-            if let DbEventKind::Connected(db) = event.kind {
-                tokio::spawn(async move { db.close().await });
+        match event.run {
+            // A run's outcome: for the tab it ran in, even if another is shown.
+            Some(run) if run != self.run_id => return,
+            Some(_) => {
+                let owner = self.run_owner.filter(|&t| t < self.tabs.len()).unwrap_or(self.active_tab);
+                return self.apply_in_tab(owner, event.kind);
             }
-            return;
+            None if event.generation != self.generation => {
+                // A connection that finished after being cancelled is still open.
+                if let DbEventKind::Connected(db) = event.kind {
+                    tokio::spawn(async move { db.close().await });
+                }
+                return;
+            }
+            None => {}
         }
+        // A plan made beside a running query: for the tab it was asked in.
+        if let DbEventKind::PlanAside { tab, .. } = &event.kind
+            && *tab < self.tabs.len()
+        {
+            return self.apply_in_tab(*tab, event.kind);
+        }
+        self.apply_shown(event.kind);
+    }
+
+    fn apply_shown(&mut self, kind: DbEventKind) {
         // Outcomes land in the result's grid, not a plan's shown in its place.
         self.unswap_plan_grid();
-        self.apply_event(event.kind);
+        self.apply_event(kind);
         self.sync_plan_grid();
+    }
+
+    /// Applies `kind` to tab `i`; when that's not the one shown, what it says
+    /// goes to the status bar, with the tab's name.
+    fn apply_in_tab(&mut self, i: usize, kind: DbEventKind) {
+        if i == self.active_tab {
+            return self.apply_shown(kind);
+        }
+        let before = self.status.clone();
+        self.in_tab(i, |app| app.apply_shown(kind));
+        if self.status != before && !self.status.is_empty() {
+            self.status = format!("{}: {}", self.tabs[i].name, self.status);
+            self.status_in_results = false;
+        }
     }
 
     fn export_progress(&mut self, rows: u64) {
@@ -103,6 +136,7 @@ impl App {
                 self.on_query_failed(&err, position, txn);
                 self.drop_queued_plan();
             }
+            DbEventKind::PlanAside { stmt, line, plan, .. } => self.plan_aside(stmt, line, plan),
             DbEventKind::MoreRows(page) => self.append_rows(page),
             DbEventKind::ExportProgress(rows) => self.export_progress(rows),
             DbEventKind::ExportDone(path, result) => self.export_done(&path, result),
@@ -202,6 +236,7 @@ impl App {
     pub(super) fn on_query_done(&mut self, outcome: QueryOutcome, txn: Option<TxnState>, stream: Option<RowStream>) {
         self.task = None;
         self.executing = false;
+        self.note_session_changes();
         // The schema (or, after USE/SET, its visibility) may have changed.
         if self.last_run_infos.iter().any(|i| matches!(i.kind, Kind::Ddl | Kind::Session)) {
             self.load_catalog();
@@ -238,7 +273,8 @@ impl App {
                 if let Some(prefix) = self.run_extra.status_prefix.take() {
                     self.status = format!("{prefix} · {}", self.status);
                 }
-                self.tab.result_tab = ResultTab::Rows;
+                // (The RESULT tab was shown as it started: a plan asked for
+                // meanwhile stays in view.)
                 self.tab.tab_scroll = 0;
                 if stream.is_some() {
                     self.status.push_str(" · more load as you scroll");
@@ -281,6 +317,8 @@ impl App {
         self.task = None;
         let reviewing = std::mem::take(&mut self.run_extra.reviewing);
         self.executing = false;
+        // Statements before the failing one ran.
+        self.note_session_changes();
         self.running_purpose = RunPurpose::Query;
         if let Some(txn) = txn {
             self.txn = txn;

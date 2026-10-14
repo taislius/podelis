@@ -234,6 +234,10 @@ impl App {
             return;
         };
         if key.modifiers.contains(KeyModifiers::CONTROL) {
+            // Ctrl+V pastes the system clipboard, as everywhere (no block mode).
+            if ch == 'v' {
+                self.paste_clipboard();
+            }
             return;
         }
         // Space is the leader, as in Neovim: Ctrl+K's menu.
@@ -440,6 +444,7 @@ impl App {
         match op {
             'y' => {
                 self.vim_yank(a, b, linewise);
+                self.yank_to_clipboard();
                 self.tab.editor.prepare_move(false);
                 self.tab.editor.set_cursor(a);
             }
@@ -458,6 +463,12 @@ impl App {
         let text = self.tab.editor.selected_text().unwrap_or_default();
         self.tab.editor.set_anchor(None);
         self.vim.register = (if linewise { text + "\n" } else { text }, linewise);
+    }
+
+    /// A yank also goes to the system clipboard (as vim's `unnamedplus`),
+    /// quietly; deletes stay in the register.
+    fn yank_to_clipboard(&mut self) {
+        self.clipboard = Some(self.vim.register.0.clone());
     }
 
     /// Deletes `a..b` into the register. Whole-line deletes also remove a
@@ -566,6 +577,7 @@ impl App {
                 match ch {
                     'y' => {
                         self.vim_yank(a, b, line_mode);
+                        self.yank_to_clipboard();
                         self.tab.editor.set_cursor(a);
                     }
                     'c' => {
@@ -616,6 +628,19 @@ mod tests {
             let code = if c == '\u{1b}' { KeyCode::Esc } else { KeyCode::Char(c) };
             app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
         }
+    }
+
+    #[test]
+    fn yanks_reach_the_system_clipboard_and_deletes_dont() {
+        let (mut app, _dir) = vim_app("select 1\nfrom t");
+        keys(&mut app, "yy");
+        assert_eq!(app.take_clipboard().as_deref(), Some("select 1\n"));
+        keys(&mut app, "vey");
+        assert_eq!(app.take_clipboard().as_deref(), Some("select"));
+        keys(&mut app, "dd");
+        assert!(app.take_clipboard().is_none(), "a delete stays in the register");
+        keys(&mut app, "p");
+        assert_eq!(app.tab.editor.text(), "from t\nselect 1");
     }
 
     #[test]

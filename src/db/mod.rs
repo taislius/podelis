@@ -89,6 +89,9 @@ struct Inner {
     sql_mode: std::sync::Mutex<String>,
     /// Why TLS failed when SSL mode `prefer` fell back to no encryption.
     tls_failed: Option<String>,
+    /// The session's settings were changed (`USE`, `SET`…): another
+    /// connection wouldn't see the same, so nothing runs aside.
+    session_changed: AtomicBool,
 }
 
 enum Pool {
@@ -279,6 +282,7 @@ impl Database {
             version,
             sql_mode: std::sync::Mutex::new(sql_mode),
             tls_failed,
+            session_changed: AtomicBool::new(false),
         })))
     }
 

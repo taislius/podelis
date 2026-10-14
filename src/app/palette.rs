@@ -13,6 +13,8 @@ pub enum Command {
     ExportInserts,
     /// Every row, not just those loaded.
     ExportAll(ExportFormat),
+    /// The marked rows (or those shown) to the clipboard.
+    CopyRows(ExportFormat),
     /// What AI agents did through `podelis mcp`.
     AgentActivity,
     LoadMore,
@@ -47,6 +49,9 @@ impl Command {
             Command::ExportAll(ExportFormat::Csv),
             Command::ExportAll(ExportFormat::Json),
             Command::ExportAll(ExportFormat::Sql),
+            Command::CopyRows(ExportFormat::Csv),
+            Command::CopyRows(ExportFormat::Json),
+            Command::CopyRows(ExportFormat::Sql),
             Command::AgentActivity,
             Command::LoadMore,
             Command::PipeRows,
@@ -69,6 +74,9 @@ impl Command {
             Command::ExportAll(ExportFormat::Csv) => "Export all rows as CSV (not just those loaded)",
             Command::ExportAll(ExportFormat::Json) => "Export all rows as JSON (not just those loaded)",
             Command::ExportAll(ExportFormat::Sql) => "Export all rows as SQL INSERT statements",
+            Command::CopyRows(ExportFormat::Csv) => "Copy rows as CSV (the marked ones, or all shown)",
+            Command::CopyRows(ExportFormat::Json) => "Copy rows as JSON (the marked ones, or all shown)",
+            Command::CopyRows(ExportFormat::Sql) => "Copy rows as SQL INSERT statements",
             Command::AgentActivity => "Agent activity: what AI agents ran (podelis mcp)",
             Command::LoadMore => "Load more rows",
             Command::PipeRows => "Pipe rows through a command (grep, sort, jq…)",
@@ -124,6 +132,7 @@ impl Command {
             Command::SwitchTab(i) if i < 9 => format!("Ctrl+K {}", i + 1),
             Command::CopyDiagnostics
             | Command::ExportAll(_)
+            | Command::CopyRows(_)
             | Command::AgentActivity
             | Command::SwitchTab(_)
             | Command::CompareSchema(_)
@@ -289,6 +298,7 @@ impl App {
             Command::ExportJson => self.export(ExportFormat::Json),
             Command::ExportInserts => self.export(ExportFormat::Sql),
             Command::ExportAll(format) => self.export_all(format),
+            Command::CopyRows(format) => self.copy_rows_as(format),
             Command::AgentActivity => self.open_agents(),
             Command::LoadMore => self.load_more(),
             Command::PipeRows => self.open_pipe_prompt(),

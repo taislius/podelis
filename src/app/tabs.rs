@@ -305,17 +305,46 @@ impl App {
         }
     }
 
+    /// Does `visit` as if tab `i` were shown (its editor, results and
+    /// connection), then shows the one that was: for a run's outcome
+    /// arriving while another tab is shown.
+    pub(super) fn in_tab(&mut self, i: usize, visit: impl FnOnce(&mut Self)) {
+        if i == self.active_tab {
+            return visit(self);
+        }
+        let Some(mut parked) = self.parked.get_mut(i).and_then(Option::take) else { return };
+        let (shown, shown_conn, focus) = (self.active_tab, self.conns.active, self.focus);
+        swap_tab(self, &mut parked);
+        self.active_tab = i;
+        self.swap_conns(self.tabs[i].conn);
+        visit(self);
+        self.close_stream();
+        self.swap_conns(shown_conn);
+        self.active_tab = shown;
+        swap_tab(self, &mut parked);
+        self.parked[i] = Some(parked);
+        self.focus = focus;
+    }
+
+    /// Closes an open stream (which holds the session) as its tab is
+    /// hidden; the rows left can be loaded again with `M`.
+    fn close_stream(&mut self) {
+        if self.row_stream.take().is_some() {
+            self.tab.grid.cut_short = true;
+        }
+        self.fetching_more = false;
+    }
+
     pub(super) fn switch_tab(&mut self, i: usize) {
         if i == self.active_tab || i >= self.tabs.len() {
             return;
         }
-        if self.executing {
+        if self.blocks_tabs() {
             return self.set_status("Wait for the query to finish (or press Esc) before switching tabs".into(), true);
         }
         self.stop_watch(": another tab");
         // An open stream would hold the session while its tab is hidden.
-        self.row_stream = None;
-        self.fetching_more = false;
+        self.close_stream();
         self.completion = None;
         self.cell_view = None;
         self.cell_edit = None;
@@ -325,6 +354,13 @@ impl App {
         self.active_tab = i;
         self.focus = Focus::Editor;
         self.switch_conn(self.tabs[i].conn);
+        // A query running in one tab: said in its results, else in the bar.
+        if self.running_here() {
+            self.set_result_status("Running… (Esc to cancel)".to_string(), false);
+        } else if self.executing {
+            self.status = self.running_elsewhere("its outcome is said here when it's done");
+            (self.status_is_error, self.status_in_results) = (false, false);
+        }
     }
 
     /// "Query N" with the smallest N not in use (one of the first
@@ -338,7 +374,7 @@ impl App {
 
     /// Opens a new tab with `sql` and switches to it.
     pub(super) fn new_tab(&mut self, name: Option<String>, sql: &str, saved_id: Option<String>) {
-        if self.executing {
+        if self.blocks_tabs() {
             return self.set_status("Wait for the query to finish (or press Esc) before opening a tab".into(), true);
         }
         let name = name.unwrap_or_else(|| self.unused_tab_name());
@@ -352,7 +388,7 @@ impl App {
     /// Opens a new tab with `sql` on connection `conn` (another tab's), so
     /// SQL meant for that connection runs there.
     pub(super) fn open_tab_on(&mut self, conn: u64, sql: &str) {
-        if self.executing {
+        if self.blocks_tabs() {
             return self.set_status("Wait for the query to finish (or press Esc) before opening a tab".into(), true);
         }
         let name = self.unused_tab_name();
@@ -605,7 +641,7 @@ impl App {
     /// in a new tab.
     pub(super) fn open_sql_in_tab(&mut self, name: Option<String>, sql: &str, saved_id: Option<String>) {
         let current_blank = self.tab.editor.is_empty() && self.tabs[self.active_tab].saved_id.is_none();
-        if current_blank && !self.executing {
+        if current_blank && !self.running_here() {
             let name = name.unwrap_or_else(|| self.tabs[self.active_tab].name.clone());
             self.tabs[self.active_tab] = TabMeta { name, saved_id, ..self.tabs[self.active_tab].clone() };
             self.tab.editor.set_text(sql);

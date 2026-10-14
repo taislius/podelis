@@ -36,6 +36,23 @@ pub fn over_ssh() -> bool {
     ["SSH_CONNECTION", "SSH_TTY"].iter().any(|v| std::env::var_os(v).is_some_and(|v| !v.is_empty()))
 }
 
+/// The terminal's own paste keys, for when the clipboard can't be read.
+/// Over SSH the keys are the other machine's, which could be either.
+pub fn terminal_paste_keys() -> &'static str {
+    if over_ssh() {
+        "Cmd+V or Ctrl+Shift+V"
+    } else if cfg!(target_os = "macos") {
+        "Cmd+V"
+    } else {
+        "Ctrl+Shift+V"
+    }
+}
+
+/// Why Ctrl+V couldn't paste, and what does.
+pub fn read_failed(e: &str) -> String {
+    format!("Couldn't read the clipboard ({e}): paste with {} instead", terminal_paste_keys())
+}
+
 /// Many terminals drop an OSC 52 copy bigger than about this (xterm's
 /// default limit, tmux's buffer).
 pub const OSC52_LIMIT: usize = 100_000;

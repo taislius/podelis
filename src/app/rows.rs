@@ -257,6 +257,30 @@ impl App {
     }
 }
 
+impl App {
+    /// The marked rows, or else all those shown, as CSV, JSON or INSERTs.
+    pub(super) fn copy_rows_as(&mut self, format: ExportFormat) {
+        let Some(results) = self.tab.grid.results.as_ref().filter(|r| !r.columns.is_empty()) else {
+            return self.set_status("No rows to copy".to_string(), true);
+        };
+        let rows: Vec<usize> = if self.tab.grid.marked.is_empty() {
+            self.tab.grid.view.clone()
+        } else {
+            self.tab.grid.marked.iter().copied().collect()
+        };
+        let (text, what) = match format {
+            ExportFormat::Csv => (crate::export::csv(results, &rows), "CSV"),
+            ExportFormat::Json => (crate::export::json(results, &rows), "JSON"),
+            ExportFormat::Sql => {
+                let table = self.insert_table();
+                let Some(results) = &self.tab.grid.results else { return };
+                (crate::export::sql_inserts(results, &rows, &table, self.engine()), "INSERT statements")
+            }
+        };
+        self.copy_text(text, &format!("Copied {} row(s) as {what}", rows.len()));
+    }
+}
+
 /// Marked result rows (indices into `results.rows`).
 pub type Marks = BTreeSet<usize>;
 

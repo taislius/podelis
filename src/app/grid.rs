@@ -38,6 +38,9 @@ pub struct ResultGrid {
     /// Rows new or changed since watch mode's run before (indices into
     /// `results.rows`).
     pub changed_rows: std::collections::HashSet<usize>,
+    /// Its rows were streamed, and the stream closed with some unread (its
+    /// tab hidden): `M` runs it again for them.
+    pub cut_short: bool,
 }
 
 impl ResultGrid {
@@ -45,6 +48,7 @@ impl ResultGrid {
     /// switch to. Returns how many sets there are.
     pub fn show(&mut self, mut outcome: QueryOutcome) -> usize {
         self.result_note = None;
+        self.cut_short = false;
         let earlier = std::mem::take(&mut outcome.earlier);
         let sets = earlier.len() + 1;
         self.result_sets =

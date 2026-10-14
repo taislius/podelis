@@ -389,6 +389,7 @@ fn stale_events_are_ignored() {
     assert!(!app.executing);
     app.handle_db_event(DbEvent {
         generation: stale_generation,
+        run: None,
         kind: DbEventKind::QueryDone(outcome(&["a"], &[&[Some("1")]]), None, None),
     });
     assert!(app.tab.grid.results.is_none());
@@ -403,7 +404,7 @@ fn a_rejected_password_is_ready_to_type_again() {
     let failed = |app: &mut App, err: &str| {
         app.connect_form.connecting = true;
         let generation = app.generation;
-        app.handle_db_event(DbEvent { generation, kind: DbEventKind::ConnectFailed(err.to_string()) });
+        app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::ConnectFailed(err.to_string()) });
     };
     failed(&mut app, "password authentication failed for user \"app\"");
     let form = &app.connect_form;
@@ -532,7 +533,7 @@ async fn connected_app(mode: ConnectionMode) -> (App, tempfile::TempDir) {
     app.connect_form.mode = mode;
     let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
     let generation = app.generation;
-    app.handle_db_event(DbEvent { generation, kind: DbEventKind::Connected(db) });
+    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
     assert!(matches!(app.screen, Screen::Query));
     (app, dir)
 }
@@ -774,7 +775,7 @@ async fn results_filter_sort_view_and_load_more() {
     run_sql(&mut app, "create table t (n int); insert into t values (1),(2),(3); select n from t").await;
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Char('M')));
-    assert!(!app.executing && app.status_is_error);
+    assert!(!app.executing && said_error(&app));
 }
 
 /// Statements that set a password aren't kept in the history.
@@ -985,7 +986,7 @@ async fn export_all_rows_of_a_streamed_result() {
     app.focus = Focus::Results;
     // A plain export says only the loaded rows went, and how to get all.
     app.handle_key(key(KeyCode::Char('e')));
-    assert!(app.status.contains("10 rows loaded") && app.status.contains("export all"), "{}", app.status);
+    assert!(said(&app).contains("10 rows loaded") && said(&app).contains("export all"), "{}", said(&app));
     let exports = || {
         let mut files: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
@@ -1022,7 +1023,7 @@ async fn export_all_rows_of_a_streamed_result() {
     app.export_all(ExportFormat::Json);
     assert!(app.export_task.is_some());
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.export_task.is_none() && app.status.contains("Export stopped"), "{}", app.status);
+    assert!(app.export_task.is_none() && said(&app).contains("Export stopped"), "{}", said(&app));
     // The export cleans up, then says it's done (and that's ignored).
     loop {
         let event = app.poll_db_event().await.unwrap();
@@ -1032,7 +1033,7 @@ async fn export_all_rows_of_a_streamed_result() {
             break;
         }
     }
-    assert!(app.status.contains("Export stopped"), "{}", app.status);
+    assert!(said(&app).contains("Export stopped"), "{}", said(&app));
     let json_files = std::fs::read_dir(dir.path())
         .unwrap()
         .filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "json"))
@@ -1338,6 +1339,82 @@ async fn runs_show_their_tab_at_once_and_f7_waits_for_a_running_query() {
 }
 
 #[tokio::test]
+async fn copying_names_rows_as_csv_and_where_messages_show() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    run_sql(&mut app, "create table pets (id integer primary key, name text)").await;
+    finish_catalog(&mut app).await;
+    run_sql(&mut app, "insert into pets (name) values ('Rex'), ('Tom')").await;
+    run_sql(&mut app, "select * from pets order by id").await;
+    // The navigator: a table as written in SQL, with its schema.
+    app.focus = Focus::Schema;
+    let panel = app.schema.as_mut().unwrap();
+    panel.selected = panel.nodes().iter().position(|n| matches!(n, SchemaNode::Table(_))).unwrap();
+    app.handle_key(ctrl('c'));
+    assert_eq!(app.take_clipboard().as_deref(), Some("main.pets"));
+    app.handle_key(key(KeyCode::Char('y')));
+    assert!(app.take_clipboard().is_some());
+    // Rows as CSV: those marked, else all shown.
+    app.focus = Focus::Results;
+    app.run_command(crate::app::palette::Command::CopyRows(ExportFormat::Csv));
+    assert_eq!(app.take_clipboard().as_deref(), Some("id,name\r\n1,Rex\r\n2,Tom\r\n"));
+    // A results key's message is in the results' footer, and in MESSAGES.
+    app.handle_key(key(KeyCode::Char('Y')));
+    assert_eq!(app.results_note.as_ref().map(|(m, _)| m.as_str()), Some("Copied row (tab-separated)"));
+    assert_eq!(
+        (app.status.as_str(), app.messages.last().map(|m| m.text.as_str())),
+        ("", Some("Copied row (tab-separated)"))
+    );
+    // A run shows how long it's been going.
+    assert_eq!(app.running_label(), None);
+    app.executing = true;
+    app.running_since = Instant::now().checked_sub(Duration::from_secs(75));
+    assert_eq!(app.running_label().as_deref(), Some("running… 1:15"));
+    app.running_since = Instant::now().checked_sub(Duration::from_secs(3));
+    assert_eq!(app.running_label().as_deref(), Some("running… 3 s"));
+    app.executing = false;
+}
+
+#[tokio::test]
+async fn other_tabs_can_be_used_while_a_read_runs() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    run_sql(&mut app, "create table t (id integer primary key); insert into t values (1), (2)").await;
+    // A page of one row: the read streams.
+    app.settings.row_limit = 1;
+    app.tab.editor.set_text("select id from t");
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(app.executing && app.run_owner() == Some(0));
+    // A new tab opens meanwhile; there, the run is another tab's.
+    app.new_tab(None, "select 2", None);
+    assert_eq!(app.active_tab, 1);
+    assert!(app.status.starts_with("Tab “Query 1” is running a query"), "{}", app.status);
+    assert_eq!(app.running_label(), None, "this tab's results aren't running");
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(said(&app).starts_with("Tab “Query 1” is running"), "{}", said(&app));
+    app.handle_key(key(KeyCode::Esc));
+    assert!(!app.cancelling, "Esc here is this tab's");
+    // The outcome lands in its own tab, and the status bar says so here.
+    finish(&mut app).await;
+    assert!(app.tab.grid.results.is_none());
+    assert!(app.status.starts_with("Query 1: "), "{}", app.status);
+    // Its stream was closed while hidden: M runs it again for the rest.
+    assert!(app.row_stream.is_none());
+    app.switch_tab(0);
+    assert!(app.tab.grid.cut_short && app.tab.grid.results.as_ref().unwrap().rows.len() == 1);
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Char('M')));
+    finish(&mut app).await;
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows.len(), 2);
+    app.focus = Focus::Editor;
+    // A write keeps every tab where it is.
+    app.tab.editor.set_text("insert into t values (3)");
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(app.executing && app.run_owner().is_none());
+    app.switch_tab(1);
+    assert_eq!(app.active_tab, 0);
+    finish(&mut app).await;
+}
+
+#[tokio::test]
 async fn result_tabs_messages_and_help() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
     run_sql(&mut app, "select 1").await;
@@ -1428,10 +1505,10 @@ async fn editing_is_refused_when_rows_cant_be_identified() {
     ] {
         let (app, _dir) = Box::pin(edit_cell(ConnectionMode::Normal, select, col)).await;
         assert!(app.cell_edit.is_none(), "{select}");
-        assert!(app.status.contains(why), "{select}: {}", app.status);
+        assert!(said(&app).contains(why), "{select}: {}", said(&app));
     }
     let (app, _dir) = Box::pin(edit_cell(ConnectionMode::ReadOnly, "select * from people", 1)).await;
-    assert!(app.cell_edit.is_none() && app.status.contains("read-only"), "{}", app.status);
+    assert!(app.cell_edit.is_none() && said(&app).contains("read-only"), "{}", said(&app));
 }
 
 #[tokio::test]
@@ -1534,9 +1611,20 @@ fn alt(c: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT)
 }
 
-/// The last message: in the editor's footer, else the status bar.
+/// The last message: in the editor's or the results' footer, else the
+/// status bar.
 fn said(app: &App) -> &str {
-    app.editor_note.as_deref().unwrap_or(&app.status)
+    let results = app.results_note.as_ref().map(|(m, _)| m.as_str());
+    app.editor_note.as_deref().or(results).unwrap_or(&app.status)
+}
+
+/// Whether that message is an error.
+fn said_error(app: &App) -> bool {
+    match (&app.editor_note, &app.results_note) {
+        (Some(_), _) => app.editor_note_is_error,
+        (None, Some((_, is_error))) => *is_error,
+        (None, None) => app.status_is_error,
+    }
 }
 
 fn ctrl(c: char) -> KeyEvent {
@@ -1861,7 +1949,7 @@ async fn connect_profile(app: &mut App, profile: &ConnectionProfile) {
     app.connect_form = ConnectForm::from_profile(profile, String::new());
     let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
     let generation = app.generation;
-    app.handle_db_event(DbEvent { generation, kind: DbEventKind::Connected(db) });
+    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
     finish_catalog(app).await;
 }
 
@@ -1953,7 +2041,7 @@ async fn watch_mode_marks_what_changed() {
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Esc));
     assert!(app.watch.is_none() && app.tab.grid.changed_rows.is_empty());
-    assert_eq!(app.status, "Stopped watching");
+    assert_eq!(said(&app), "Stopped watching");
 
     // A write can't be watched; another query stops watching.
     app.start_watch(2);
@@ -2017,7 +2105,7 @@ async fn chart_a_result_column() {
     run_sql(&mut app, "select 'a' as day, 3 as n union all select 'b', 6").await;
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Char('b')));
-    assert!(app.status_is_error && app.status.contains("day has no numbers"), "{}", app.status);
+    assert!(said_error(&app) && said(&app).contains("day has no numbers"), "{}", said(&app));
     app.handle_key(key(KeyCode::Right));
     app.handle_key(key(KeyCode::Char('b')));
     let view = app.cell_view.as_ref().unwrap();
@@ -2048,6 +2136,38 @@ async fn schema_snapshots_show_what_changed_since() {
     let text = &app.cell_view.as_ref().unwrap().text;
     assert!(text.contains("ONLY HERE\n  table orders") && text.contains("column email TEXT: only here"), "{text}");
     assert!(text.contains("people ADD COLUMN email TEXT;"), "{text}");
+}
+
+#[tokio::test]
+async fn a_read_finishes_in_its_tab_while_one_on_another_connection_is_shown() {
+    let (mut app, dir) = test_app();
+    let project = project_id(&app);
+    let (a, b) = (sqlite_profile("alpha", &dir.path().join("a.db")), sqlite_profile("beta", &dir.path().join("b.db")));
+    app.store.upsert(&project, None, a.clone()).unwrap();
+    app.store.upsert(&project, None, b.clone()).unwrap();
+    connect_profile(&mut app, &a).await;
+    run_sql(&mut app, "create table here (x int); insert into here values (1)").await;
+    finish_catalog(&mut app).await;
+    app.handle_key(ctrl('o'));
+    connect_profile(&mut app, &b).await;
+    app.handle_key(alt('1'));
+    assert_eq!(app.connect_form.name, "alpha");
+
+    app.tab.editor.set_text("select x from here");
+    app.handle_key(key(KeyCode::F(5)));
+    app.handle_key(alt('2'));
+    assert_eq!((app.active_tab, app.connect_form.name.as_str()), (1, "beta"));
+    finish(&mut app).await;
+    // Still on beta's tab, with beta's connection; alpha's tab has its rows.
+    assert_eq!((app.active_tab, app.connect_form.name.as_str()), (1, "beta"));
+    assert!(app.tab.grid.results.is_none());
+    assert!(app.status.starts_with("Query 1: 1 row(s)"), "{}", app.status);
+    app.handle_key(alt('1'));
+    assert_eq!(app.connect_form.name, "alpha");
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("1".to_string())]]);
+    // Both connections still work.
+    run_sql(&mut app, "select count(*) from here").await;
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("1".to_string())]]);
 }
 
 #[tokio::test]
@@ -2205,6 +2325,32 @@ fn live_pg_url() -> Option<String> {
 }
 
 #[tokio::test]
+async fn f7_during_a_slow_query_shows_the_plan_at_once() {
+    let Some(url) = live_pg_url() else { return };
+    let (mut app, _dir) = test_app();
+    app.connect_form.apply_url(&url).unwrap();
+    let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
+    let generation = app.generation;
+    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
+    finish_catalog(&mut app).await;
+    app.tab.editor.set_text("select pg_sleep(2)");
+    app.handle_key(key(KeyCode::F(5)));
+    app.tab.editor.set_text("select 1");
+    app.handle_key(key(KeyCode::F(7)));
+    // The plan arrives while the query still runs.
+    while app.tab.plan.is_none() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    assert!(app.executing && app.tab.result_tab == ResultTab::Plan);
+    assert!(app.queued_plan.is_none());
+    // The query's result doesn't take the plan out of view.
+    finish(&mut app).await;
+    assert_eq!(app.tab.result_tab, ResultTab::Plan);
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().columns, ["pg_sleep"]);
+}
+
+#[tokio::test]
 async fn queries_are_cancelled_at_the_connection_timeout() {
     let Some(url) = live_pg_url() else { return };
     let (mut app, _dir) = test_app();
@@ -2212,7 +2358,7 @@ async fn queries_are_cancelled_at_the_connection_timeout() {
     app.connect_form.timeout = "1".into();
     let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
     let generation = app.generation;
-    app.handle_db_event(DbEvent { generation, kind: DbEventKind::Connected(db) });
+    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
     app.tab.editor.set_text("select pg_sleep(10)");
     app.handle_key(key(KeyCode::F(5)));
     let started = Instant::now();
@@ -2445,7 +2591,7 @@ async fn explain_analyze_of_a_write_is_rolled_back() {
     app.connect_form.apply_url(&url).unwrap();
     let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
     let generation = app.generation;
-    app.handle_db_event(DbEvent { generation, kind: DbEventKind::Connected(db) });
+    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
     run_sql(&mut app, "create temporary table ea (x int); insert into ea values (1)").await;
     app.tab.editor.set_text("update ea set x = 2");
     app.handle_key(KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT));
@@ -2497,7 +2643,7 @@ async fn add_mark_delete_and_copy_rows() {
     assert_eq!(app.take_clipboard().unwrap(), "1\tRex\tcat\n3\tKit\tcat");
     app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert_eq!(app.take_clipboard().unwrap(), "1\tRex\tcat\n3\tKit\tcat");
-    assert_eq!(app.status, "Copied 2 rows (tab-separated, a line each)");
+    assert_eq!(said(&app), "Copied 2 rows (tab-separated, a line each)");
     app.handle_key(key(KeyCode::Char('d')));
     let confirm = app.confirm.as_ref().expect("asks before deleting");
     assert_eq!(confirm.message, "Delete 2 row(s) from pets?");
@@ -2915,7 +3061,7 @@ async fn a_connection_starts_in_its_transaction_mode() {
     app.connect_form.transaction = Some(TxMode::RollbackOnly);
     let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
     let generation = app.generation;
-    app.handle_db_event(DbEvent { generation, kind: DbEventKind::Connected(db) });
+    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
     assert_eq!(app.tx_mode, TxMode::RollbackOnly);
 }
 
@@ -2930,7 +3076,7 @@ async fn a_new_connection_is_kept_once_it_works() {
         app.connect_form.name = name.into();
         let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
         let generation = app.generation;
-        app.handle_db_event(DbEvent { generation, kind: DbEventKind::Connected(db) });
+        app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
     };
     // Unnamed: named after the file, and saved in the project.
     connect(&mut app, "").await;
@@ -2950,7 +3096,7 @@ async fn a_new_connection_is_kept_once_it_works() {
     app.connect_form = ConnectForm::from_profile(&profile, String::new());
     let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
     let generation = app.generation;
-    app.handle_db_event(DbEvent { generation, kind: DbEventKind::Connected(db) });
+    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
     assert_eq!(saved(&app).len(), 2);
 }
 
@@ -3104,16 +3250,19 @@ fn a_tabular_plan_takes_the_results_keys() {
     assert_eq!(app.tab.grid.results.as_ref().unwrap().columns, ["id"]);
     app.handle_results_key(key(KeyCode::Char('3')));
     assert!(app.tab.plan_swapped);
-    // A query's outcome arriving meanwhile goes to the result, not the plan.
+    // A query's outcome arriving meanwhile goes to the result, not the plan,
+    // which stays in view (the RESULT tab was shown as the query started).
     let generation = app.generation;
     app.handle_db_event(DbEvent {
         generation,
+        run: None,
         kind: DbEventKind::QueryDone(outcome(&["n"], &[&[Some("9")]]), None, None),
     });
-    assert_eq!(app.tab.result_tab, ResultTab::Rows);
-    assert!(!app.tab.plan_swapped);
+    assert_eq!(app.tab.result_tab, ResultTab::Plan);
+    assert!(app.tab.plan_swapped);
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().columns.len(), 5);
+    app.handle_results_key(key(KeyCode::Char('1')));
     assert_eq!(app.tab.grid.results.as_ref().unwrap().columns, ["n"]);
-    assert_eq!(app.tab.plan_grid.as_ref().unwrap().results.as_ref().unwrap().columns.len(), 5);
 }
 
 #[test]

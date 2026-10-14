@@ -76,7 +76,8 @@ impl App {
         }
         match key.code {
             KeyCode::Esc if self.export_task.is_some() => return self.stop_export(),
-            KeyCode::Esc if self.executing => return self.cancel_query(),
+            // (In another tab, Esc is that tab's.)
+            KeyCode::Esc if self.running_here() => return self.cancel_query(),
             // Esc leaves the zoom, after a results filter (which it clears
             // first) and outside vim mode in the editor (where it's vim's).
             KeyCode::Esc
@@ -179,7 +180,7 @@ impl App {
     }
 
     /// Ctrl+C: copies the editor's selection (or its line), the open cell,
-    /// or the results row (or the marked rows).
+    /// the results row (or the marked rows), or the navigator's name.
     pub(super) fn copy_focused(&mut self) {
         if self.cell_view.is_some() {
             return self.copy_cell();
@@ -200,17 +201,40 @@ impl App {
                 }
             }
             Focus::Results if has_row => return self.copy_row(),
-            Focus::Results | Focus::Schema => {}
+            Focus::Schema => {
+                if let Some((name, what)) = self.schema_name() {
+                    return self.copy_text(name.clone(), &format!("Copied {what} {name}"));
+                }
+            }
+            Focus::Results => {}
         }
         self.set_status("Nothing to copy here · Ctrl+Q quits".to_string(), false);
+    }
+
+    /// The navigator's selection as it's written in SQL (a table with its
+    /// schema), and what it is.
+    fn schema_name(&self) -> Option<(String, &'static str)> {
+        let panel = self.schema.as_ref()?;
+        let engine = self.engine();
+        let quote = |name: &str| engine.quote_ident(name);
+        Some(match *panel.nodes().get(panel.selected)? {
+            SchemaNode::Table(t) => {
+                let info = &panel.tables[t].info;
+                (format!("{}.{}", quote(&info.schema), quote(&info.name)), if info.is_view { "view" } else { "table" })
+            }
+            SchemaNode::Column(t, c) => (quote(&panel.tables[t].columns[c].name), "column"),
+            SchemaNode::Index(t, i) => (quote(&panel.tables[t].details.as_ref()?.indexes.get(i)?.name), "index"),
+            // Its name with the argument types, as Postgres shows overloads.
+            SchemaNode::Routine(r) => (panel.routines.get(r)?.name.clone(), "routine"),
+            SchemaNode::Section(_) => return None,
+        })
     }
 
     /// Pastes the system clipboard (Ctrl+V, or the editor's menu).
     pub(super) fn paste_clipboard(&mut self) {
         match crate::clipboard::read() {
             Ok(text) => self.paste_into_pane(&text),
-            Err(e) => self
-                .set_status(format!("Couldn't read the clipboard ({e}): paste with the terminal's keys instead"), true),
+            Err(e) => self.set_status(crate::clipboard::read_failed(&e), true),
         }
     }
 
@@ -825,7 +849,7 @@ impl App {
     }
 
     /// The table `INSERT` exports go into: the query's, when it reads just one.
-    fn insert_table(&self) -> String {
+    pub(super) fn insert_table(&self) -> String {
         let engine = self.engine();
         self.tab.last_sql.as_ref().and_then(|(sql, _)| analyze::edit_source(&parse(sql, engine))).map_or_else(
             || "result".to_string(),
@@ -1016,6 +1040,7 @@ impl App {
             KeyCode::Char('.') => return self.toggle_system_tables(),
             KeyCode::Char('/') => return panel.filter_editing = true,
             KeyCode::Char('o') => return self.cycle_schema_sort(),
+            KeyCode::Char('y') => return self.copy_focused(),
             KeyCode::Esc if !panel.filter.is_empty() => {
                 panel.filter.clear();
                 panel.selected = step_selectable(&panel.nodes(), 0, 1);
@@ -1149,7 +1174,7 @@ impl App {
 
     pub(super) fn execute_with(&mut self, sql: String, offset: usize, purpose: RunPurpose) {
         if self.executing {
-            return self.set_status("A query is running: wait for it, or Esc stops it".to_string(), true);
+            return self.set_status(self.running_elsewhere("wait for it, or Esc stops it"), true);
         }
         if self.database.is_none() {
             return self.set_status(self.not_connected_message(), true);
@@ -1220,6 +1245,8 @@ impl App {
             // Running, as far as the rest of the app goes: nothing else
             // starts, and Esc stops it.
             self.executing = true;
+            self.running_since = Some(Instant::now());
+            self.run_owner = None;
             let send = self.sender();
             tokio::spawn(async move {
                 let scans = db.full_scans(&sql).await.unwrap_or_default();
@@ -1267,11 +1294,14 @@ impl App {
     /// Re-runs the last query with a larger row limit (read-only queries only,
     /// since it executes them again).
     pub(super) fn load_more(&mut self) {
+        if self.executing {
+            return self.set_status(self.running_elsewhere("load more once it's done"), true);
+        }
         if self.row_stream.is_some() {
             return self.fetch_more(self.settings.row_limit * 10);
         }
         let Some(results) = &self.tab.grid.results else { return };
-        if !results.truncated() {
+        if !results.truncated() && !self.tab.grid.cut_short {
             return self.set_status("All rows are already loaded".to_string(), false);
         }
         if !self.tab.last_query_infos.iter().all(|i| i.kind == Kind::Read) {
@@ -1298,10 +1328,72 @@ impl App {
             return self.set_status("That's already an EXPLAIN; run it with F6".to_string(), true);
         }
         if self.executing {
-            self.queued_plan = Some((stmt, line));
-            return self.set_status("The plan follows when the running query finishes (Esc stops both)".into(), false);
+            return self.explain_aside(stmt, line);
         }
         self.explain_statement(stmt, line);
+    }
+
+    /// F7 while a query runs: made at once on a connection of its own where
+    /// that sees the same as the session, else after the query.
+    fn explain_aside(&mut self, stmt: String, line: usize) {
+        let version = self.database.as_ref().map_or("", |db| db.version());
+        let explain = self.engine().dialect().explain(&stmt, version);
+        // (SQLite never: see `run_aside`.)
+        let aside = self.engine() != Engine::Sqlite
+            && self.txn == TxnState::Idle
+            && crate::params::find(&explain, self.engine()).is_empty();
+        match self.database.clone().filter(|_| aside) {
+            Some(db) => {
+                let send = self.sender();
+                let limit = self.settings.row_limit;
+                let tab = self.active_tab;
+                tokio::spawn(async move {
+                    let plan = db.run_aside(&explain, limit).await.ok().flatten();
+                    send(DbEventKind::PlanAside { tab, stmt, line, plan });
+                });
+            }
+            None => self.queue_plan(stmt, line),
+        }
+    }
+
+    /// Only in the tab whose query runs: it's made there after it.
+    fn queue_plan(&mut self, stmt: String, line: usize) {
+        if !self.running_here() {
+            return self.set_status(self.running_elsewhere("F7 again once it's done"), true);
+        }
+        self.queued_plan = Some((stmt, line));
+        self.set_status("The plan follows when the running query finishes (Esc stops both)".into(), false);
+    }
+
+    /// The plan made beside the running query, or (where it couldn't be)
+    /// made after it.
+    pub(super) fn plan_aside(&mut self, stmt: String, line: usize, plan: Option<QueryOutcome>) {
+        match plan {
+            Some(outcome) => {
+                self.plan_request = Some((stmt, false, line));
+                self.show_plan(outcome);
+            }
+            None if self.executing => self.queue_plan(stmt, line),
+            None => self.explain_statement(stmt, line),
+        }
+    }
+
+    /// "A query is running", naming its tab when that isn't this one.
+    pub(super) fn running_elsewhere(&self, then: &str) -> String {
+        match self.run_owner.filter(|&t| t != self.active_tab).and_then(|t| self.tabs.get(t)) {
+            Some(tab) => format!("Tab “{}” is running a query: {then}", tab.name),
+            None => format!("A query is running: {then}"),
+        }
+    }
+
+    /// Settings changed by the last run (`USE`, `SET`…) are the session's
+    /// alone: from then on plans aren't made on another connection.
+    pub(super) fn note_session_changes(&mut self) {
+        if self.last_run_infos.iter().any(|i| i.kind == Kind::Session)
+            && let Some(db) = &self.database
+        {
+            db.mark_session_changed();
+        }
     }
 
     /// The plan queued while a query ran, now that it's done.
@@ -1530,8 +1622,19 @@ impl App {
             self.connect_form.query_timeout().ok().flatten().map(|limit| (Instant::now() + limit, limit));
         self.tab.error_marker = None;
         self.executing = true;
+        self.running_since = Some(Instant::now());
+        // A read leaves the other tabs free meanwhile (see `in_tab`).
+        self.run_id += 1;
+        let reads = !self.last_run_infos.is_empty() && self.last_run_infos.iter().all(|i| i.kind == Kind::Read);
+        let plan = self.plan_request.as_ref().is_some_and(|(_, analyzed, _)| !analyzed);
+        let free = match self.running_purpose {
+            RunPurpose::Query => reads,
+            RunPurpose::Explain => plan,
+            _ => false,
+        };
+        self.run_owner = free.then_some(self.active_tab);
         self.set_result_status("Running… (Esc to cancel)".to_string(), false);
-        let send = self.sender();
+        let send = self.run_sender();
         let row_limit = self.next_row_limit.take().unwrap_or(self.settings.row_limit);
         tracing::debug!(statements = self.last_run_infos.len(), stream, row_limit, "run");
         let sql = if self.run_extra.vertical { sql::without_vertical(&sql, self.engine()) } else { sql };
@@ -1635,6 +1738,10 @@ impl App {
 
     /// Disconnects, asking first if a transaction would be rolled back.
     pub(super) fn request_disconnect(&mut self) {
+        // (In its own tab, disconnecting stops it.)
+        if self.executing && !self.running_here() {
+            return self.set_status(self.running_elsewhere("disconnect once it's done"), true);
+        }
         if self.txn == TxnState::Idle {
             return self.disconnect();
         }

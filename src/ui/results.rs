@@ -57,7 +57,7 @@ pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
     let focused = app.focus == Focus::Results;
     // How long it ran is the result's, in its footer.
-    let info = if app.executing { "running…".to_string() } else { String::new() };
+    let info = app.running_label().unwrap_or_default();
     let info = if app.zoomed { format!("ZOOMED · {info}") } else { info };
     let block = pane("Query result", &info, focused);
     app.hits.results = area;
@@ -97,15 +97,18 @@ pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
         }
         ResultTab::Rows => draw_rows(f, app, body, footer),
     }
-    // The last run's outcome (or progress), until the next key; the cell
-    // info comes back after it.
-    if app.status_in_results && !app.status.is_empty() && app.cell_edit.is_none() {
-        let style = if app.status_is_error { bold(t.error) } else { fg(t.text) };
+    // What a key here did, else the last run's outcome (or progress), until
+    // the next key; the cell info comes back after it.
+    let run = (app.status_in_results && !app.status.is_empty()).then_some((&app.status, app.status_is_error));
+    if let Some((message, is_error)) = app.results_note.as_ref().map(|(m, e)| (m, *e)).or(run)
+        && app.cell_edit.is_none()
+    {
+        let style = if is_error { bold(t.error) } else { fg(t.text) };
         // In place of the cell info: none of it may show through.
         f.render_widget(Clear, footer);
         f.render_widget(Block::default().style(Style::default().bg(t.inset)), footer);
         f.render_widget(
-            Paragraph::new(Span::styled(format!(" {}", truncate(&app.status, footer.width as usize)), style)),
+            Paragraph::new(Span::styled(format!(" {}", truncate(&one_line(message), footer.width as usize)), style)),
             footer,
         );
     }
@@ -119,7 +122,7 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     let rows = result_grid.and_then(|g| g.results.as_ref()).map(|r| {
         if r.columns.is_empty() {
             format!("{} affected", r.rows_affected.unwrap_or(0))
-        } else if app.row_stream.is_some() {
+        } else if app.row_stream.is_some() || result_grid.is_some_and(|g| g.cut_short) {
             format!("{}+ rows", r.total_rows)
         } else {
             format!("{} rows", r.total_rows)
@@ -600,13 +603,13 @@ fn draw_rows_footer(f: &mut Frame, app: &App, footer: Rect, offset: usize, count
         Span::styled(format!("   NULL AS {NULL_SYMBOL}"), dim()),
     ]);
     let shown = app.tab.grid.view.len();
-    let plus = if app.row_stream.is_some() { "+" } else { "" };
+    let plus = if app.row_stream.is_some() || app.tab.grid.cut_short { "+" } else { "" };
     let mut right = vec![Span::styled(format!("1–{shown} / {}{plus}", results.total_rows), bold(t.text))];
     if app.fetching_more {
         right.push(Span::styled("  · loading…", fg(t.warn)));
     } else if app.row_stream.is_some() {
         right.push(Span::styled("  · scroll or M for more", dim()));
-    } else if results.truncated() {
+    } else if results.truncated() || app.tab.grid.cut_short {
         right.push(Span::styled("  · M loads more", dim()));
     }
     // Which columns show, with arrows where more are hidden.

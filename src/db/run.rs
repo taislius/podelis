@@ -273,7 +273,35 @@ impl Database {
         unreachable!("the shown statement is among the drained results")
     }
 
+    /// After a run that changed the session's settings (`USE`, `SET`…).
+    pub fn mark_session_changed(&self) {
+        self.0.session_changed.store(true, Ordering::SeqCst);
+    }
+
+    /// Runs `sql` on a pool connection of its own while the session is busy
+    /// (a plan while a query runs). `None` where that would differ from the
+    /// session: SQLite (an in-memory database is the session's alone), or
+    /// once the session's settings were changed. The caller leaves out open
+    /// transactions, whose changes other connections don't see.
+    pub async fn run_aside(&self, sql: &str, row_limit: usize) -> Result<Option<QueryOutcome>> {
+        if self.0.session_changed.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+        let start = Instant::now();
+        let mut aside = match &self.0.pool {
+            Pool::Postgres(p) => Session::Postgres(p.acquire().await?),
+            Pool::MySql(p) => Session::MySql(p.acquire().await?),
+            Pool::Sqlite(_) => return Ok(None),
+        };
+        let mut results = aside.run(sql, row_limit).await?;
+        let statements = results.len();
+        let Some(last) = results.pop() else { return Ok(Some(QueryOutcome::default())) };
+        Ok(Some(last.into_outcome(statements, statements, start.elapsed(), false)))
+    }
+
     pub(super) async fn reopen_session(&self, session: &mut Session) -> Result<()> {
+        // A new session has the connection's own settings again.
+        self.0.session_changed.store(false, Ordering::SeqCst);
         *session = match &self.0.pool {
             Pool::Postgres(p) => Session::Postgres(p.acquire().await?),
             Pool::MySql(p) => Session::MySql(p.acquire().await?),

@@ -681,8 +681,7 @@ impl App {
                 KeyCode::Char('v') => match crate::clipboard::read() {
                     Ok(text) => self.handle_paste(&text),
                     Err(e) => {
-                        self.connect_form.error =
-                            Some(format!("Couldn't read the clipboard ({e}): paste with the terminal's keys instead"));
+                        self.connect_form.error = Some(crate::clipboard::read_failed(&e));
                     }
                 },
                 // Clearing and deleting a word, as in every input.

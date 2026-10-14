@@ -226,6 +226,8 @@ impl App {
         let Some((there, other)) = self.compare_target(id) else { return };
         self.row_stream = None;
         self.executing = true;
+        self.running_since = Some(Instant::now());
+        self.run_owner = None;
         self.set_result_status(format!("Running on this connection and on {}…", other.name), false);
         let send = self.sender();
         let limit = self.settings.row_limit;

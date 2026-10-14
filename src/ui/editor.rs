@@ -365,7 +365,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Option<(u16, u16
     if app.active_tab == 0 && area.x > 0 {
         mark_line(f, area.x - 1, true);
     }
-    // Room per tab: " SQL " + name + " ●" + "│".
+    // Room per tab: " SQL " + name + " ●" (or " …") + "│".
     let budget = (area.width as usize).saturating_sub(4) / tab_count.max(1);
     let name_room = budget.saturating_sub(9).clamp(4, 24);
     let mut spans = Vec::new();
@@ -384,6 +384,10 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Option<(u16, u16
         // Only a saved query's changes: other tabs are drafts, kept anyway.
         if tab.saved_id.is_some() && app.tab_dirty(i) {
             spans.push(Span::styled(" ●", fg(t.warn).bg(bg)));
+        }
+        // A query running in a tab not shown (the shown one's results say so).
+        if !active && app.executing && app.run_owner() == Some(i) {
+            spans.push(Span::styled(" …", fg(t.accent).bg(bg)));
         }
         spans.push(Span::styled(" ", Style::default().bg(bg)));
         hits.push((start, area.x + width(&spans), i));
