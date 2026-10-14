@@ -243,6 +243,15 @@ Run the basics (connect, run, scroll, a popup, the mouse, copying with
   and press F7: the editor's footer says the plan follows, and it does when
   the query ends. Click the editor's tab, then right-click there: the
   editor's menu.
+- [ ] Run `select pg_sleep(10)`, then Ctrl+T: the new tab works (run
+  something else there: it says the other tab is running), the first tab's
+  name shows `…`, and when it ends the status bar says so; its results are
+  in its own tab. With a tab on another connection too. A write
+  (`insert … ; select pg_sleep(5)`) keeps the tabs where they are.
+- [ ] F7 on PostgreSQL/MySQL during a slow query: the plan shows at once.
+  After `set search_path …` (or `use …`) it waits for the query instead.
+- [ ] Navigator: `y` on a table copies `schema.table`; results menu "Copy
+  rows as CSV"; vim mode: `yy` then Cmd+V elsewhere pastes the line.
 - [ ] Copy and paste: in the editor `Ctrl+C` copies the selection, or the
   cursor's line with none, and never quits (`Ctrl+Q` does); in the results
   it copies the row, or the marked rows a line each. `Ctrl+V` pastes in

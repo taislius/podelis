@@ -34,10 +34,10 @@ Keys that work directly:
 |---|---|
 | `F5` / `Ctrl+R` / `Ctrl+Enter`¹ | Run the selection, or everything in the editor (or click **▶ F5 Run** right of the tabs; *Statement* and *Explain* are there too). The results pane switches to RESULT as it starts |
 | `F6` | Run the selection, or the statement under the cursor. With several statements in the editor, its footer says which one that is (`stmt 2/3`) |
-| `F7` | Show the plan for the selection / statement under the cursor (not executed), switching to QUERY PLAN as it starts. Pressed while a query runs, the plan (of the SQL as it is then) follows when that query finishes; if it fails, its error stays in view instead, and `Esc` stops both. MySQL 8.0.16+ shows `FORMAT=TREE`; older MySQL and MariaDB show the classic `EXPLAIN` table |
+| `F7` | Show the plan for the selection / statement under the cursor (not executed), switching to QUERY PLAN as it starts. Pressed while a query runs, PostgreSQL and MySQL make it at once on a connection of their own; where that would see something else (SQLite, an open transaction, after `USE` or `SET`, `:parameters`) it follows when the query finishes, and if that fails its error stays in view instead (`Esc` stops both). MySQL 8.0.16+ shows `FORMAT=TREE`; older MySQL and MariaDB show the classic `EXPLAIN` table |
 | `Shift+F7` | `EXPLAIN ANALYZE`: runs the statement and shows actual times and rows (writes ask first and are rolled back). MySQL needs 8.0.18+; MariaDB runs `ANALYZE` |
 | `F8` / `Shift+F8` | Commit / roll back the open transaction |
-| `Esc` | Cancel the running query |
+| `Esc` | Cancel the running query (in its own tab). The results pane's title counts how long it has run (`running… 12 s`) |
 | `Ctrl+P` / `Ctrl+N` | Previous / next query from history |
 | `Tab` / `Shift+Tab` | Cycle focus: editor → results → schema (`Tab` right after a word completes it instead; `Esc` then `Tab` still moves on) |
 | `Ctrl+↑` / `Ctrl+↓` | Move the border between the editor and the results up / down |
@@ -67,6 +67,13 @@ A tab's `SQL` label is orange while the tab isn't saved to the library
 its text has changed since it was saved. Tabs, their
 connections and cursors come back after a restart (unless
 `restore_session = false`); results don't, press `F5` to re-run.
+
+While a query that reads runs, other tabs can be used: switch to one, open
+a new one, read its results. The running tab's name gets a green `…`, its
+outcome lands in it when it's done (the status bar says so), and the rows a
+streamed result hadn't sent yet are loaded with `M`. One query runs at a
+time; a write, a review or a comparison keeps every tab where it is until
+it's done.
 
 **Query parameters.** Running SQL with placeholders — `:name` in any
 engine, `$1` on Postgres, `?` on MySQL/SQLite, and SQLite's `?2`, `@name`
@@ -117,6 +124,8 @@ Visual and Visual-line modes, shown in the status bar. Supported: counts,
 `h j k l w b e 0 ^ $ gg G`, `i a I A o O`, `x X dd D cc C yy p P J r ~ u`,
 operators with motions (`dw`, `c$`, `y3w`…), `iw` (`ciw`, `diw`, `yiw`) and
 `v`/`V` with `d y c x`. Redo is `Ctrl+Y`, since `Ctrl+R` runs the query.
+Yanks also go to the system clipboard (deletes stay in vim's register), and
+`Ctrl+V` pastes from it in Normal mode as in Insert mode.
 
 ## Results
 
@@ -138,7 +147,7 @@ When focused:
 | `c` | Edit the cell: type the new value, `Enter` saves, `Ctrl+N` sets NULL, `Esc` cancels |
 | `a` | Add a row: a form of the table's columns (empty fields get their default; `NULL`; `=expr` for raw SQL) |
 | `Space` / `d` | Mark rows / delete the marked rows (or the current one); always asks first, `t` reviews it in a transaction |
-| `C` | Copy the marked rows (or all rows shown) as a Markdown table |
+| `C` | Copy the marked rows (or all rows shown) as a Markdown table; as CSV, JSON or `INSERT` statements from the menu (`m`) or Ctrl+K ("Copy rows as…") |
 | `m` / right-click | Menu of everything you can do here, with each action's key |
 | `y` / `Y` or `Ctrl+C` | Copy the selected cell / row (tab-separated); `Y` and `Ctrl+C` copy the marked rows, a line each, when rows are marked |
 | `e` / `J` / `i` | Export the rows shown as CSV / JSON / SQL `INSERT` statements to `podelis-export-<timestamp>.<ext>` (in the current directory, or `export_dir`). For every row of a big result, not just those loaded, use "Export all rows" in the menu (`m`) or Ctrl+K: it writes the rest straight to the file as it arrives, without loading it into the grid; `Esc` stops it |
@@ -165,9 +174,10 @@ it are asked for when you run.
 
 **Footers.** Each pane has its own: the editor's says what a key or click
 there did (copied, nothing to run, a plan waiting for the running query…)
-and holds the transaction modes; the results' shows the run's progress and
-outcome, then the selected cell. The status bar at the bottom is for the
-connection, key hints and everything else.
+and holds the transaction modes; the results' says the same for keys there,
+the run's progress and outcome, then the selected cell. The status bar at
+the bottom is for the connection, key hints and everything else. A footer's
+message goes with the next key; MESSAGES keeps it.
 
 **Menus.** Right-click a pane, or press `m` in the results or schema
 (`Shift+F10` anywhere), for a small menu of what you can do there, each
@@ -262,6 +272,7 @@ When focused:
 | `d` | Show the definition: `CREATE VIEW`, the function source, or a table's columns, keys and indexes (SQLite: its `CREATE TABLE`). In it, `←`/`→` show the previous / next table's (the navigator's selection follows), `y` copies it |
 | `s` | Add `SELECT * FROM <table> LIMIT 100;` at the end of the editor and run it (only it, as `F6` would) |
 | `f` | Related tables: what the table points to and what points to it through foreign keys, two steps each way |
+| `y` / `Ctrl+C` | Copy the selection's name as SQL writes it: a table with its schema (`public.orders`), a column, an index or a function |
 | `r` | Refresh (also happens automatically after DDL, `USE` and `SET`) |
 | `.` | Show or hide system tables (`pg_catalog` and `information_schema`; MySQL's `information_schema`, `performance_schema`, `mysql` and `sys`; SQLite's `sqlite_schema` and `sqlite_*`) in a SYSTEM section |
 | `Space` | The `Ctrl+K` command menu |

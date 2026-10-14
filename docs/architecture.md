@@ -42,11 +42,21 @@ everywhere:
 - **Lists** (`list.rs`): `list::step` moves any list's selection, with a
   `Nav` saying whether it wraps, takes j/k and Home/End, or Tab.
 - **Messages** (`mod.rs`): `set_status` puts a message where it belongs.
-  Said while handling a key, click or paste with the editor focused (no
-  popup or find bar open), it goes to the editor's footer
-  (`editor_note`); otherwise to the status bar. A run's progress and
-  outcome use `set_result_status`, for the results pane's footer. Both
-  last until the next key (a run's until it ends).
+  Said while handling a key, click or paste with the editor or the results
+  focused (no popup, find bar or cell prompt open), it goes to that pane's
+  footer (`editor_note`, `results_note`) and to MESSAGES; otherwise to the
+  status bar. A run's progress and outcome use `set_result_status`, for the
+  results pane's footer. They last until the next key (a run's until it
+  ends).
+- **Runs and tabs** (`query.rs`, `tabs.rs`, `events.rs`): one query runs
+  at a time (`executing`). A read records its tab (`run_owner`), and other
+  tabs can then be shown; a write, a review or a comparison leaves it
+  `None`, which keeps every tab in place (`blocks_tabs`). A run's events
+  carry its `run_id` rather than the connection's `generation`, so they
+  outlive connection switches (not a disconnect), and `in_tab` applies
+  them to the owner tab, swapping its state and connection in and back
+  out. F7 meanwhile plans on a pool connection (`Database::run_aside`)
+  where that sees what the session does.
 
 ## Databases: ports and adapters
 

@@ -49,7 +49,8 @@ same way tools like `lazygit` do.
   optional **vim keys**, **rebindable keys** and **mouse** support
 - **Tabs and a query library:** several query tabs per project, each with
   its own results and **its own connection** (so one tab can be on staging
-  while another is on prod). Save a tab to the project's
+  while another is on prod); keep working in other tabs while a long read
+  runs in one. Save a tab to the project's
   library under a name and group (`reports/churn by month`), rename or move
   it, and search everything — names, groups, SQL text and your history —
   from one window (F3)
@@ -95,12 +96,14 @@ same way tools like `lazygit` do.
   switch, `RESULT 2/3` shows which), the last one first. Cancel a running
   query on the server (`pg_cancel_backend` / `KILL QUERY`; SQLite interrupts it)
 - **Results:** type-aware columns, sideways scrolling, sort, filter, a
-  full-value view (JSON pretty-printed), copy cell/row, CSV, JSON and SQL
-  `INSERT` export,
+  full-value view (JSON pretty-printed), copying (Ctrl+C: a cell, rows, marked
+  rows as Markdown, CSV, JSON or `INSERT`s), CSV, JSON and SQL `INSERT`
+  export,
   and **editing cells in place** (saved by primary key, through the same
   safety checks). A read-only query **streams**: the first 1,000 rows show
   at once and more load as you scroll. MESSAGES and QUERY PLAN tabs hold
-  run outcomes and `EXPLAIN` plans (F7, without running the query). The
+  run outcomes and `EXPLAIN` plans (F7, without running the query; made at
+  once even while another query runs). The
   plan starts with **what stands out**, each pointing at its step: the
   slowest (or costliest) step, big filtered scans and nested full scans,
   row estimates far off the actual counts, sorts and hashes spilling to
