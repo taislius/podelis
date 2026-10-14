@@ -41,6 +41,12 @@ everywhere:
   with the same keys through `edit_at_end`.
 - **Lists** (`list.rs`): `list::step` moves any list's selection, with a
   `Nav` saying whether it wraps, takes j/k and Home/End, or Tab.
+- **Messages** (`mod.rs`): `set_status` puts a message where it belongs.
+  Said while handling a key, click or paste with the editor focused (no
+  popup or find bar open), it goes to the editor's footer
+  (`editor_note`); otherwise to the status bar. A run's progress and
+  outcome use `set_result_status`, for the results pane's footer. Both
+  last until the next key (a run's until it ends).
 
 ## Databases: ports and adapters
 

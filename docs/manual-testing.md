@@ -238,6 +238,11 @@ Run the basics (connect, run, scroll, a popup, the mouse, copying with
 - [ ] macOS Terminal, iTerm2, WezTerm, Ghostty, kitty, Alacritty
 - [ ] A Linux desktop terminal
 - [ ] Inside tmux, and over SSH (clipboard via OSC 52)
+- [ ] Run a slow query (`select pg_sleep(5)`): RESULT shows at once; the
+  editor's title doesn't say running, the results pane does. Edit the SQL
+  and press F7: the editor's footer says the plan follows, and it does when
+  the query ends. Click the editor's tab, then right-click there: the
+  editor's menu.
 - [ ] Copy and paste: in the editor `Ctrl+C` copies the selection, or the
   cursor's line with none, and never quits (`Ctrl+Q` does); in the results
   it copies the row, or the marked rows a line each. `Ctrl+V` pastes in

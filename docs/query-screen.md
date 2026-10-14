@@ -32,9 +32,9 @@ Keys that work directly:
 
 | Key | Action |
 |---|---|
-| `F5` / `Ctrl+R` / `Ctrl+Enter`¹ | Run the selection, or everything in the editor (or click **▶ F5 Run** right of the tabs; *Statement* and *Explain* are there too) |
+| `F5` / `Ctrl+R` / `Ctrl+Enter`¹ | Run the selection, or everything in the editor (or click **▶ F5 Run** right of the tabs; *Statement* and *Explain* are there too). The results pane switches to RESULT as it starts |
 | `F6` | Run the selection, or the statement under the cursor. With several statements in the editor, its footer says which one that is (`stmt 2/3`) |
-| `F7` | Show the plan for the selection / statement under the cursor (not executed). MySQL 8.0.16+ shows `FORMAT=TREE`; older MySQL and MariaDB show the classic `EXPLAIN` table |
+| `F7` | Show the plan for the selection / statement under the cursor (not executed), switching to QUERY PLAN as it starts. Pressed while a query runs, the plan (of the SQL as it is then) follows when that query finishes; if it fails, its error stays in view instead, and `Esc` stops both. MySQL 8.0.16+ shows `FORMAT=TREE`; older MySQL and MariaDB show the classic `EXPLAIN` table |
 | `Shift+F7` | `EXPLAIN ANALYZE`: runs the statement and shows actual times and rows (writes ask first and are rolled back). MySQL needs 8.0.18+; MariaDB runs `ANALYZE` |
 | `F8` / `Shift+F8` | Commit / roll back the open transaction |
 | `Esc` | Cancel the running query |
@@ -162,6 +162,12 @@ only.
 `Ctrl+S` as `snippets/recent orders`). Typing the start of a snippet's name
 offers it in autocomplete, and choosing it inserts its SQL; `:parameters` in
 it are asked for when you run.
+
+**Footers.** Each pane has its own: the editor's says what a key or click
+there did (copied, nothing to run, a plan waiting for the running query…)
+and holds the transaction modes; the results' shows the run's progress and
+outcome, then the selected cell. The status bar at the bottom is for the
+connection, key hints and everything else.
 
 **Menus.** Right-click a pane, or press `m` in the results or schema
 (`Shift+F10` anywhere), for a small menu of what you can do there, each
