@@ -42,7 +42,7 @@ Keys that work directly:
 | `Tab` / `Shift+Tab` | Cycle focus: editor → results → schema (`Tab` right after a word completes it instead; `Esc` then `Tab` still moves on) |
 | `Ctrl+↑` / `Ctrl+↓` | Move the border between the editor and the results up / down |
 | `Ctrl+←` / `Ctrl+→` | Move the navigator's border left / right (from the navigator or the results; in the editor they move by word) |
-| `Ctrl+Q` / `Ctrl+C` | Quit (`Ctrl+C` copies instead when text is selected in the editor) |
+| `Ctrl+Q` | Quit (`Ctrl+C` copies on this screen: see the editor and results keys) |
 | `F1` | Every key |
 
 The function keys from earlier versions still work: `F2` navigator, `F3`
@@ -93,7 +93,8 @@ When focused:
 | `Ctrl+Home`/`Ctrl+End` | Start / end of the text |
 | `Shift` + any movement | Select |
 | `Ctrl+A` | Select all |
-| `Ctrl+C` / `Ctrl+X` | Copy / cut the selection |
+| `Ctrl+C` / `Ctrl+X` | Copy / cut the selection; with nothing selected, `Ctrl+C` copies the cursor's line |
+| `Ctrl+V` | Paste from the system clipboard (`pbpaste`, `wl-paste`, `xclip` or `xsel`), for terminals where `Ctrl+V` doesn't paste; the terminal's own paste (`Cmd+V` on macOS) works too |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
 | `Tab` (after a word) / `Ctrl+Space` | Autocomplete; typing `.` after a table, alias or schema opens it too |
 | `Esc`, then `Tab` | Next pane, even right after a word (the status bar hint says `ESC TAB` when plain Tab would complete) |
@@ -101,11 +102,15 @@ When focused:
 | `Ctrl+F` | Find and replace: `Enter`/`↓` next, `↑` previous, `Tab` to the replacement, `Enter` replaces, `Ctrl+A` replaces all |
 | `Ctrl+/` | Comment / uncomment the selected lines (`Ctrl+7` in terminals that send that) |
 | `Ctrl+K i` / `Ctrl+E` | Insert a snippet or saved query at the cursor (the library window, starting at the `snippets` group) |
-| `Ctrl+K m` / right-click | Menu of what you can do in the editor |
+| `Ctrl+K m` / right-click | Menu of what you can do in the editor: copy, cut and paste first (right-clicking the selection keeps it) |
 | `Ctrl+K f` | Format the selection, or everything. Strings, quoted names and block comments stay exactly as written; if formatting would change anything but spacing, it's refused |
 | `↑`/`↓`, `Tab`/`Enter`, `Esc` | In the completion list: choose, accept, close |
 
-Pasting is supported (bracketed paste), including multi-line SQL.
+Pasting is supported, including multi-line SQL: the terminal's own paste
+(`Cmd+V` on macOS, `Ctrl+Shift+V` in most Linux terminals) or `Ctrl+V`,
+which reads the system clipboard itself (`pbpaste`, `wl-paste`, `xclip` or
+`xsel`). Over SSH use the terminal's paste: those tools would read the
+server's clipboard.
 
 **Vim keys** (`editor_mode = "vim"` in `config.toml`): Normal, Insert,
 Visual and Visual-line modes, shown in the status bar. Supported: counts,
@@ -135,7 +140,7 @@ When focused:
 | `Space` / `d` | Mark rows / delete the marked rows (or the current one); always asks first, `t` reviews it in a transaction |
 | `C` | Copy the marked rows (or all rows shown) as a Markdown table |
 | `m` / right-click | Menu of everything you can do here, with each action's key |
-| `y` / `Y` | Copy the selected cell / row (tab-separated) |
+| `y` / `Y` or `Ctrl+C` | Copy the selected cell / row (tab-separated); `Y` and `Ctrl+C` copy the marked rows, a line each, when rows are marked |
 | `e` / `J` / `i` | Export the rows shown as CSV / JSON / SQL `INSERT` statements to `podelis-export-<timestamp>.<ext>` (in the current directory, or `export_dir`). For every row of a big result, not just those loaded, use "Export all rows" in the menu (`m`) or Ctrl+K: it writes the rest straight to the file as it arrives, without loading it into the grid; `Esc` stops it |
 | `M` | Load 10× more rows (streamed results fetch the next pages; scripts are re-run with a bigger limit, read-only ones only) |
 | `[` / `]`, `1` `2` `3` (or click a tab) | Switch between the RESULT, MESSAGES and QUERY PLAN tabs (`F7` opens the plan with the results focused; `1` goes back) |
@@ -149,7 +154,7 @@ says `was lines 12–15 · edited since`.
 A plan that comes as a table (MySQL before 8.0.16 and MariaDB: the classic
 `EXPLAIN` columns) shows in QUERY PLAN as a grid like the result's, under its
 notes, and takes the same keys: moving, `s` sort, `/` filter, `x` / `X`,
-`y` / `Y` / `C` copy, `e` / `J` export, `|` and `o`. Editing, adding,
+`y` / `Y` / `C` / `Ctrl+C` copy, `e` / `J` export, `|` and `o`. Editing, adding,
 deleting, following a foreign key and loading more are for query results
 only.
 
@@ -160,7 +165,9 @@ it are asked for when you run.
 
 **Menus.** Right-click a pane, or press `m` in the results or schema
 (`Shift+F10` anywhere), for a small menu of what you can do there, each
-item with its key — a quick way to learn the shortcuts.
+item with its key — a quick way to learn the shortcuts. The editor's starts
+with Copy and Cut (with text selected) and Paste; the results pane, with
+messages or nothing run yet, offers its tabs and zoom.
 
 Cells can be edited, and rows added or deleted, when the result comes from
 a plain `SELECT` on one table (no joins, grouping or computed columns) that includes the table's

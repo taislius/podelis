@@ -233,11 +233,17 @@ Use two databases with the same tables, e.g. `pgbench -i -s 10 a` and
 ### Terminals
 
 Run the basics (connect, run, scroll, a popup, the mouse, copying with
-`y`) in each:
+`y` and `Ctrl+C`, pasting with `Ctrl+V` and the terminal's paste) in each:
 
 - [ ] macOS Terminal, iTerm2, WezTerm, Ghostty, kitty, Alacritty
 - [ ] A Linux desktop terminal
 - [ ] Inside tmux, and over SSH (clipboard via OSC 52)
+- [ ] Copy and paste: in the editor `Ctrl+C` copies the selection, or the
+  cursor's line with none, and never quits (`Ctrl+Q` does); in the results
+  it copies the row, or the marked rows a line each. `Ctrl+V` pastes in
+  the editor and the connection form. Right-click the selection: it stays,
+  and the menu offers Copy, Cut and Paste; right-click the results on the
+  MESSAGES tab: a results menu, not the editor's.
 - [ ] A narrow window (80 columns or less): the navigator hides and nothing
   overlaps; resize while a query runs
 - [ ] `theme = "light"` on a light background; `editor_mode = "vim"`
