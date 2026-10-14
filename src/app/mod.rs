@@ -1274,7 +1274,7 @@ impl App {
             return;
         }
         let ctrl_c = key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');
-        // Ctrl+Q quits too, from anywhere (Ctrl+C copies a selection).
+        // Ctrl+Q quits from anywhere (on the query screen Ctrl+C copies).
         let ctrl_q = key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q');
         if let Some(confirm) = self.confirm.take() {
             // A second Ctrl+C or Ctrl+Q confirms quitting.
@@ -1329,14 +1329,10 @@ impl App {
             return self.request_quit();
         }
         if ctrl_c {
-            // With text selected in the editor, Ctrl+C copies instead of
-            // quitting; quitting asks first if a transaction is open.
-            if matches!(self.screen, Screen::Query)
-                && self.focus == Focus::Editor
-                && let Some(text) = self.tab.editor.selected_text()
-            {
-                self.copy_text(text, "Copied selection");
-                return;
+            // On the query screen Ctrl+C copies, and Ctrl+Q quits; elsewhere
+            // it quits, asking first if a transaction is open.
+            if matches!(self.screen, Screen::Query) {
+                return self.copy_focused();
             }
             return self.request_quit();
         }

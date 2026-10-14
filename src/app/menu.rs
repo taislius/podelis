@@ -12,6 +12,15 @@ pub enum MenuAction {
     SchemaKey(KeyCode),
     /// A palette command without a key of its own.
     Command(super::palette::Command),
+    Clip(Clip),
+}
+
+/// The editor's clipboard items.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Clip {
+    Copy,
+    Cut,
+    Paste,
 }
 
 #[derive(Clone, Debug)]
@@ -43,10 +52,37 @@ impl App {
         MenuItem { label, keys: self.keymap.label(action).to_string(), action: MenuAction::Action(action) }
     }
 
+    /// The editor's menu: the clipboard, then actions with their keys.
+    fn editor_items(&self) -> Vec<MenuItem> {
+        // Copy and cut only with something selected.
+        [(Clip::Copy, "Copy", "Ctrl+C"), (Clip::Cut, "Cut", "Ctrl+X")]
+            .into_iter()
+            .filter(|_| self.tab.editor.selection().is_some())
+            .chain([(Clip::Paste, "Paste", "Ctrl+V")])
+            .map(|(clip, label, keys)| MenuItem { label, keys: keys.to_string(), action: MenuAction::Clip(clip) })
+            .chain([
+                self.action_item("Run (the selection, or everything)", Action::Run),
+                self.action_item("Run the statement at the cursor", Action::RunStatement),
+                self.action_item("Explain (plan only)", Action::Explain),
+                self.action_item("Explain analyze (runs it)", Action::ExplainAnalyze),
+                self.action_item("Format SQL", Action::Format),
+                self.action_item("Comment / uncomment lines", Action::Comment),
+                self.action_item("Find and replace", Action::Find),
+                self.action_item("Insert a snippet or saved query", Action::InsertSnippet),
+                self.action_item("Save to the library", Action::SaveTab),
+                self.action_item("Search saved queries and history", Action::Library),
+                self.action_item("Zoom this pane (and back)", Action::Zoom),
+                self.action_item("All commands…", Action::Palette),
+            ])
+            .collect()
+    }
+
     /// The focused pane's menu, at `at` (a click) or next to the pane.
     pub(super) fn open_menu(&mut self, at: Option<(u16, u16)>) {
         let (title, items) = match self.focus {
-            Focus::Results if self.tab.grid.results.as_ref().is_some_and(|r| !r.columns.is_empty()) => {
+            Focus::Results
+                if self.grid_shown() && self.tab.grid.results.as_ref().is_some_and(|r| !r.columns.is_empty()) =>
+            {
                 use KeyCode::Char;
                 // A plan's table: what changes data or needs a query's table is left out.
                 let plan = self.tab.plan_swapped;
@@ -69,7 +105,7 @@ impl App {
                         results_item("Mark / unmark this row", Char(' '), "Space"),
                         results_item("Delete the marked rows (or this one)", Char('d'), "d"),
                         results_item("Copy the cell", Char('y'), "y"),
-                        results_item("Copy the row", Char('Y'), "Y"),
+                        results_item("Copy the row (or the marked rows)", Char('Y'), "Y"),
                         results_item("Copy rows as a Markdown table", Char('C'), "C"),
                         results_item("Follow the foreign key", Char('f'), "f"),
                         results_item("Pipe rows through a command", Char('|'), "|"),
@@ -114,23 +150,20 @@ impl App {
                     ],
                 )
             }
-            _ => (
-                "EDITOR",
-                vec![
-                    self.action_item("Run (the selection, or everything)", Action::Run),
-                    self.action_item("Run the statement at the cursor", Action::RunStatement),
-                    self.action_item("Explain (plan only)", Action::Explain),
-                    self.action_item("Explain analyze (runs it)", Action::ExplainAnalyze),
-                    self.action_item("Format SQL", Action::Format),
-                    self.action_item("Comment / uncomment lines", Action::Comment),
-                    self.action_item("Find and replace", Action::Find),
-                    self.action_item("Insert a snippet or saved query", Action::InsertSnippet),
-                    self.action_item("Save to the library", Action::SaveTab),
-                    self.action_item("Search saved queries and history", Action::Library),
-                    self.action_item("Zoom this pane (and back)", Action::Zoom),
-                    self.action_item("All commands…", Action::Palette),
-                ],
-            ),
+            // Messages, a plan's text, or nothing run yet: no rows to act on.
+            Focus::Results => {
+                use KeyCode::Char;
+                (
+                    "RESULTS",
+                    vec![
+                        results_item("Show the rows", Char('1'), "1"),
+                        results_item("Show the messages", Char('2'), "2"),
+                        results_item("Show the plan", Char('3'), "3"),
+                        self.action_item("Zoom this pane (and back)", Action::Zoom),
+                    ],
+                )
+            }
+            _ => ("EDITOR", self.editor_items()),
         };
         let pane = match self.focus {
             Focus::Results => self.hits.result_rows,
@@ -165,6 +198,13 @@ impl App {
             MenuAction::Command(command) => self.run_command(command),
             MenuAction::ResultsKey(code) => self.handle_results_key(KeyEvent::new(code, KeyModifiers::NONE)),
             MenuAction::SchemaKey(code) => self.handle_schema_key(KeyEvent::new(code, KeyModifiers::NONE)),
+            MenuAction::Clip(Clip::Copy) => {
+                if let Some(text) = self.tab.editor.selected_text() {
+                    self.copy_text(text, "Copied selection");
+                }
+            }
+            MenuAction::Clip(Clip::Cut) => self.cut_selection(),
+            MenuAction::Clip(Clip::Paste) => self.paste_clipboard(),
         }
     }
 

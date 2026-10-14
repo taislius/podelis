@@ -178,6 +178,49 @@ impl App {
         }
     }
 
+    /// Ctrl+C: copies the editor's selection (or its line), the open cell,
+    /// or the results row (or the marked rows).
+    pub(super) fn copy_focused(&mut self) {
+        if self.cell_view.is_some() {
+            return self.copy_cell();
+        }
+        let has_row = self.grid_shown() && self.selected_row().is_some();
+        match self.focus {
+            _ if self.popup_open() => {}
+            Focus::Editor => {
+                let ed = &self.tab.editor;
+                if let Some(text) = ed.selected_text() {
+                    return self.copy_text(text, "Copied selection");
+                }
+                let row = ed.cursor().0;
+                let (start, end) = (ed.offset_of((row, 0)), ed.offset_of((row, ed.line_len(row))));
+                let line = ed.text()[start..end].to_string();
+                if !line.trim().is_empty() {
+                    return self.copy_text(line, &format!("Copied line {}", row + 1));
+                }
+            }
+            Focus::Results if has_row => return self.copy_row(),
+            Focus::Results | Focus::Schema => {}
+        }
+        self.set_status("Nothing to copy here · Ctrl+Q quits".to_string(), false);
+    }
+
+    /// Pastes the system clipboard (Ctrl+V, or the editor's menu).
+    pub(super) fn paste_clipboard(&mut self) {
+        match crate::clipboard::read() {
+            Ok(text) => self.paste_into_pane(&text),
+            Err(e) => self
+                .set_status(format!("Couldn't read the clipboard ({e}): paste with the terminal's keys instead"), true),
+        }
+    }
+
+    pub(super) fn cut_selection(&mut self) {
+        if let Some(text) = self.tab.editor.cut() {
+            self.edited();
+            self.copy_text(text, "Cut selection");
+        }
+    }
+
     fn paste_into_pane(&mut self, text: &str) {
         if let Some(edit) = &mut self.cell_edit {
             return edit.text.insert_str(text);
@@ -355,13 +398,9 @@ impl App {
                 return;
             }
             KeyCode::Char('a') if ctrl => return ed.select_all(),
-            KeyCode::Char('x') if ctrl => {
-                if let Some(text) = ed.cut() {
-                    self.edited();
-                    self.copy_text(text, "Cut selection");
-                }
-                return;
-            }
+            KeyCode::Char('x') if ctrl => return self.cut_selection(),
+            // Where the terminal doesn't paste by itself.
+            KeyCode::Char('v') if ctrl => return self.paste_clipboard(),
             KeyCode::Esc => return ed.clear_selection(),
             _ => {}
         }
@@ -526,6 +565,9 @@ impl App {
         if let Some(i) = switch {
             return self.set_result_tab(tabs[i]);
         }
+        if key.code == KeyCode::Char('m') {
+            return self.open_menu(None);
+        }
         if !self.grid_shown() {
             return self.handle_tab_scroll_key(key);
         }
@@ -554,7 +596,6 @@ impl App {
             KeyCode::Char('a') => return self.start_row_insert(),
             KeyCode::Char('d') => return self.delete_rows(),
             KeyCode::Char('C') => return self.copy_markdown(),
-            KeyCode::Char('m') => return self.open_menu(None),
             KeyCode::Char('z') => return self.toggle_zoom(),
             KeyCode::Char('>') => return self.step_result_set(true),
             KeyCode::Char('<') => return self.step_result_set(false),
@@ -750,11 +791,21 @@ impl App {
         self.copy_text(text, &status);
     }
 
+    /// The marked rows, or else the current one, a line each (tab-separated).
     pub(super) fn copy_row(&mut self) {
-        let Some(cells) = self.selected_row() else { return };
-        let text =
-            cells.iter().map(|c| c.as_deref().unwrap_or("").replace(['\t', '\n'], " ")).collect::<Vec<_>>().join("\t");
-        self.copy_text(text, "Copied row (tab-separated)");
+        let line = |cells: &[Option<String>]| {
+            cells.iter().map(|c| c.as_deref().unwrap_or("").replace(['\t', '\n'], " ")).collect::<Vec<_>>().join("\t")
+        };
+        let marked = &self.tab.grid.marked;
+        if marked.is_empty() {
+            let Some(cells) = self.selected_row() else { return };
+            let text = line(cells);
+            return self.copy_text(text, "Copied row (tab-separated)");
+        }
+        let Some(results) = self.tab.grid.results.as_ref() else { return };
+        let lines: Vec<_> = marked.iter().filter_map(|&i| results.rows.get(i)).map(|r| line(r)).collect();
+        let status = format!("Copied {} rows (tab-separated, a line each)", lines.len());
+        self.copy_text(lines.join("\n"), &status);
     }
 
     /// `podelis-export-<timestamp>.<ext>` in `export_dir` (or the current folder).

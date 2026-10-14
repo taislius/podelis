@@ -63,7 +63,16 @@ impl App {
             MouseEventKind::Up(MouseButton::Left) => self.dragging = false,
             // Right-click: select what's under the pointer, then its menu.
             MouseEventKind::Down(MouseButton::Right) => {
-                self.click(x, y, false);
+                // Inside the editor's selection it stays, for Copy and Cut.
+                let pos = self.editor_pos_at(x, y);
+                let on_selection = inside(self.hits.editor_text, x, y)
+                    && self.tab.editor.selection().is_some_and(|(a, b)| (a..=b).contains(&pos));
+                if on_selection {
+                    self.focus = Focus::Editor;
+                    self.completion = None;
+                } else {
+                    self.click(x, y, false);
+                }
                 self.dragging = false;
                 let on_pane = [self.hits.editor, self.hits.results].iter().any(|r| inside(*r, x, y))
                     || self.hits.schema.is_some_and(|r| inside(r, x, y));

@@ -322,7 +322,7 @@ pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String
                     (&complete, "autocomplete"),
                     (&undo_redo, "undo / redo"),
                     ("Shift+move · Ctrl+A", "select · select all"),
-                    ("Ctrl+C / Ctrl+X", "copy / cut selection"),
+                    ("Ctrl+C / Ctrl+X / Ctrl+V", "copy / cut / paste"),
                     (&history, "query history"),
                     (k(Action::Find), "find and replace"),
                     (k(Action::InsertSnippet), "insert a snippet / saved query"),

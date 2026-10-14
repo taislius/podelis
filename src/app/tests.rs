@@ -487,17 +487,25 @@ fn drafts_survive_project_switches_and_restarts() {
 }
 
 #[test]
-fn ctrl_c_copies_selection_instead_of_quitting() {
+fn ctrl_c_copies_on_the_query_screen_and_ctrl_q_quits() {
     let (mut app, _dir) = test_app();
     app.screen = Screen::Query;
-    app.tab.editor.insert_str("select 1");
+    app.tab.editor.insert_str("select 1\nfrom t\n");
     let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
     app.handle_key(ctrl('a'));
     app.handle_key(ctrl('c'));
-    assert!(!app.should_quit);
-    assert_eq!(app.take_clipboard().as_deref(), Some("select 1"));
+    assert_eq!(app.take_clipboard().as_deref(), Some("select 1\nfrom t\n"));
+    // Nothing selected: the cursor's line.
     app.handle_key(key(KeyCode::Esc));
+    app.tab.editor.set_cursor((1, 2));
     app.handle_key(ctrl('c'));
+    assert_eq!((app.take_clipboard().as_deref(), app.status.as_str()), (Some("from t"), "Copied line 2"));
+    // An empty line has nothing to copy; Ctrl+C never quits here.
+    app.tab.editor.set_cursor((2, 0));
+    app.handle_key(ctrl('c'));
+    assert!(app.take_clipboard().is_none() && !app.should_quit);
+    assert_eq!(app.status, "Nothing to copy here · Ctrl+Q quits");
+    app.handle_key(ctrl('q'));
     assert!(app.should_quit);
 }
 
@@ -661,7 +669,7 @@ async fn transaction_tracking_and_disconnect_confirmation() {
     app.handle_key(key(KeyCode::Esc));
     assert!(matches!(app.screen, Screen::Query));
 
-    app.handle_key(ctrl('c'));
+    app.handle_key(ctrl('q'));
     assert!(matches!(app.confirm.as_ref().unwrap().action, ConfirmAction::Quit));
     app.handle_key(key(KeyCode::Char('n')));
     assert!(!app.should_quit);
@@ -2434,6 +2442,12 @@ async fn add_mark_delete_and_copy_rows() {
         app.take_clipboard().unwrap(),
         "| id | name | kind |\n| --- | --- | --- |\n| 1 | Rex | cat |\n| 3 | Kit | cat |\n"
     );
+    // `Y` and Ctrl+C copy them too, a line each.
+    app.handle_key(key(KeyCode::Char('Y')));
+    assert_eq!(app.take_clipboard().unwrap(), "1\tRex\tcat\n3\tKit\tcat");
+    app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert_eq!(app.take_clipboard().unwrap(), "1\tRex\tcat\n3\tKit\tcat");
+    assert_eq!(app.status, "Copied 2 rows (tab-separated, a line each)");
     app.handle_key(key(KeyCode::Char('d')));
     let confirm = app.confirm.as_ref().expect("asks before deleting");
     assert_eq!(confirm.message, "Delete 2 row(s) from pets?");
@@ -2461,9 +2475,24 @@ async fn menus_offer_what_each_pane_can_do() {
     app.focus = Focus::Editor;
     app.handle_key(KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT));
     let menu = app.menu.as_ref().unwrap();
-    assert_eq!((menu.title, menu.items[0].keys.as_str()), ("EDITOR", "F5 · Ctrl+R · Ctrl+Enter"));
+    let labels: Vec<_> = menu.items.iter().map(|i| (i.label, i.keys.as_str())).collect();
+    assert_eq!(menu.title, "EDITOR");
+    assert_eq!(labels[..2], [("Paste", "Ctrl+V"), ("Run (the selection, or everything)", "F5 · Ctrl+R · Ctrl+Enter")]);
     app.handle_key(key(KeyCode::Esc));
     assert!(app.menu.is_none());
+    // With a selection, Copy and Cut come first; Copy copies it.
+    app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+    app.handle_key(KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT));
+    let labels: Vec<_> = app.menu.as_ref().unwrap().items.iter().map(|i| i.label).collect();
+    assert_eq!(labels[..3], ["Copy", "Cut", "Paste"]);
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.take_clipboard(), Some(app.tab.editor.text()));
+    // The results pane without rows on show has its own menu, not the editor's.
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Char('2')));
+    app.handle_key(key(KeyCode::Char('m')));
+    let menu = app.menu.as_ref().unwrap();
+    assert_eq!((menu.title, menu.items[0].label), ("RESULTS", "Show the rows"));
 }
 
 #[test]
