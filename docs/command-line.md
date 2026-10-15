@@ -85,17 +85,108 @@ podelis doctor                            # config, keychain, password managers,
 podelis doctor -p shop --connections      # …and test every saved connection of a project
 ```
 
+## Ask in plain language: `ask`
+
+```sh
+podelis ask prod "revenue per country last month"           # prints SQL; runs nothing
+podelis ask -p shop --model local prod "top 10 products"    # a project, and a model by name
+podelis ask prod "orders per day this week" > orders.sql    # stdout has only the SQL
+```
+
+An AI model (set up in `config.toml`: [AI models](configuration.md#ai-models))
+writes one query for the question over the connection's schema, and
+`ask` prints it (in the app, `Ctrl+K q` puts it in the editor). It's never run: read it, then run it as you like
+(`podelis prod -e - < orders.sql`, or paste it in the editor). What the
+model said about it (what it does, what it assumed) and how many tokens
+it took go to stderr.
+
+- **The model sees only what it needs:** the tables that matter for the
+  question and their columns, keys and comments, never rows (what
+  `podelis gateway context` shows, below).
+- **Its SQL is checked against the schema.** A table or column that isn't
+  there goes back to the model with what's wrong, up to twice; any still
+  unknown are named ("Check before running it: …").
+- **Your schema stays on your machine unless you say so.** A project
+  shares its schemas only with models on this machine (a local server)
+  until you allow more: asking a model at a provider asks first, in the
+  terminal, whether to send the table and column names this once or
+  always for the project (`share_schema = "all"` on the project in
+  `connections.toml`; remove it to go back). Without a terminal it isn't
+  sent, and `ask` exits with 3.
+
+Exit codes: 0 SQL printed, 1 no SQL (the model said why), 3 the schema
+wasn't sent.
+
+## What your team knows: `memory`
+
+Models write wrong SQL when a column means something they can't see:
+`status = 3`, a total with VAT, revenue net of refunds. Tell the project's
+memory once, and every model asked about those tables is shown it:
+
+```sh
+podelis memory add orders.status 3 = cancelled
+podelis memory add revenue is orders.total minus refunds    # is / are / means / equals say how it relates
+podelis memory add -p shop customers.tier gold spends over 1000 a year
+podelis memory                       # every fact, numbered (podelis memory list refunds: those matching)
+podelis memory forget 2
+podelis memory learn db/migrations   # what your migrations say: each table's history, the comments above statements
+podelis memory confirm 7             # a model's assumption (ask says which) that's right
+podelis memory export > memory.txt   # as text: read it, review it, keep it in git
+```
+
+**Your migrations know a lot.** `learn` reads a folder of `.sql`
+migration files (any tool's: Flyway, Rails, Django, golang-migrate…, in
+file-name order) without a model: when each table was created and each
+column added, dropped or renamed, dated from the file names
+(`20240301_add_refunds.sql`), the `--` comment right above a statement
+("Refunds used to be negative orders") as a note on that table or column,
+and `COMMENT ON`. Run it again after new migrations: it replaces what it
+learned from that folder before. What people said goes first when there's
+no room for everything, then the notes, then the histories.
+
+**A model's assumptions wait for you.** When a model had to assume what a
+value means ("0 for free orders") and no fact said it, `ask` keeps that
+as a fact that isn't confirmed (never shown to models), and says so:
+`podelis memory confirm <number>` makes it count, `forget` drops it (and
+the same suggestion isn't kept again).
+
+A fact goes to a model with the tables it's about (`orders`,
+`orders.status`, `public.orders` and `public.orders.status` all go with
+`orders`) or when it matches the question's words, labelled as what the
+team says; `podelis gateway context` shows which ones. Facts you add, and
+those from your migrations, are confirmed; only confirmed ones are shown.
+In the app, `Ctrl+K k` shows them. They're kept per project in `memory/<project-id>.db`, and
+the gateway's log never has their text.
+
 ## The gateway
 
 The gateway is the background process for what involves AI models:
-the models and their keys, what they're shown, their tools and memory.
-Features that need it start it, and it stops by itself after
+the models and their keys, and later what they're shown, their tools and
+memory. Features that need it start it, and it stops by itself after
 `gateway_idle` minutes with no client (see [Configuration](configuration.md)),
-so it never has to be started by hand. It listens only on a socket in
-the config folder that only you can open. In this version it answers
-only these commands; the AI features come next.
+so it never has to be started by hand; a gateway left running by an older
+Podėlis version (after an update) is stopped and replaced by the next use
+(a newer version's is left alone: two installed versions don't stop each
+other's), and `podelis gateway stop` stops either. It listens only on a socket in
+the config folder that only you can open. The models it may use are set
+up in `config.toml` ([AI models](configuration.md#ai-models)); the
+features that ask them come next.
+
+**What a model is shown of a database.** Not the whole schema, and never
+rows: the tables whose names, column names or comments match the
+question's words, then the tables a foreign key joins to them (one that
+links two of them first), with their columns, keys, where foreign keys
+point, and the database's own comments (`COMMENT ON` in PostgreSQL,
+`COMMENT '…'` in MySQL), within about 4,000 tokens. `podelis gateway
+context` shows exactly that, with why each table is there, so you can see
+it before anything is sent anywhere; `-p` picks the project.
 
 ```sh
+podelis gateway models                    # the models set up, and where each one's key comes from (without running a key_command)
+podelis gateway key claude                # store a model's API key in the OS keychain (asked, not shown)
+podelis gateway test                      # ask the default model for one word (costs a few tokens)
+podelis gateway test local                # …or a model by name
+podelis gateway context prod "revenue per product in September"   # what a model would be shown of prod's schema (sends nothing)
 podelis gateway status                    # does it run? (exit 1 if not)
 podelis gateway start                     # start it in the background
 podelis gateway stop                      # stop it

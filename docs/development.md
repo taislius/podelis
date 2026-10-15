@@ -21,6 +21,13 @@ random SQL-ish text to the lexer, splitter, analyzer, completion, parameter
 handling and editor; failures they find are saved in `proptest-regressions/`
 and re-run first.
 
+The gateway's tests (`src/gateway/`) need no API keys and spend nothing:
+they run the gateway in the test and answer as a model from a small fake
+server on localhost (`fake_model`, Anthropic's streamed format), and
+check what it was sent. To try a real model by hand, set `PODELIS_CONFIG_DIR`
+to a scratch folder with a `[[models]]` entry, then `podelis gateway test`;
+`podelis gateway stop` ends a gateway left running from a scratch folder.
+
 The Rust version is pinned in `rust-toolchain.toml` (rustup installs it on
 first use), so local builds and CI see the same lints. Lints are configured
 in `Cargo.toml` (`[lints]`), formatting in `rustfmt.toml`, and

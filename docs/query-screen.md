@@ -25,6 +25,8 @@ search every command by name. `F1` shows every key.
 | `o` / `d` | Pick a connection for this tab (opens a new tab if this one is connected) / disconnect this tab |
 | `p` | Projects and connections (or click the project's name in the top bar): see [Projects and connections](connections.md) |
 | `u` / `s` / `h` | Connection info / the server's sessions / connection heartbeat on or off |
+| `q` | Ask in plain language: a model writes the SQL for your question (see *Asking in plain language* below) |
+| `k` | The project's memory: what models are told about your data. `a` adds a fact (`orders.status 3 = cancelled`), `c` confirms one a model suggested (orange), `d` forgets one |
 | `1`…`9` | Jump to a tab (the menu lists the open tabs by number; typing a tab's name finds it too) |
 | `?` | Every key |
 
@@ -185,6 +187,33 @@ notes, and takes the same keys: moving, `s` sort, `/` filter, `x` / `X`,
 deleting, following a foreign key and loading more are for query results
 only.
 
+**Asking in plain language.** `Ctrl+K q` asks for a question about the
+tab's connection ("revenue per country last month"); a model you've set
+up ([AI models](configuration.md#ai-models)) writes the SQL, and it lands
+at the end of the editor under the question and what the model said about
+it, as comments. **It doesn't run**: read it, then `F6` runs it. The status
+bar shows the answer coming (`Esc` stops waiting, once it has nothing
+else to do: a running query, a filter, a selection or vim's mode come
+first; stopping also stops the model's work), and how many tokens it
+took. The model sees only the tables that matter for the question, never
+rows; its SQL is checked against the schema first, and names still not
+found are marked `-- CHECK:` above it. What the model had to assume
+(`-- assumed: orders.total means 0 for free orders`) is kept in the
+project's memory, not confirmed: `Ctrl+K k`, then `c` if it's right. Facts
+in the memory (`podelis memory`) are shown to the model with the tables
+they're about. A model that isn't on this machine
+sees a project's schema only if you allow it: the first time, a question
+asks whether to send it this once (`y`) or always for the project (`a`);
+`n` or `Esc` say no. It may come while you type, so keys in its first
+moment don't count, and it waits for any other question already open.
+Asking works on saved connections, since the gateway opens them itself;
+`podelis ask` does the same from the command line. The SQL goes to the
+tab you asked in, even if you've moved to another meanwhile (closing that
+tab, or switching project, stops the question). What's in the editor is
+kept as it is, except that a last statement left without its `;` gets
+one, so the two don't run together (not in a MySQL script using
+`DELIMITER`).
+
 **Snippets** are saved queries in the `snippets` group (save one with
 `Ctrl+S` as `snippets/recent orders`). Typing the start of a snippet's name
 offers it in autocomplete, and choosing it inserts its SQL; `:parameters` in
@@ -295,7 +324,7 @@ When focused:
 | `Enter` / `→` | Expand a table: its columns (with `→ table.column` for foreign keys) and indexes, scrolled into view; on a function, show its definition |
 | `←` | Collapse |
 | `d` | Show the definition: `CREATE VIEW`, the function source, or a table's columns, keys and indexes (SQLite: its `CREATE TABLE`). In it, `←`/`→` show the previous / next table's (the navigator's selection follows), `y` copies it |
-| `s` | Add `SELECT * FROM <table> LIMIT 100;` at the end of the editor and run it (only it, as `F6` would) |
+| `s` | Add `SELECT * FROM <table> LIMIT 100;` at the end of the editor and run it (only it, as `F6` would). A last statement left without its `;` gets one first (before a comment after it), so the two stay apart |
 | `f` | Related tables: what the table points to and what points to it through foreign keys, two steps each way |
 | `y` / `Ctrl+C` | Copy the selection's name as SQL writes it: a table with its schema (`public.orders`), a column, an index or a function |
 | `r` | Refresh (also happens automatically after DDL, `USE` and `SET`) |

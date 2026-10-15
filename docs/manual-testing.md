@@ -237,6 +237,34 @@ Use two databases with the same tables, e.g. `pgbench -i -s 10 a` and
   ending one works.
 - [ ] Connection info (`Ctrl+K u`).
 
+### AI models and the gateway
+
+With a real key (a few cents) and, if you have it, Ollama:
+
+- [ ] `podelis gateway models` lists the models and where each key comes
+  from; `podelis gateway test` answers in seconds; a wrong key says "the
+  key was refused".
+- [ ] `podelis gateway context prod "…"` on a big schema (TPC-H, IMDb):
+  the tables are the ones the question needs, with their joins, in a few
+  thousand tokens.
+- [ ] `Ctrl+K q` in the app: the answer's progress in the status bar, the
+  SQL at the end of the editor under the question, not run; `F6` runs it.
+  `Esc` while asking stops it; switching tabs meanwhile still puts the SQL
+  in the tab asked from.
+- [ ] A provider's model on a project that doesn't share its schema: the
+  question to send it (`y` once, `a` always; `share_schema = "all"` saved).
+- [ ] `podelis memory learn` on a real repository's migrations; a fact
+  added with `podelis memory add` shows in `podelis gateway context` for a
+  question about its table; a model's `-- assumed:` fact waits in
+  `Ctrl+K k` (orange) until `c`.
+- [ ] An agent through `podelis mcp` (Claude Code): the tools work, a
+  write is approved in the app, Agent activity shows the session. With the
+  gateway stopped first, the agent's first call starts it.
+- [ ] `podelis gateway status` after 30 min with nothing connected: not
+  running.
+- [ ] A typo in a `[[models]]` entry (`api = "ollama"`): `podelis gateway
+  models` shows the parse error, not "no models are set up".
+
 ### Terminals
 
 Run the basics (connect, run, scroll, a popup, the mouse, copying with

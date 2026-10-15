@@ -130,6 +130,14 @@ same way tools like `lazygit` do.
   hex, written as each engine writes it (`\xdeadbeef`, `0xDEADBEEF`,
   `X'DEADBEEF'`), so exports, pipes and comparisons get the real bytes, and
   an edited value or an exported `INSERT` goes back as binary
+- **Ask in plain language:** `Ctrl+K q` in the app, or `podelis ask prod
+  "revenue per country last month"`, has a model you choose (Claude, GPT,
+  or a local one through Ollama) write the SQL over the tables that matter,
+  checks its names against the schema, and puts it in the editor (or
+  prints it) without running it. What your team knows (`status = 3` means
+  cancelled; revenue is net of refunds) goes in the project's memory
+  (`podelis memory add …`) and is shown to the model with those tables. Rows never go to
+  the model, and the schema leaves your machine only if you allow it
 - **For AI agents:** `podelis mcp` gives your coding agent the connections
   you share with it, in read-only transactions unless you allow writes, with
   no passwords and nothing destructive. Agent activity shows everything
@@ -190,8 +198,11 @@ file is needed — the first run starts with a welcome screen.
 - [The query screen](docs/query-screen.md): the editor, results, tabs and
   the query library, and every key
 - [Without the UI](docs/command-line.md): `-e`, `--import`, `--test`,
-  `podelis doctor`, exit codes, and use on servers and in CI (also
-  `man podelis`)
+  `podelis doctor`, `ask`, `memory`, the gateway, exit codes, and use on
+  servers and in CI (also `man podelis`)
+- [AI models](docs/ai.md): asking in plain language (`Ctrl+K q`,
+  `podelis ask`), the project's memory, setting up Claude, GPT or a local
+  model, what's sent where, and the gateway
 - [For AI agents](docs/agents.md): `podelis mcp`, sharing connections with
   agents safely, and reviewing what they ran
 - [Configuration](docs/configuration.md): `config.toml`, keys, themes, and

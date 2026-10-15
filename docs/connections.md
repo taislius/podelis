@@ -25,9 +25,13 @@ Quitting from here (`q`, `Ctrl+Q`, `Ctrl+C`) asks first if a transaction is open
 | `→` / `Tab` | The project's connections, opening it first if it isn't the open one (its tabs come back behind them) |
 | `n` | New project |
 | `r` | Rename project |
-| `d` | Delete project, with all its connections and their saved passwords (asks for confirmation; not the open one) |
+| `d` | Delete project, with all its connections, their saved passwords, its history and its memory for AI models (asks for confirmation; not the open one) |
 | `Esc` | Back to the project's tabs (with none open: to the project you left, or quit) |
 | `q` | Quit (asks if a transaction is open) |
+
+A project's schemas (table and column names, comments) are shown only to
+AI models on this machine, when asking in plain language, unless the
+project allows more (`share_schema = "all"`): see [AI models](ai.md).
 
 ## Connections
 
@@ -66,7 +70,8 @@ While editing or adding a connection:
   the driver defaults (e.g. your OS user for Postgres). For **SQLite** the
   form asks only for a file path or `:memory:`. A path that doesn't exist
   is usually a typo, so the form says so and creates a new database only
-  when you press Enter again.
+  when you press Enter again. A relative path is from the folder you start
+  Podėlis in, for asking a model and for agents too (they send theirs).
 - **SSL mode:** `prefer` (the default) uses TLS when the server offers it.
   If the server offers TLS this client can't use (an old MySQL 5.x that
   speaks only TLS 1.0/1.1), it connects without encryption and warns: in

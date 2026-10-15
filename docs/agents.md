@@ -84,6 +84,26 @@ claude mcp add podelis-shop -- podelis mcp -p shop   # another project
 
 Other agents take the same command, `podelis mcp`, in their MCP settings.
 
+`podelis mcp` hands the agent to Podėlis's gateway, the background
+process that holds everything involving AI models (see [the
+gateway](command-line.md#the-gateway)), and starts it if it isn't
+running: there's nothing to set up. The tools, their rules, approvals and
+the log are the gateway's; each agent's session, and the database
+connections it opened, end when the agent goes. If the gateway stops
+(`podelis gateway stop`, or after an update), `podelis mcp` ends too, so
+the agent sees its server gone rather than waiting on one that never
+answers; the next `podelis mcp` starts the gateway again.
+
+The gateway opens agents' connections in its own environment: the one of
+whatever started it (the app, or an agent's `podelis mcp`). A saved SQLite
+connection with a relative path is still the agent's (from the folder it
+started in). Something only the agent's environment has (another
+`SSH_AUTH_SOCK` for an SSH tunnel, variables a password command reads)
+isn't seen: use absolute paths and settings both have, or stop the gateway
+(`podelis gateway stop`) so the agent's next call starts it in its own. If an agent can't reach Podėlis, `podelis gateway status` says
+whether the gateway runs, and `PODELIS_LOG=debug` writes what it did to
+`podelis.log`.
+
 The agent gets these tools:
 
 | Tool | What it does |

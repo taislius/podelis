@@ -140,8 +140,71 @@ gateway/
                 client has been connected for `gateway_idle`, the call log
   client.rs     connect and say hello, call, and start the gateway when
                 none answers (`connect_or_start`, `spawn_gateway`)
-  command.rs    `podelis gateway [status | start | stop]`
+  command.rs    `podelis gateway [status | start | stop | models | key | test]`
+  ai.rs         the `models`, `complete`, `context`, `ask` and `memory.*`
+                methods
+  memory.rs     a project's facts ("thing, relation, value", who said it,
+                confirmed or not) in `memory/<project-id>.db`, with an FTS5
+                index; `relevant` picks those about the question's tables
+                or matching its words
+  migrations.rs a folder of SQL migrations read into facts, without a model:
+                each table's history, comments above statements, COMMENT ON
+  names.rs      a model's SQL checked against the schema: tables (CTE-aware,
+                from `scope.rs`) and, where every source is a real table,
+                columns
+  context.rs    what a model is shown of a database for a question: tables
+                matched by name, column names and comments, their foreign-key
+                neighbours, rendered within a budget
+  models/       the models: `[[models]]` in config.toml, keys (keychain,
+                key_command, environment), retries
+    anthropic.rs  Anthropic's Messages API, streamed
+    openai.rs     OpenAI's Chat Completions format (GPT, Ollama, llama.cpp…)
+    sse.rs        server-sent events, as both stream answers
 ```
+
+The model clients are ours, on `reqwest`, rather than an SDK or a
+multi-provider crate: the gateway decides what leaves the machine, so
+every byte sent to a provider is in these files. `complete` streams the
+answer back as `complete.delta` notifications (`{ id, text }`) before
+its response, and the call log keeps the model's name and the tokens,
+never the prompt or the answer.
+
+`context` opens the saved connection read-only (as the app does: keychain
+or password command), loads `catalog`, `links` and `comments`
+(`Database::comments`: `COMMENT ON` in PostgreSQL, table and column
+comments in MySQL, none in SQLite) and keeps them for five minutes per
+connection. It reads `connections.toml` with `ConnectionStore::peek`,
+which never moves an unreadable file aside as the app's load does.
+
+The gateway's `ai::Caches` hold what's kept between calls: those
+schemas, each project's memory connection (opened and set up once,
+reopened after an error), and what models' `key_command`s printed (15
+minutes; a key the provider refuses is dropped at once).
+
+The app asks through the gateway too (`app/ask.rs`): `Ctrl+K q` opens a
+prompt, a task connects (starting the gateway if needed) and calls `ask`,
+passing `ask.delta` notifications on as progress events; the SQL goes to
+the end of the tab's editor (`append_statement`, which ends a last
+statement left without `;`), and a refusal to share the schema becomes a
+question (`ConfirmAction::ShareSchema`: `y` once, `a` always). The memory
+window (`app/memory_view.rs`, `Ctrl+K k`) lists, adds, confirms and
+forgets facts through the same kind of gateway call.
+
+Agents too: `podelis mcp` (`mcp::run`) is a bridge. It connects (starting
+the gateway if needed), calls `mcp.open` with the project, the agent's
+name and its folder, then copies bytes between its stdin/stdout and the
+connection; the gateway hands that connection to `mcp::serve_on`, the
+same rmcp server as before (tools, rules, approvals through files in
+`agents/`, the log), until the agent goes or the gateway stops.
+
+`ask` builds the context, refuses a model off this machine unless the
+project's `share_schema` is `all` (or the call says `share_once`, which
+`podelis ask` sends after asking you), asks for one query in a `sql`
+block, checks its names with `names.rs`, and sends what's wrong back in
+the same conversation, at most twice. It returns the SQL, what the model
+said and the names still unknown; it never runs anything. `FACT:` lines
+at the end of the model's note (its assumptions) are taken out and kept
+as facts that aren't confirmed, `source = "model:<name>"`.
 
 The first request on a connection must be `hello`, with the client's
 name and the protocol version (`PROTOCOL`); anything else, or another
@@ -149,6 +212,14 @@ version, is answered with an error and the connection closed. The call
 log records the method and the outcome, never the parameters. A gateway
 that crashed leaves its socket file behind; the next one holds the lock,
 so it knows the file is stale and replaces it.
+
+While a request runs, the connection is watched (`server::watched`): a
+client gone drops the work (a model call stops, and stops costing), and
+so does the gateway stopping. A client that only closed its sending side
+(`printf … | socat`) isn't gone: once its input ends, the socket is
+checked a few times a second for being closed for writing too. A
+`config.toml` that doesn't parse is said as it is (`models` and `ask`
+show the parse error), not taken for one without models.
 
 ## SQL checks
 
