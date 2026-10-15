@@ -123,6 +123,33 @@ Outside `db/`, code doesn't match on `Engine` except for defaults and tests.
    offers, so unsupported features simply don't show.
 4. Add it to the live-database tests (`db/tests.rs`).
 
+## The gateway
+
+`gateway/` is a separate process, `podelis gateway`: the one place for
+AI models, the context they're shown, their tools and memory (the plan is
+in the private planning notes). Clients talk to it; they don't call
+models themselves.
+
+```
+gateway/
+  protocol.rs   JSON-RPC 2.0, one message per line; requests, responses,
+                and notifications the gateway pushes (`stopping`)
+  server.rs     one gateway per config folder (a lock file held for the
+                process's life), the socket (`gateway/gateway.sock`,
+                0600 in a 0700 folder), connections, stopping when no
+                client has been connected for `gateway_idle`, the call log
+  client.rs     connect and say hello, call, and start the gateway when
+                none answers (`connect_or_start`, `spawn_gateway`)
+  command.rs    `podelis gateway [status | start | stop]`
+```
+
+The first request on a connection must be `hello`, with the client's
+name and the protocol version (`PROTOCOL`); anything else, or another
+version, is answered with an error and the connection closed. The call
+log records the method and the outcome, never the parameters. A gateway
+that crashed leaves its socket file behind; the next one holds the lock,
+so it knows the file is stale and replaces it.
+
 ## SQL checks
 
 Podėlis checks SQL before it is sent: syntax hints, lint warnings in the

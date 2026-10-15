@@ -20,6 +20,7 @@ keepalive = 0               # seconds between checks of an idle connection (0: o
 leader_double_space = false # Space twice quickly in the editor opens the Ctrl+K menu
 notify_after = 10           # a query running this many seconds rings and notifies when done (0: off)
 guard_rows = 1000000        # on production, a read of a whole table this big asks first, agents' is refused (0: off)
+gateway_idle = 30           # minutes the gateway waits with no client before it stops (0: keeps running)
 
 [keys]                      # rebind query-screen keys (replaces that action's defaults)
 run = ["F5", "Ctrl+Enter"]
@@ -75,6 +76,9 @@ Linux), or in `$PODELIS_CONFIG_DIR` if set:
 - `crash.log` — if Podėlis ever crashes, what happened (with a backtrace);
   please attach it to a bug report. A crash in a background task is logged
   too and shown in the status bar, without taking the app down.
+- `gateway/` — the gateway's socket and lock file while it runs, and
+  `calls.jsonl`: each call to it (when, which client, which method, the
+  outcome), never what was asked, up to about 1 MB.
 
 Files are created readable only by you (they can contain SQL and
 connection details).

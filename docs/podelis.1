@@ -34,6 +34,9 @@
 .Cm doctor
 .Op Fl p Ar project
 .Op Fl -connections
+.Nm
+.Cm gateway
+.Op Cm status | start | stop
 .Sh DESCRIPTION
 Without
 .Fl e ,
@@ -255,6 +258,26 @@ activity window.
 (or the
 .Ev PODELIS_AGENT
 environment variable) sets what to call the agent in it.
+.It Cm gateway Op Cm status | start | stop
+The gateway is the background process that will hold what involves AI
+models: the models and their keys, what they're shown, their tools and
+memory.
+Features that need it start it, and it stops by itself after
+.Li gateway_idle
+minutes with no client (30 by default; 0 keeps it running), so it never
+has to be started by hand.
+It listens only on a socket in the config folder that only its owner can
+open.
+Without an argument it runs in the foreground until
+.Ic Ctrl+C ,
+SIGTERM or the idle time;
+.Cm status
+says whether one runs (exit status 1 if not),
+.Cm start
+starts it in the background, and
+.Cm stop
+stops it.
+In this version it answers only those: AI features come next.
 .El
 .Sh SAFETY
 .Fl e
@@ -393,6 +416,11 @@ The debug log (only with
 What happened if
 .Nm
 crashed.
+.It Pa gateway/
+The gateway's socket, its lock file, and
+.Pa calls.jsonl :
+each call to it (when, which client, which method, the outcome), never
+what was asked.
 .El
 .Sh EXIT STATUS
 For

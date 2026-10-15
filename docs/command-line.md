@@ -85,6 +85,23 @@ podelis doctor                            # config, keychain, password managers,
 podelis doctor -p shop --connections      # …and test every saved connection of a project
 ```
 
+## The gateway
+
+The gateway is the background process for what involves AI models:
+the models and their keys, what they're shown, their tools and memory.
+Features that need it start it, and it stops by itself after
+`gateway_idle` minutes with no client (see [Configuration](configuration.md)),
+so it never has to be started by hand. It listens only on a socket in
+the config folder that only you can open. In this version it answers
+only these commands; the AI features come next.
+
+```sh
+podelis gateway status                    # does it run? (exit 1 if not)
+podelis gateway start                     # start it in the background
+podelis gateway stop                      # stop it
+podelis gateway                           # run it in the foreground (Ctrl+C stops it)
+```
+
 ## Exit codes
 
 | Code | `-e`, `--import`, `--test` |
