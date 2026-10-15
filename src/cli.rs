@@ -15,6 +15,7 @@ pub const USAGE: &str = "\
 Usage: podelis [OPTIONS] [CONNECTION]
        podelis doctor [-p <project>] [--connections]
        podelis mcp [-p <project>] [--name <label>]
+       podelis gateway [status | start | stop]
 
 CONNECTION is a URL (postgres://…, mysql://…, sqlite:…), a SQLite file, or
 the name of a saved connection in the project. Without one, Podėlis reopens
@@ -56,6 +57,11 @@ your agent as an MCP server. Each agent call runs in a read-only
 transaction unless a connection allows writes; what agents run is logged
 and shows in the query library (F3).
 
+gateway runs the gateway in the foreground until Ctrl+C or it's idle
+(`gateway_idle` in config.toml): the background process Podėlis starts
+by itself when a feature needs it. status says whether it runs; start
+starts it in the background; stop stops it.
+
 Exit codes of -e, --import and --test: 0 done, 1 the SQL failed, 2 usage
 (bad option, unknown connection, missing file), 3 refused (read-only,
 production or destructive without --yes), 4 couldn't connect, 5 timed out.";
@@ -82,6 +88,18 @@ pub struct Args {
     pub name: Option<String>,
     /// `doctor --connections`.
     pub test_connections: bool,
+    /// `gateway [status | start | stop]`.
+    pub gateway: Option<GatewayCommand>,
+}
+
+/// What `podelis gateway` was asked to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayCommand {
+    /// Run it here, in the foreground.
+    Run,
+    Status,
+    Start,
+    Stop,
 }
 
 /// What to do instead of starting normally.
@@ -136,6 +154,18 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> ParseOutcome {
             }
             "mcp" if !out.mcp && out.connection.is_none() => {
                 out.mcp = true;
+                Ok(())
+            }
+            "gateway" if out.gateway.is_none() && out.connection.is_none() => {
+                out.gateway = Some(GatewayCommand::Run);
+                Ok(())
+            }
+            action @ ("status" | "start" | "stop") if out.gateway == Some(GatewayCommand::Run) => {
+                out.gateway = Some(match action {
+                    "status" => GatewayCommand::Status,
+                    "start" => GatewayCommand::Start,
+                    _ => GatewayCommand::Stop,
+                });
                 Ok(())
             }
             "-f" | "--format" => value(&arg).and_then(|v| {

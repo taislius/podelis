@@ -77,6 +77,9 @@ pub struct Settings {
     /// at least this many rows asks first (agents' are refused); 0 turns
     /// the check off.
     pub guard_rows: u64,
+    /// Minutes the gateway waits with no client connected before it
+    /// stops (it's started again when needed); 0 keeps it running.
+    pub gateway_idle: u64,
     /// Key bindings by action name (see `keys.rs`).
     pub keys: HashMap<String, KeySpec>,
 }
@@ -99,6 +102,7 @@ impl Default for Settings {
             leader_double_space: false,
             notify_after: 10,
             guard_rows: 1_000_000,
+            gateway_idle: 30,
             keys: HashMap::new(),
         }
     }

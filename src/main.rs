@@ -14,6 +14,7 @@ mod editor;
 mod export;
 #[cfg(test)]
 mod fuzz_tests;
+mod gateway;
 mod history;
 mod import;
 mod keys;
@@ -67,6 +68,9 @@ async fn main() -> Result<()> {
     if args.mcp {
         let name = args.name.clone().or_else(|| std::env::var("PODELIS_AGENT").ok());
         std::process::exit(mcp::run(&store, args.project.as_deref(), name).await);
+    }
+    if let Some(command) = args.gateway {
+        std::process::exit(gateway::command::run(command, &store::config_dir()).await);
     }
     if args.doctor {
         let code = doctor::run(&store, store_warning.as_deref(), args.project.as_deref(), args.test_connections).await;
