@@ -31,6 +31,13 @@ everywhere:
   with the editor, the last run and a `ResultGrid` (`grid.rs`: the result
   sets, filter, sort, marks, selection and scroll). Switching tabs swaps
   the whole struct with a parked one, so nothing can leak between tabs.
+- **Kept results** (`runs.rs`): each query run opens a `KeptRun` in the
+  tab's `runs`. The one shown lives in the tab (`grid`, `last_sql`, its
+  infos and parameters, its error), so every key works on it unchanged;
+  the others are parked in their slots and swapped in to be shown, the
+  way tabs are. A re-run of the shown result (`M`, the refresh after a row
+  change, watch mode) replaces it instead (`rerun_shown`). Old unpinned
+  ones go past `KEEP` results or `KEEP_ROWS` rows.
 - **Popups** (`overlay.rs`): `App::overlays()` lists the open popups front
   first. Key handling, drawing (back to front), mouse blocking and "is the
   user typing" all read it, so a new popup is added in one place.
@@ -47,7 +54,8 @@ everywhere:
   footer (`editor_note`, `results_note`) and to MESSAGES; otherwise to the
   status bar. A run's progress and outcome use `set_result_status`, for the
   results pane's footer. They last until the next key (a run's until it
-  ends).
+  ends). The MESSAGES tab is a list (`messages.rs`): one can be selected,
+  opened whole and copied.
 - **Runs and tabs** (`query.rs`, `tabs.rs`, `events.rs`): one query runs
   at a time (`executing`). A read records its tab (`run_owner`), and other
   tabs can then be shown; a write, a review or a comparison leaves it

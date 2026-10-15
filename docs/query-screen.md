@@ -32,7 +32,7 @@ Keys that work directly:
 
 | Key | Action |
 |---|---|
-| `F5` / `Ctrl+R` / `Ctrl+Enter`¹ | Run the selection, or everything in the editor (or click **▶ F5 Run** right of the tabs; *Statement* and *Explain* are there too). The results pane switches to RESULT as it starts |
+| `F5` / `Ctrl+R` / `Ctrl+Enter`¹ | Run the selection, or everything in the editor (or click **▶ F5 Run** right of the tabs; *Statement* and *Explain* are there too). The results pane switches to RESULT as it starts, with a result of its own (the one before stays: `,` in the results) |
 | `F6` | Run the selection, or the statement under the cursor. With several statements in the editor, its footer says which one that is (`stmt 2/3`) |
 | `F7` | Show the plan for the selection / statement under the cursor (not executed), switching to QUERY PLAN as it starts. Pressed while a query runs, PostgreSQL and MySQL make it at once on a connection of their own; where that would see something else (SQLite, an open transaction, after `USE` or `SET`, `:parameters`) it follows when the query finishes, and if that fails its error stays in view instead (`Esc` stops both). MySQL 8.0.16+ shows `FORMAT=TREE`; older MySQL and MariaDB show the classic `EXPLAIN` table |
 | `Shift+F7` | `EXPLAIN ANALYZE`: runs the statement and shows actual times and rows (writes ask first and are rolled back). MySQL needs 8.0.18+; MariaDB runs `ANALYZE` |
@@ -153,7 +153,25 @@ When focused:
 | `e` / `J` / `i` | Export the rows shown as CSV / JSON / SQL `INSERT` statements to `podelis-export-<timestamp>.<ext>` (in the current directory, or `export_dir`). For every row of a big result, not just those loaded, use "Export all rows" in the menu (`m`) or Ctrl+K: it writes the rest straight to the file as it arrives, without loading it into the grid; `Esc` stops it |
 | `M` | Load 10× more rows (streamed results fetch the next pages; scripts are re-run with a bigger limit, read-only ones only) |
 | `[` / `]`, `1` `2` `3` (or click a tab) | Switch between the RESULT, MESSAGES and QUERY PLAN tabs (`F7` opens the plan with the results focused; `1` goes back) |
-| `↑`/`↓`/`PageUp`/`PageDown`, `←`/`→`, `Home` / `0` | In MESSAGES and QUERY PLAN: scroll down and across, back to the top / the left edge. A plan wider than the pane says which columns show in the footer |
+| `,` / `.` (or click `#2`) | Show the result of an earlier / later run: each query you run keeps its own (see *Earlier results* below) |
+| `p` | Pin the result shown, so it's kept however many queries run after it (again unpins) |
+| `↑`/`↓`/`PageUp`/`PageDown`, `Home` / `End` | In MESSAGES: select a message (or click it). `Enter` shows all of it (or double-click), `y` / `Ctrl+C` copies it, `Y` copies every message, `Esc` clears the selection |
+| `↑`/`↓`/`PageUp`/`PageDown`, `←`/`→`, `Home` / `0` | In QUERY PLAN: scroll down and across, back to the top / the left edge (`←`/`→` scroll MESSAGES across too). A plan wider than the pane says which columns show in the footer |
+
+**Earlier results.** Each query you run (`F5`, `F6`, `s` in the navigator,
+a comparison…) gets a result of its own, numbered `#1`, `#2`… on the line
+above the rows, and the one before stays a key away: `,` and `.` (or a
+click on its number) switch between them, and every key works on the one
+shown, as on the newest: editing a cell, `M`, watch mode. That line also
+says which statement the result is for, with its lines in the editor
+(`lines 12–15`; click them to select it there), and when it ran. The last
+10 are kept, and the older ones go sooner when together they hold over
+200,000 rows (the newest stays, however big); `p` pins one to keep it
+longer (pinned numbers are green).
+A run that fails says why where its rows would be, and the next run takes
+its place. Re-running the result shown (`M`, after adding or deleting
+rows, watch mode) replaces it. Results are kept until the tab is closed,
+not over a restart.
 
 Above the plan: the statement it's for (`EXPLAIN` or `EXPLAIN ANALYZE`),
 its lines in the editor (`lines 12–15`; click them to go there), when the plan was made and
@@ -180,10 +198,15 @@ the bottom is for the connection, key hints and everything else. A footer's
 message goes with the next key; MESSAGES keeps it.
 
 **Menus.** Right-click a pane, or press `m` in the results or schema
-(`Shift+F10` anywhere), for a small menu of what you can do there, each
-item with its key — a quick way to learn the shortcuts. The editor's starts
-with Copy and Cut (with text selected) and Paste; the results pane, with
-messages or nothing run yet, offers its tabs and zoom.
+(`Ctrl+K m` or `Shift+F10` anywhere), for a small menu of what you can do
+there, each item with its key — a quick way to learn the shortcuts. The
+status bar shows the key next to `^K keys`, and the results pane has
+`menu ▾` right of its tabs to click, with `export ▾` beside it while rows
+are shown: exporting the rows shown or every row as CSV, JSON or `INSERT`s,
+copying them, piping them or opening them in the viewer. The editor's menu
+starts with Copy and Cut (with text selected) and Paste; the results
+pane's, with messages or nothing run yet, offers its tabs and zoom (and
+in MESSAGES, copying them).
 
 Cells can be edited, and rows added or deleted, when the result comes from
 a plain `SELECT` on one table (no joins, grouping or computed columns) that includes the table's
@@ -246,9 +269,11 @@ the rows to a private temporary file and opens it in the viewer; Podėlis
 hands it the terminal and comes back when it exits.
 
 **Mouse:** click a pane to focus it, a tab to switch to it, `+` for a new
-tab, the editor to place the cursor (drag to select), a result cell or a
-schema item to select it; double-click opens a cell or expands a table; the
-wheel scrolls. Your terminal's own text selection then needs `Shift` (or
+tab, the editor to place the cursor (drag to select), a result cell, a
+message or a schema item to select it (clicking the navigator's tree, or
+the rows, while typing their filter ends the typing: keys then go to what
+was clicked), a result's `#2` to show it; double-click opens a cell or a
+message, or expands a table; the wheel scrolls. Your terminal's own text selection then needs `Shift` (or
 `Option` on macOS); `mouse = false` in `config.toml` turns this off.
 
 Copying uses your system's clipboard tool (`pbcopy`, `wl-copy`, `xclip` or

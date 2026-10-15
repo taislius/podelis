@@ -11,7 +11,7 @@ server_syntax_check = true  # check SQL with the server while typing
 lint = true                 # warn about likely mistakes: = NULL, UPDATE without WHERE…
 system_tables = false       # list pg_catalog, information_schema, sqlite_schema… in the navigator (`.` toggles)
 editor_mode = "standard"    # or "vim"
-hints = "minimal"           # status bar key hints: "minimal" (just `^K keys`) or "full"
+hints = "minimal"           # status bar key hints: "minimal" (`^K keys` and the pane's menu key) or "full"
 export_dir = "~/Downloads"  # where exports go (default: current directory)
 restore_session = true      # reopen the last project's tabs and connections
 mouse = true                # clicks and the wheel (false: terminal selection without Shift)
@@ -70,7 +70,8 @@ Linux), or in `$PODELIS_CONFIG_DIR` if set:
 - `podelis.log` — only with `PODELIS_LOG=debug` (or another
   [filter](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
   like `podelis=trace`): what the app and the database driver did,
-  **including the SQL run**. Off by default.
+  **including the SQL run**; `podelis=trace` also logs each key as the
+  terminal sent it, for a key that doesn't do what it should. Off by default.
 - `crash.log` — if Podėlis ever crashes, what happened (with a backtrace);
   please attach it to a bug report. A crash in a background task is logged
   too and shown in the status bar, without taking the app down.

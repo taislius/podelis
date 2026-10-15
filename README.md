@@ -98,11 +98,13 @@ same way tools like `lazygit` do.
 - **Results:** type-aware columns, sideways scrolling, sort, filter, a
   full-value view (JSON pretty-printed), copying (Ctrl+C: a cell, rows, marked
   rows as Markdown, CSV, JSON or `INSERT`s), CSV, JSON and SQL `INSERT`
-  export,
-  and **editing cells in place** (saved by primary key, through the same
+  export (`export ▾` above the rows lists them all),
+  **earlier results kept**: each query you run gets its own (`#1`, `#2`…,
+  `,` / `.` switch, `p` pins), with the statement it ran and its lines in
+  the editor, and **editing cells in place** (saved by primary key, through the same
   safety checks). A read-only query **streams**: the first 1,000 rows show
   at once and more load as you scroll. MESSAGES and QUERY PLAN tabs hold
-  run outcomes and `EXPLAIN` plans (F7, without running the query; made at
+  run outcomes (select one to read it whole or copy it) and `EXPLAIN` plans (F7, without running the query; made at
   once even while another query runs). The
   plan starts with **what stands out**, each pointing at its step: the
   slowest (or costliest) step, big filtered scans and nested full scans,

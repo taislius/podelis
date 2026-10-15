@@ -129,6 +129,13 @@ OS and the server version when something is off.
   select 1` as one script: `RESULT 3/3` shows, and `<` / `>` (or clicking
   the RESULT tab) step through the three sets. The empty one shows its
   columns.
+- [ ] Run three queries one after another, one of them failing: `#1`
+  and `#2` show above the rows with the statement and `lines …`, and the
+  failed one says why where its rows would be (the next run takes its
+  place). `,` / `.` and clicking a number switch; clicking `lines …`
+  selects the statement in the editor. On an earlier result, `c` edits
+  its own table and `M` re-runs its own query (with its own `:param`
+  values). `p` pins one: it stays after ten more queries.
 - [ ] `podelis <conn> -e "select 1; select 2"` prints both tables; with
   `-f json` two arrays (`| jq -s length` says 2); with `-f csv` only the
   last one, and stderr says one earlier set was left out.
@@ -258,6 +265,17 @@ Run the basics (connect, run, scroll, a popup, the mouse, copying with
   the editor and the connection form. Right-click the selection: it stays,
   and the menu offers Copy, Cut and Paste; right-click the results on the
   MESSAGES tab: a results menu, not the editor's.
+- [ ] MESSAGES: `↑` selects the newest message, `Enter` shows it whole
+  (`y` there copies it), `y` / `Ctrl+C` copy it, `Y` copies all; a click
+  selects one, a double click opens it.
+- [ ] `export ▾` and `menu ▾` right of the results' tabs open their menus
+  under them; the status bar shows `m  menu · right-click` (`^K m` in the
+  editor), not while a filter is being typed.
+- [ ] Navigator: `/`, type a few letters, then click a table and press
+  `d`: its definition shows, the filter keeps its letters.
+- [ ] Editor: `Ctrl+←` / `Ctrl+→` move by word without selecting
+  (`Ctrl+Shift` selects), in each terminal above. If one doesn't,
+  `PODELIS_LOG=podelis=trace` logs each key as the terminal sent it.
 - [ ] A narrow window (80 columns or less): the navigator hides and nothing
   overlaps; resize while a query runs
 - [ ] `theme = "light"` on a light background; `editor_mode = "vim"`
