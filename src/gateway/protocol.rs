@@ -18,6 +18,15 @@ pub mod code {
     pub const HELLO_FIRST: i64 = -32001;
     /// The client speaks another protocol version.
     pub const VERSION: i64 = -32002;
+    /// A model couldn't answer: none set up, no key, the provider failed.
+    pub const MODEL: i64 = -32010;
+    /// A database couldn't be read: no such connection, couldn't connect.
+    pub const DATABASE: i64 = -32011;
+    /// The project doesn't share its schemas with that model (one that
+    /// isn't on this machine): the user may allow it.
+    pub const NOT_SHARED: i64 = -32012;
+    /// The project's memory couldn't be read or changed.
+    pub const MEMORY: i64 = -32013;
 }
 
 /// A request or notification from a client.
@@ -37,11 +46,17 @@ pub struct Incoming {
 pub struct RpcError {
     pub code: i64,
     pub message: String,
+    /// What a client may act on (JSON-RPC's `data`).
+    pub data: Option<Value>,
 }
 
 impl RpcError {
     pub fn new(code: i64, message: impl Into<String>) -> Self {
-        RpcError { code, message: message.into() }
+        RpcError { code, message: message.into(), data: None }
+    }
+
+    pub fn with_data(code: i64, message: impl Into<String>, data: Value) -> Self {
+        RpcError { code, message: message.into(), data: Some(data) }
     }
 }
 
@@ -69,7 +84,11 @@ pub fn result(id: &Value, result: &Value) -> String {
 }
 
 pub fn error(id: &Value, error: &RpcError) -> String {
-    line(&json!({ "jsonrpc": "2.0", "id": id, "error": { "code": error.code, "message": error.message } }))
+    let mut body = json!({ "code": error.code, "message": error.message });
+    if let Some(data) = &error.data {
+        body["data"] = data.clone();
+    }
+    line(&json!({ "jsonrpc": "2.0", "id": id, "error": body }))
 }
 
 pub fn notification(method: &str, params: &Value) -> String {
@@ -105,10 +124,11 @@ pub fn parse_outgoing(text: &[u8]) -> Result<Outgoing, String> {
     let id = value.get("id").cloned().unwrap_or(Value::Null);
     let outcome = match (value.get("result"), value.get("error")) {
         (Some(result), None) => Ok(result.clone()),
-        (None, Some(error)) => Err(RpcError::new(
-            error.get("code").and_then(Value::as_i64).unwrap_or(0),
-            error.get("message").and_then(Value::as_str).unwrap_or("unknown error"),
-        )),
+        (None, Some(error)) => Err(RpcError {
+            code: error.get("code").and_then(Value::as_i64).unwrap_or(0),
+            message: error.get("message").and_then(Value::as_str).unwrap_or("unknown error").to_string(),
+            data: error.get("data").cloned(),
+        }),
         _ => return Err("the gateway sent a response with neither a result nor an error".into()),
     };
     Ok(Outgoing::Response { id, outcome })

@@ -705,6 +705,50 @@ async fn links_on_each_engine() {
     }
 }
 
+/// Comments on tables and columns, which the gateway shows models: none
+/// on SQLite, `COMMENT ON` on Postgres, `COMMENT '…'` on MySQL.
+#[tokio::test]
+async fn comments_on_each_engine() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::connect(sqlite_params(&dir.path().join("c.db"), false)).await.unwrap();
+    db.run("CREATE TABLE noted (id INT PRIMARY KEY)", 1).await.unwrap();
+    assert!(db.comments().await.unwrap().is_empty());
+    for engine in [Engine::Postgres, Engine::MySql] {
+        let Some(db) = live_db(engine).await else { continue };
+        if engine == Engine::MySql {
+            db.run("CREATE DATABASE IF NOT EXISTS podelis_comments; USE podelis_comments", 1).await.unwrap();
+        }
+        db.run("DROP TABLE IF EXISTS noted", 1).await.unwrap();
+        db.run("DROP VIEW IF EXISTS noted_view", 1).await.unwrap();
+        if engine == Engine::Postgres {
+            db.run("CREATE TABLE noted (id INT PRIMARY KEY, total NUMERIC, plain INT)", 1).await.unwrap();
+            db.run("COMMENT ON TABLE noted IS 'One row per checkout'", 1).await.unwrap();
+            db.run("COMMENT ON COLUMN noted.total IS 'VAT included'", 1).await.unwrap();
+        } else {
+            db.run(
+                "CREATE TABLE noted (id INT PRIMARY KEY, total DECIMAL(10,2) COMMENT 'VAT included', plain INT) \
+                 COMMENT 'One row per checkout'",
+                1,
+            )
+            .await
+            .unwrap();
+        }
+        db.run("CREATE VIEW noted_view AS SELECT id FROM noted", 1).await.unwrap();
+        let comments = db.comments().await.unwrap();
+        let mine: Vec<(Option<&str>, &str)> = comments
+            .iter()
+            .filter(|c| c.table.starts_with("noted"))
+            .map(|c| (c.column.as_deref(), c.text.as_str()))
+            .collect();
+        assert_eq!(mine, [(None, "One row per checkout"), (Some("total"), "VAT included")], "{engine:?}");
+        db.run("DROP VIEW noted_view", 1).await.unwrap();
+        db.run("DROP TABLE noted", 1).await.unwrap();
+        if engine == Engine::MySql {
+            db.run("DROP DATABASE podelis_comments", 1).await.unwrap();
+        }
+    }
+}
+
 /// What a heavy-query guard asks about: the tables a read would read in
 /// full, with about how many rows (the plan's estimate, else the catalog's).
 #[tokio::test]

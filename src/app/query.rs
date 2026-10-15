@@ -13,6 +13,8 @@ impl App {
         match self.top_overlay() {
             Some(Overlay::Menu) => return self.handle_menu_key(key),
             Some(Overlay::PipePrompt) => return self.handle_pipe_prompt_key(key),
+            Some(Overlay::AskPrompt) => return self.handle_ask_prompt_key(key),
+            Some(Overlay::Memory) => return self.handle_memory_key(key),
             Some(Overlay::RowForm) => return self.handle_row_form_key(key),
             Some(Overlay::Palette) => return self.handle_palette_key(key),
             Some(Overlay::Activity) => return self.handle_activity_key(key),
@@ -96,6 +98,10 @@ impl App {
             {
                 return self.stop_watch("");
             }
+            // A question being answered: Esc stops it once it has nothing
+            // else to do here (cancelling a query, the zoom, watch mode,
+            // a filter, vim's modes, a selection come first).
+            KeyCode::Esc if self.asking.is_some() && !self.esc_has_a_job() => return self.stop_asking(),
             KeyCode::Tab => return self.cycle_focus(true),
             KeyCode::BackTab => return self.cycle_focus(false),
             _ => {}
@@ -108,6 +114,18 @@ impl App {
             Focus::Editor => self.handle_editor_key(key),
             Focus::Results => self.handle_results_key(key),
             Focus::Schema => self.handle_schema_key(key),
+        }
+    }
+
+    /// Whether Esc does something in the focused pane: clears the results
+    /// filter, leaves a vim mode, or drops the editor's selection.
+    fn esc_has_a_job(&self) -> bool {
+        match self.focus {
+            Focus::Results => !self.tab.grid.filter.is_empty(),
+            Focus::Schema => self.schema.as_ref().is_some_and(|s| !s.filter.is_empty()),
+            Focus::Editor => {
+                self.vim_mode().is_some_and(|m| m != VimMode::Normal) || self.tab.editor.selection().is_some()
+            }
         }
     }
 
@@ -142,6 +160,16 @@ impl App {
         match self.top_overlay() {
             Some(Overlay::PipePrompt) => {
                 if let Some(input) = &mut self.pipe_prompt {
+                    input.insert_str(text);
+                }
+            }
+            Some(Overlay::AskPrompt) => {
+                if let Some(input) = &mut self.ask_prompt {
+                    input.insert_str(text);
+                }
+            }
+            Some(Overlay::Memory) => {
+                if let Some(input) = self.memory_view.as_mut().and_then(|v| v.adding.as_mut()) {
                     input.insert_str(text);
                 }
             }
@@ -311,6 +339,8 @@ impl App {
             Action::Comment => self.toggle_comment(),
             Action::Format => self.format_sql(),
             Action::NextWarning => self.next_warning(),
+            Action::Ask => self.open_ask_prompt(),
+            Action::Memory => self.open_memory(),
             Action::Palette => self.open_palette(false),
             Action::ConnectionInfo => self.show_connection_info(),
             Action::Activity => self.open_activity(),
@@ -857,7 +887,7 @@ impl App {
             ExportFormat::Sql => "sql",
         };
         let dir = match self.settings.export_dir.as_deref() {
-            Some(d) if d.starts_with("~/") => dirs::home_dir().unwrap_or_default().join(&d[2..]),
+            Some(d) if d.starts_with("~/") => crate::settings::expand_home(d),
             Some(d) => PathBuf::from(d),
             None => PathBuf::new(),
         };
@@ -1117,20 +1147,7 @@ impl App {
                 );
                 // After everything, a blank line apart: never inside another
                 // statement. Then it runs, alone (as F6 would).
-                let ed = &mut self.tab.editor;
-                let text = ed.text();
-                ed.clear_selection();
-                ed.move_doc_end();
-                let gap = if text.trim().is_empty() || text.ends_with("\n\n") {
-                    ""
-                } else if text.ends_with('\n') {
-                    "\n"
-                } else {
-                    "\n\n"
-                };
-                ed.insert_str(&format!("{gap}{query}"));
-                self.edited();
-                self.focus = Focus::Editor;
+                self.append_statement(&query);
                 if self.database.is_some() {
                     self.execute_current();
                 }

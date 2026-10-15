@@ -57,7 +57,7 @@ use store::ConnectionStore;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = match cli::parse(std::env::args().skip(1)) {
-        cli::ParseOutcome::Run(args) => args,
+        cli::ParseOutcome::Run(args) => *args,
         cli::ParseOutcome::Exit(code, text) => {
             let _ = if code == 0 { writeln!(stdout(), "{text}") } else { writeln!(std::io::stderr(), "{text}") };
             std::process::exit(code);
@@ -67,10 +67,17 @@ async fn main() -> Result<()> {
     let (store, store_warning) = ConnectionStore::load();
     if args.mcp {
         let name = args.name.clone().or_else(|| std::env::var("PODELIS_AGENT").ok());
-        std::process::exit(mcp::run(&store, args.project.as_deref(), name).await);
+        std::process::exit(mcp::run(&store::config_dir(), args.project.as_deref(), name).await);
     }
-    if let Some(command) = args.gateway {
-        std::process::exit(gateway::command::run(command, &store::config_dir()).await);
+    if let Some(words) = &args.memory {
+        std::process::exit(gateway::command::memory(&store::config_dir(), args.project.as_deref(), words).await);
+    }
+    if let Some(words) = &args.ask {
+        let (project, model) = (args.project.as_deref(), args.model.as_deref());
+        std::process::exit(gateway::command::ask(&store::config_dir(), project, model, words).await);
+    }
+    if let Some(command) = args.gateway.clone() {
+        std::process::exit(gateway::command::run(command, &store::config_dir(), args.project.as_deref()).await);
     }
     if args.doctor {
         let code = doctor::run(&store, store_warning.as_deref(), args.project.as_deref(), args.test_connections).await;

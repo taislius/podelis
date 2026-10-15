@@ -44,7 +44,7 @@ mod tunnel;
 mod types;
 
 pub use activity::Activity;
-pub use details::{ForeignKey, IndexInfo, Link, RoutineInfo, TableDetails};
+pub use details::{Comment, ForeignKey, IndexInfo, Link, RoutineInfo, TableDetails};
 pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint};
 #[cfg(test)]
 pub use dialect::PlanNote;

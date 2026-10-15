@@ -92,14 +92,23 @@ pub fn join(words: &[String]) -> String {
 /// Runs the command and returns the password it printed. Blocks: call it
 /// off the async runtime.
 pub fn run(words: &[String], params: &ConnectParams) -> Result<String> {
+    let env = [
+        ("PODELIS_ENGINE", params.engine.label().to_string()),
+        ("PODELIS_HOST", params.host.clone()),
+        ("PODELIS_PORT", params.port.to_string()),
+        ("PODELIS_USER", params.user.clone()),
+        ("PODELIS_DATABASE", params.database.clone()),
+    ];
+    run_with(words, &env)
+}
+
+/// Runs a command that prints a secret (a password, a model's API key)
+/// with `env` set, and returns its first line. Blocks.
+pub fn run_with(words: &[String], env: &[(&str, String)]) -> Result<String> {
     let (program, args) = words.split_first().context("the password command is empty")?;
     let mut child = Command::new(program)
         .args(args)
-        .env("PODELIS_ENGINE", params.engine.label())
-        .env("PODELIS_HOST", &params.host)
-        .env("PODELIS_PORT", params.port.to_string())
-        .env("PODELIS_USER", &params.user)
-        .env("PODELIS_DATABASE", &params.database)
+        .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
         // Without it, gpg (under `pass`) doesn't point a terminal pinentry
         // at the TUI's terminal; a graphical one still works.
         .env_remove("GPG_TTY")

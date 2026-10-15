@@ -124,6 +124,25 @@ pub(in crate::db) async fn link_rows(
     Ok(fetch_all_on_session!(db, p, query))
 }
 
+/// Table and column comments of the current database (a view's
+/// `TABLE_COMMENT` is just "VIEW", so views are left out).
+pub(in crate::db) async fn comment_rows(db: &Database) -> Result<Vec<(String, String, Option<String>, String)>> {
+    let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
+    let query = sqlx::query_as(
+        "SELECT CAST(table_schema AS CHAR), CAST(table_name AS CHAR), CAST(NULL AS CHAR),
+                    CAST(table_comment AS CHAR)
+             FROM information_schema.tables
+             WHERE table_schema = DATABASE() AND table_type <> 'VIEW' AND table_comment <> ''
+         UNION ALL
+         SELECT CAST(table_schema AS CHAR), CAST(table_name AS CHAR), CAST(column_name AS CHAR),
+                    CAST(column_comment AS CHAR)
+             FROM information_schema.columns
+             WHERE table_schema = DATABASE() AND column_comment <> ''
+         ORDER BY 2, 3",
+    );
+    Ok(fetch_all_on_session!(db, p, query))
+}
+
 pub(in crate::db) async fn table_details(p: &MySqlPool, schema: &str, table: &str) -> Result<TableDetails> {
     let indexes: Vec<(String, i64, Option<String>)> = sqlx::query_as(
         "SELECT CAST(index_name AS CHAR), CAST(MAX(non_unique) AS SIGNED),

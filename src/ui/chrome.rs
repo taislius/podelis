@@ -399,6 +399,13 @@ pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String
                 ],
             ),
             (
+                "AI",
+                vec![
+                    (k(Action::Ask), "ask in plain language: a model writes the SQL (lands in the editor, not run)"),
+                    (k(Action::Memory), "project memory: what models are told; confirm their guesses"),
+                ],
+            ),
+            (
                 "Connection & project",
                 vec![
                     (&keys_menu, "one-letter actions and this pane's keys; type to search all"),

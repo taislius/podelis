@@ -15,7 +15,12 @@ pub const USAGE: &str = "\
 Usage: podelis [OPTIONS] [CONNECTION]
        podelis doctor [-p <project>] [--connections]
        podelis mcp [-p <project>] [--name <label>]
-       podelis gateway [status | start | stop]
+       podelis ask [-p <project>] <connection> <question>
+       podelis memory [-p <project>] [list [<words>] | add <subject> <what> |
+                      forget <id> | confirm <id> | learn <folder> | export]
+       podelis gateway [status | start | stop | models]
+       podelis gateway key <model> | test [<model>]
+       podelis gateway context [-p <project>] <connection> <question>
 
 CONNECTION is a URL (postgres://…, mysql://…, sqlite:…), a SQLite file, or
 the name of a saved connection in the project. Without one, Podėlis reopens
@@ -43,6 +48,8 @@ Options:
       --table <name>     Table for --import (default: from the file name)
       --delimiter <c>    Separator for --import: one character, or tab
                          (default: from the file's first line)
+      --model <name>     For ask: the model to ask, by its name in
+                         config.toml (default: the first)
       --name <label>     For mcp: what to call this agent in the log
                          (default: $PODELIS_AGENT, else the agent's own name)
   -h, --help             Show this help
@@ -51,16 +58,37 @@ Options:
 doctor checks the local setup (config, keychain, ssh, terminal);
 --connections also tests the project's saved connections.
 
+ask has an AI model write SQL for a question over a saved connection's
+schema and prints it, never running it (the first model in config.toml,
+see gateway models). Only the tables that matter are shown to the model,
+never rows, and its SQL is checked against the schema. A model that isn't
+on this machine is shown a project's schema only once you allow it.
+
+memory is what the project's team has said about its data, shown to
+models when they write SQL: `podelis memory add orders.status 3 =
+cancelled`, `add revenue is orders.total minus refunds`. list shows the
+facts (or those matching words), forget removes one by its number,
+confirm makes a model's suggestion count, learn reads a folder of SQL
+migrations (each table's history, and the comments above statements),
+export prints them all as text to keep or review.
+
 mcp serves the connections shared with AI agents (\"AI agents\" in a
 connection's settings) over MCP on stdin and stdout: add `podelis mcp` to
-your agent as an MCP server. Each agent call runs in a read-only
-transaction unless a connection allows writes; what agents run is logged
-and shows in the query library (F3).
+your agent as an MCP server (it hands the agent to the gateway, started
+if needed). Each agent call runs in a read-only transaction unless a
+connection allows writes; what agents run is logged and shows in the
+query library (F3).
 
 gateway runs the gateway in the foreground until Ctrl+C or it's idle
 (`gateway_idle` in config.toml): the background process Podėlis starts
-by itself when a feature needs it. status says whether it runs; start
-starts it in the background; stop stops it.
+by itself when a feature needs it, the one place that talks to AI
+models. status says whether it runs; start starts it in the background;
+stop stops it. models lists the models set up in config.toml
+([[models]]) and whether each has its key; key <model> stores a model's
+API key in the OS keychain; test asks a model for one word, to check it
+answers (it costs a few tokens). context shows what a model would be
+shown of a saved connection's database for a question: the tables that
+matter, why, and their columns, keys and comments (nothing is sent).
 
 Exit codes of -e, --import and --test: 0 done, 1 the SQL failed, 2 usage
 (bad option, unknown connection, missing file), 3 refused (read-only,
@@ -90,22 +118,36 @@ pub struct Args {
     pub test_connections: bool,
     /// `gateway [status | start | stop]`.
     pub gateway: Option<GatewayCommand>,
+    /// `ask <connection> <question…>`: the words after `ask`.
+    pub ask: Option<Vec<String>>,
+    /// `ask --model`: which model.
+    pub model: Option<String>,
+    /// `memory …`: the words after `memory`.
+    pub memory: Option<Vec<String>>,
 }
 
 /// What `podelis gateway` was asked to do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GatewayCommand {
     /// Run it here, in the foreground.
     Run,
     Status,
     Start,
     Stop,
+    Models,
+    /// Store a model's key (its name; empty until given).
+    Key(String),
+    /// Ask a model (the default one when `None`) for one word.
+    Test(Option<String>),
+    /// What a model would be shown for a question: the connection, then
+    /// the question's words.
+    Context(Vec<String>),
 }
 
 /// What to do instead of starting normally.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseOutcome {
-    Run(Args),
+    Run(Box<Args>),
     Exit(i32, String),
 }
 
@@ -114,6 +156,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> ParseOutcome {
     let mut args = args.into_iter();
     let usage_error = |msg: String| ParseOutcome::Exit(2, format!("{msg}\n\n{USAGE}"));
     while let Some(arg) = args.next() {
+        if gateway_word(&mut out, &arg) {
+            continue;
+        }
         let mut value = |name: &str| args.next().ok_or_else(|| format!("{name} needs a value"));
         let result: Result<(), String> = match arg.as_str() {
             "-h" | "--help" => return ParseOutcome::Exit(0, USAGE.to_string()),
@@ -132,6 +177,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> ParseOutcome {
             "--import" => value(&arg).map(|v| out.import = Some(v)),
             "--table" => value(&arg).map(|v| out.table = Some(v)),
             "--name" => value(&arg).map(|v| out.name = Some(v)),
+            "--model" => value(&arg).map(|v| out.model = Some(v)),
             "--delimiter" => value(&arg).and_then(|v| {
                 out.delimiter = Some(match v.as_str() {
                     "tab" | "\\t" | "\t" => b'\t',
@@ -154,18 +200,6 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> ParseOutcome {
             }
             "mcp" if !out.mcp && out.connection.is_none() => {
                 out.mcp = true;
-                Ok(())
-            }
-            "gateway" if out.gateway.is_none() && out.connection.is_none() => {
-                out.gateway = Some(GatewayCommand::Run);
-                Ok(())
-            }
-            action @ ("status" | "start" | "stop") if out.gateway == Some(GatewayCommand::Run) => {
-                out.gateway = Some(match action {
-                    "status" => GatewayCommand::Status,
-                    "start" => GatewayCommand::Start,
-                    _ => GatewayCommand::Stop,
-                });
                 Ok(())
             }
             "-f" | "--format" => value(&arg).and_then(|v| {
@@ -193,7 +227,80 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> ParseOutcome {
             return usage_error(e);
         }
     }
-    ParseOutcome::Run(out)
+    if let Err(e) = check_subcommands(&out) {
+        return usage_error(e);
+    }
+    ParseOutcome::Run(Box::new(out))
+}
+
+/// What a subcommand still needs after all the words are read.
+fn check_subcommands(out: &Args) -> Result<(), String> {
+    if out.gateway == Some(GatewayCommand::Key(String::new())) {
+        return Err("gateway key needs the model's name (as in config.toml)".into());
+    }
+    if let Some(words) = &out.memory {
+        let enough = match words.first().map(String::as_str) {
+            None | Some("list" | "export") => true,
+            Some("add") => words.len() >= 3,
+            Some("forget" | "confirm") => words.get(1).is_some_and(|id| id.parse::<i64>().is_ok()),
+            Some("learn") => words.len() == 2,
+            Some(other) => {
+                return Err(format!("memory: no '{other}' (list, add, forget, confirm, learn, export)"));
+            }
+        };
+        if !enough {
+            return Err("memory add needs a subject and what's said about it; forget and confirm, a fact's number; \
+                 learn, a folder"
+                .into());
+        }
+    }
+    if out.ask.as_ref().is_some_and(|words| words.len() < 2) {
+        return Err("ask needs a saved connection's name and a question".into());
+    }
+    if matches!(&out.gateway, Some(GatewayCommand::Context(words)) if words.len() < 2) {
+        return Err("gateway context needs a saved connection's name and a question".into());
+    }
+    Ok(())
+}
+
+/// `gateway` or `ask` and the words after them; false if `word` isn't
+/// one of them.
+fn gateway_word(out: &mut Args, word: &str) -> bool {
+    let positional = !word.starts_with('-');
+    if word == "ask" && out.ask.is_none() && out.memory.is_none() && out.gateway.is_none() && out.connection.is_none() {
+        out.ask = Some(Vec::new());
+        return true;
+    }
+    if word == "memory"
+        && out.memory.is_none()
+        && out.ask.is_none()
+        && out.gateway.is_none()
+        && out.connection.is_none()
+    {
+        out.memory = Some(Vec::new());
+        return true;
+    }
+    if let Some(words) = out.ask.as_mut().or(out.memory.as_mut()) {
+        if positional {
+            words.push(word.to_string());
+        }
+        return positional;
+    }
+    match (&mut out.gateway, word) {
+        (None, "gateway") if out.connection.is_none() => out.gateway = Some(GatewayCommand::Run),
+        (Some(GatewayCommand::Run), "status") => out.gateway = Some(GatewayCommand::Status),
+        (Some(GatewayCommand::Run), "start") => out.gateway = Some(GatewayCommand::Start),
+        (Some(GatewayCommand::Run), "stop") => out.gateway = Some(GatewayCommand::Stop),
+        (Some(GatewayCommand::Run), "models") => out.gateway = Some(GatewayCommand::Models),
+        (Some(GatewayCommand::Run), "key") => out.gateway = Some(GatewayCommand::Key(String::new())),
+        (Some(GatewayCommand::Run), "test") => out.gateway = Some(GatewayCommand::Test(None)),
+        (Some(GatewayCommand::Run), "context") => out.gateway = Some(GatewayCommand::Context(Vec::new())),
+        (Some(GatewayCommand::Key(name)), _) if positional && name.is_empty() => *name = word.to_string(),
+        (Some(GatewayCommand::Test(name @ None)), _) if positional => *name = Some(word.to_string()),
+        (Some(GatewayCommand::Context(words)), _) if positional => words.push(word.to_string()),
+        _ => return false,
+    }
+    true
 }
 
 /// How a CONNECTION argument is meant.
@@ -400,7 +507,7 @@ async fn connect(form: &ConnectForm, args: &Args) -> Result<Database, Failure> {
 
 /// Reads a password from the terminal without showing it; None if
 /// cancelled (Esc, Ctrl+C) or the terminal can't be put in raw mode.
-fn prompt_password(label: &str) -> Option<String> {
+pub(crate) fn prompt_password(label: &str) -> Option<String> {
     use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, read};
     use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
     let mut err = std::io::stderr();
@@ -572,6 +679,41 @@ mod tests {
         };
         assert_eq!([";", "|", "tab", "\\t", "\t"].map(delimiter), (*b";|\t\t\t").map(Some));
         assert!(matches!(args(&["--delimiter", "ab"]), ParseOutcome::Exit(2, _)));
+    }
+
+    #[test]
+    fn gateway_words() {
+        let run = |args: &[&str]| match parse(args.iter().map(|a| (*a).to_string())) {
+            ParseOutcome::Run(a) => Ok(a),
+            ParseOutcome::Exit(code, text) => Err((code, text)),
+        };
+        assert_eq!(run(&["gateway"]).unwrap().gateway, Some(GatewayCommand::Run));
+        assert_eq!(run(&["gateway", "stop"]).unwrap().gateway, Some(GatewayCommand::Stop));
+        assert_eq!(
+            run(&["gateway", "test", "local"]).unwrap().gateway,
+            Some(GatewayCommand::Test(Some("local".into())))
+        );
+        let ctx = run(&["-p", "shop", "gateway", "context", "prod", "orders", "by", "month"]).unwrap();
+        assert_eq!(ctx.project.as_deref(), Some("shop"));
+        let words = ["prod", "orders", "by", "month"].map(String::from).to_vec();
+        assert_eq!(ctx.gateway, Some(GatewayCommand::Context(words)));
+        let (code, text) = run(&["gateway", "key"]).unwrap_err();
+        assert!(code == 2 && text.contains("needs the model's name"));
+        assert!(run(&["gateway", "context", "prod"]).unwrap_err().1.contains("and a question"));
+        let ask = run(&["-p", "shop", "ask", "prod", "top", "customers"]).unwrap();
+        assert_eq!(ask.ask, Some(["prod", "top", "customers"].map(String::from).to_vec()));
+        assert!(run(&["ask", "prod"]).unwrap_err().1.contains("and a question"));
+        let add = run(&["memory", "add", "orders.status", "3", "=", "cancelled"]).unwrap();
+        assert_eq!(add.memory, Some(["add", "orders.status", "3", "=", "cancelled"].map(String::from).to_vec()));
+        assert!(run(&["memory", "forget", "x"]).is_err() && run(&["memory", "drop"]).is_err());
+        assert_eq!(run(&["memory"]).unwrap().memory, Some(Vec::new()));
+        // Words after `memory` are its own, `ask` and `gateway` too.
+        let odd = run(&["memory", "add", "quotes.side", "means", "ask", "gateway"]).unwrap();
+        assert_eq!((odd.ask, odd.gateway), (None, None));
+        assert_eq!(odd.memory.unwrap().len(), 5);
+        // Without `gateway`, they're connection names as before.
+        let plain = run(&["status"]).unwrap();
+        assert_eq!((plain.gateway, plain.connection.as_deref()), (None, Some("status")));
     }
 
     #[test]

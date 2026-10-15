@@ -167,6 +167,12 @@ impl Server {
         self
     }
 
+    /// The folder the agent was started in (the gateway runs elsewhere).
+    pub fn in_dir(mut self, dir: Option<String>) -> Self {
+        self.dir = dir.filter(|d| !d.is_empty());
+        self
+    }
+
     /// Reads the shared connections from `store` on each call.
     pub fn reading(mut self, store: PathBuf) -> Self {
         self.store = Some(store);
@@ -176,7 +182,8 @@ impl Server {
     /// The connections shared with agents now.
     fn shared(&self) -> Vec<ConnectionProfile> {
         let Some(path) = &self.store else { return self.connections.clone() };
-        let (store, _) = ConnectionStore::load_from(path.clone());
+        // Read only: an unreadable file is left where it is.
+        let (store, _) = ConnectionStore::peek(path.clone());
         store
             .project(&self.project_id)
             .map(|p| p.connections.iter().filter(|c| c.agents != AgentAccess::None).cloned().collect())
@@ -437,8 +444,16 @@ impl Server {
         if let Some(open) = self.open.lock().await.get(&profile.name).filter(|o| o.profile == profile) {
             return Ok((open.db.clone(), profile, Arc::clone(&open.turn)));
         }
-        let (password, _) = store::saved_password(&self.project_id, &profile);
-        let mut params = ConnectForm::from_profile(&profile, password).params()?;
+        // Off the runtime: the gateway serves others while the keychain
+        // waits (locked, or asking).
+        let (project_id, for_password) = (self.project_id.clone(), profile.clone());
+        let (password, _) = tokio::task::spawn_blocking(move || store::saved_password(&project_id, &for_password))
+            .await
+            .map_err(|e| e.to_string())?;
+        // A relative SQLite file is the agent's, from where it started (the
+        // gateway runs elsewhere).
+        let opened = store::opened_from(&profile, self.dir.as_deref());
+        let mut params = ConnectForm::from_profile(&opened, password).params()?;
         params.read_only |= !matches!(profile.agents, AgentAccess::Write | AgentAccess::Approve)
             || profile.mode == ConnectionMode::ReadOnly;
         let db = Database::connect(params).await.map_err(|e| crate::db::with_hint(&crate::db::error_message(&e)))?;
@@ -708,35 +723,80 @@ impl ServerHandler for Server {
     }
 }
 
-/// `podelis mcp`: serves the project's shared connections on stdin and
-/// stdout until the agent closes them. Returns the exit code.
-pub async fn run(store: &ConnectionStore, project: Option<&str>, name: Option<String>) -> i32 {
-    let found = match project {
-        Some(p) => store.project_by_name(p),
-        None => store.last_project.as_deref().and_then(|id| store.project(id)),
-    };
-    let Some(project) = found else {
-        let _ = eprintln_safe(&match project {
-            Some(p) => format!("podelis mcp: no project named '{p}'"),
-            None => "podelis mcp: no project yet: pass -p <project>".to_string(),
-        });
-        return 2;
-    };
-    let log = agents::log_path(&store::config_dir(), &project.id);
+/// Serves `project`'s shared connections to one agent over `read` and
+/// `write` until it goes: in the gateway, on the connection a `podelis
+/// mcp` bridge opened. `dir`: the folder the agent was started in.
+pub async fn serve_on<R, W>(
+    config_dir: &std::path::Path,
+    project: &store::Project,
+    name: Option<String>,
+    dir: Option<String>,
+    read: R,
+    write: W,
+) -> Result<(), String>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let log = agents::log_path(config_dir, &project.id);
     let server = Server::new(project.id.clone(), project.name.clone(), project.connections.clone(), log)
-        .reading(store::config_dir().join("connections.toml"))
+        .reading(config_dir.join("connections.toml"))
         .named(name)
-        .guarding(crate::settings::Settings::load(&store::config_dir()).0.guard_rows);
-    match server.serve(rmcp::transport::stdio()).await {
-        Ok(service) => {
-            let _ = service.waiting().await;
-            0
+        .in_dir(dir)
+        .guarding(crate::settings::Settings::load(config_dir).0.guard_rows);
+    let service = server.serve((read, write)).await.map_err(|e| e.to_string())?;
+    let _ = service.waiting().await;
+    Ok(())
+}
+
+/// `podelis mcp`: a bridge between the agent (stdin and stdout) and the
+/// gateway, which serves the project's shared connections (started if it
+/// isn't running). Returns the exit code.
+pub async fn run(config_dir: &std::path::Path, project: Option<&str>, name: Option<String>) -> i32 {
+    use crate::gateway::client::{CallError, connect_or_start, spawn_gateway};
+    let mut client = match connect_or_start(config_dir, "podelis mcp", || spawn_gateway(config_dir)).await {
+        Ok(client) => client,
+        Err(e) => {
+            let _ = eprintln_safe(&format!("podelis mcp: {e}"));
+            return 1;
+        }
+    };
+    let dir = std::env::current_dir().ok().map(|d| d.display().to_string());
+    let open = serde_json::json!({ "project": project, "name": name, "dir": dir });
+    match client.call("mcp.open", open).await {
+        Ok(_) => {}
+        Err(CallError::Rpc(e)) => {
+            let _ = eprintln_safe(&format!("podelis mcp: {}", e.message));
+            return 2;
         }
         Err(e) => {
             let _ = eprintln_safe(&format!("podelis mcp: {e}"));
-            1
+            return 1;
         }
     }
+    // From here the connection carries MCP: bytes both ways until the
+    // agent closes its side.
+    let (mut from_gateway, mut to_gateway) = client.into_stream();
+    let to = async {
+        let _ = tokio::io::copy(&mut tokio::io::stdin(), &mut to_gateway).await;
+        // The agent is done: the gateway ends the session.
+        let _ = tokio::io::AsyncWriteExt::shutdown(&mut to_gateway).await;
+    };
+    let from = async {
+        let _ = tokio::io::copy(&mut from_gateway, &mut tokio::io::stdout()).await;
+    };
+    tokio::pin!(to, from);
+    tokio::select! {
+        // The gateway went (stopped, restarted): so does the bridge, and
+        // the agent sees its server gone rather than one that never answers.
+        () = &mut from => {
+            let _ = eprintln_safe("podelis mcp: the gateway closed the session");
+            return 1;
+        }
+        // The agent closed its side: the gateway's last answers still come.
+        () = &mut to => from.await,
+    }
+    0
 }
 
 /// A message on stderr (stdout carries the protocol).
@@ -746,7 +806,7 @@ fn eprintln_safe(message: &str) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use rmcp::model::{CallToolRequestParams, ClientCapabilities, ClientConfig};
     use rmcp::service::RunningService;
     use rmcp::{ClientHandler, RoleClient};
@@ -754,7 +814,7 @@ mod tests {
     use super::*;
     use crate::db::Engine;
 
-    struct TestAgent;
+    pub(crate) struct TestAgent;
 
     impl ClientHandler for TestAgent {
         fn get_info(&self) -> ClientConfig {
@@ -793,7 +853,11 @@ mod tests {
     }
 
     /// The tool's text, with "ERROR " before a failure's.
-    async fn call(client: &RunningService<RoleClient, TestAgent>, tool: &str, args: serde_json::Value) -> String {
+    pub(crate) async fn call(
+        client: &RunningService<RoleClient, TestAgent>,
+        tool: &str,
+        args: serde_json::Value,
+    ) -> String {
         let params = CallToolRequestParams::new(tool.to_string()).with_arguments(args.as_object().unwrap().clone());
         let result = client.call_tool(params).await.unwrap();
         let text: String = result.content.iter().filter_map(|c| c.as_text().map(|t| t.text.clone())).collect();
@@ -802,6 +866,20 @@ mod tests {
 
     /// An agent through the real protocol: what it sees, what runs, what's
     /// refused, the dry run on production, and the log of it all.
+    #[tokio::test]
+    async fn a_relative_sqlite_file_is_the_agents() {
+        let dir = tempfile::tempdir().unwrap();
+        make_sqlite(&dir.path().join("shop.db"), "CREATE TABLE here (id INT); INSERT INTO here VALUES (7)");
+        let mut shop = sqlite("shop", std::path::Path::new("shop.db"), AgentAccess::Read, ConnectionMode::Normal);
+        shop.host = "shop.db".into();
+        let server = Server::new("p1".into(), "shop".into(), vec![shop], dir.path().join("agents.jsonl"))
+            .in_dir(Some(dir.path().display().to_string()));
+        let client = connect(server).await;
+        let rows =
+            call(&client, "query", serde_json::json!({ "connection": "shop", "sql": "select id from here" })).await;
+        assert!(rows.contains("\"7\""), "{rows}");
+    }
+
     #[tokio::test]
     async fn agents_get_shared_connections_safely() {
         let dir = tempfile::tempdir().unwrap();

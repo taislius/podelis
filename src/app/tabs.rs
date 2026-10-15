@@ -450,6 +450,9 @@ impl App {
             return self.set_status("Wait for the query to finish before closing the tab".into(), true);
         }
         let closing = self.active_tab;
+        // A question asked from this tab stops; one from a later tab follows
+        // its place.
+        self.tab_closing(closing);
         if self.tabs.len() == 1 {
             // Keep one (empty) tab.
             self.tabs[0] = TabMeta { name: "Query 1".into(), saved_id: None, conn: self.tabs[0].conn };

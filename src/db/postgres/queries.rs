@@ -149,6 +149,24 @@ pub(in crate::db) async fn link_rows(
     .await?)
 }
 
+/// `COMMENT ON` descriptions of tables, views and their columns (the
+/// column's name is null for a table's own).
+pub(in crate::db) async fn comment_rows(p: &PgPool) -> Result<Vec<(String, String, Option<String>, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT n.nspname::text, c.relname::text, a.attname::text, d.description
+             FROM pg_description d
+             JOIN pg_class c ON c.oid = d.objoid AND d.classoid = 'pg_class'::regclass
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = d.objsubid AND d.objsubid > 0
+             WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+               AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%'
+               AND (d.objsubid = 0 OR a.attname IS NOT NULL)
+             ORDER BY n.nspname, c.relname, d.objsubid",
+    )
+    .fetch_all(p)
+    .await?)
+}
+
 pub(in crate::db) async fn table_details(p: &PgPool, schema: &str, table: &str) -> Result<TableDetails> {
     let indexes: Vec<(String, bool, bool, String, String)> = sqlx::query_as(
         "SELECT i.relname::text, ix.indisunique, ix.indisprimary,

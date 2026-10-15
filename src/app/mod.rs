@@ -36,6 +36,7 @@ pub use vim::VimMode;
 
 mod activity;
 mod agents;
+pub mod ask;
 mod compare;
 mod connections;
 mod edit;
@@ -46,6 +47,7 @@ mod grid;
 mod info;
 mod input;
 mod list;
+pub mod memory_view;
 mod menu;
 mod messages;
 mod mouse;
@@ -335,6 +337,12 @@ enum DbEventKind {
     Diagnosed(String, String),
     /// The output of piping rows through a command.
     PipeDone(String, Result<String, String>),
+    /// Characters of an answer being written, for ask `n`.
+    AskProgress(u64, usize),
+    /// Ask `n`'s answer: the SQL and what the model said, or why not.
+    AskDone(u64, Box<Result<serde_json::Value, ask::AskFailure>>),
+    /// A gateway call's answer (the memory window's).
+    GatewayDone(memory_view::GatewayPurpose, Box<Result<serde_json::Value, ask::AskFailure>>),
     /// A definition to show (title, text).
     Definition(String, Result<String, String>),
     /// The background syntax check of `text`: the server's problem, else
@@ -565,6 +573,12 @@ pub enum ConfirmAction {
     /// An agent's write waiting for the user: y approves it, anything else
     /// says no.
     AgentWrite(crate::agents::Request),
+    /// The project doesn't share its schema with the model asked: `y`
+    /// sends it this once, `a` always for the project.
+    ShareSchema {
+        question: ask::Question,
+        project_id: Option<String>,
+    },
 }
 
 /// The autocomplete popup.
@@ -670,6 +684,13 @@ pub struct App {
     pub row_form: Option<rows::RowForm>,
     /// The command the rows are piped through (`|`), being typed.
     pub pipe_prompt: Option<LineInput>,
+    /// `Ctrl+K q`: the question being typed, and one being answered.
+    pub ask_prompt: Option<LineInput>,
+    pub asking: Option<ask::Asking>,
+    /// `Ctrl+K k`: the project's memory.
+    pub memory_view: Option<memory_view::MemoryView>,
+    /// Numbers the asks, so a stopped one's answer is dropped.
+    ask_count: u64,
     last_pipe: String,
     /// A viewer to run with the terminal (`o`), picked up by the main loop.
     external: Option<pipes::External>,
@@ -764,6 +785,8 @@ pub struct App {
     /// When an agent's write was put to the user: keys in its first moment
     /// were meant for something else.
     agent_asked: Option<Instant>,
+    /// The sharing question, waiting while another confirmation is open.
+    pending_share: Option<Confirm>,
     /// The agent activity window.
     pub agents_view: Option<AgentsView>,
     /// Watch mode: the last query run again every few seconds.
@@ -896,6 +919,10 @@ impl App {
             menu: None,
             row_form: None,
             pipe_prompt: None,
+            ask_prompt: None,
+            asking: None,
+            memory_view: None,
+            ask_count: 0,
             last_pipe: String::new(),
             external: None,
             activity: None,
@@ -951,6 +978,7 @@ impl App {
             agent_checked: None,
             agent_seen: None,
             agent_asked: None,
+            pending_share: None,
             agents_view: None,
             watch: None,
             watch_rerun: false,
@@ -1400,6 +1428,80 @@ impl App {
         }
     }
 
+    /// A key while a confirmation is open: what it answers. `quit_key`:
+    /// Ctrl+C or Ctrl+Q, which confirm quitting.
+    fn answer_confirm(&mut self, confirm: Confirm, key: KeyEvent, quit_key: bool) {
+        // A second Ctrl+C or Ctrl+Q confirms quitting.
+        if confirm.offer_transaction
+            && matches!(key.code, KeyCode::Char('t' | 'T'))
+            && let ConfirmAction::Run { sql, offset, filled, .. } = confirm.action
+        {
+            return self.run_in_transaction(&sql, offset, filled, RunPurpose::Query);
+        }
+        let yes =
+            matches!(key.code, KeyCode::Char('y' | 'Y')) || (quit_key && matches!(confirm.action, ConfirmAction::Quit));
+        if let ConfirmAction::AgentWrite(request) = &confirm.action {
+            // Only y, or n / Esc, answer; and not in the first moment
+            // (a key being typed as it appeared).
+            let settled = self.agent_asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
+            let answer = match key.code {
+                KeyCode::Char('y' | 'Y') => Some(true),
+                KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(false),
+                _ => None,
+            };
+            match answer {
+                Some(approve) if settled => {
+                    let request = request.clone();
+                    return self.answer_agent(&request, approve);
+                }
+                _ => {
+                    self.confirm = Some(confirm);
+                    return;
+                }
+            }
+        }
+        if let ConfirmAction::ShareSchema { question, project_id } = &confirm.action {
+            // It came by itself, maybe while typing: only y, a, or n / Esc
+            // answer it, and not in its first moment (as an agent's write).
+            let settled = self.agent_asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
+            let answer = match key.code {
+                KeyCode::Char('y' | 'Y') => Some(Some(false)),
+                KeyCode::Char('a' | 'A') => Some(Some(true)),
+                KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(None),
+                _ => None,
+            };
+            match answer {
+                Some(Some(always)) if settled => {
+                    return self.answer_share(question.clone(), project_id.as_deref(), always);
+                }
+                Some(None) if settled => return self.set_status("Not sent".into(), false),
+                _ => {
+                    self.confirm = Some(confirm);
+                    return;
+                }
+            }
+        }
+        if !yes {
+            self.queued_plan = None;
+            self.set_status("Cancelled".to_string(), false);
+            return;
+        }
+        match confirm.action {
+            ConfirmAction::Run { sql, offset, infos, purpose, filled } => {
+                self.run_writes(sql, offset, infos, purpose, filled);
+            }
+            ConfirmAction::RunHeavy { sql, offset, infos, filled } => {
+                self.run_writes(sql, offset, infos, RunPurpose::Query, filled);
+            }
+            ConfirmAction::Disconnect => self.disconnect(),
+            ConfirmAction::Quit => self.should_quit = true,
+            ConfirmAction::CloseTab => self.close_tab(),
+            ConfirmAction::LeaveProject(target, panes) => self.go_to_project(target, panes),
+            // Answered above.
+            ConfirmAction::AgentWrite(_) | ConfirmAction::ShareSchema { .. } => {}
+        }
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) {
         self.on_input(|app| app.key(key));
     }
@@ -1443,54 +1545,9 @@ impl App {
         // Ctrl+Q quits from anywhere (on the query screen Ctrl+C copies).
         let ctrl_q = key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q');
         if let Some(confirm) = self.confirm.take() {
-            // A second Ctrl+C or Ctrl+Q confirms quitting.
-            if confirm.offer_transaction
-                && matches!(key.code, KeyCode::Char('t' | 'T'))
-                && let ConfirmAction::Run { sql, offset, filled, .. } = confirm.action
-            {
-                return self.run_in_transaction(&sql, offset, filled, RunPurpose::Query);
-            }
-            let yes = matches!(key.code, KeyCode::Char('y' | 'Y'))
-                || ((ctrl_c || ctrl_q) && matches!(confirm.action, ConfirmAction::Quit));
-            if let ConfirmAction::AgentWrite(request) = &confirm.action {
-                // Only y, or n / Esc, answer; and not in the first moment
-                // (a key being typed as it appeared).
-                let settled = self.agent_asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
-                let answer = match key.code {
-                    KeyCode::Char('y' | 'Y') => Some(true),
-                    KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(false),
-                    _ => None,
-                };
-                match answer {
-                    Some(approve) if settled => {
-                        let request = request.clone();
-                        return self.answer_agent(&request, approve);
-                    }
-                    _ => {
-                        self.confirm = Some(confirm);
-                        return;
-                    }
-                }
-            }
-            if !yes {
-                self.queued_plan = None;
-                self.set_status("Cancelled".to_string(), false);
-                return;
-            }
-            match confirm.action {
-                ConfirmAction::Run { sql, offset, infos, purpose, filled } => {
-                    self.run_writes(sql, offset, infos, purpose, filled);
-                }
-                ConfirmAction::RunHeavy { sql, offset, infos, filled } => {
-                    self.run_writes(sql, offset, infos, RunPurpose::Query, filled);
-                }
-                ConfirmAction::Disconnect => self.disconnect(),
-                ConfirmAction::Quit => self.should_quit = true,
-                ConfirmAction::CloseTab => self.close_tab(),
-                ConfirmAction::LeaveProject(target, panes) => self.go_to_project(target, panes),
-                ConfirmAction::AgentWrite(_) => {}
-            }
-            return;
+            self.answer_confirm(confirm, key, ctrl_c || ctrl_q);
+            // A sharing question waiting behind it comes next.
+            return self.share_tick();
         }
         if ctrl_q {
             return self.request_quit();

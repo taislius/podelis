@@ -35,8 +35,24 @@
 .Op Fl p Ar project
 .Op Fl -connections
 .Nm
+.Op Fl p Ar project
+.Cm ask
+.Op Fl -model Ar name
+.Ar connection question
+.Nm
+.Op Fl p Ar project
+.Cm memory
+.Op Cm list Oo Ar words Oc | Cm add Ar subject what | Cm forget Ar id | Cm confirm Ar id | Cm learn Ar folder | Cm export
+.Nm
 .Cm gateway
-.Op Cm status | start | stop
+.Op Cm status | start | stop | models
+.Nm
+.Cm gateway key Ar model
+.Nm
+.Cm gateway test Op Ar model
+.Nm
+.Op Fl p Ar project
+.Cm gateway context Ar connection question
 .Sh DESCRIPTION
 Without
 .Fl e ,
@@ -223,6 +239,12 @@ files, and otherwise whichever of
 tab and
 .Ql \&,
 the first line has most of.
+.It Fl -model Ar name
+For
+.Cm ask :
+the model to ask, by its name in
+.Pa config.toml
+(default: the first one there).
 .It Fl h , Fl -help
 Print a summary of the options.
 .It Fl V , Fl -version
@@ -230,6 +252,67 @@ Print the version.
 .El
 .Sh COMMANDS
 .Bl -tag -width Ds
+.It Cm ask Oo Fl p Ar project Oc Oo Fl -model Ar name Oc Ar connection question
+Has an AI model write one SQL query for the
+.Ar question
+(the words after the connection) over the saved
+.Ar connection Ns 's
+schema, and prints it on standard output, never running it; what the
+model said about it, and how many tokens it took, go to standard error.
+The model is shown only the tables that matter for the question
+(see
+.Cm gateway context ) ,
+never rows, and its SQL is checked against the schema: a table or column
+that isn't there goes back to the model, up to twice, and any still
+unknown are named before you run it.
+A model that isn't on this machine is shown a project's schema only if
+the project shares it: the first time,
+.Cm ask
+asks (in a terminal) whether to send it this once or always for the
+project.
+Exit status: 0 with SQL, 1 if none came, 3 if the schema wasn't sent.
+.It Cm memory Oo Fl p Ar project Oc Op Cm list | add | forget | confirm | learn | export
+What the project's team has said about its data, shown to models when
+they write SQL
+.Pq see Cm ask :
+facts such as
+.Ql podelis memory add orders.status 3 = cancelled
+or
+.Ql add revenue is orders.total minus refunds
+(a first word
+.Ql is ,
+.Ql are ,
+.Ql means
+or
+.Ql equals
+says how it relates; otherwise
+.Ql means ) .
+A fact is shown with the tables it's about (its subject's table) or when
+it matches the question's words, and only once it's confirmed; facts you
+add are.
+.Cm list ,
+the default, shows them all, or those matching
+.Ar words ;
+.Cm forget
+removes one by its number;
+.Cm confirm
+makes a fact a model suggested count (when it had to assume what a
+value means,
+.Cm ask
+keeps the assumption, not confirmed, and says so);
+.Cm learn
+reads a folder of SQL migration files (and its subfolders, in file-name
+order): each table's history, when it was created and its columns added,
+dropped or renamed (dated from file names such as
+.Pa 20240301_add_refunds.sql ) ,
+a
+.Ql --
+comment right above a statement as a note on it, and
+.Ql COMMENT ON .
+Learning a folder again replaces what was learned from it.
+No model reads the files.
+.Cm export
+prints the facts as text, to read, keep or review.
 .It Cm doctor Oo Fl p Ar project Oc Op Fl -connections
 Check the local setup: the config files, the keychain,
 .Xr ssh 1 ,
@@ -242,6 +325,11 @@ Serve the project's connections shared with AI agents (the
 .Dq AI agents
 setting of a connection) to an agent over MCP, on standard input and
 output.
+The agent is served by the gateway
+.Pq see Cm gateway ,
+which
+.Cm mcp
+starts if it isn't running; each agent's session ends when it goes.
 Agents see only those connections, never their passwords.
 Each call runs in a transaction of Podėlis's own, read-only on the server
 unless a connection allows writes; agents can't send
@@ -258,10 +346,10 @@ activity window.
 (or the
 .Ev PODELIS_AGENT
 environment variable) sets what to call the agent in it.
-.It Cm gateway Op Cm status | start | stop
-The gateway is the background process that will hold what involves AI
-models: the models and their keys, what they're shown, their tools and
-memory.
+.It Cm gateway Op Cm status | start | stop | models
+The gateway is the background process that holds what involves AI
+models: the models and their keys, and later what they're shown, their
+tools and memory.
 Features that need it start it, and it stops by itself after
 .Li gateway_idle
 minutes with no client (30 by default; 0 keeps it running), so it never
@@ -277,7 +365,39 @@ says whether one runs (exit status 1 if not),
 starts it in the background, and
 .Cm stop
 stops it.
-In this version it answers only those: AI features come next.
+.Cm models
+lists the models set up in
+.Pa config.toml
+(the
+.Li [[models]]
+entries, the first being the default) and where each one's key comes
+from, never the key.
+.It Cm gateway key Ar model
+Asks for the model's API key without showing it and stores it in the OS
+keychain (service
+.Li podelis ,
+account
+.Li model:\& Ns Ar model ) ,
+where only the gateway reads it.
+.It Cm gateway test Op Ar model
+Asks the model (the default one without an argument) for one word and
+prints the answer, the tokens and the time: a check that its address and
+key work.
+It costs a few tokens.
+.It Cm gateway context Ar connection question
+Shows what a model would be shown of the saved
+.Ar connection Ns 's
+database for the
+.Ar question
+(the words after the connection), and sends nothing to any model: the
+tables that matter, each with why (its name, a column's name or the
+database's comment matched the question's words, or a foreign key joins it
+to such a table), then their columns, keys, where foreign keys point, and
+the database's comments on them.
+Never rows.
+The connection is opened read-only, as
+.Nm
+opens it (the keychain or its password command).
 .El
 .Sh SAFETY
 .Fl e
@@ -349,6 +469,19 @@ or
 Use this folder instead of the
 .Pa podelis
 folder of the OS config directory.
+.It Ev ANTHROPIC_API_KEY , Ev OPENAI_API_KEY
+The API key of a model in
+.Pa config.toml
+at Anthropic's or OpenAI's own address, when it has none in the keychain
+.Pq Cm gateway key
+and no
+.Li key_command .
+Only the gateway reads keys.
+.It Ev PODELIS_MODEL
+Set for a model's
+.Li key_command :
+the model's name in
+.Pa config.toml .
 .It Ev PODELIS_LOG
 Write a debug log to
 .Pa podelis.log ,
@@ -416,6 +549,10 @@ The debug log (only with
 What happened if
 .Nm
 crashed.
+.It Pa memory/ Ns Ar project-id Ns Pa .db
+Each project's facts
+.Pq Cm memory ,
+in SQLite.
 .It Pa gateway/
 The gateway's socket, its lock file, and
 .Pa calls.jsonl :
@@ -447,6 +584,12 @@ a step failed.
 .It 5
 The connection's query timeout ran out; the query was cancelled.
 .El
+.Pp
+For
+.Cm ask :
+0 the SQL was printed, 1 none came (the model said why, or it failed), 2
+usage, 3 the project's schema wasn't sent to the model (not allowed, and
+no terminal to ask in).
 .Pp
 Retrying can help with 4 and 5.
 It won't help with 1, 2 or 3.

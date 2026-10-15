@@ -154,7 +154,10 @@ impl App {
                 let count = project.connections.len();
                 self.projects_message =
                     Some((format!("Deleted project '{}' and its {count} connection(s)", project.name), false));
-                let files = [self.history_path(&id), self.draft_path(&id), self.tabs_path(&id)];
+                // Its memory for models too (the gateway may keep it open: on
+                // Unix the file goes, and nothing asks for this project again).
+                let memory = self.data_dir.as_ref().map(|d| crate::gateway::memory::path(d, &id));
+                let files = [self.history_path(&id), self.draft_path(&id), self.tabs_path(&id), memory];
                 for path in files.into_iter().flatten() {
                     let _ = std::fs::remove_file(path);
                 }

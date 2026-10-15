@@ -821,6 +821,48 @@ fn right_click_opens_a_menu_at_the_pointer() {
 }
 
 #[test]
+fn asking_in_plain_language_and_sharing_a_schema() {
+    let (mut app, _dir) = query_app();
+    app.connect_form.name = "prod".into();
+    app.ask_prompt = Some(crate::app::LineInput::new("revenue per country last month"));
+    let screen = render(&mut app, 110, 24);
+    assert!(screen.contains("ASK ABOUT PROD"), "{screen}");
+    assert!(screen.contains("? revenue per country last month"), "{screen}");
+    assert!(screen.contains("it lands in the editor and doesn't run"), "{screen}");
+    app.ask_prompt = None;
+    app.confirm = Some(Confirm {
+        message: "Send shop's table and column names to the model?".into(),
+        details: vec!["project 'shop' shares its schemas only with models on this machine".into()],
+        danger: false,
+        action: ConfirmAction::ShareSchema {
+            question: crate::app::ask::Question { text: "x".into(), tab: 0, connection: "prod".into() },
+            project_id: None,
+        },
+        offer_transaction: false,
+    });
+    let screen = render(&mut app, 110, 24);
+    assert!(screen.contains(" y  this once") && screen.contains(" a  always, for this project"), "{screen}");
+}
+
+#[test]
+fn the_memory_window_marks_what_waits_for_the_user() {
+    let (mut app, _dir) = query_app();
+    let fact = |id: i64, subject: &str, value: &str, confirmed: bool, source: &str| serde_json::json!({ "id": id, "subject": subject, "relation": "means", "value": value, "confirmed": confirmed, "source": source });
+    app.memory_view = Some(crate::app::memory_view::MemoryView {
+        facts: vec![
+            fact(1, "orders.status", "3 = cancelled", true, "user"),
+            fact(2, "orders.total", "VAT included", false, "model:claude"),
+        ],
+        ..Default::default()
+    });
+    let screen = render(&mut app, 110, 24);
+    assert!(screen.contains("MEMORY · SHOP"), "{screen}");
+    assert!(screen.contains("orders.status means 3 = cancelled  · user"), "{screen}");
+    assert!(screen.contains("orders.total means VAT included  · model:claude, not confirmed: c"), "{screen}");
+    assert!(screen.contains("a add · c confirm · d forget · Esc close"), "{screen}");
+}
+
+#[test]
 fn kept_results_and_the_statement_above_a_result() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let (mut app, _dir) = query_app();

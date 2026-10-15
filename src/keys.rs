@@ -51,6 +51,8 @@ pub enum Action {
     Projects,
     TxMode,
     NextWarning,
+    Ask,
+    Memory,
 }
 
 impl Action {
@@ -91,6 +93,8 @@ impl Action {
             Action::Projects => "Projects and connections",
             Action::TxMode => "Transaction mode: auto-commit, manual commit or rollback-only",
             Action::NextWarning => "Go to the next lint warning",
+            Action::Ask => "Ask in plain language: a model writes the SQL (it lands in the editor, not run)",
+            Action::Memory => "Project memory: what models are told about your data (confirm their guesses)",
         }
     }
 
@@ -117,6 +121,8 @@ impl Action {
             Action::Projects => "projects",
             Action::TxMode => "transaction mode",
             Action::NextWarning => "next warning",
+            Action::Ask => "ask in plain language",
+            Action::Memory => "project memory (for models)",
             _ => self.describe(),
         }
     }
@@ -193,6 +199,8 @@ const ACTIONS: &[(Action, &str, &[&str])] = &[
     (Action::Projects, "projects", &["Ctrl+K p"]),
     (Action::TxMode, "transaction_mode", &["Ctrl+K x"]),
     (Action::NextWarning, "next_warning", &["Ctrl+K w"]),
+    (Action::Ask, "ask", &["Ctrl+K q"]),
+    (Action::Memory, "memory", &["Ctrl+K k"]),
 ];
 
 /// One key or several, as written in config.toml.

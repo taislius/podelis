@@ -34,6 +34,15 @@ pub enum Hints {
     Full,
 }
 
+/// A path as typed in settings or on the command line: a leading `~/` is
+/// the home folder.
+pub fn expand_home(path: &str) -> std::path::PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => dirs::home_dir().unwrap_or_default().join(rest),
+        None => std::path::PathBuf::from(path),
+    }
+}
+
 /// User preferences from `config.toml`. Every field is optional; the file
 /// is only read, never written.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -80,6 +89,8 @@ pub struct Settings {
     /// Minutes the gateway waits with no client connected before it
     /// stops (it's started again when needed); 0 keeps it running.
     pub gateway_idle: u64,
+    /// The models the gateway may use, the default first (`[[models]]`).
+    pub models: Vec<crate::gateway::models::ModelConfig>,
     /// Key bindings by action name (see `keys.rs`).
     pub keys: HashMap<String, KeySpec>,
 }
@@ -103,6 +114,7 @@ impl Default for Settings {
             notify_after: 10,
             guard_rows: 1_000_000,
             gateway_idle: 30,
+            models: Vec::new(),
             keys: HashMap::new(),
         }
     }

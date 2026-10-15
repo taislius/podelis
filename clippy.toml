@@ -1,0 +1,2 @@
+# Words doc comments may use as words, besides clippy's own list ("..").
+doc-valid-idents = ["OpenAI", ".."]

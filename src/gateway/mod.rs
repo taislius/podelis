@@ -9,21 +9,32 @@
 //!   stopping when idle, the call log.
 //! - `client`: connecting, and starting the gateway on first use.
 //!
-//! This first part has the process and the protocol only (`hello`,
-//! `status`, `shutdown`); models, context, tools and memory come next.
+//! - `models`, `ai`: the models it talks to (Anthropic's API, and OpenAI's
+//!   format for GPT and local servers), and the `models` and `complete`
+//!   methods.
+//!
+//! Context, tools and memory come next.
 
+mod ai;
 pub mod client;
 pub mod command;
+pub mod context;
+pub mod memory;
+mod migrations;
+pub mod models;
+mod names;
 pub mod protocol;
 pub mod server;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// The protocol's version: a client and a gateway must agree on it.
-pub const PROTOCOL: u32 = 1;
+/// The protocol's version: a client and a gateway must agree on it. A
+/// client meeting another version stops that gateway and starts its own
+/// (`client::replace_other`). 2: models, context, ask, memory, mcp.open.
+pub const PROTOCOL: u32 = 2;
 
 /// The gateway's folder in the config folder: its socket, lock and log,
 /// readable only by the user.

@@ -53,6 +53,44 @@ pub struct Project {
     pub name: String,
     #[serde(default)]
     pub connections: Vec<ConnectionProfile>,
+    /// Which AI models may be shown its databases' schemas (table and
+    /// column names, comments) when asking in plain language.
+    #[serde(default, skip_serializing_if = "ShareSchema::is_default")]
+    pub share_schema: ShareSchema,
+}
+
+/// `profile` as opened from `dir`: a SQLite file with a relative path is
+/// in that folder (the gateway runs elsewhere than the app or agent that
+/// asks). Other connections are as they are.
+pub fn opened_from(profile: &ConnectionProfile, dir: Option<&str>) -> ConnectionProfile {
+    let mut opened = profile.clone();
+    if opened.engine == crate::db::Engine::Sqlite
+        && opened.host != ":memory:"
+        && std::path::Path::new(&opened.host).is_relative()
+        && let Some(dir) = dir.filter(|d| !d.is_empty())
+    {
+        opened.host = std::path::Path::new(dir).join(&opened.host).to_string_lossy().into_owned();
+    }
+    opened
+}
+
+/// Where a project's schemas may go, to write SQL from a question.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShareSchema {
+    /// Only to models on this machine: nothing leaves it.
+    #[default]
+    Local,
+    /// To any model set up, a provider's too.
+    All,
+}
+
+impl ShareSchema {
+    // serde's `skip_serializing_if` passes a reference.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    fn is_default(&self) -> bool {
+        *self == ShareSchema::default()
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -87,6 +125,37 @@ impl ConnectionStore {
 
     fn empty(path: PathBuf, save_blocked: bool) -> Self {
         Self { path, projects: vec![], last_project: None, save_blocked, migrated_project: None }
+    }
+
+    /// Reads the store without changing anything: a file that can't be
+    /// parsed is reported, not moved aside, and saving is refused. For
+    /// readers in the background (the gateway), which mustn't touch the
+    /// user's file.
+    pub fn peek(path: PathBuf) -> (Self, Option<String>) {
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Self::empty(path, true), None),
+            Err(e) => {
+                let warning = format!("couldn't read {}: {e}", path.display());
+                return (Self::empty(path, true), Some(warning));
+            }
+        };
+        match toml::from_str::<ConnectionsFile>(&text) {
+            Ok(file) => {
+                let store = Self {
+                    path,
+                    projects: file.projects,
+                    last_project: file.last_project,
+                    save_blocked: true,
+                    migrated_project: None,
+                };
+                (store, None)
+            }
+            Err(e) => {
+                let first_line = e.to_string().lines().next().unwrap_or_default().to_string();
+                (Self::empty(path, true), Some(format!("connections.toml is invalid: {first_line}")))
+            }
+        }
     }
 
     pub fn load_from(path: PathBuf) -> (Self, Option<String>) {
@@ -189,7 +258,12 @@ impl ConnectionStore {
 
     fn add_project_unsaved(&mut self, name: &str) -> String {
         let id = uuid::Uuid::new_v4().to_string();
-        self.projects.push(Project { id: id.clone(), name: name.to_string(), connections: vec![] });
+        self.projects.push(Project {
+            id: id.clone(),
+            name: name.to_string(),
+            connections: vec![],
+            share_schema: ShareSchema::default(),
+        });
         id
     }
 
@@ -206,6 +280,12 @@ impl ConnectionStore {
         let name = name.trim();
         self.check_project_name(name, Some(id))?;
         self.project_or_err(id)?.name = name.to_string();
+        self.save()
+    }
+
+    /// Where the project's schemas may be sent to write SQL.
+    pub fn set_share_schema(&mut self, id: &str, share: ShareSchema) -> Result<()> {
+        self.project_or_err(id)?.share_schema = share;
         self.save()
     }
 

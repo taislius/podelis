@@ -14,10 +14,13 @@ impl App {
         if let DbEventKind::ContainersFound(request, result) = event.kind {
             return self.containers_found(request, result);
         }
-        // An export goes on while other tabs are used.
+        // An export, or a question, goes on while other tabs are used.
         match event.kind {
             DbEventKind::ExportProgress(rows) => return self.export_progress(rows),
             DbEventKind::ExportDone(path, result) => return self.export_done(&path, result),
+            DbEventKind::AskProgress(id, chars) => return self.ask_progress(id, chars),
+            DbEventKind::AskDone(id, result) => return self.ask_done(id, *result),
+            DbEventKind::GatewayDone(purpose, result) => return self.gateway_done(purpose, *result),
             _ => {}
         }
         match event.run {
@@ -161,7 +164,11 @@ impl App {
             }
             DbEventKind::Catalog(result) => self.apply_catalog(result),
             // Handled before the generation check.
-            DbEventKind::Restored { .. } | DbEventKind::ContainersFound(..) => {}
+            DbEventKind::Restored { .. }
+            | DbEventKind::ContainersFound(..)
+            | DbEventKind::AskProgress(..)
+            | DbEventKind::AskDone(..)
+            | DbEventKind::GatewayDone(..) => {}
             DbEventKind::Pinged(result) => self.pinged(result),
             DbEventKind::ActivityLoaded(result) => self.activity_loaded(result),
             DbEventKind::SessionStopped(result) => self.session_stopped(result),
@@ -413,6 +420,7 @@ impl App {
             self.approvals_tick();
             self.agents_tick();
         }
+        self.share_tick();
         if let Some((deadline, limit)) = self.run_extra.deadline
             && self.executing
             && Instant::now() >= deadline

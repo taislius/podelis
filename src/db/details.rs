@@ -44,6 +44,16 @@ pub struct RoutineInfo {
     pub(super) id: String,
 }
 
+/// A comment the database keeps on a table or view (`column` is `None`)
+/// or on one of its columns: what the schema's authors said it means.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Comment {
+    pub schema: String,
+    pub table: String,
+    pub column: Option<String>,
+    pub text: String,
+}
+
 /// A foreign key's column and what it points to: one row of the whole
 /// database's links, for showing related tables.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -160,6 +170,21 @@ impl Database {
                 target_table,
                 target_column,
             })
+            .collect())
+    }
+
+    /// Every table, view and column comment (the system catalogs left
+    /// out); SQLite has none.
+    pub async fn comments(&self) -> Result<Vec<Comment>> {
+        let rows = match &self.0.pool {
+            Pool::Postgres(p) => postgres::queries::comment_rows(p).await?,
+            Pool::MySql(_) => mysql::queries::comment_rows(self).await?,
+            Pool::Sqlite(_) => Vec::new(),
+        };
+        Ok(rows
+            .into_iter()
+            .filter(|(_, _, _, text)| !text.trim().is_empty())
+            .map(|(schema, table, column, text)| Comment { schema, table, column, text })
             .collect())
     }
 

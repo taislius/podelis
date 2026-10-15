@@ -54,16 +54,37 @@ impl Client {
     /// Connects to a running gateway and says hello as `name`. Fails if
     /// none is running.
     pub async fn connect(config_dir: &Path, name: &str) -> Result<Self, CallError> {
+        Self::connect_speaking(config_dir, name, super::PROTOCOL).await
+    }
+
+    /// Connects saying hello in `protocol`: another version's, to stop
+    /// that gateway.
+    async fn connect_speaking(config_dir: &Path, name: &str, protocol: u32) -> Result<Self, CallError> {
         let stream = UnixStream::connect(super::socket_path(config_dir)).await?;
         let (read, writer) = stream.into_split();
         let mut client =
             Client { reader: BufReader::new(read), writer, next_id: 1, hello: Value::Null, notifications: Vec::new() };
-        client.hello = client.call("hello", json!({ "client": name, "protocol": super::PROTOCOL })).await?;
+        client.hello = client.call("hello", json!({ "client": name, "protocol": protocol })).await?;
         Ok(client)
     }
 
     /// Calls `method` and waits for its response.
     pub async fn call(&mut self, method: &str, params: Value) -> Result<Value, CallError> {
+        let mut kept = Vec::new();
+        let result = self.call_streaming(method, params, |m, p| kept.push((m.to_string(), p.clone()))).await;
+        self.notifications.extend(kept);
+        result
+    }
+
+    /// Calls `method`, handing each notification that comes meanwhile to
+    /// `on_note` as it arrives (an answer being written), and waits for
+    /// the response.
+    pub async fn call_streaming(
+        &mut self,
+        method: &str,
+        params: Value,
+        mut on_note: impl FnMut(&str, &Value),
+    ) -> Result<Value, CallError> {
         let id = self.next_id;
         self.next_id += 1;
         self.writer.write_all(protocol::request(id, method, &params).as_bytes()).await?;
@@ -74,9 +95,15 @@ impl Client {
                 }
                 // A response to a request given up on earlier.
                 Outgoing::Response { .. } => {}
-                Outgoing::Notification { method, params } => self.notifications.push((method, params)),
+                Outgoing::Notification { method, params } => on_note(&method, &params),
             }
         }
+    }
+
+    /// The connection itself, for a protocol that takes it over after a
+    /// call (`mcp.open`): what's read so far stays in the reader.
+    pub fn into_stream(self) -> (BufReader<OwnedReadHalf>, OwnedWriteHalf) {
+        (self.reader, self.writer)
     }
 
     /// The next notification: one that came during a call, else waits for
@@ -118,7 +145,18 @@ pub async fn connect_or_start(
 ) -> Result<Client, CallError> {
     match Client::connect(config_dir, name).await {
         Ok(client) => return Ok(client),
-        // It's there, but refused (another protocol version): say so.
+        // An older version's gateway (left running from before an
+        // update): stopped, and this version's started. A newer one is
+        // left alone: two installed versions mustn't stop each other's.
+        Err(CallError::Rpc(e)) if e.code == super::protocol::code::VERSION => {
+            if their_protocol(&e).is_some_and(|theirs| theirs > super::PROTOCOL) {
+                return Err(CallError::Rpc(RpcError::new(
+                    e.code,
+                    "a newer Podėlis's gateway is running: use that version (or `podelis gateway stop` with it)",
+                )));
+            }
+            replace_other(config_dir, &e).await?;
+        }
         Err(e @ CallError::Rpc(_)) => return Err(e),
         Err(CallError::Io(_)) => {}
     }
@@ -128,6 +166,8 @@ pub async fn connect_or_start(
         tokio::time::sleep(Duration::from_millis(25)).await;
         match Client::connect(config_dir, name).await {
             Ok(client) => return Ok(client),
+            // Another client is replacing the old gateway too: soon gone.
+            Err(CallError::Rpc(e)) if e.code == super::protocol::code::VERSION && Instant::now() < deadline => {}
             Err(e @ CallError::Rpc(_)) => return Err(e),
             Err(CallError::Io(e)) if Instant::now() >= deadline => {
                 return Err(CallError::Io(std::io::Error::new(
@@ -138,6 +178,33 @@ pub async fn connect_or_start(
             Err(CallError::Io(_)) => {}
         }
     }
+}
+
+/// The protocol another version's gateway speaks, from its refusal: its
+/// `data` (from version 2), else its message ("speaks protocol 1").
+fn their_protocol(e: &RpcError) -> Option<u32> {
+    if let Some(n) = e.data.as_ref().and_then(|d| d["protocol"].as_u64()) {
+        return u32::try_from(n).ok();
+    }
+    let rest = e.message.split("speaks protocol ").nth(1)?;
+    rest.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+}
+
+/// Stops another version's gateway (its refusal says which), and waits
+/// for it to let go of the socket.
+pub async fn replace_other(config_dir: &Path, refused: &RpcError) -> Result<(), CallError> {
+    let Some(theirs) = their_protocol(refused) else { return Err(CallError::Rpc(refused.clone())) };
+    // Another client may be replacing it at the same moment: gone already
+    // (or the new one answering in this version) is done, not an error.
+    let Ok(mut old) = Client::connect_speaking(config_dir, "podelis (replacing an older gateway)", theirs).await else {
+        return Ok(());
+    };
+    let _ = old.call("shutdown", json!({})).await;
+    let deadline = Instant::now() + START_TIMEOUT;
+    while super::socket_path(config_dir).exists() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    Ok(())
 }
 
 /// Starts `podelis gateway` in the background for `config_dir`: in a

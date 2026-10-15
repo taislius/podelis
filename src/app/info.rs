@@ -77,6 +77,8 @@ impl App {
             // What agents did, for the status bar's note.
             || self.watching_agents()
             || self.watch.is_some()
+            // The sharing question, waiting behind another confirmation.
+            || self.pending_share.is_some()
     }
 
     /// Pings an idle connection every `keepalive` seconds: notices a dropped

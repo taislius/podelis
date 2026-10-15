@@ -84,6 +84,8 @@ pub(super) fn draw_query(f: &mut Frame, app: &mut App, body: Rect) {
                 let command = app.pipe_prompt.clone().unwrap_or_default();
                 draw_pipe_prompt(f, &command, area);
             }
+            Overlay::AskPrompt => draw_ask_prompt(f, app, area),
+            Overlay::Memory => draw_memory(f, app, area),
             Overlay::Menu => draw_menu(f, app, area),
             Overlay::Confirm => draw_confirm(f, app, area),
         }
@@ -323,6 +325,75 @@ fn draw_pipe_prompt(f: &mut Frame, command: &LineInput, area: Rect) {
         Line::from(Span::styled(" rows go in as TSV with a header (JSON for jq) · ↵ run · Esc cancel", dim())),
     ];
     f.render_widget(Paragraph::new(lines).block(popup("PIPE ROWS THROUGH", t.accent)), rect);
+}
+
+/// `Ctrl+K q`: the question for a model, about the tab's connection.
+fn draw_ask_prompt(f: &mut Frame, app: &App, area: Rect) {
+    let t = theme();
+    let Some(question) = &app.ask_prompt else { return };
+    let rect = centered_box(area, fit(80, 30, area.width), 6);
+    f.render_widget(Clear, rect);
+    let lines = vec![
+        Line::from([vec![Span::styled(" ? ", bold(t.accent))], input_spans(question, fg(t.text_bright))].concat()),
+        Line::default(),
+        Line::from(Span::styled(" a model writes the SQL from the tables that matter (never their rows)", dim())),
+        Line::from(Span::styled(" it lands in the editor and doesn't run · ↵ ask · Esc cancel", dim())),
+    ];
+    let title = format!("ASK ABOUT {}", app.connect_form.name.to_uppercase());
+    f.render_widget(Paragraph::new(lines).block(popup(&title, t.accent)), rect);
+}
+
+/// `Ctrl+K k`: the project's memory, a fact a line; a model's
+/// suggestions, waiting to be confirmed, in orange.
+fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
+    let t = theme();
+    let Some(view) = &app.memory_view else { return };
+    let width = fit(100, 40, area.width.saturating_sub(4));
+    let height = fit(view.facts.len() as u16 + 7, 10, area.height.saturating_sub(2));
+    let rect = centered_box(area, width, height);
+    f.render_widget(Clear, rect);
+    let room = usize::from(width).saturating_sub(4);
+    let mut lines = Vec::new();
+    if view.loading {
+        lines.push(Line::from(Span::styled(" Loading…", dim())));
+    } else if view.facts.is_empty() {
+        lines.push(Line::from(Span::styled(" No facts yet: a adds one (orders.status 3 = cancelled).", dim())));
+    }
+    let shown = usize::from(height.saturating_sub(6));
+    let first = view.selected.saturating_sub(shown.saturating_sub(1));
+    for (i, fact) in view.facts.iter().enumerate().skip(first).take(shown) {
+        let confirmed = fact["confirmed"].as_bool() == Some(true);
+        let text = format!(
+            " {} {} {}",
+            fact["subject"].as_str().unwrap_or("?"),
+            fact["relation"].as_str().unwrap_or("?"),
+            fact["value"].as_str().unwrap_or("?"),
+        );
+        let source = fact["source"].as_str().unwrap_or("?");
+        let who = if confirmed { format!("  · {source}") } else { format!("  · {source}, not confirmed: c") };
+        let text = truncate(&text, room.saturating_sub(who.chars().count()));
+        let style = if confirmed { fg(t.text) } else { fg(t.warn) };
+        let mut line = Line::from(vec![Span::styled(text, style), Span::styled(who, dim())]);
+        if i == view.selected {
+            line = line.style(Style::default().bg(t.active));
+        }
+        lines.push(line);
+    }
+    lines.push(Line::default());
+    if let Some(input) = &view.adding {
+        lines.push(Line::from(
+            [vec![Span::styled(" + ", bold(t.accent))], input_spans(input, fg(t.text_bright))].concat(),
+        ));
+        lines.push(Line::from(Span::styled(
+            " what it's about, then what's said: orders.status 3 = cancelled · ↵ add",
+            dim(),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(" shown to models with the tables they're about, once confirmed", dim())));
+        lines.push(Line::from(Span::styled(" a add · c confirm · d forget · Esc close", dim())));
+    }
+    let project = app.project().map(|p| p.name.to_uppercase()).unwrap_or_default();
+    f.render_widget(Paragraph::new(lines).block(popup(&format!("MEMORY · {project}"), t.accent)), rect);
 }
 
 /// The save-as / rename prompt.
@@ -665,13 +736,21 @@ pub(super) fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
         keys.push(Span::styled(" t ", bold(t.on_accent).bg(t.ok)));
         keys.push(Span::styled(" in a transaction, review first   ", fg(t.text)));
     }
+    // Sending a schema to a model: this once, or always for the project.
+    if matches!(confirm.action, crate::app::ConfirmAction::ShareSchema { .. }) {
+        keys.push(Span::styled(" a ", bold(t.on_accent).bg(t.accent)));
+        keys.push(Span::styled(" always, for this project", fg(t.text)));
+    }
     // An agent's write: only `n` or Esc say no, so typing can't.
     let agent = matches!(confirm.action, crate::app::ConfirmAction::AgentWrite(_));
+    let share = matches!(confirm.action, crate::app::ConfirmAction::ShareSchema { .. });
     lines.push(Line::from(vec![
         Span::styled(" y ", bold(t.on_accent).bg(color)),
-        Span::styled(" yes   ", fg(t.text)),
-        Span::styled(if agent { " n / Esc " } else { " any other key " }, bold(t.text).bg(t.active)),
-        Span::styled(if agent { " no" } else { " cancel" }, muted()),
+        Span::styled(if share { " this once   " } else { " yes   " }, fg(t.text)),
+        // An agent's write and the sharing question: only `n` or Esc say
+        // no, so typing can't.
+        Span::styled(if agent || share { " n / Esc " } else { " any other key " }, bold(t.text).bg(t.active)),
+        Span::styled(if agent || share { " no" } else { " cancel" }, muted()),
     ]));
     if !keys.is_empty() {
         lines.push(Line::from(keys));

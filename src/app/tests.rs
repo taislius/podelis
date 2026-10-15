@@ -3525,3 +3525,305 @@ async fn s_in_the_navigator_runs_only_its_select() {
     );
     assert_eq!(results.statements, 1, "just the SELECT");
 }
+
+/// An app on the saved SQLite connection `shop` of project `p`, its data
+/// (and gateway) in `dir`, with `config` as config.toml.
+async fn asking_app(dir: &std::path::Path, config: &str) -> App {
+    crate::gateway::tests::saved_shop(dir).await;
+    std::fs::write(dir.join("config.toml"), config).unwrap();
+    let (store, _) = ConnectionStore::load_from(dir.join("connections.toml"));
+    let mut app = App::new(store, None, Some(dir.to_path_buf()));
+    let id = app.store.project_by_name("p").unwrap().id.clone();
+    app.open_project(&id);
+    app.connect_form.engine = Engine::Sqlite;
+    app.connect_form.host = dir.join("shop.db").to_string_lossy().into_owned();
+    app.connect_form.name = "shop".into();
+    let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
+    let generation = app.generation;
+    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
+    app.connect_form.name = "shop".into();
+    app
+}
+
+/// As if the question that came by itself had been on screen a while
+/// (keys in its first moment don't answer it).
+fn settle(app: &mut App) {
+    app.agent_asked = Instant::now().checked_sub(Duration::from_secs(2));
+}
+
+/// Handles events until the question is answered.
+async fn until_answered(app: &mut App) {
+    while app.asking.is_some() {
+        let event = tokio::time::timeout(Duration::from_secs(10), app.poll_db_event()).await.unwrap().unwrap();
+        app.handle_db_event(event);
+    }
+}
+
+#[tokio::test]
+async fn a_question_puts_the_models_sql_in_the_editor_without_running_it() {
+    let answer = "```sql\nSELECT c.country, count(*) AS orders FROM orders o JOIN customers c ON c.id = o.customer_id GROUP BY c.country\n```\nCounts orders per country.";
+    let (url, _server) =
+        crate::gateway::tests::fake_model(vec![(200, crate::gateway::tests::claude_answer(answer))]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let config =
+        format!("[[models]]\nname = \"near\"\napi = \"anthropic\"\nurl = \"{url}\"\nmodel = \"claude-opus-5-5\"\n");
+    let mut app = asking_app(dir.path(), &config).await;
+    let _gateway = crate::gateway::tests::start(dir.path(), None);
+    app.tab.editor.set_text("select 1;");
+    app.run_action(Action::Ask);
+    assert!(app.ask_prompt.is_some());
+    type_text(&mut app, "orders per country");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.asking.is_some() && said(&app).starts_with("Asking…"));
+    until_answered(&mut app).await;
+    assert_eq!(
+        app.tab.editor.text(),
+        "select 1;\n\n-- orders per country\n-- Counts orders per country.\n\
+         SELECT c.country, count(*) AS orders FROM orders o JOIN customers c ON c.id = o.customer_id GROUP BY c.country;"
+    );
+    assert!(said(&app).contains("nothing ran"), "{}", said(&app));
+    assert!(!app.executing && app.tab.grid.results.is_none(), "nothing ran");
+    assert_eq!(app.focus, Focus::Editor);
+}
+
+#[tokio::test]
+async fn a_far_model_sees_the_schema_once_allowed_and_always_saves_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = "[[models]]\nname = \"far\"\napi = \"openai\"\nurl = \"https://models.invalid/v1\"\nmodel = \"x\"\nkey_command = \"echo sk-x\"\n";
+    let mut app = asking_app(dir.path(), config).await;
+    let _gateway = crate::gateway::tests::start(dir.path(), None);
+    app.run_action(Action::Ask);
+    type_text(&mut app, "customers by country");
+    app.handle_key(key(KeyCode::Enter));
+    until_answered(&mut app).await;
+    let confirm = app.confirm.as_ref().expect("asks whether to send the schema");
+    assert!(matches!(confirm.action, ConfirmAction::ShareSchema { .. }));
+    assert!(confirm.message.contains("Send p's table and column names"), "{}", confirm.message);
+    // Keys typed as it appears don't answer it; nor do others.
+    app.handle_key(key(KeyCode::Char('a')));
+    app.handle_key(key(KeyCode::Char('x')));
+    assert!(app.confirm.is_some() && app.asking.is_none());
+    assert_eq!(app.store.project_by_name("p").unwrap().share_schema, crate::store::ShareSchema::Local);
+    settle(&mut app);
+    // `a`: always, for the project; the question goes again.
+    app.handle_key(key(KeyCode::Char('a')));
+    assert_eq!(app.store.project_by_name("p").unwrap().share_schema, crate::store::ShareSchema::All);
+    let (saved, _) = ConnectionStore::load_from(dir.path().join("connections.toml"));
+    assert_eq!(saved.project_by_name("p").unwrap().share_schema, crate::store::ShareSchema::All);
+    assert!(app.asking.is_some());
+    until_answered(&mut app).await;
+    // (The address is made up: it fails, but it was sent.)
+    assert!(said(&app).starts_with("Couldn't ask") && said(&app).contains("models.invalid"), "{}", said(&app));
+}
+
+#[test]
+fn asking_needs_a_saved_connection() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    app.run_action(Action::Ask);
+    assert!(app.ask_prompt.is_none());
+    assert!(said_error(&app), "{}", said(&app));
+}
+
+#[test]
+fn appended_sql_never_joins_the_statement_before_it() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    let after = |app: &mut App, before: &str| {
+        app.tab.editor.set_text(before);
+        app.append_statement("SELECT 2;");
+        app.tab.editor.text()
+    };
+    assert_eq!(after(&mut app, "select 1"), "select 1;\n\nSELECT 2;");
+    // What's there stays as it is.
+    assert_eq!(after(&mut app, "select 1;\n\n\n"), "select 1;\n\n\nSELECT 2;");
+    let script = "DELIMITER //\nCREATE PROCEDURE p() BEGIN SELECT 1; END //";
+    assert_eq!(after(&mut app, script), format!("{script}\n\nSELECT 2;"));
+    assert_eq!(after(&mut app, "select 1;\n-- later"), "select 1;\n-- later\n\nSELECT 2;");
+    // Before a comment after it, not inside it.
+    assert_eq!(after(&mut app, "select 1 -- note"), "select 1; -- note\n\nSELECT 2;");
+    assert_eq!(after(&mut app, "select 1 /* x */\n-- y"), "select 1; /* x */\n-- y\n\nSELECT 2;");
+    assert_eq!(after(&mut app, "-- only a note"), "-- only a note\n\nSELECT 2;");
+    assert_eq!(after(&mut app, ""), "SELECT 2;");
+    // One undo takes it back.
+    app.tab.editor.set_text("select 1");
+    app.append_statement("SELECT 2;");
+    app.undo();
+    assert_eq!(app.tab.editor.text(), "select 1");
+}
+
+/// Handles events until the memory window has its facts again.
+async fn until_memory_loaded(app: &mut App, facts: usize) {
+    for _ in 0..50 {
+        if app.memory_view.as_ref().is_some_and(|v| !v.loading && v.facts.len() == facts) {
+            return;
+        }
+        let event = tokio::time::timeout(Duration::from_secs(10), app.poll_db_event()).await.unwrap().unwrap();
+        app.handle_db_event(event);
+    }
+    panic!("the memory window didn't show {facts} facts");
+}
+
+#[tokio::test]
+async fn the_memory_window_adds_confirms_and_forgets_facts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = asking_app(dir.path(), "").await;
+    let _gateway = crate::gateway::tests::start(dir.path(), None);
+    // A model's guess, waiting.
+    let mut conn = crate::gateway::memory::open(dir.path(), &app.project().unwrap().id).await.unwrap();
+    crate::gateway::memory::add(&mut conn, "orders.total", "means", "VAT included", "model:near", false).await.unwrap();
+    drop(conn);
+    app.run_action(Action::Memory);
+    until_memory_loaded(&mut app, 1).await;
+    assert_eq!(app.memory_view.as_ref().unwrap().facts[0]["confirmed"], serde_json::json!(false));
+    // `a`: as `podelis memory add`.
+    app.handle_key(key(KeyCode::Char('a')));
+    type_text(&mut app, "revenue is orders.total minus refunds");
+    app.handle_key(key(KeyCode::Enter));
+    until_memory_loaded(&mut app, 2).await;
+    let added = &app.memory_view.as_ref().unwrap().facts[1];
+    assert_eq!((added["relation"].as_str(), added["value"].as_str()), (Some("is"), Some("orders.total minus refunds")));
+    // `c` on the guess confirms it.
+    app.handle_key(key(KeyCode::Char('c')));
+    for _ in 0..50 {
+        if app.memory_view.as_ref().unwrap().facts[0]["confirmed"] == serde_json::json!(true) {
+            break;
+        }
+        let event = tokio::time::timeout(Duration::from_secs(10), app.poll_db_event()).await.unwrap().unwrap();
+        app.handle_db_event(event);
+    }
+    assert_eq!(app.memory_view.as_ref().unwrap().facts[0]["confirmed"], serde_json::json!(true));
+    // `d` forgets the selected one.
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Char('d')));
+    until_memory_loaded(&mut app, 1).await;
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.memory_view.is_none());
+}
+
+#[tokio::test]
+async fn allowing_the_schema_asks_again_about_the_tab_it_came_from() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = "[[models]]\nname = \"far\"\napi = \"openai\"\nurl = \"https://models.invalid/v1\"\nmodel = \"x\"\nkey_command = \"echo sk-x\"\n";
+    let mut app = asking_app(dir.path(), config).await;
+    let _gateway = crate::gateway::tests::start(dir.path(), None);
+    app.run_action(Action::Ask);
+    type_text(&mut app, "customers by country");
+    app.handle_key(key(KeyCode::Enter));
+    // Another tab meanwhile, not connected.
+    app.new_tab(None, "", None);
+    app.switch_conn(None);
+    assert_eq!(app.active_tab, 1);
+    until_answered(&mut app).await;
+    assert!(app.confirm.is_some());
+    settle(&mut app);
+    app.handle_key(key(KeyCode::Char('y')));
+    let asking = app.asking.as_ref().expect("asked again");
+    assert_eq!((asking.question.tab, asking.question.connection.as_str()), (0, "shop"));
+    // Leaving the project stops it: no answer for a tab of another one.
+    app.leave_project();
+    assert!(app.asking.is_none());
+}
+
+#[tokio::test]
+async fn the_sharing_question_waits_for_a_confirmation_already_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = "[[models]]\nname = \"far\"\napi = \"openai\"\nurl = \"https://models.invalid/v1\"\nmodel = \"x\"\nkey_command = \"echo sk-x\"\n";
+    let mut app = asking_app(dir.path(), config).await;
+    let _gateway = crate::gateway::tests::start(dir.path(), None);
+    app.run_action(Action::Ask);
+    type_text(&mut app, "customers by country");
+    app.handle_key(key(KeyCode::Enter));
+    // Meanwhile, the user asks to close the tab (it asks first).
+    app.confirm = Some(Confirm {
+        message: "Close?".into(),
+        details: Vec::new(),
+        danger: false,
+        action: ConfirmAction::CloseTab,
+        offer_transaction: false,
+    });
+    until_answered(&mut app).await;
+    assert!(matches!(app.confirm.as_ref().unwrap().action, ConfirmAction::CloseTab), "not replaced");
+    // Answered: then the sharing question shows, at once.
+    app.handle_key(key(KeyCode::Char('n')));
+    assert!(matches!(app.confirm.as_ref().unwrap().action, ConfirmAction::ShareSchema { .. }));
+}
+
+#[tokio::test]
+async fn esc_while_asking_does_its_own_job_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = asking_app(
+        dir.path(),
+        "[[models]]\nname = \"m\"\napi = \"openai\"\nurl = \"http://127.0.0.1:9/v1\"\nmodel = \"x\"\n",
+    )
+    .await;
+    let _gateway = crate::gateway::tests::start(dir.path(), None);
+    app.run_action(Action::Ask);
+    type_text(&mut app, "customers");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.asking.is_some());
+    // A selection in the editor: Esc drops it, the question goes on.
+    app.tab.editor.set_text("select 1");
+    app.tab.editor.select_all();
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.asking.is_some() && app.tab.editor.selection().is_none());
+    // Nothing else to do: Esc stops asking.
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.asking.is_none());
+}
+
+#[test]
+fn a_late_memory_answer_for_another_project_is_dropped() {
+    let (mut app, _dir) = test_app();
+    let shown = app.current_project.clone().unwrap();
+    app.memory_view = Some(super::memory_view::MemoryView { project_id: shown, ..Default::default() });
+    let facts = serde_json::json!({ "facts": [{ "id": 1, "subject": "x" }] });
+    let other = super::memory_view::GatewayPurpose::MemoryList("another-project".into());
+    app.gateway_done(other, Ok(facts.clone()));
+    assert!(app.memory_view.as_ref().unwrap().facts.is_empty());
+    let mine = super::memory_view::GatewayPurpose::MemoryList(app.current_project.clone().unwrap());
+    app.gateway_done(mine, Ok(facts));
+    assert_eq!(app.memory_view.as_ref().unwrap().facts.len(), 1);
+}
+
+#[test]
+fn deleting_a_project_deletes_its_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut store, _) = ConnectionStore::load_from(dir.path().join("c.toml"));
+    let id = store.add_project("gone").unwrap();
+    store.add_project("kept").unwrap();
+    let mut app = App::new(store, None, Some(dir.path().to_path_buf()));
+    let memory = crate::gateway::memory::path(dir.path(), &id);
+    std::fs::create_dir_all(memory.parent().unwrap()).unwrap();
+    std::fs::write(&memory, "facts").unwrap();
+    app.projects_selected = app.store.projects.iter().position(|p| p.id == id).unwrap();
+    app.delete_selected_project();
+    assert!(!memory.exists());
+}
+
+#[tokio::test]
+async fn closing_another_tab_while_asking_keeps_the_question() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = asking_app(
+        dir.path(),
+        "[[models]]\nname = \"m\"\napi = \"openai\"\nurl = \"http://127.0.0.1:9/v1\"\nmodel = \"x\"\n",
+    )
+    .await;
+    app.new_tab(None, "", None);
+    app.new_tab(None, "", None);
+    app.switch_tab(1);
+    app.connect_form.name = "shop".into();
+    let _gateway = crate::gateway::tests::start(dir.path(), None);
+    app.run_action(Action::Ask);
+    type_text(&mut app, "customers");
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.asking.as_ref().unwrap().question.tab, 1);
+    // Tab 0 closes: the question follows its tab to place 0.
+    app.switch_tab(0);
+    app.close_tab();
+    assert_eq!(app.asking.as_ref().map(|a| a.question.tab), Some(0));
+    // Its own tab closes: it stops.
+    app.switch_tab(0);
+    app.close_tab();
+    assert!(app.asking.is_none());
+}

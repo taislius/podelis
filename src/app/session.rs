@@ -158,6 +158,9 @@ impl App {
     /// Saves the tabs and session, closes the connections and shows the
     /// project list. Opening the project again brings it all back.
     pub(super) fn leave_project(&mut self) {
+        // Its answer would go to a tab of another project.
+        self.stop_asking();
+        self.memory_view = None;
         self.save_draft();
         if let Some(id) = &self.current_project {
             self.projects_selected = self.store.projects.iter().position(|p| &p.id == id).unwrap_or(0);
