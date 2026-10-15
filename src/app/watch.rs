@@ -106,7 +106,7 @@ impl App {
         if !same || !infos.iter().all(|i| i.kind == Kind::Read) {
             return self.stop_watch(": the query or connection changed");
         }
-        let filled = self.last_run_filled.clone();
+        let filled = self.tab.last_filled.clone();
         self.watch_rerun = true;
         self.run_now(sql, offset, infos, RunPurpose::Query, filled);
         self.watch_rerun = false;

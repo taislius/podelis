@@ -41,9 +41,18 @@ pub struct TabState {
     /// into `grid` and this holds the result's grid.
     pub plan_grid: Option<Box<ResultGrid>>,
     pub plan_swapped: bool,
+    /// The results kept from its runs, oldest first (`runs.rs`); the one
+    /// shown is `run_at`, and how many have been made numbers the next.
+    pub runs: Vec<super::runs::KeptRun>,
+    pub run_at: usize,
+    pub(super) runs_made: usize,
+    /// Why the run shown has no result: its error.
+    pub run_error: Option<String>,
+    /// The parameters the shown result's query ran with, to run it again.
+    pub(super) last_filled: Option<Filled>,
 }
 
-/// The statement a plan was made for.
+/// The statement a plan or a result was made for.
 #[derive(Clone, Debug)]
 pub struct PlanSource {
     pub sql: String,
@@ -52,9 +61,31 @@ pub struct PlanSource {
     /// The editor line it started on then (from 0).
     pub line: usize,
     pub at: chrono::DateTime<chrono::Local>,
+    /// `find_in` for an editor version, drawn every frame.
+    found: std::cell::Cell<Option<(u64, Found)>>,
 }
 
+/// Where a statement is in the text: a byte offset and a line.
+type Found = Option<(usize, usize)>;
+
 impl PlanSource {
+    /// For `sql`, on editor line `line`, made now.
+    pub fn new(sql: String, analyzed: bool, line: usize) -> Self {
+        PlanSource { sql, analyzed, line, at: chrono::Local::now(), found: std::cell::Cell::default() }
+    }
+
+    /// `find_in` the editor's text, worked out again only once it changed.
+    pub fn find_in_editor(&self, editor: &TextEditor) -> Option<(usize, usize)> {
+        if let Some((version, found)) = self.found.get()
+            && version == editor.version()
+        {
+            return found;
+        }
+        let found = self.find_in(&editor.text());
+        self.found.set(Some((editor.version(), found)));
+        found
+    }
+
     /// Where the statement is in `text` now: the copy nearest the line it
     /// was on (lines above it may have come or gone), as a byte offset and
     /// line. `None` once it's been edited away.
@@ -328,7 +359,7 @@ impl App {
 
     /// Closes an open stream (which holds the session) as its tab is
     /// hidden; the rows left can be loaded again with `M`.
-    fn close_stream(&mut self) {
+    pub(super) fn close_stream(&mut self) {
         if self.row_stream.take().is_some() {
             self.tab.grid.cut_short = true;
         }

@@ -282,12 +282,9 @@ fn the_filter_shows_only_with_its_grid() {
 fn a_plan_says_what_it_is_for_and_how_old_it_is() {
     let (mut app, _dir) = query_app();
     app.tab.plan = Some(crate::db::Plan { text: "Seq Scan on users".into(), notes: Vec::new() });
-    app.tab.plan_source = Some(crate::app::PlanSource {
-        sql: "from users\nwhere id < 4".into(),
-        analyzed: false,
-        line: 1,
-        at: chrono::Local::now() - chrono::TimeDelta::minutes(3),
-    });
+    let mut source = crate::app::PlanSource::new("from users\nwhere id < 4".into(), false, 1);
+    source.at = chrono::Local::now() - chrono::TimeDelta::minutes(3);
+    app.tab.plan_source = Some(source);
     app.tab.result_tab = crate::app::ResultTab::Plan;
     let screen = render(&mut app, 100, 30);
     assert!(
@@ -821,6 +818,73 @@ fn right_click_opens_a_menu_at_the_pointer() {
     app.handle_mouse(click(MouseEventKind::Down(MouseButton::Left), menu.x + 3, menu.y + 9));
     assert!(app.menu.is_none());
     assert_eq!(app.take_clipboard().as_deref(), Some("2\tben@example.com\tline one line two"));
+}
+
+#[test]
+fn kept_results_and_the_statement_above_a_result() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let (mut app, _dir) = query_app();
+    let one = || QueryOutcome {
+        columns: vec!["id".into()],
+        column_types: vec!["INT4".into()],
+        rows: vec![vec![Some("1".into())]],
+        total_rows: 1,
+        statements: 1,
+        ..QueryOutcome::default()
+    };
+    app.tab.editor.set_text("select 1;\nselect id, email, note\nfrom users\nwhere id < 4;");
+    app.open_run_for_tests(0..9);
+    app.show_results_for_tests(one());
+    app.open_run_for_tests(10..app.tab.editor.text().len());
+    app.show_results_for_tests(one());
+    app.tab.runs[1].source.as_mut().unwrap().at = chrono::Local::now();
+    app.focus = Focus::Results;
+    let screen = render(&mut app, 140, 22);
+    assert!(screen.contains(" #1  #2  select id, email, note from users where id < 4;  lines 2–4"), "{screen}");
+    // A click on #1 shows it; on the lines, its statement in the editor.
+    let (x0, _, i) = app.hits.run_tabs[0];
+    let click = |x, y| MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(click(x0 + 1, app.hits.run_source.y));
+    assert_eq!((i, app.tab.run_at), (0, 0));
+    let screen = render(&mut app, 140, 22);
+    assert!(screen.contains("select 1;  line 1"), "{screen}");
+    let source = app.hits.run_source;
+    app.handle_mouse(click(source.x + source.width - 30, source.y));
+    assert_eq!((app.focus, app.tab.editor.selected_text().as_deref()), (Focus::Editor, Some("select 1;")));
+    // A run that failed says so where its result would be.
+    app.open_run_for_tests(10..app.tab.editor.text().len());
+    app.tab.run_error = Some("relation \"users\" does not exist".into());
+    let screen = render(&mut app, 140, 22);
+    assert!(screen.contains("The query failed:") && screen.contains("relation \"users\" does not exist"), "{screen}");
+}
+
+#[test]
+fn clicking_a_table_while_filtering_the_navigator_gives_it_the_keys() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let (mut app, _dir) = query_app();
+    app.focus = Focus::Schema;
+    app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+    let _ = render(&mut app, 100, 30);
+    let list = app.hits.schema_list;
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: list.x + 2,
+        row: list.y + 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(click);
+    let panel = app.schema.as_ref().unwrap();
+    assert!(!panel.filter_editing, "the click ends typing the filter");
+    assert_eq!(panel.filter.text(), "o", "the filter stays");
+    // `d` is for the clicked table now, not the filter.
+    app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+    assert_eq!(app.schema.as_ref().unwrap().filter.text(), "o");
 }
 
 #[test]

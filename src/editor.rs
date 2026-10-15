@@ -74,6 +74,16 @@ pub struct TextEditor {
     undo: History,
     redo: History,
     last_edit: Option<EditKind>,
+    /// Changes with every edit (and differs between editors), so what's
+    /// worked out from the text can be kept until it changes.
+    version: u64,
+}
+
+/// The next editor version: one counter for all, so a new editor never
+/// reuses another's.
+fn next_version() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl Default for TextEditor {
@@ -94,7 +104,13 @@ impl TextEditor {
             undo: History::default(),
             redo: History::default(),
             last_edit: None,
+            version: next_version(),
         }
+    }
+
+    /// Changes whenever the text does.
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     /// A fresh editor holding `text` (no undo history), cursor at the end.
@@ -399,6 +415,7 @@ impl TextEditor {
     // ---------------------------------------------------------------- undo
 
     fn checkpoint(&mut self, kind: EditKind) {
+        self.version = next_version();
         if !(kind == EditKind::Typing && self.last_edit == Some(EditKind::Typing)) {
             self.undo.push(Snapshot { lines: self.lines.clone(), cursor: self.cursor() });
         }
@@ -407,6 +424,7 @@ impl TextEditor {
     }
 
     fn restore(&mut self, snap: Snapshot) {
+        self.version = next_version();
         self.lines = snap.lines;
         self.set_cursor(snap.cursor);
         self.anchor = None;

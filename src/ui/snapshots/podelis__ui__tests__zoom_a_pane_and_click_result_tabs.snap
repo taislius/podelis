@@ -4,7 +4,7 @@ expression: screen
 ---
 " >_  PODĖLIS v0.0.0   │  project  shop ▼                                                  "
 "┌ QUERY RESULT ─────────────────────────────────────────────────────────────── ZOOMED ·  ┐"
-"│ RESULT 3 rows │ MESSAGES 1 │ QUERY PLAN │                                              │"
+"│ RESULT 3 rows │ MESSAGES 1 │ QUERY PLAN │                             export ▾  menu ▾ │"
 "│ #     id email            note                                                         │"
 "│ ─── ──── ──────────────── ─────────────────                                            │"
 "│ 01     1 ana@example.com  ∅                                                            │"
@@ -17,4 +17,4 @@ expression: screen
 "│                                                                                        │"
 "│ Zoomed: Tab moves between panes; Ctrl+K z · F12 or Esc returns                         │"
 "└────────────────────────────────────────────────────────────────────────────────────────┘"
-" ● prod  db.internal:3306 · MySQL                   z  unzoom   ^K  keys                  "
+" ● prod  db.internal:3306 · MySQL       z  unzoom   ^K  keys   m  menu · right-click      "

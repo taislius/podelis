@@ -47,6 +47,7 @@ mod info;
 mod input;
 mod list;
 mod menu;
+mod messages;
 mod mouse;
 mod overlay;
 mod palette;
@@ -57,6 +58,7 @@ mod query;
 mod results;
 mod review;
 mod rows;
+mod runs;
 mod schema;
 mod session;
 mod tabs;
@@ -441,6 +443,13 @@ pub struct Hits {
     pub tx_mode: Rect,
     /// The line above a plan saying what it's for (a click goes there).
     pub plan_source: Rect,
+    /// The same above a result, and its kept results' numbers: x ranges
+    /// and indices into `runs`.
+    pub run_source: Rect,
+    pub run_tabs: Vec<(u16, u16, usize)>,
+    /// The MESSAGES lines, and the index of the first one shown.
+    pub messages: Rect,
+    pub messages_offset: usize,
     /// The syntax hint under the editor (a click goes to what it's about).
     pub syntax_hint: Rect,
     /// Editor tab strip: (row, then each tab's x range and index).
@@ -463,6 +472,9 @@ pub struct Hits {
     pub manager_settings: Rect,
     /// The results pane's tabs: their x ranges, and their row.
     pub result_tabs: Vec<(u16, u16, ResultTab)>,
+    /// `export ▾` and `menu ▾` right of them: x ranges, and whether it's
+    /// the export menu.
+    pub result_buttons: Vec<(u16, u16, bool)>,
     pub result_tabs_y: u16,
 }
 
@@ -578,11 +590,22 @@ pub struct CellView {
     /// A definition opened from the navigator (`d`): ←/→ show the previous
     /// or next table's, view's or function's.
     pub browse: bool,
+    /// `y` copies the text itself (a message), saying this.
+    pub copies_text: Option<&'static str>,
 }
 
 impl CellView {
     pub fn new(title: String, text: String) -> Self {
-        CellView { title, text, scroll: 0, record: false, sql: None, max_scroll: u16::MAX, browse: false }
+        CellView {
+            title,
+            text,
+            scroll: 0,
+            record: false,
+            sql: None,
+            max_scroll: u16::MAX,
+            browse: false,
+            copies_text: None,
+        }
     }
 
     /// A navigator definition (`d`), browsable with ←/→.
@@ -693,6 +716,10 @@ pub struct App {
     pub cell_view: Option<CellView>,
     /// Outcomes and errors of recent runs, oldest first.
     pub messages: Vec<Message>,
+    /// The message selected in MESSAGES (`messages.rs`), and whether the
+    /// next drawing scrolls it into view.
+    pub message_selected: Option<usize>,
+    pub reveal_message: bool,
     pub help_visible: bool,
     /// Reopening the session's connections (Esc or any key hides it).
     pub splash: Option<session::Splash>,
@@ -743,6 +770,9 @@ pub struct App {
     pub watch: Option<watch::Watch>,
     /// The run starting now is watch mode's (others stop it).
     watch_rerun: bool,
+    /// The run starting now is the shown result's again (`M`, after a
+    /// row change): it replaces that result instead of keeping a new one.
+    same_result: bool,
     /// "Export all rows" in progress: what stops it, and the file it writes.
     export_task: Option<(tokio::sync::oneshot::Sender<()>, PathBuf)>,
     pub fetching_more: bool,
@@ -896,6 +926,8 @@ impl App {
             connection_summary: String::new(),
             cell_view: None,
             messages: Vec::new(),
+            message_selected: None,
+            reveal_message: false,
             help_visible: false,
             splash: None,
             connect_latency: None,
@@ -922,6 +954,7 @@ impl App {
             agents_view: None,
             watch: None,
             watch_rerun: false,
+            same_result: false,
             export_task: None,
             fetching_more: false,
             completion: None,
@@ -1150,6 +1183,8 @@ impl App {
         self.messages.push(Message { time, text, is_error });
         if self.messages.len() > 200 {
             self.messages.remove(0);
+            // The selected one stays selected (or goes with the oldest).
+            self.message_selected = self.message_selected.and_then(|i| i.checked_sub(1));
         }
     }
 
@@ -1258,6 +1293,14 @@ impl App {
     #[cfg(test)]
     pub fn show_results_for_tests(&mut self, outcome: QueryOutcome) {
         self.show_results(outcome);
+    }
+
+    /// A run of the editor's `range` starting, as `run_now` would: its
+    /// own result, kept.
+    #[cfg(test)]
+    pub fn open_run_for_tests(&mut self, range: std::ops::Range<usize>) {
+        let text = self.tab.editor.text();
+        self.open_run(Some((&text[range.clone()], range.start)));
     }
 
     #[cfg(test)]

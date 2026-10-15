@@ -187,6 +187,18 @@ fn owned<'a>(hints: &[(&str, &'a str)]) -> Vec<(String, &'a str)> {
     hints.iter().map(|(k, l)| ((*k).to_string(), *l)).collect()
 }
 
+/// The pane's menu (what right-click opens): its key on the query screen.
+/// Not while a plain `m` would type into a filter or cell being edited.
+fn menu_chip(app: &App) -> Option<Vec<Span<'static>>> {
+    let key = match app.focus {
+        _ if !matches!(app.screen, Screen::Query) => return None,
+        Focus::Editor => app.keymap.short_label(Action::Menu),
+        _ if app.typing() => return None,
+        _ => "m".to_string(),
+    };
+    Some(chip(&key, "menu · right-click", false))
+}
+
 /// As many key hints as fit in `width` cells, most important first.
 fn key_hints(app: &App, width: u16) -> Vec<Span<'static>> {
     let keys = &app.keymap;
@@ -275,6 +287,8 @@ fn key_hints(app: &App, width: u16) -> Vec<Span<'static>> {
             _ => "?".to_string(),
         };
         chips.push(chip(&help, "keys", false));
+        // The pane's menu (what right-click opens), each item with its key.
+        chips.extend(menu_chip(app));
     }
     let mut spans = Vec::new();
     let mut used = 0;
@@ -342,6 +356,8 @@ pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String
                     ("s · /", "sort · filter"),
                     ("[ · ] · 1 2 3", "rows / messages / plan tabs"),
                     ("< · >", "previous / next result set of a script"),
+                    (", · . · p", "earlier / later result kept from a run · pin it"),
+                    ("↑↓ · ↵ · y · Y", "in MESSAGES: select · whole message · copy it · copy all"),
                     ("c", "edit the cell (saved by primary key)"),
                     ("a · Space · d", "add a row · mark rows · delete marked rows"),
                     ("C", "copy rows as a Markdown table"),

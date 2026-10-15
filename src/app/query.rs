@@ -201,6 +201,9 @@ impl App {
                 }
             }
             Focus::Results if has_row => return self.copy_row(),
+            Focus::Results if self.tab.result_tab == ResultTab::Messages && !self.messages.is_empty() => {
+                return self.copy_message();
+            }
             Focus::Schema => {
                 if let Some((name, what)) = self.schema_name() {
                     return self.copy_text(name.clone(), &format!("Copied {what} {name}"));
@@ -590,8 +593,17 @@ impl App {
         if let Some(i) = switch {
             return self.set_result_tab(tabs[i]);
         }
-        if key.code == KeyCode::Char('m') {
-            return self.open_menu(None);
+        match key.code {
+            KeyCode::Char('m') => return self.open_menu(None),
+            // The results kept from earlier runs.
+            // (Not over a plan's table, which isn't a run's result.)
+            KeyCode::Char(',') if !self.tab.plan_swapped => return self.step_run(false),
+            KeyCode::Char('.') if !self.tab.plan_swapped => return self.step_run(true),
+            KeyCode::Char('p') if !self.tab.plan_swapped => return self.toggle_pin_run(),
+            _ => {}
+        }
+        if self.tab.result_tab == ResultTab::Messages && self.handle_messages_key(key) {
+            return;
         }
         if !self.grid_shown() {
             return self.handle_tab_scroll_key(key);
@@ -795,6 +807,10 @@ impl App {
             KeyCode::Char('y') if view.record => {
                 let text = view.text.clone();
                 self.copy_text(text, "Copied the row");
+            }
+            KeyCode::Char('y') if view.copies_text.is_some() => {
+                let (text, said) = (view.text.clone(), view.copies_text.unwrap_or_default());
+                self.copy_text(text, said);
             }
             KeyCode::Char('y') => self.copy_cell(),
             KeyCode::Left | KeyCode::Right | KeyCode::Char('h' | 'l') if view.browse => {
@@ -1310,8 +1326,7 @@ impl App {
         let Some((sql, offset)) = self.tab.last_sql.clone() else { return };
         self.next_row_limit = Some((results.rows.len() * 10).min(MAX_ROW_LIMIT));
         let infos = self.tab.last_query_infos.clone();
-        let filled = self.last_run_filled.clone();
-        self.run_now(sql, offset, infos, RunPurpose::Query, filled);
+        self.rerun_shown(sql, offset, infos);
     }
 
     /// Shows the plan for the selection or the statement at the cursor,
@@ -1468,10 +1483,16 @@ impl App {
     /// Shows the statement the plan is for in the editor, selected and
     /// scrolled to from its first line, if it's still there.
     pub(super) fn go_to_plan_statement(&mut self) {
-        let text = self.tab.editor.text();
         let Some(source) = self.tab.plan_source.clone() else { return };
+        self.go_to_source(&source, "The plan's statement", "F7 explains it again");
+    }
+
+    /// Selects `source`'s statement in the editor and scrolls to it, if
+    /// it's still there; `what` names it, `again` says how to redo it.
+    pub(super) fn go_to_source(&mut self, source: &PlanSource, what: &str, again: &str) {
+        let text = self.tab.editor.text();
         let Some((offset, line)) = source.find_in(&text) else {
-            return self.set_status("The plan's statement isn't in the editor any more".to_string(), true);
+            return self.set_status(format!("{what} isn't in the editor any more"), true);
         };
         let ed = &mut self.tab.editor;
         let start = ed.pos_of_offset(offset);
@@ -1486,7 +1507,7 @@ impl App {
         let last = line + source.sql.matches('\n').count();
         let lines =
             if last > line { format!("lines {}–{}", line + 1, last + 1) } else { format!("line {}", line + 1) };
-        self.set_status(format!("The plan's statement, {lines} (F7 explains it again)"), false);
+        self.set_status(format!("{what}, {lines} ({again})"), false);
     }
 
     /// The selection, or the statement at the cursor, to EXPLAIN, and the
@@ -1511,12 +1532,8 @@ impl App {
             .format_plan(&outcome.columns, &outcome.rows)
             .unwrap_or_else(|| crate::db::Plan { text: "The server returned no plan.".to_string(), notes: Vec::new() });
         self.tab.plan = Some(plan);
-        self.tab.plan_source = self.plan_request.take().map(|(sql, analyzed, line)| PlanSource {
-            sql,
-            analyzed,
-            line,
-            at: chrono::Local::now(),
-        });
+        self.tab.plan_source =
+            self.plan_request.take().map(|(sql, analyzed, line)| PlanSource::new(sql, analyzed, line));
         // A plan with columns (MySQL's classic EXPLAIN) is a grid too.
         self.unswap_plan_grid();
         self.tab.plan_grid = (outcome.columns.len() > 1 && self.engine() != Engine::Sqlite).then(|| {
@@ -1575,6 +1592,10 @@ impl App {
         purpose: RunPurpose,
         filled: Option<Filled>,
     ) {
+        // A query's own result, unless it's the shown one run again.
+        // (Taken whatever runs, so it can't outlive the run it was for.)
+        let same_result = std::mem::take(&mut self.same_result);
+        let new_result = matches!(purpose, RunPurpose::Query) && !self.watch_rerun && !same_result;
         // Anything else run stops watch mode.
         if !self.watch_rerun {
             self.stop_watch(": another query ran");
@@ -1589,8 +1610,7 @@ impl App {
         // A still-open streamed result holds the session: close it (which
         // cancels it on the server) so this run can start; so does an export.
         self.stop_export();
-        self.row_stream = None;
-        self.fetching_more = false;
+        self.close_stream();
         self.completion = None;
         // One read-only statement can be streamed page by page.
         let stream = matches!(purpose, RunPurpose::Query) && infos.len() == 1 && infos[0].kind == Kind::Read;
@@ -1599,13 +1619,17 @@ impl App {
         self.run_extra.vertical = false;
         if matches!(self.running_purpose, RunPurpose::Query) {
             self.run_extra.vertical = sql::ends_vertical(&sql, self.engine());
+            let original = filled.as_ref().map_or(&sql, |f| &f.original);
+            if new_result {
+                self.open_run(Some((original, offset)));
+            }
             // Remembered for "load more" and error locations; helper runs
             // (EXPLAIN, cell edits) don't replace them.
             self.tab.last_sql = Some((sql.clone(), offset));
+            self.tab.last_filled.clone_from(&filled);
             self.tab.last_query_infos.clone_from(&self.last_run_infos);
             // History keeps the placeholders, not the values, and no
             // statement that sets a password.
-            let original = filled.as_ref().map_or(&sql, |f| &f.original);
             if !sql::sets_password(original, self.engine()) {
                 self.history.push(original);
             }

@@ -525,6 +525,142 @@ fn undo_redo_and_shift_selection_keys() {
     assert_eq!(app.tab.editor.text(), "select ");
 }
 
+#[test]
+fn ctrl_arrows_move_by_word_without_selecting() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    type_text(&mut app, "select abc from t");
+    // After a click, which leaves an empty selection to drag from.
+    app.tab.editor.set_anchor(Some(app.tab.editor.cursor()));
+    for (code, at) in [(KeyCode::Left, (0, 16)), (KeyCode::Left, (0, 11)), (KeyCode::Right, (0, 15))] {
+        app.handle_key(KeyEvent::new(code, KeyModifiers::CONTROL));
+        assert_eq!(app.tab.editor.cursor(), at);
+        assert_eq!(app.tab.editor.selected_text(), None);
+    }
+}
+
+#[tokio::test]
+async fn each_query_keeps_its_result_to_go_back_to() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    let shown = |app: &App| app.tab.grid.results.as_ref().map(|r| r.rows[0][0].clone().unwrap_or_default());
+    run_sql(&mut app, "select 'one'").await;
+    run_sql(&mut app, "select 'two'").await;
+    assert_eq!((app.tab.runs.len(), app.tab.run_at), (2, 1));
+    assert_eq!(shown(&app).as_deref(), Some("two"));
+    // `,` shows the one before, with its SQL (for M, editing, watch…).
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Char(',')));
+    assert_eq!(shown(&app).as_deref(), Some("one"));
+    assert_eq!(app.tab.last_sql.as_ref().map(|(sql, _)| sql.as_str()), Some("select 'one'"));
+    app.handle_key(key(KeyCode::Char(',')));
+    assert_eq!(said(&app), "This is the oldest kept result");
+    app.handle_key(key(KeyCode::Char('.')));
+    assert_eq!(shown(&app).as_deref(), Some("two"));
+    // A failure is said where its result would be; the next run takes its place.
+    run_sql(&mut app, "select nope from nowhere").await;
+    assert!(app.tab.grid.results.is_none() && app.tab.run_error.as_ref().is_some_and(|e| e.contains("nowhere")));
+    run_sql(&mut app, "select 'three'").await;
+    let numbers: Vec<usize> = app.tab.runs.iter().map(|r| r.number).collect();
+    assert_eq!(numbers, [1, 2, 4]);
+    assert!(app.tab.run_error.is_none());
+    // The last few are kept, and pinned ones too.
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Char(',')));
+    app.handle_key(key(KeyCode::Char(',')));
+    app.handle_key(key(KeyCode::Char('p')));
+    assert!(app.tab.runs[0].pinned && said(&app).starts_with("Pinned result #1"));
+    for i in 0..super::runs::KEEP + 2 {
+        run_sql(&mut app, &format!("select {i}")).await;
+    }
+    assert_eq!(app.tab.runs.len(), super::runs::KEEP + 1);
+    assert_eq!(app.tab.runs[0].number, 1, "the pinned one stays");
+    app.focus = Focus::Results;
+    for _ in 0..super::runs::KEEP {
+        app.handle_key(key(KeyCode::Char(',')));
+    }
+    assert_eq!(shown(&app).as_deref(), Some("one"));
+}
+
+#[tokio::test]
+async fn an_earlier_result_runs_again_with_its_own_parameters() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    app.tab.editor.set_text("select :v");
+    app.handle_key(key(KeyCode::F(5)));
+    type_text(&mut app, "7");
+    app.handle_key(key(KeyCode::Enter));
+    finish(&mut app).await;
+    run_sql(&mut app, "select 'other'").await;
+    assert!(app.tab.last_filled.is_none());
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Char(',')));
+    assert_eq!(app.tab.last_filled.as_ref().map(|f| f.original.as_str()), Some("select :v"));
+    // After a row change it runs again, replacing that result.
+    let (sql, offset) = app.tab.last_sql.clone().unwrap();
+    let infos = app.tab.last_query_infos.clone();
+    app.rerun_shown(sql, offset, infos);
+    finish(&mut app).await;
+    assert_eq!(app.tab.runs.len(), 2);
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("7".to_string())]]);
+    // History kept the placeholder, not the value.
+    assert!(app.history.older("").is_some_and(|h| h == "select :v"));
+}
+
+#[test]
+fn kept_results_are_dropped_past_a_row_budget() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    let big = |n: usize| QueryOutcome {
+        columns: vec!["n".into()],
+        column_types: vec![String::new()],
+        rows: vec![vec![None]; n],
+        total_rows: n as u64,
+        statements: 1,
+        ..QueryOutcome::default()
+    };
+    let rows = super::runs::KEEP_ROWS / 2 + 1;
+    for _ in 0..4 {
+        app.open_run_for_tests(0..0);
+        app.show_results_for_tests(big(rows));
+    }
+    // Besides the newest kept, two were past the budget: the oldest went.
+    let numbers: Vec<usize> = app.tab.runs.iter().map(|r| r.number).collect();
+    assert_eq!(numbers, [2, 3, 4]);
+    // Over a plan's table `,` stays put.
+    app.tab.plan_swapped = true;
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Char(',')));
+    assert_eq!(app.tab.run_at, 2);
+}
+
+#[test]
+fn messages_can_be_selected_copied_and_opened() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    app.log("Connected".into(), false);
+    app.log("relation \"nowhere\" does not exist\nLINE 1: select * from nowhere".into(), true);
+    app.focus = Focus::Results;
+    app.tab.result_tab = ResultTab::Messages;
+    // From the newest; Ctrl+C or `y` copies it whole.
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!(app.message_selected, Some(1));
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!(app.message_selected, Some(0));
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(app.take_clipboard().is_some_and(|c| c.contains("LINE 1:")));
+    app.handle_key(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT));
+    assert!(
+        app.take_clipboard()
+            .is_some_and(|c| c.starts_with(&format!("{}  Connected\n", app.messages[0].time)) && c.contains("LINE 1:"))
+    );
+    app.handle_key(key(KeyCode::Enter));
+    let view = app.cell_view.as_ref().unwrap();
+    assert!(view.title.contains("error") && view.text.contains("LINE 1:"));
+    app.handle_key(key(KeyCode::Char('y')));
+    assert!(app.take_clipboard().is_some_and(|c| c.starts_with("relation")));
+}
+
 /// An app connected to an in-memory SQLite database, on the query screen.
 async fn connected_app(mode: ConnectionMode) -> (App, tempfile::TempDir) {
     let (mut app, dir) = test_app();
@@ -3299,7 +3435,7 @@ fn the_statement_to_explain_and_its_line() {
     app.tab.editor.set_text("select 1;\n\n  select *\n  from t;\nselect 3");
     app.tab.editor.set_cursor((3, 3));
     assert_eq!(app.statement_to_explain(), Some(("select *\n  from t".to_string(), 2)));
-    let source = PlanSource { sql: "select 3".into(), analyzed: false, line: 4, at: chrono::Local::now() };
+    let source = PlanSource::new("select 3".into(), false, 4);
     assert_eq!(source.find_in("select 3\nx\nx\nx\nselect 3\nselect 3"), Some((15, 4)), "the copy nearest line 5");
     assert_eq!(source.find_in("select 4"), None);
 }

@@ -256,6 +256,7 @@ impl App {
         }
         match std::mem::take(&mut self.running_purpose) {
             RunPurpose::Query => {
+                self.tab.run_error = None;
                 let grid = &self.tab.grid;
                 let place = (grid.table_state.selected(), grid.selected_col, grid.row_offset);
                 self.show_results(outcome);
@@ -319,7 +320,7 @@ impl App {
         self.executing = false;
         // Statements before the failing one ran.
         self.note_session_changes();
-        self.running_purpose = RunPurpose::Query;
+        let query = matches!(std::mem::take(&mut self.running_purpose), RunPurpose::Query);
         if let Some(txn) = txn {
             self.txn = txn;
         }
@@ -351,6 +352,10 @@ impl App {
         self.log(status.clone(), true);
         self.set_status(status.clone(), true);
         self.status_in_results = true;
+        // Said where its result would be.
+        if query {
+            self.tab.run_error = Some(status.clone());
+        }
         self.notify_if_long(|took| format!("Query failed after {}: {status}", format_elapsed(took)));
         if dry_run {
             self.end_dry_run(review::DryRun::Failed(status));

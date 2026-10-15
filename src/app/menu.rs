@@ -77,66 +77,118 @@ impl App {
             .collect()
     }
 
+    /// `export ▾` above the results: the rows shown to a file or the
+    /// clipboard, or every row of the result to a file.
+    pub(super) fn open_export_menu(&mut self, at: Option<(u16, u16)>) {
+        use super::palette::Command;
+        use KeyCode::Char;
+        let command = |label, command| MenuItem { label, keys: String::new(), action: MenuAction::Command(command) };
+        let mut items = vec![
+            results_item("Export the rows shown as CSV", Char('e'), "e"),
+            results_item("Export the rows shown as JSON", Char('J'), "J"),
+            results_item("Export the rows shown as INSERT statements", Char('i'), "i"),
+            command("Export all rows as CSV (not just those loaded)", Command::ExportAll(ExportFormat::Csv)),
+            command("Export all rows as JSON", Command::ExportAll(ExportFormat::Json)),
+            command("Export all rows as INSERT statements", Command::ExportAll(ExportFormat::Sql)),
+            results_item("Copy the rows as a Markdown table", Char('C'), "C"),
+            command("Copy the rows as CSV", Command::CopyRows(ExportFormat::Csv)),
+            command("Copy the rows as JSON", Command::CopyRows(ExportFormat::Json)),
+            command("Copy the rows as INSERT statements", Command::CopyRows(ExportFormat::Sql)),
+            results_item("Pipe the rows through a command", Char('|'), "|"),
+            results_item("Open the rows in the viewer", Char('o'), "o"),
+        ];
+        // A plan's table: only what its rows can go to.
+        if self.tab.plan_swapped {
+            items.retain(|i| !matches!(i.action, MenuAction::ResultsKey(Char('i')) | MenuAction::Command(_)));
+        }
+        let pane = self.hits.result_rows;
+        let at = at.unwrap_or((pane.x + 2, pane.y + 1));
+        self.completion = None;
+        self.menu = Some(Menu { title: "EXPORT", items, selected: 0, at });
+    }
+
+    /// The results kept from earlier runs: to switch between and pin.
+    fn run_items(&self) -> Vec<MenuItem> {
+        use KeyCode::Char;
+        let n = self.tab.runs.len();
+        let at = self.tab.run_at;
+        let pinned = self.tab.shown_run().is_some_and(|r| r.pinned);
+        [
+            (at > 0).then(|| results_item("Earlier result (kept from a run before)", Char(','), ",")),
+            (at + 1 < n).then(|| results_item("Later result", Char('.'), ".")),
+            (n > 0).then(|| {
+                results_item(if pinned { "Unpin this result" } else { "Pin this result (keep it)" }, Char('p'), "p")
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    /// The menu over a grid of rows: a result's, or a plan's table.
+    fn grid_menu(&self) -> (&'static str, Vec<MenuItem>) {
+        use KeyCode::Char;
+        // A plan's table: what changes data or needs a query's table is left out.
+        let plan = self.tab.plan_swapped;
+        let for_plan = |item: &MenuItem| {
+            !plan
+                || !matches!(
+                    item.action,
+                    MenuAction::ResultsKey(Char('c' | 'a' | 'd' | 'f' | 'M' | 'i' | '>' | ',' | '.' | 'p'))
+                        | MenuAction::Command(_)
+                )
+        };
+        (
+            if plan { "QUERY PLAN" } else { "RESULTS" },
+            vec![
+                results_item("Show the full value", KeyCode::Enter, "↵"),
+                results_item("Show the row vertically", Char('x'), "x"),
+                results_item("All rows one column per line (\\G) / table", Char('X'), "X"),
+                results_item("Edit this cell", Char('c'), "c"),
+                results_item("Add a row", Char('a'), "a"),
+                results_item("Mark / unmark this row", Char(' '), "Space"),
+                results_item("Delete the marked rows (or this one)", Char('d'), "d"),
+                results_item("Copy the cell", Char('y'), "y"),
+                results_item("Copy the row (or the marked rows)", Char('Y'), "Y"),
+                results_item("Copy rows as a Markdown table", Char('C'), "C"),
+                MenuItem {
+                    label: "Copy rows as CSV",
+                    keys: String::new(),
+                    action: MenuAction::Command(super::palette::Command::CopyRows(ExportFormat::Csv)),
+                },
+                results_item("Follow the foreign key", Char('f'), "f"),
+                results_item("Pipe rows through a command", Char('|'), "|"),
+                results_item("Open rows in the viewer", Char('o'), "o"),
+                results_item("Sort by this column", Char('s'), "s"),
+                results_item("Chart this column", Char('b'), "b"),
+                results_item("Filter rows", Char('/'), "/"),
+                results_item("Export as CSV", Char('e'), "e"),
+                results_item("Export as JSON", Char('J'), "J"),
+                results_item("Export as INSERT statements", Char('i'), "i"),
+                MenuItem {
+                    label: "Export all rows as CSV",
+                    keys: String::new(),
+                    action: MenuAction::Command(super::palette::Command::ExportAll(ExportFormat::Csv)),
+                },
+                results_item("Load more rows", Char('M'), "M"),
+                results_item("Zoom this pane (and back)", Char('z'), "z"),
+            ]
+            .into_iter()
+            // A script's other result sets.
+            .chain((self.tab.grid.result_sets.len() > 1).then(|| results_item("Next result set", Char('>'), ">")))
+            .chain(self.run_items())
+            .filter(for_plan)
+            .collect(),
+        )
+    }
+
     /// The focused pane's menu, at `at` (a click) or next to the pane.
     pub(super) fn open_menu(&mut self, at: Option<(u16, u16)>) {
         let (title, items) = match self.focus {
             Focus::Results
                 if self.grid_shown() && self.tab.grid.results.as_ref().is_some_and(|r| !r.columns.is_empty()) =>
             {
-                use KeyCode::Char;
-                // A plan's table: what changes data or needs a query's table is left out.
-                let plan = self.tab.plan_swapped;
-                let for_plan = |item: &MenuItem| {
-                    !plan
-                        || !matches!(
-                            item.action,
-                            MenuAction::ResultsKey(Char('c' | 'a' | 'd' | 'f' | 'M' | 'i' | '>'))
-                                | MenuAction::Command(_)
-                        )
-                };
-                (
-                    if plan { "QUERY PLAN" } else { "RESULTS" },
-                    vec![
-                        results_item("Show the full value", KeyCode::Enter, "↵"),
-                        results_item("Show the row vertically", Char('x'), "x"),
-                        results_item("All rows one column per line (\\G) / table", Char('X'), "X"),
-                        results_item("Edit this cell", Char('c'), "c"),
-                        results_item("Add a row", Char('a'), "a"),
-                        results_item("Mark / unmark this row", Char(' '), "Space"),
-                        results_item("Delete the marked rows (or this one)", Char('d'), "d"),
-                        results_item("Copy the cell", Char('y'), "y"),
-                        results_item("Copy the row (or the marked rows)", Char('Y'), "Y"),
-                        results_item("Copy rows as a Markdown table", Char('C'), "C"),
-                        MenuItem {
-                            label: "Copy rows as CSV",
-                            keys: String::new(),
-                            action: MenuAction::Command(super::palette::Command::CopyRows(ExportFormat::Csv)),
-                        },
-                        results_item("Follow the foreign key", Char('f'), "f"),
-                        results_item("Pipe rows through a command", Char('|'), "|"),
-                        results_item("Open rows in the viewer", Char('o'), "o"),
-                        results_item("Sort by this column", Char('s'), "s"),
-                        results_item("Chart this column", Char('b'), "b"),
-                        results_item("Filter rows", Char('/'), "/"),
-                        results_item("Export as CSV", Char('e'), "e"),
-                        results_item("Export as JSON", Char('J'), "J"),
-                        results_item("Export as INSERT statements", Char('i'), "i"),
-                        MenuItem {
-                            label: "Export all rows as CSV",
-                            keys: String::new(),
-                            action: MenuAction::Command(super::palette::Command::ExportAll(ExportFormat::Csv)),
-                        },
-                        results_item("Load more rows", Char('M'), "M"),
-                        results_item("Zoom this pane (and back)", Char('z'), "z"),
-                    ]
-                    .into_iter()
-                    // A script's other result sets.
-                    .chain(
-                        (self.tab.grid.result_sets.len() > 1).then(|| results_item("Next result set", Char('>'), ">")),
-                    )
-                    .filter(for_plan)
-                    .collect(),
-                )
+                self.grid_menu()
             }
             Focus::Schema if self.schema.is_some() => {
                 use KeyCode::Char;
@@ -159,14 +211,21 @@ impl App {
             // Messages, a plan's text, or nothing run yet: no rows to act on.
             Focus::Results => {
                 use KeyCode::Char;
+                let messages = self.tab.result_tab == ResultTab::Messages && !self.messages.is_empty();
                 (
                     "RESULTS",
-                    vec![
+                    [
                         results_item("Show the rows", Char('1'), "1"),
                         results_item("Show the messages", Char('2'), "2"),
                         results_item("Show the plan", Char('3'), "3"),
-                        self.action_item("Zoom this pane (and back)", Action::Zoom),
-                    ],
+                    ]
+                    .into_iter()
+                    .chain(messages.then(|| results_item("Show the whole message", KeyCode::Enter, "↵")))
+                    .chain(messages.then(|| results_item("Copy the message", Char('y'), "y")))
+                    .chain(messages.then(|| results_item("Copy every message", Char('Y'), "Y")))
+                    .chain(self.run_items())
+                    .chain([self.action_item("Zoom this pane (and back)", Action::Zoom)])
+                    .collect(),
                 )
             }
             _ => ("EDITOR", self.editor_items()),

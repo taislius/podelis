@@ -259,6 +259,8 @@ impl App {
                 return;
             }
         };
+        // Kept as a result of its own.
+        self.open_run(None);
         self.show_results(diff.outcome);
         // The rows are a comparison, not a table's: nothing to edit or re-run.
         self.tab.last_sql = None;

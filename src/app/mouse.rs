@@ -123,17 +123,8 @@ impl App {
         if inside(hits.agent_note, x, y) {
             return self.open_agents();
         }
-        // The results pane's tabs.
-        if y == hits.result_tabs_y
-            && inside(hits.results, x, y)
-            && let Some(&(_, _, tab)) = hits.result_tabs.iter().find(|(x0, x1, _)| (*x0..*x1).contains(&x))
-        {
-            self.focus = Focus::Results;
-            // Clicking the shown RESULT tab again steps through a script's result sets.
-            if tab == ResultTab::Rows && self.tab.result_tab == ResultTab::Rows && self.tab.grid.result_sets.len() > 1 {
-                return self.step_result_set(true);
-            }
-            return self.set_result_tab(tab);
+        if self.click_results_top(&hits, x, y) {
+            return;
         }
         // A syntax hint: to the spot in the editor it's about.
         if inside(hits.syntax_hint, x, y)
@@ -187,8 +178,14 @@ impl App {
             self.focus = Focus::Editor;
             return;
         }
+        if inside(hits.messages, x, y) && self.tab.result_tab == ResultTab::Messages {
+            self.focus = Focus::Results;
+            return self.click_message(y, double);
+        }
         if inside(hits.result_rows, x, y) && self.grid_shown() {
             self.focus = Focus::Results;
+            // As in the navigator: a click on a row ends typing the filter.
+            self.tab.grid.filter_editing = false;
             let row = self.tab.grid.row_offset + (y - hits.result_rows.y) as usize;
             if row < self.tab.grid.view.len() {
                 self.tab.grid.table_state.select(Some(row));
@@ -211,6 +208,43 @@ impl App {
         }
     }
 
+    /// The results pane's top rows: its tabs, `export ▾` / `menu ▾`, and
+    /// above a result the kept results' numbers and its statement. True
+    /// if `x`, `y` was one.
+    fn click_results_top(&mut self, hits: &Hits, x: u16, y: u16) -> bool {
+        let find = |spots: &[(u16, u16, usize)]| spots.iter().find(|(x0, x1, _)| (*x0..*x1).contains(&x)).copied();
+        if !inside(hits.results, x, y) {
+            return false;
+        }
+        if y == hits.result_tabs_y
+            && let Some(&(x0, _, export)) = hits.result_buttons.iter().find(|(x0, x1, _)| (*x0..*x1).contains(&x))
+        {
+            self.focus = Focus::Results;
+            let at = Some((x0, y + 1));
+            if export { self.open_export_menu(at) } else { self.open_menu(at) }
+        } else if y == hits.result_tabs_y
+            && let Some(&(_, _, tab)) = hits.result_tabs.iter().find(|(x0, x1, _)| (*x0..*x1).contains(&x))
+        {
+            self.focus = Focus::Results;
+            // Clicking the shown RESULT tab again steps through a script's result sets.
+            if tab == ResultTab::Rows && self.tab.result_tab == ResultTab::Rows && self.tab.grid.result_sets.len() > 1 {
+                self.step_result_set(true);
+            } else {
+                self.set_result_tab(tab);
+            }
+        } else if y == hits.run_source.y
+            && let Some((_, _, i)) = find(&hits.run_tabs)
+        {
+            self.focus = Focus::Results;
+            self.show_run(i);
+        } else if inside(hits.run_source, x, y) {
+            self.go_to_run_statement();
+        } else {
+            return false;
+        }
+        true
+    }
+
     /// A click in the navigator: its filter line, or a row of the tree.
     fn click_schema(&mut self, x: u16, y: u16, double: bool) {
         let hits = &self.hits;
@@ -221,11 +255,15 @@ impl App {
             }
             return;
         }
-        if !inside(hits.schema_list, x, y) {
+        let on_list = inside(hits.schema_list, x, y);
+        let index = hits.schema_offset + y.saturating_sub(hits.schema_list.y) as usize;
+        let Some(panel) = &mut self.schema else { return };
+        // Clicking past the filter line ends its typing (the filter stays):
+        // keys then go to the tree, to what was clicked.
+        panel.filter_editing = false;
+        if !on_list {
             return;
         }
-        let index = hits.schema_offset + (y - hits.schema_list.y) as usize;
-        let Some(panel) = &mut self.schema else { return };
         let nodes = panel.nodes();
         let Some(&node) = nodes.get(index) else { return };
         if matches!(node, SchemaNode::Section(_)) {

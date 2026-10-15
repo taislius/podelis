@@ -234,8 +234,7 @@ impl App {
         let refresh = self.tab.last_query_infos.iter().all(|i| i.kind == Kind::Read);
         if let (true, Some((sql, offset))) = (refresh, self.tab.last_sql.clone()) {
             let infos = self.tab.last_query_infos.clone();
-            let filled = self.last_run_filled.clone();
-            self.run_now(sql, offset, infos, RunPurpose::Query, filled);
+            self.rerun_shown(sql, offset, infos);
             self.run_extra.status_prefix = Some(msg);
         }
     }

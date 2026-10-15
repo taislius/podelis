@@ -181,7 +181,12 @@ fn notify(text: &str) {
 fn handle_input(app: &mut App, event: Event) {
     match event {
         // Some terminals (enhanced keyboards) also report releases.
-        Event::Key(key) if key.kind != KeyEventKind::Release => app.handle_key(key),
+        Event::Key(key) if key.kind != KeyEventKind::Release => {
+            // What the terminal sent, for keys that don't do what they should
+            // (`PODELIS_LOG=podelis=trace`).
+            tracing::trace!(code = ?key.code, modifiers = ?key.modifiers, "key");
+            app.handle_key(key);
+        }
         Event::Paste(text) => app.handle_paste(&text),
         Event::Mouse(mouse) => app.handle_mouse(mouse),
         Event::FocusGained => app.set_terminal_focus(true),
