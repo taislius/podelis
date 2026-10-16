@@ -69,69 +69,87 @@ everywhere:
 ## Databases: ports and adapters
 
 The app talks to one type, `db::Database` (the port). Each engine is a
-self-contained adapter folder:
+self-contained adapter folder, and nothing outside its folder names it:
+`build.rs` finds the engines.
 
 ```
+build.rs          finds every src/db/<engine>/ with an engine.toml and
+                  writes engines.rs (in OUT_DIR): Engine, Engine::ALL, Pool,
+                  Session, the engines' modules, and the dispatch macros
 db/
-  mod.rs          Database, the Pool/Session enums (the one dispatch point)
+  mod.rs          Database (includes engines.rs)
   dialect.rs      trait Dialect + Capabilities + LexerRules + Placeholders
   run.rs          running, streaming, cancelling, checking statements; the
                   answer check before a run after a quiet while, and a
                   session given up on (stale) replaced before the next
   catalog.rs  details.rs  info.rs  activity.rs
-                  Database methods: each is one `match` over the engine that
-                  calls that engine's function
-  errors.rs  diagnose.rs  tunnel.rs  options.rs
-                  shared: error messages, the connection test, SSH tunnels,
-                  connection parameters
+                  Database methods: each calls its engine's same-named
+                  function through the dispatch macros
+  errors.rs  diagnose.rs  tunnel.rs  options.rs  types.rs  passwords.rs
+                  shared: error messages (each engine words its own),
+                  the connection test, SSH tunnels, connection parameters,
+                  the type vocabulary, where passwords are looked for
   agent_constraints.rs
                   the shape of what AI agents may send (each engine fills
                   it in); `agents.rs` applies it without naming engines
+  tests.rs        the tests every engine shares, and their helpers
   postgres/  mysql/  sqlite/
+    engine.toml   its name (the Engine variant, as connections.toml writes
+                  it) and its order in lists
     mod.rs        the Dialect: names, quoting, lexer rules, placeholders,
-                  EXPLAIN, plan formatting, capabilities…
-    connect.rs    connection options, pool and session
+                  EXPLAIN, plan formatting, capabilities, type names, error
+                  wording, container images and logins…; its DriverPool,
+                  DriverConnection, DIALECT and `cell`
+    connect.rs    connection options, pool and session; the check before
+                  connecting and before reopening or cancelling
     queries.rs    catalog, table details, routines, session info, TLS,
-                  activity, cancel, error classification
+                  activity, cancel, transaction state, full scans
     cells.rs      decoding values as text
+    passwords.rs  where its own clients keep a password (~/.pgpass, …)
     agent_constraints.rs
                   what agents may start a statement with (reads, writes),
                   and what reaches past the data here (files on the server,
                   other sessions, locks, other servers), each with why
+    db_tests.rs   its own Database tests
 ```
 
 Three concerns are kept apart:
 
-- **Dialect** (`engine.dialect()`): what differs in SQL text, with no I/O —
-  identifier quoting and string literals, lexer rules (comment styles,
-  quoting, dollar quotes), placeholders (`$1`, `?`), the sqlparser and
-  formatter dialects, EXPLAIN statements and plan formatting, import column
-  types, default-row INSERTs.
+- **Dialect** (`engine.dialect()`): what differs in SQL text and facts,
+  with no I/O — identifier quoting and string literals, lexer rules
+  (comment styles, quoting, dollar quotes), placeholders (`$1`, `?`), the
+  sqlparser and formatter dialects, EXPLAIN statements and plan formatting,
+  type names, how its errors read, hidden columns, container images.
 - **Capabilities** (`engine.capabilities()`): what an engine supports —
   file-based, cancel (and so timeouts), activity monitor, schemas, routines,
   server-side transaction state, DDL that commits, CREATE statements in the
-  catalog. The app and UI ask these instead of checking which engine it is.
+  catalog, table sizes, plans as grids, `COPY`. The app and UI ask these
+  instead of checking which engine it is.
 - **Driver** (the engine folder's `connect.rs` / `queries.rs` / `cells.rs`):
-  the I/O, through sqlx.
+  the I/O, through sqlx. Every engine has the same functions with the same
+  signatures, taking `&Database`.
 
-Dispatch is a closed enum, not trait objects: `Database` matches on its
-`Pool`/`Session` enum and calls the engine's functions. That keeps calls
-static (no boxed futures for async), and the compiler lists every place a new
-engine must handle.
+Dispatch is static, not trait objects. The generated `on_engine!(engine,
+engine::queries::activity(self).await)` (and `on_pool!`, `on_session!`)
+expands to a `match` over the engines whose arms bring each engine's module
+in as `engine`, so calls stay static (no boxed futures for async). An
+engine missing a function fails to compile, naming its module.
 
-Outside `db/`, code doesn't match on `Engine` except for defaults and tests.
+Outside `db/`, code doesn't name an engine except in tests.
 
 ### Adding an engine
 
-1. A folder `db/<engine>/` with `mod.rs` (a `Dialect` impl), `connect.rs`,
-   `queries.rs`, `cells.rs` and `agent_constraints.rs`, modelled on an
-   existing one.
-2. A variant in `Engine` (`options.rs`, plus `Engine::ALL`), in `Pool` and
-   `Session` (`mod.rs`), and its static in `dialect.rs`.
-3. Build: the compiler points at each `match` that needs the new arm (connect,
-   catalog, details, info, activity, run). Capabilities decide what the app
-   offers, so unsupported features simply don't show.
-4. Add it to the live-database tests (`db/tests.rs`).
+1. A folder `db/<engine>/` with an `engine.toml` (`name`, `order`),
+   `mod.rs` (a `Dialect` impl, `DriverPool`, `DriverConnection`,
+   `DIALECT`, `cell`), `connect.rs`, `queries.rs`, `cells.rs`,
+   `passwords.rs`, `agent_constraints.rs` and `db_tests.rs`, modelled on
+   an existing one.
+2. Build: `build.rs` adds it to `Engine`, `Engine::ALL`, `Pool` and
+   `Session`; the compiler points at each function the new folder still
+   lacks. Capabilities decide what the app offers, so unsupported features
+   simply don't show.
+3. Its live tests in its `db_tests.rs`, calling the shared helpers in
+   `db/tests.rs` (and a `PODELIS_TEST_*` server in CI).
 
 ## The gateway
 
@@ -434,7 +452,7 @@ and why:
 
 - Unit tests next to the code; app behaviour in `app/tests.rs`; drawing in
   `ui/tests.rs` with insta snapshots (`ui/snapshots/`).
-- Live-database tests in `db/tests.rs` run against real PostgreSQL and MySQL
+- Live-database tests in `db/tests.rs` and each engine's `db_tests.rs` run against real PostgreSQL and MySQL
   when `PODELIS_TEST_PG_PORT` / `PODELIS_TEST_MYSQL_PORT` are set; SQLite
   always runs.
 - Property tests (`fuzz_tests.rs`) throw random SQL-ish text at the lexer,
