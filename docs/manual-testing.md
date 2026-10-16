@@ -133,6 +133,18 @@ OS and the server version when something is off.
   server doesn't answer" and *connection lost* in red; during a query,
   `Esc` says the cancel didn't get through (orange) and `Esc` again stops
   waiting. Back online, the next run reconnects and the dot is green.
+- [ ] *Connection lost*, then the server back without touching anything:
+  within a few seconds the dot is green and the status bar says "The
+  connection is back". A server stopped when Podėlis starts (the session
+  reopened): F5 once it's up connects and runs, no restart needed.
+- [ ] A server that's down: connecting to PostgreSQL and to MySQL says
+  "can't reach …: connection refused" at once, not "pool timed out" after
+  10 s (MySQL's `performance_schema.host_cache` shows no handshake errors
+  afterwards).
+- [ ] A long query in one tab, another tab (another connection) shown:
+  `Esc` there doesn't stop it, it says "Tab “…” on <connection> is running a
+  query: Alt+N goes to it, Esc there stops it" (N: that tab's number); in its own tab `Esc` stops it (MySQL: no
+  "Unknown thread id").
 
 ### Scripts and result sets
 
@@ -191,6 +203,9 @@ OS and the server version when something is off.
 - [ ] MySQL: F7 and Shift+F7 on a full table scan of a big table.
 - [ ] SQLite: F7 on a join without an index on the inner table: "Full scan
   of … for every row of the outer loop".
+- [ ] A long plan: click a line, drag past the bottom (it scrolls, and stops
+  at the last line), scroll back up, `y`: every selected line is copied, the
+  ones out of sight too; `Shift+↓` extends, `Esc` lets go, `Y` copies all.
 
 ### Writes and safety
 
@@ -279,10 +294,22 @@ With a real key (a few cents) and, if you have it, Ollama:
 - [ ] An agent through `podelis mcp` (Claude Code): the tools work, a
   write is approved in the app, Agent activity shows the session. With the
   gateway stopped first, the agent's first call starts it.
+- [ ] Refusals say why, engine by engine: `PRAGMA table_info(t)` on SQLite
+  ("describe_table tells…"), `SELECT load_file('/etc/passwd')` on MySQL
+  ("reads a file on the server"), `SET …` anywhere (its own transaction),
+  while a PostgreSQL column called `attach` reads fine.
 - [ ] `podelis gateway status` after 30 min with nothing connected: not
   running.
 - [ ] A typo in a `[[models]]` entry (`api = "ollama"`): `podelis gateway
   models` shows the parse error, not "no models are set up".
+
+### Tabs
+
+- [ ] A dozen tabs with long names: the active one shows its whole name (up
+  to 40 characters), the others shortened; `‹N` and `›N` say how many
+  don't fit (a click on one goes to the next hidden tab), and the active tab
+  is always in sight (Ctrl+PageUp/PageDown through them all). In a narrow
+  window its name shortens too, and the `+` stays.
 
 ### Terminals
 

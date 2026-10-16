@@ -316,7 +316,8 @@ prints the facts as text, to read, keep or review.
 .It Cm doctor Oo Fl p Ar project Oc Op Fl -connections
 Check the local setup: the config files, the keychain,
 .Xr ssh 1 ,
-the terminal, the result viewer and the crash log.
+the terminal, the programs that open result rows (each format's) and the
+crash log.
 With
 .Fl -connections ,
 also test every saved connection of the project.
@@ -494,6 +495,23 @@ or
 .Li podelis=trace
 (a tracing-subscriber filter).
 The log includes the SQL run.
+.It Ev PAGER
+Opens result rows
+.Pq Ic o No in the app
+in the terminal when there's no desktop to show an app on: on macOS over
+.Xr ssh 1 ,
+on Linux without a display (an
+.Xr ssh 1
+session without X forwarding, a console).
+.Li less -S
+when it's unset.
+Not used for a format
+.Li [viewers]
+in
+.Pa config.toml
+names a program for, or for TSV with the older
+.Li viewer
+setting; with a desktop, the system's app for the type opens the rows.
 .It Ev COLORTERM
 .Li truecolor
 or
@@ -545,6 +563,13 @@ The debug log (only with
 What happened if
 .Nm
 crashed.
+.It Pa opened/
+Result rows opened
+.Pq Ic o No in the app ,
+one file each: those a day old are removed the next time rows are opened,
+one shown in the terminal as soon as its viewer exits.
+.Pa open.log
+holds what the last app started said, if it failed.
 .It Pa memory/ Ns Ar project-id Ns Pa .db
 Each project's facts
 .Pq Cm memory ,

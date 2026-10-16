@@ -146,6 +146,10 @@ characters long):
 - `crash.log` — if Podėlis ever crashes, what happened (with a backtrace);
   please attach it to a bug report. A crash in a background task is logged
   too and shown in the status bar, without taking the app down.
+- `opened/` — result rows opened (`o`), one file each: those a day old are
+  removed the next time rows are opened, one shown in the terminal as soon
+  as its viewer exits. `open.log` holds what the last app started said, if
+  it failed.
 - `memory/<project-id>.db` — each project's facts for models
   (`podelis memory`), in SQLite.
 - `gateway/` — the gateway's socket and lock file while it runs, and

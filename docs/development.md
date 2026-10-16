@@ -9,8 +9,8 @@ cargo install cargo-deny --locked   # once: check.sh requires it
 
 How the code is organised — the app/UI/database layers, and the database
 adapters (one folder per engine, a `Dialect` and capabilities per engine) —
-is in [docs/architecture.md](docs/architecture.md), including how to add an
-engine.
+is in [architecture.md](architecture.md), including how `build.rs` finds
+the engines and how to add one.
 
 Run `./scripts/install-hooks.sh` once to have git run `check.sh` before
 every push (skip once with `git push --no-verify`).
@@ -54,7 +54,7 @@ GitHub Actions, kept small to save minutes:
   checksums: cancel that run (`gh run cancel <id>`) unless that's wanted.
 
 What the automated tests can't cover (real terminals, remote servers, big
-tables) is in [docs/manual-testing.md](docs/manual-testing.md): data sets
+tables) is in [manual-testing.md](manual-testing.md): data sets
 to test with, from generated to public servers with real data, and a
 checklist to go through before a release.
 

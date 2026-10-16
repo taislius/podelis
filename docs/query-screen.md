@@ -240,7 +240,8 @@ there, each item with its key — a quick way to learn the shortcuts. The
 status bar shows the key next to `^K keys`, and the results pane has
 `menu ▾` right of its tabs to click, with `export ▾` beside it while rows
 are shown: exporting the rows shown or every row as CSV, JSON or `INSERT`s,
-copying them, piping them or opening them in the viewer. The editor's menu
+copying them, piping them or opening them (in an app, or a pager in the
+terminal without a desktop). The editor's menu
 starts with Copy and Cut (with text selected) and Paste; the results
 pane's, with messages or nothing run yet, offers its tabs and zoom (and
 in MESSAGES, copying them).
