@@ -41,7 +41,7 @@ Keys that work directly:
 | `F7` | Show the plan for the selection / statement under the cursor (not executed), switching to QUERY PLAN as it starts. Pressed while a query runs, PostgreSQL and MySQL make it at once on a connection of their own; where that would see something else (SQLite, an open transaction, after `USE` or `SET`, `:parameters`) it follows when the query finishes, and if that fails its error stays in view instead (`Esc` stops both). MySQL 8.0.16+ shows `FORMAT=TREE`; older MySQL and MariaDB show the classic `EXPLAIN` table |
 | `Shift+F7` | `EXPLAIN ANALYZE`: runs the statement and shows actual times and rows (writes ask first and are rolled back). MySQL needs 8.0.18+; MariaDB runs `ANALYZE` |
 | `F8` / `Shift+F8` | Commit / roll back the open transaction |
-| `Esc` | Cancel the running query (in its own tab). The results pane's title counts how long it has run (`running… 12 s`). When the server can't be reached to be told (a VPN or network that dropped), it says so in orange, the status bar shows *connection lost*, and `Esc` again stops waiting: the next run opens a new session (a read runs on it; anything else isn't run and says so, since a transaction that was open is gone — run it again). A cancel the server refuses (a missing privilege) is only said |
+| `Esc` | Cancel the running query, in its own tab (on the connection it runs on). In another tab `Esc` doesn't stop it: it says which tab, on which connection, is running it (`Tab “Query 1” on prod is running a query: Alt+1 goes to it`). The results pane's title counts how long it has run (`running… 12 s`). When the server can't be reached to be told (a VPN or network that dropped), it says so in orange, the status bar shows *connection lost*, and `Esc` again stops waiting: the next run opens a new session (a read runs on it; anything else isn't run and says so, since a transaction that was open is gone — run it again). A cancel the server refuses (a missing privilege) is only said |
 | `Ctrl+P` / `Ctrl+N` | Previous / next query from history |
 | `Tab` / `Shift+Tab` | Cycle focus: editor → results → schema (`Tab` right after a word completes it instead; `Esc` then `Tab` still moves on) |
 | `Ctrl+↑` / `Ctrl+↓` | Move the border between the editor and the results up / down |
@@ -70,14 +70,19 @@ A tab's `SQL` label is orange while the tab isn't saved to the library
 (its text is still kept as a draft), and a `●` on a saved query's tab means
 its text has changed since it was saved. Tabs, their
 connections and cursors come back after a restart (unless
-`restore_session = false`); results don't, press `F5` to re-run.
+`restore_session = false`); results don't, press `F5` to re-run. The active
+tab shows its whole name (up to 40 characters) and the others share what's
+left; when they don't all fit, the row starts later, `‹3` saying how many
+tabs are before it (a click there goes to the one just before).
 
 While a query that reads runs, other tabs can be used: switch to one, open
 a new one, read its results. The running tab's name gets a green `…`, its
 outcome lands in it when it's done (the status bar says so), and the rows a
 streamed result hadn't sent yet are loaded with `M`. One query runs at a
-time; a write, a review or a comparison keeps every tab where it is until
-it's done.
+time, even on another tab's connection: the other tabs say which tab, on
+which connection, is running it, and `Esc` stops it only in its own tab. A
+write, a review or a comparison keeps every tab where it is until it's
+done.
 
 **Query parameters.** Running SQL with placeholders — `:name` in any
 engine, `$1` on Postgres, `?` on MySQL/SQLite, and SQLite's `?2`, `@name`
@@ -290,7 +295,9 @@ shows `♥` before the connection; a failed check turns it red with
 **connection lost** until the next successful check or query. Without
 it, a run after a minute with none (or after *connection lost*) first
 checks that the server answers: a link that died meanwhile fails in 5 s,
-with nothing run, instead of leaving the query waiting. "Copy diagnostics" in the palette
+with nothing run, instead of leaving the query waiting. Once it's
+*connection lost*, Podėlis checks again every few seconds (and when you
+do something), heartbeat or not, and says when the connection is back. "Copy diagnostics" in the palette
 copies versions, terminal and settings for a bug report — no hosts, users
 or SQL.
 

@@ -84,6 +84,9 @@ db/
   errors.rs  diagnose.rs  tunnel.rs  options.rs
                   shared: error messages, the connection test, SSH tunnels,
                   connection parameters
+  agent_constraints.rs
+                  the shape of what AI agents may send (each engine fills
+                  it in); `agents.rs` applies it without naming engines
   postgres/  mysql/  sqlite/
     mod.rs        the Dialect: names, quoting, lexer rules, placeholders,
                   EXPLAIN, plan formatting, capabilities…
@@ -91,6 +94,10 @@ db/
     queries.rs    catalog, table details, routines, session info, TLS,
                   activity, cancel, error classification
     cells.rs      decoding values as text
+    agent_constraints.rs
+                  what agents may start a statement with (reads, writes),
+                  and what reaches past the data here (files on the server,
+                  other sessions, locks, other servers), each with why
 ```
 
 Three concerns are kept apart:
@@ -117,7 +124,8 @@ Outside `db/`, code doesn't match on `Engine` except for defaults and tests.
 ### Adding an engine
 
 1. A folder `db/<engine>/` with `mod.rs` (a `Dialect` impl), `connect.rs`,
-   `queries.rs` and `cells.rs`, modelled on an existing one.
+   `queries.rs`, `cells.rs` and `agent_constraints.rs`, modelled on an
+   existing one.
 2. A variant in `Engine` (`options.rs`, plus `Engine::ALL`), in `Pool` and
    `Session` (`mod.rs`), and its static in `dialect.rs`.
 3. Build: the compiler points at each `match` that needs the new arm (connect,

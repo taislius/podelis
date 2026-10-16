@@ -35,10 +35,12 @@ new one.
 A rolled-back transaction doesn't undo everything: sequences a write
 advanced stay advanced, and MySQL's MyISAM and MEMORY tables don't roll
 back at all, so on a MySQL database that has any, agents can't write
-even as a dry run. Calls that reach past the data are refused too: files
-on the server (`INTO OUTFILE`, `pg_read_file`, `lo_export`), other
-sessions (`pg_terminate_backend`), locks that outlive the transaction, and
-other servers (`dblink`). That list is a safety net, not a boundary:
+even as a dry run. Calls that reach past the data are refused too, each
+engine by its own list: files on the server (MySQL's `INTO OUTFILE`,
+PostgreSQL's `pg_read_file` and `lo_export`, SQLite's `ATTACH`), other
+sessions (`pg_terminate_backend`), locks that outlive the transaction,
+extensions (SQLite's `load_extension`) and other servers (`dblink`); the
+refusal says which and what it does. That list is a safety net, not a boundary:
 **connect as a database user with only the rights agents should have**
 (for reading, `GRANT SELECT` on what they need, no superuser or `FILE`
 privilege). Podėlis's rules then sit on top.
