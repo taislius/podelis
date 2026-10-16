@@ -257,6 +257,7 @@ impl App {
     }
 
     pub(super) fn on_query_done(&mut self, outcome: QueryOutcome, txn: Option<TxnState>, stream: Option<RowStream>) {
+        self.running_db = None;
         self.task = None;
         self.executing = false;
         self.note_session_changes();
@@ -334,6 +335,7 @@ impl App {
     }
 
     pub(super) fn on_query_failed(&mut self, err: &str, position: Option<ErrorPos>, txn: Option<TxnState>) {
+        self.running_db = None;
         self.stop_watch(": the query failed");
         if err.contains("couldn't reconnect") || err.contains("the server doesn't answer") {
             self.connection_lost = true;

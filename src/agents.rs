@@ -36,14 +36,6 @@ pub enum Verdict {
     Refuse(String),
 }
 
-/// Statements an agent may start with: reads anywhere, and data and
-/// schema changes where it may write. Nothing else: not SET, BEGIN,
-/// COMMIT, USE, CALL, DO, COPY, LOCK, GRANT… (they change the session,
-/// end Podėlis's transaction, or reach outside the database).
-const READS: &[&str] = &["select", "with", "values", "table", "show", "describe", "desc", "explain", "pragma"];
-const WRITES: &[&str] =
-    &["insert", "update", "delete", "merge", "replace", "create", "alter", "drop", "truncate", "comment"];
-
 /// Reads run wherever an agent may look, in a read-only transaction.
 /// Writes need write access and a connection that isn't read-only; nothing
 /// destructive (DROP, TRUNCATE, a change without WHERE) ever runs; and on
@@ -96,48 +88,14 @@ pub fn explainable(sql: &str, engine: Engine) -> Result<(), String> {
     allowed(sql, engine).map(drop)
 }
 
-/// Functions and clauses that reach past the data, which a read-only
-/// transaction doesn't stop: the server's files, other sessions, locks
-/// that outlive the transaction, other servers. Refusing them is a safety
-/// net, not a boundary: a database user with only the rights the job needs
-/// is that.
-const OUTSIDE: &[&str] = &[
-    // MySQL: files on the server, and locks held past the transaction.
-    "outfile",
-    "dumpfile",
-    "load_file",
-    "get_lock",
-    // PostgreSQL: the server's files, other sessions, its configuration,
-    // session locks, other servers.
-    "pg_read_file",
-    "pg_read_binary_file",
-    "pg_ls_dir",
-    "pg_stat_file",
-    "lo_import",
-    "lo_export",
-    "pg_terminate_backend",
-    "pg_cancel_backend",
-    "pg_reload_conf",
-    "pg_rotate_logfile",
-    "pg_promote",
-    "pg_switch_wal",
-    "pg_advisory_lock",
-    "pg_advisory_lock_shared",
-    "pg_try_advisory_lock",
-    "pg_try_advisory_lock_shared",
-    "dblink",
-    "dblink_exec",
-    "dblink_connect",
-    // SQLite: other database files, and extensions.
-    "attach",
-    "load_extension",
-];
-
 /// The statements of `sql` if an agent may send them at all (whether it may
-/// write is up to [`verdict`]): each starts with a word on [`READS`] or
-/// [`WRITES`], none changes the session or its transaction, and none uses
-/// anything on [`OUTSIDE`].
+/// write is up to [`verdict`]), by the engine's own constraints
+/// (`db::agent_constraints`): each starts with a statement agents may run,
+/// none uses anything that reaches past the data, and none changes the session or its
+/// transaction (not SET, BEGIN, COMMIT, USE, CALL, DO, COPY, LOCK, GRANT…:
+/// they change the session, end Podėlis's transaction, or reach outside).
 fn allowed(sql: &str, engine: Engine) -> Result<Vec<crate::analyze::StatementInfo>, String> {
+    let rules = engine.dialect().agent_constraints();
     let statements = crate::sql::split_statements(sql, engine);
     if statements.is_empty() {
         return Err("there's no SQL to run".to_string());
@@ -149,21 +107,12 @@ fn allowed(sql: &str, engine: Engine) -> Result<Vec<crate::analyze::StatementInf
             .map(|t| statement[t.range].to_ascii_lowercase())
             .collect();
         let first = words.first().map_or("", String::as_str);
-        if !READS.contains(&first) && !WRITES.contains(&first) {
-            return Err(format!(
-                "“{}”: agents can run queries and, where allowed, INSERT, UPDATE, DELETE and schema changes; \
-                 not {}: Podėlis runs each call in a transaction of its own",
-                one_line(statement),
-                first.to_uppercase()
-            ));
+        if !rules.may_start_with(first) {
+            let why = rules.why_not(first, engine.label());
+            return Err(format!("“{}”: not {}: {why}", one_line(statement), first.to_uppercase()));
         }
-        if let Some(outside) = words.iter().find(|w| OUTSIDE.contains(&w.as_str())) {
-            return Err(format!(
-                "“{}” uses {}, which reaches past the data (the server's files, other sessions, locks or \
-                 servers): agents can't",
-                one_line(statement),
-                outside.to_uppercase()
-            ));
+        if let Some((word, does)) = rules.reaching_outside(&words) {
+            return Err(format!("“{}” uses {}, which {does}: agents can't", one_line(statement), word.to_uppercase()));
         }
     }
     let infos = crate::analyze::analyze(&crate::parse::parse(sql, engine));
@@ -460,7 +409,7 @@ pub fn forget(dir: &Path, id: &str) {
 /// Several agents (each its own `podelis mcp`) may write at once: the file
 /// is locked while a line is added, and while it's cut back in place.
 pub fn append(path: &Path, mut entry: Entry) -> std::io::Result<()> {
-    if [Engine::Postgres, Engine::MySql, Engine::Sqlite].iter().any(|e| crate::sql::sets_password(&entry.sql, *e)) {
+    if Engine::ALL.iter().any(|e| crate::sql::sets_password(&entry.sql, *e)) {
         // Messages may quote the statement, so they go too.
         entry.sql = "(a statement that sets a password: not logged)".to_string();
         entry.refused = entry.refused.map(|_| "refused".to_string());
@@ -545,7 +494,6 @@ mod tests {
             "copy t to program 'rm -rf /'",
             "lock tables t write",
             "grant all on t to public",
-            "select * from users into outfile '/tmp/x'",
             "select pg_terminate_backend(pid) from pg_stat_activity",
             "select lo_export(1, '/tmp/x')",
             "select pg_advisory_lock(1)",
@@ -555,6 +503,24 @@ mod tests {
             assert!(refused(Read, Normal, sql), "{sql}");
             assert!(refused(Approve, Normal, sql), "{sql}");
         }
+        // Each engine by its own constraints (`db::agent_constraints`).
+        let on = |engine, sql| verdict(Write, Normal, sql, engine);
+        for (engine, sql, why) in [
+            (Engine::MySql, "select * from users into outfile '/tmp/x'", "writes a file on the server"),
+            (Engine::MySql, "select load_file('/etc/passwd')", "reads a file on the server"),
+            (Engine::Sqlite, "select load_extension('x')", "loads code into the database"),
+            (Engine::Sqlite, "attach 'other.db' as o", "not ATTACH: a connection is one database file"),
+            (Engine::Sqlite, "pragma writable_schema = 1", "not PRAGMA: describe_table tells"),
+            (Engine::Postgres, "replace into t values (1)", "not REPLACE: agents can run queries"),
+            (Engine::Postgres, "replace into t values (1)", "schema changes on PostgreSQL"),
+            (Engine::MySql, "set autocommit = 1", "not SET: Podėlis runs each call in a transaction of its own"),
+        ] {
+            let Verdict::Refuse(said) = on(engine, sql) else { panic!("{engine:?} ran {sql}") };
+            assert!(said.contains(why), "{engine:?} {sql}: {said}");
+        }
+        // Another engine's words are a name like any other.
+        assert_eq!(on(Engine::Postgres, "select attach, outfile from t"), Verdict::Run(Wrap::Commit));
+        assert_eq!(on(Engine::MySql, "replace into t values (1)"), Verdict::Run(Wrap::Commit));
     }
 
     #[test]

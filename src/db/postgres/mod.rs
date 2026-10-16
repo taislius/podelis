@@ -1,5 +1,6 @@
 //! PostgreSQL.
 
+mod agent_constraints;
 mod plan;
 
 pub(super) mod cells;
@@ -12,6 +13,10 @@ use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan};
 pub struct Postgres;
 
 impl Dialect for Postgres {
+    fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
+        &agent_constraints::AGENT_CONSTRAINTS
+    }
+
     fn label(&self) -> &'static str {
         "PostgreSQL"
     }

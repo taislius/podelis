@@ -113,6 +113,11 @@ impl App {
             // else to do here (cancelling a query, the zooms, watch mode,
             // a filter, vim's modes, a selection come first).
             KeyCode::Esc if self.asking.is_some() && !self.esc_has_a_job() => return self.stop_asking(),
+            // Another tab's query isn't stopped from here: Esc says whose it
+            // is (tab and connection) and how to get there.
+            KeyCode::Esc if self.executing && !self.running_here() && !self.esc_has_a_job() => {
+                return self.set_status(self.running_elsewhere("Esc there stops it"), false);
+            }
             KeyCode::Tab => return self.cycle_focus(true),
             KeyCode::BackTab => return self.cycle_focus(false),
             _ => {}
@@ -1278,7 +1283,7 @@ impl App {
 
     pub(super) fn execute_with(&mut self, sql: String, offset: usize, purpose: RunPurpose) {
         if self.executing {
-            return self.set_status(self.running_elsewhere("wait for it, or Esc stops it"), true);
+            return self.set_status(self.running_elsewhere("wait for it, or Esc there stops it"), true);
         }
         if self.database.is_none() {
             return self.set_status(self.not_connected_message(), true);
@@ -1482,11 +1487,16 @@ impl App {
     }
 
     /// "A query is running", naming its tab when that isn't this one.
+    /// Says which tab, on which connection, runs the query (one at a time
+    /// across the tabs), how to get there, then `then`.
     pub(super) fn running_elsewhere(&self, then: &str) -> String {
-        match self.run_owner.filter(|&t| t != self.active_tab).and_then(|t| self.tabs.get(t)) {
-            Some(tab) => format!("Tab “{}” is running a query: {then}", tab.name),
-            None => format!("A query is running: {then}"),
-        }
+        let Some(t) = self.run_owner.filter(|&t| t != self.active_tab) else {
+            return format!("A query is running: {then}");
+        };
+        let Some(tab) = self.tabs.get(t) else { return format!("A query is running: {then}") };
+        let on = tab.conn.and_then(|id| self.conn_name(id)).map(|n| format!(" on {n}")).unwrap_or_default();
+        let go = if t < 9 { format!("Alt+{} goes to it, ", t + 1) } else { String::new() };
+        format!("Tab “{}”{on} is running a query: {go}{then}", tab.name)
     }
 
     /// Settings changed by the last run (`USE`, `SET`…) are the session's
@@ -1739,6 +1749,7 @@ impl App {
             self.connect_form.query_timeout().ok().flatten().map(|limit| (Instant::now() + limit, limit));
         self.tab.error_marker = None;
         self.executing = true;
+        self.running_db = Some(db.clone());
         self.running_since = Some(Instant::now());
         // A read leaves the other tabs free meanwhile (see `in_tab`).
         self.run_id += 1;
@@ -1849,7 +1860,8 @@ impl App {
         if self.cancelling {
             return;
         }
-        let Some(db) = self.database.clone() else { return };
+        // The run's own connection: another tab's may be shown now.
+        let Some(db) = self.running_db.clone().or_else(|| self.database.clone()) else { return };
         self.cancelling = true;
         self.queued_plan = None;
         self.set_result_status("Cancelling...".to_string(), false);
@@ -1870,7 +1882,7 @@ impl App {
         if let Some(task) = self.task.take() {
             task.abort();
         }
-        if let Some(db) = &self.database {
+        if let Some(db) = self.running_db.as_ref().or(self.database.as_ref()) {
             db.abandon_session();
         }
         self.on_query_failed(

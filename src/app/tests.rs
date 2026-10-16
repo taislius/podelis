@@ -810,6 +810,58 @@ fn memory_changes_name_the_fact() {
 }
 
 #[tokio::test]
+async fn esc_stops_only_its_own_tabs_query_and_others_say_whose_runs() {
+    let (mut app, dir) = test_app();
+    app.data_dir = Some(dir.path().to_path_buf());
+    let project = project_id(&app);
+    let (a, b) = (sqlite_profile("alpha", &dir.path().join("a.db")), sqlite_profile("beta", &dir.path().join("b.db")));
+    app.store.upsert(&project, None, a.clone()).unwrap();
+    app.store.upsert(&project, None, b.clone()).unwrap();
+    app.load_tabs(&project);
+    connect_profile(&mut app, &a).await;
+    app.handle_key(ctrl('o'));
+    connect_profile(&mut app, &b).await;
+    // A read that never ends, in alpha's tab: the other tabs stay free.
+    app.handle_key(alt('1'));
+    app.tab.editor.set_text("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n");
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(app.executing);
+    app.handle_key(alt('2'));
+    assert_eq!((app.active_tab, app.connect_form.name.as_str()), (1, "beta"));
+    // Esc here doesn't stop it: it says whose it is, and how to get there.
+    app.focus = Focus::Editor;
+    app.handle_key(key(KeyCode::Esc));
+    assert!(!app.cancelling && app.executing);
+    assert_eq!(said(&app), "Tab “Query 1” on alpha is running a query: Alt+1 goes to it, Esc there stops it");
+    // (Once it's under way: a cancel before the run starts is cleared by it.)
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // In its own tab, Esc stops it on its own connection.
+    app.handle_key(alt('1'));
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.cancelling);
+    tokio::time::timeout(std::time::Duration::from_secs(5), finish(&mut app)).await.expect("stopped");
+    assert!(!app.executing && !app.cancel_failed);
+    assert!(!app.status.contains("Couldn't cancel"), "{}", app.status);
+}
+
+#[tokio::test]
+async fn a_lost_connection_is_checked_again_and_said_when_back() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    app.connection_lost = true;
+    // Ticks go on for it, heartbeat or not; something done checks it now.
+    assert!(app.settings.keepalive == 0 && app.wants_ticks());
+    app.last_activity = Instant::now().checked_sub(Duration::from_secs(3)).unwrap();
+    app.handle_key(key(KeyCode::Down));
+    assert!(app.pinging);
+    while app.pinging {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    assert!(!app.connection_lost && !app.wants_ticks());
+    assert_eq!(said(&app), "The connection is back");
+}
+
+#[tokio::test]
 async fn read_only_mode_refuses_writes() {
     let (mut app, _dir) = connected_app(ConnectionMode::ReadOnly).await;
     run_sql(&mut app, "select 1; delete from t where id = 1").await;
@@ -1642,12 +1694,11 @@ async fn other_tabs_can_be_used_while_a_read_runs() {
     // A new tab opens meanwhile; there, the run is another tab's.
     app.new_tab(None, "select 2", None);
     assert_eq!(app.active_tab, 1);
-    assert!(app.status.starts_with("Tab “Query 1” is running a query"), "{}", app.status);
+    assert!(app.status.starts_with("Tab “Query 1” on :memory: is running a query: Alt+1 goes to it"), "{}", app.status);
     assert_eq!(app.running_label(), None, "this tab's results aren't running");
     app.handle_key(key(KeyCode::F(5)));
-    assert!(said(&app).starts_with("Tab “Query 1” is running"), "{}", said(&app));
-    app.handle_key(key(KeyCode::Esc));
-    assert!(!app.cancelling, "Esc here is this tab's");
+    assert!(said(&app).ends_with("wait for it, or Esc there stops it"), "{}", said(&app));
+    // (Esc here says whose it is: `esc_stops_only_its_own_tabs_query_and_others_say_whose_runs`.)
     // The outcome lands in its own tab, and the status bar says so here.
     finish(&mut app).await;
     assert!(app.tab.grid.results.is_none());
@@ -3090,10 +3141,24 @@ async fn heartbeat_can_be_switched_on_and_reports_a_lost_connection() {
     }
     assert!(app.connect_latency.is_some() && !app.connection_lost);
     // A failed check marks the connection lost until something succeeds.
-    app.pinged(Err("connection refused".into()));
+    app.pinged(Err(("connection refused".into(), super::Ping::Failed)));
     assert!(app.connection_lost && app.status.contains("hint:"), "{}", app.status);
     run_sql(&mut app, "select 1").await;
     assert!(!app.connection_lost);
+    // A heartbeat with no answer once: said, the session kept (an open
+    // transaction would go with it).
+    run_sql(&mut app, "create table hb (x int); begin; insert into hb values (1)").await;
+    assert_eq!(app.txn, TxnState::Open);
+    app.pinged(Err(("no answer in 5 s".into(), super::Ping::NoAnswer)));
+    app.pinged(Err(("no answer in 5 s".into(), super::Ping::NoAnswer)));
+    assert!(app.connection_lost);
+    run_sql(&mut app, "select count(*) from hb").await;
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("1".to_string())]], "still its transaction");
+    // A check on its way when the connection shown changes isn't waited
+    // for any more (its answer is dropped).
+    app.pinging = true;
+    app.switch_conn(None);
+    assert!(!app.pinging);
     app.run_action(crate::keys::Action::Heartbeat);
     assert_eq!(app.settings.keepalive, 0);
 }

@@ -405,17 +405,18 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Option<(u16, u16
             cell.set_fg(bar);
         }
     };
-    if app.active_tab == 0 && area.x > 0 {
-        mark_line(f, area.x - 1, true);
-    }
-    // Room per tab: " SQL " + name + " ●" (or " …") + "│".
-    let budget = (area.width as usize).saturating_sub(4) / tab_count.max(1);
-    let name_room = budget.saturating_sub(9).clamp(4, 24);
-    let mut spans = Vec::new();
-    let mut hits = Vec::new();
+    // Room per tab: " SQL " + name + " ●" (or " …") + "│". The active
+    // tab's whole name (up to a point), the others what's left.
+    const OVERHEAD: usize = 9;
+    let total = (area.width as usize).saturating_sub(4);
+    let active_room = app.tabs.get(app.active_tab).map_or(0, |t| t.name.chars().count()).clamp(4, 40);
+    let others = tab_count.saturating_sub(1).max(1);
+    let name_room = (total.saturating_sub(active_room + OVERHEAD) / others).saturating_sub(OVERHEAD).clamp(4, 24);
     let width = |spans: &[Span]| spans.iter().map(Span::width).sum::<usize>() as u16;
+    // Each tab's spans, then as many as fit, the active one always.
+    let mut tabs: Vec<Vec<Span>> = Vec::new();
     for (i, tab) in app.tabs.iter().enumerate() {
-        let start = area.x + width(&spans);
+        let mut spans = Vec::new();
         let active = i == app.active_tab;
         // No background: the thick line and the brighter name mark the active tab.
         let bg = t.inset;
@@ -423,7 +424,8 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Option<(u16, u16
         let saved_marker = if tab.saved_id.is_some() { muted() } else { fg(t.warn) };
         spans.push(Span::styled(" SQL ", saved_marker.bg(bg)));
         let name_style = if active { fg(t.text_bright) } else { muted() };
-        spans.push(Span::styled(truncate(&tab.name, name_room), name_style.bg(bg)));
+        let room = if active { active_room } else { name_room };
+        spans.push(Span::styled(truncate(&tab.name, room), name_style.bg(bg)));
         // Only a saved query's changes: other tabs are drafts, kept anyway.
         if tab.saved_id.is_some() && app.tab_dirty(i) {
             spans.push(Span::styled(" ●", fg(t.warn).bg(bg)));
@@ -433,10 +435,45 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Option<(u16, u16
             spans.push(Span::styled(" …", fg(t.accent).bg(bg)));
         }
         spans.push(Span::styled(" ", Style::default().bg(bg)));
+        tabs.push(spans);
+    }
+    // Tabs that don't fit go, the active one always staying: from the
+    // start ("‹N" says how many), then from the end ("›N"), with room kept
+    // for the `+`.
+    if tabs.is_empty() {
+        f.render_widget(Paragraph::new(Span::styled(" + ", dim())), area);
+        return (Vec::new(), Some((area.x, area.x + 3)));
+    }
+    let active = app.active_tab.min(tab_count - 1);
+    let widths: Vec<usize> = tabs.iter().map(|t| usize::from(width(t)) + 1).collect();
+    let marker = |n: usize| if n == 0 { 0 } else { format!("‹{n} ").chars().count() };
+    let fits = |first: usize, last: usize| {
+        marker(first) + marker(tab_count - 1 - last) + widths[first..=last].iter().sum::<usize>() + 3
+            <= usize::from(area.width)
+    };
+    let first = (0..=active).find(|&first| fits(first, active)).unwrap_or(active);
+    let last = (active..tab_count).take_while(|&last| fits(first, last)).last().unwrap_or(active);
+    let mut spans = Vec::new();
+    let mut hits = Vec::new();
+    if first > 0 {
+        // A click on it goes to the tab just before those shown.
+        spans.push(Span::styled(format!("‹{first} "), dim()));
+        hits.push((area.x, area.x + width(&spans), first - 1));
+        // The active tab first in sight: its left line, drawn thick.
+        if first == active {
+            mark_line(f, area.x + width(&spans), false);
+            spans.push(Span::styled("┃", fg(bar)));
+        }
+    } else if active == 0 && area.x > 0 {
+        mark_line(f, area.x - 1, true);
+    }
+    for (i, tab) in tabs.into_iter().enumerate().take(last + 1).skip(first) {
+        let start = area.x + width(&spans);
+        spans.extend(tab);
         hits.push((start, area.x + width(&spans), i));
         // The lines either side of the active tab are drawn thick, the colour
         // of the pane's border.
-        if i + 1 == app.active_tab || active {
+        if i + 1 == active || i == active {
             let x = area.x + width(&spans);
             if x < area.right() {
                 mark_line(f, x, false);
@@ -445,6 +482,11 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Option<(u16, u16
         } else {
             spans.push(Span::styled("│", fg(t.line)));
         }
+    }
+    if last + 1 < tab_count {
+        let start = area.x + width(&spans);
+        spans.push(Span::styled(format!("›{} ", tab_count - 1 - last), dim()));
+        hits.push((start, area.x + width(&spans), last + 1));
     }
     let plus = area.x + width(&spans);
     spans.push(Span::styled(" + ", dim()));

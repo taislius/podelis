@@ -8,7 +8,7 @@ pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, port: u16
     let mut opts = MySqlConnectOptions::new()
         .port(port)
         .username(&params.user)
-        .ssl_mode(params.ssl_mode.mysql())
+        .ssl_mode(ssl_mode(params.ssl_mode))
         .pipes_as_concat(false);
     if !params.password.is_empty() {
         opts = opts.password(&params.password);
@@ -38,6 +38,18 @@ pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, port: u16
         .context("failed to connect to database")?;
     let conn = pool.acquire().await.context("failed to open session")?;
     Ok((Pool::MySql(pool), Session::MySql(conn)))
+}
+
+/// Podėlis's SSL mode as MySQL's: `verify-full` is MySQL's
+/// `VERIFY_IDENTITY` (the certificate and the host name).
+fn ssl_mode(mode: SslMode) -> MySqlSslMode {
+    match mode {
+        SslMode::Disable => MySqlSslMode::Disabled,
+        SslMode::Prefer => MySqlSslMode::Preferred,
+        SslMode::Require => MySqlSslMode::Required,
+        SslMode::VerifyCa => MySqlSslMode::VerifyCa,
+        SslMode::VerifyFull => MySqlSslMode::VerifyIdentity,
+    }
 }
 
 /// One login of its own, outside the pool: a server that's down (refused,

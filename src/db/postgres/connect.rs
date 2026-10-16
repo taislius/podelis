@@ -5,8 +5,10 @@ use super::super::*;
 pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, port: u16) -> Result<(Pool, Session)> {
     // `new()` would read ~/.pgpass for the default host and user: it's
     // looked up for this connection's (`db::passwords`, before connecting).
-    let mut opts =
-        PgConnectOptions::new_without_pgpass().port(port).ssl_mode(params.ssl_mode.pg()).application_name("podelis");
+    let mut opts = PgConnectOptions::new_without_pgpass()
+        .port(port)
+        .ssl_mode(ssl_mode(params.ssl_mode))
+        .application_name("podelis");
     if params.read_only {
         opts = opts.options([("default_transaction_read_only", "on")]);
     }
@@ -29,6 +31,17 @@ pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, port: u16
         .context("failed to connect to database")?;
     let conn = pool.acquire().await.context("failed to open session")?;
     Ok((Pool::Postgres(pool), Session::Postgres(conn)))
+}
+
+/// Podėlis's SSL mode as PostgreSQL's (libpq's names, one for one).
+fn ssl_mode(mode: SslMode) -> PgSslMode {
+    match mode {
+        SslMode::Disable => PgSslMode::Disable,
+        SslMode::Prefer => PgSslMode::Prefer,
+        SslMode::Require => PgSslMode::Require,
+        SslMode::VerifyCa => PgSslMode::VerifyCa,
+        SslMode::VerifyFull => PgSslMode::VerifyFull,
+    }
 }
 
 /// The session's backend process id (for cancelling its queries).

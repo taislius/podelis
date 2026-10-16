@@ -2,6 +2,7 @@
 
 use std::fmt::Write as _;
 
+mod agent_constraints;
 pub(super) mod cells;
 pub(super) mod connect;
 pub(super) mod queries;
@@ -11,6 +12,10 @@ use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan, Plan
 pub struct Sqlite;
 
 impl Dialect for Sqlite {
+    fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
+        &agent_constraints::AGENT_CONSTRAINTS
+    }
+
     /// `X'DEADBEEF'`, as SQLite's `quote()` writes it.
     fn hex(&self, bytes: &[u8]) -> String {
         format!("X'{}'", hex_digits(bytes, true))

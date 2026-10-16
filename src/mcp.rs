@@ -929,7 +929,7 @@ pub(crate) mod tests {
         // Read-only: refused by Podėlis, and by SQLite for what it misses.
         assert!(call(&client, "query", q("reads", "UPDATE t SET x = 0 WHERE id = 1")).await.starts_with("ERROR"));
         let sneaky = call(&client, "query", q("reads", "PRAGMA user_version = 7")).await;
-        assert!(sneaky.starts_with("ERROR") && sneaky.contains("session"), "{sneaky}");
+        assert!(sneaky.starts_with("ERROR") && sneaky.contains("not PRAGMA"), "{sneaky}");
         assert!(call(&client, "query", q("hidden", "SELECT 1")).await.starts_with("ERROR No connection 'hidden'"));
 
         // Writes where allowed, never destructive ones.

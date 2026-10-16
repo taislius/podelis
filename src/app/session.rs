@@ -207,6 +207,8 @@ impl App {
         self.connection_lost = false;
         // Events from the other connection's background work no longer
         // apply; restart what was cut short.
+        // (A check on its way is for the connection before: see `pinging`.)
+        self.pinging = false;
         self.generation += 1;
         self.tab.syntax_hint = None;
         match &mut self.schema {
@@ -218,6 +220,14 @@ impl App {
     }
 
     /// The other tabs' connections: id, database and form.
+    /// A connection's name, by its id: the shown one's or a parked one's.
+    pub(super) fn conn_name(&self, id: u64) -> Option<String> {
+        if self.conns.active == Some(id) {
+            return Some(self.connect_form.name.clone()).filter(|n| !n.is_empty());
+        }
+        self.conns.parked.get(&id).map(|slot| slot.connect_form.name.clone()).filter(|n| !n.is_empty())
+    }
+
     pub(super) fn parked_connections(&self) -> Vec<(u64, &Database, &ConnectForm)> {
         let mut out: Vec<_> = self
             .conns

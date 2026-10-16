@@ -183,6 +183,8 @@ pub trait Dialect: Sync {
 
     /// A query returning the server's version string.
     fn version_query(&self) -> &'static str;
+    /// What AI agents may send (`db::agent_constraints`).
+    fn agent_constraints(&self) -> &'static super::agent_constraints::AgentConstraints;
 
     /// The EXPLAIN statement for `stmt` (without its `;`), for a server
     /// of `version` (as `version_query` returned it).

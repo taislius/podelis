@@ -24,6 +24,7 @@ use uuid::Uuid;
 use crate::sql;
 
 mod activity;
+pub mod agent_constraints;
 mod catalog;
 mod copy;
 mod details;

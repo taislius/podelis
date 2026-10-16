@@ -288,6 +288,15 @@ pub struct ContainerPicker {
     pub note: Option<String>,
 }
 
+/// How a connection check failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ping {
+    /// The server said no, or the connection broke.
+    Failed,
+    /// Nothing came back in time: the session may be stuck on a dead link.
+    NoAnswer,
+}
+
 pub struct DbEvent {
     generation: u64,
     /// A run's outcome, by its id: it outlives connection switches (another
@@ -334,7 +343,9 @@ enum DbEventKind {
     /// A session's query was cancelled or the session ended.
     SessionStopped(Result<String, String>),
     /// A keep-alive check: latency and whether it had to reconnect.
-    Pinged(Result<(Duration, bool), String>),
+    /// A connection check: its latency and whether it reconnected, or why
+    /// not and whether it got no answer at all (`Ping::NoAnswer`).
+    Pinged(Result<(Duration, bool), (String, Ping)>),
     /// A connection test's report (title, text).
     Diagnosed(String, String),
     /// The output of piping rows through a command.
@@ -873,6 +884,9 @@ pub struct App {
     pub cancel_failed: bool,
     /// A drag selecting the plan's lines.
     pub plan_dragging: bool,
+    /// The connection the running query runs on: cancelled there, whichever
+    /// tab (and connection) is shown meanwhile.
+    running_db: Option<Database>,
     /// Mode of the open connection.
     pub active_mode: ConnectionMode,
     /// What happens to writes on this connection (Ctrl+K w).
@@ -1037,6 +1051,7 @@ impl App {
             cancelling: false,
             cancel_failed: false,
             plan_dragging: false,
+            running_db: None,
             active_mode: ConnectionMode::Normal,
             tx_mode: TxMode::AutoCommit,
             tx_picker: None,
@@ -1198,6 +1213,10 @@ impl App {
     }
 
     fn invalidate_tasks(&mut self) {
+        self.running_db = None;
+        // A check on its way is for the connection before: its answer will
+        // be dropped (another generation), so it's no longer awaited.
+        self.pinging = false;
         self.generation += 1;
         self.run_id += 1;
         self.queued_plan = None;
@@ -1335,6 +1354,7 @@ impl App {
         let outer = std::mem::replace(&mut self.handling_input, true);
         handle(self);
         self.handling_input = outer;
+        self.recheck_lost_connection();
     }
 
     #[cfg(test)]

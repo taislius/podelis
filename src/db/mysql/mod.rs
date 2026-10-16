@@ -1,5 +1,6 @@
 //! MySQL (and MariaDB).
 
+mod agent_constraints;
 pub(super) mod cells;
 pub(super) mod connect;
 mod plan;
@@ -10,6 +11,10 @@ use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan, hex_
 pub struct MySql;
 
 impl Dialect for MySql {
+    fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
+        &agent_constraints::AGENT_CONSTRAINTS
+    }
+
     fn label(&self) -> &'static str {
         "MySQL"
     }

@@ -2,6 +2,13 @@
 
 use super::*;
 
+/// How often a lost connection is checked again.
+const LOST_RECHECK: Duration = Duration::from_secs(5);
+/// … and how soon after the last check something the user does checks it.
+const LOST_RECHECK_AFTER_INPUT: Duration = Duration::from_secs(2);
+/// How long a check waits for the server.
+const PING_WITHIN: Duration = Duration::from_secs(5);
+
 impl App {
     /// Shows who and where the open connection is: user, database,
     /// settings, TLS, latency.
@@ -67,11 +74,13 @@ impl App {
     }
 
     /// Whether the main loop should tick every second (a query is running,
-    /// or keep-alive checks are on).
+    /// keep-alive checks are on, the connection is lost…).
     pub fn wants_ticks(&self) -> bool {
         self.executing
             || self.activity.is_some()
             || (self.settings.keepalive > 0 && self.database.is_some())
+            // A lost connection, checked again until it's back.
+            || (self.connection_lost && self.database.is_some())
             // A plan's age, kept current.
             || (self.tab.result_tab == ResultTab::Plan && self.tab.plan_source.is_some())
             // What agents did, for the status bar's note.
@@ -85,21 +94,45 @@ impl App {
     /// connection (and reconnects) before the next query, and keeps the
     /// latency current.
     pub(super) fn keepalive_tick(&mut self) {
-        let every = Duration::from_secs(self.settings.keepalive);
+        // A lost connection is checked again every few seconds, heartbeat
+        // or not, so it's said as soon as it's back (and reconnected).
+        let every = if self.connection_lost { LOST_RECHECK } else { Duration::from_secs(self.settings.keepalive) };
         if every.is_zero() || self.executing || self.pinging || self.last_activity.elapsed() < every {
             return;
         }
+        self.ping();
+    }
+
+    /// Something done while the connection is lost (a key, a click):
+    /// checks it again now rather than at the next tick, once in a while.
+    pub(super) fn recheck_lost_connection(&mut self) {
+        if self.connection_lost
+            && !self.executing
+            && !self.pinging
+            && self.last_activity.elapsed() >= LOST_RECHECK_AFTER_INPUT
+        {
+            self.ping();
+        }
+    }
+
+    /// `SELECT 1` on the session (a dropped one is reopened, as for a
+    /// query). No answer within `PING_WITHIN` is said as such; whether the
+    /// session is given up for it is `pinged`'s to decide.
+    fn ping(&mut self) {
         let Some(db) = self.database.clone() else { return };
         self.pinging = true;
         self.last_activity = Instant::now();
         let send = self.sender();
         tokio::spawn(async move {
             let started = Instant::now();
-            let result = db.run("SELECT 1", 1).await;
-            let elapsed = started.elapsed();
-            send(DbEventKind::Pinged(
-                result.map(|o| (elapsed, o.reconnected)).map_err(|e| crate::db::error_message(&e)),
-            ));
+            let result = if let Ok(result) = tokio::time::timeout(PING_WITHIN, db.run("SELECT 1", 1)).await {
+                result
+                    .map(|o| (started.elapsed(), o.reconnected))
+                    .map_err(|e| (crate::db::error_message(&e), Ping::Failed))
+            } else {
+                Err((format!("no answer in {} s", PING_WITHIN.as_secs()), Ping::NoAnswer))
+            };
+            send(DbEventKind::Pinged(result));
         });
     }
 
@@ -122,12 +155,30 @@ impl App {
         }
     }
 
-    pub(super) fn pinged(&mut self, result: Result<(Duration, bool), String>) {
+    pub(super) fn pinged(&mut self, result: Result<(Duration, bool), (String, Ping)>) {
         self.pinging = false;
-        self.connection_lost = result.is_err();
+        let was_lost = std::mem::replace(&mut self.connection_lost, result.is_err());
+        // No answer while rechecking a lost connection: the session is
+        // given up (the next check opens a new one rather than waiting on
+        // a dead link), unless a query now runs on it or a transaction is
+        // open (that would lose it without a word). A heartbeat that
+        // stalled once only says so.
+        if matches!(result, Err((_, Ping::NoAnswer)))
+            && was_lost
+            && !self.executing
+            && self.txn == TxnState::Idle
+            && let Some(db) = &self.database
+        {
+            db.abandon_session();
+        }
+        let result = result.map_err(|(e, _)| e);
         match result {
             Ok((latency, reconnected)) => {
                 self.connect_latency = Some(latency);
+                if was_lost && !reconnected {
+                    self.log("The connection is back".to_string(), false);
+                    self.set_status("The connection is back".to_string(), false);
+                }
                 if reconnected {
                     self.txn = TxnState::Idle;
                     self.log("The connection had dropped: reconnected".to_string(), true);
@@ -137,6 +188,9 @@ impl App {
                     );
                 }
             }
+            // Said once: while it stays lost, the checks every few seconds
+            // keep quiet (the status bar says "connection lost").
+            Err(_) if was_lost => {}
             Err(e) => {
                 let msg = format!("Connection check failed: {}", crate::db::with_hint(&e).replace('\n', " · "));
                 self.log(msg.clone(), true);

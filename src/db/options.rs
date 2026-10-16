@@ -65,26 +65,6 @@ impl SslMode {
         let n = SSL_MODES.len();
         SSL_MODES[if forward { (idx + 1) % n } else { (idx + n - 1) % n }]
     }
-
-    pub(super) fn pg(self) -> PgSslMode {
-        match self {
-            SslMode::Disable => PgSslMode::Disable,
-            SslMode::Prefer => PgSslMode::Prefer,
-            SslMode::Require => PgSslMode::Require,
-            SslMode::VerifyCa => PgSslMode::VerifyCa,
-            SslMode::VerifyFull => PgSslMode::VerifyFull,
-        }
-    }
-
-    pub(super) fn mysql(self) -> MySqlSslMode {
-        match self {
-            SslMode::Disable => MySqlSslMode::Disabled,
-            SslMode::Prefer => MySqlSslMode::Preferred,
-            SslMode::Require => MySqlSslMode::Required,
-            SslMode::VerifyCa => MySqlSslMode::VerifyCa,
-            SslMode::VerifyFull => MySqlSslMode::VerifyIdentity,
-        }
-    }
 }
 
 /// How carefully the app treats a connection.

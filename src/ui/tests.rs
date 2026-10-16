@@ -903,6 +903,58 @@ fn the_plans_lines_are_selected_by_mouse_and_kept_when_scrolled() {
 }
 
 #[test]
+fn the_active_tab_shows_its_whole_name_and_stays_in_sight() {
+    let (mut app, _dir) = query_app();
+    let press = |app: &mut App, code, modifiers| app.handle_key(KeyEvent::new(code, modifiers));
+    for _ in 2..=12 {
+        press(&mut app, KeyCode::Char('t'), KeyModifiers::CONTROL);
+    }
+    for (i, tab) in app.tabs.iter_mut().enumerate().skip(1) {
+        tab.name = format!("monthly revenue report {}", i + 1);
+    }
+    for _ in 0..3 {
+        press(&mut app, KeyCode::PageUp, KeyModifiers::CONTROL);
+    }
+    assert_eq!(app.active_tab, 8);
+    // Tabs after it that don't fit are said too, and the `+` stays.
+    let screen = render(&mut app, 110, 24);
+    let row = screen.lines().nth(2).unwrap();
+    assert!(row.contains("›") && row.contains(" + "), "{row}");
+    assert!(app.hits.new_tab.is_some());
+    let screen = render(&mut app, 110, 24);
+    let tabs = screen.lines().nth(2).unwrap();
+    assert!(tabs.contains("monthly revenue report 9"), "the active tab's name, whole: {tabs}");
+    // Many tabs: the others squeezed, those before it cut from the start.
+    for _ in 0..3 {
+        press(&mut app, KeyCode::PageDown, KeyModifiers::CONTROL);
+    }
+    let screen = render(&mut app, 160, 24);
+    let tabs = screen.lines().nth(2).unwrap();
+    assert!(tabs.contains("monthly revenue report 12"), "{tabs}");
+    assert!(tabs.contains("‹"), "says some are left out: {tabs}");
+    // Clicking a tab still picks the one drawn there.
+    let hit = app.hits.tabs.iter().find(|(_, _, i)| *i == 10).copied().unwrap();
+    app.handle_mouse(crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        column: hit.0 + 1,
+        row: app.hits.tabs_y,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.active_tab, 10);
+    // "‹N": the tab just before those shown.
+    let _ = render(&mut app, 110, 24);
+    let (start, _, before) = app.hits.tabs[0];
+    app.handle_mouse(crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        column: start,
+        row: app.hits.tabs_y,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.active_tab, before);
+    assert!(before < 10);
+}
+
+#[test]
 fn a_long_file_path_gives_way_to_the_message_and_keeps_its_name() {
     let (mut app, _dir) = query_app();
     app.connect_form.engine = crate::db::Engine::Sqlite;

@@ -59,6 +59,8 @@ jobs:
           else shasum -a 256 "$ASSET" > "$ASSET.sha256"; fi
       - uses: softprops/action-gh-release@v2
         with:
+          # A tag like v1.0.0-rc.1 is a pre-release: not shown as the latest.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             ${{ env.ASSET }}
             ${{ env.ASSET }}.sha256
