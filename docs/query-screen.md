@@ -20,6 +20,8 @@ search every command by name. `F1` shows every key.
 | `i` | Insert a snippet or saved query at the cursor |
 | `n` | Show/hide the navigator |
 | `z` | Zoom the focused pane to the whole screen; again or `Esc` returns. Tab still moves between panes (also `z` in results/schema, or double-click a pane's title) |
+| `v` | Select the statement at the cursor (a right-click puts the cursor under the pointer: *Select the statement* in its menu) |
+| `b` | The statement at the cursor (or the selected lines) alone, in a taller pop-over over the editor, the results under it (also `Shift+F12`). It's the tab's own text, edited in place; moving out of the statement shows the next one, and `F5` runs the one in sight. It stays while another pane has the keys (an Explain's plan, the results under it); again, or `Esc` in the editor, shows the whole text |
 | `m` | Menu of what you can do in the focused pane (also right-click) |
 | `l` / `t` | Search saved queries and history / rename the tab |
 | `o` / `d` | Pick a connection for this tab (opens a new tab if this one is connected) / disconnect this tab |
@@ -34,12 +36,12 @@ Keys that work directly:
 
 | Key | Action |
 |---|---|
-| `F5` / `Ctrl+R` / `Ctrl+Enter`¹ | Run the selection, or everything in the editor (or click **▶ F5 Run** right of the tabs; *Statement* and *Explain* are there too). The results pane switches to RESULT as it starts, with a result of its own (the one before stays: `,` in the results) |
+| `F5` / `Ctrl+R` / `Ctrl+Enter`¹ | Run the selection, or everything in the editor. In a tab whose connection couldn't be opened again when Podėlis started (the server was down, the VPN off), `F5`, `F6` and `F7` try it again first and go ahead once it's open (or click **▶ F5 Run** right of the tabs; *Statement* and *Explain* are there too). The results pane switches to RESULT as it starts, with a result of its own (the one before stays: `,` in the results) |
 | `F6` | Run the selection, or the statement under the cursor. With several statements in the editor, its footer says which one that is (`stmt 2/3`) |
 | `F7` | Show the plan for the selection / statement under the cursor (not executed), switching to QUERY PLAN as it starts. Pressed while a query runs, PostgreSQL and MySQL make it at once on a connection of their own; where that would see something else (SQLite, an open transaction, after `USE` or `SET`, `:parameters`) it follows when the query finishes, and if that fails its error stays in view instead (`Esc` stops both). MySQL 8.0.16+ shows `FORMAT=TREE`; older MySQL and MariaDB show the classic `EXPLAIN` table |
 | `Shift+F7` | `EXPLAIN ANALYZE`: runs the statement and shows actual times and rows (writes ask first and are rolled back). MySQL needs 8.0.18+; MariaDB runs `ANALYZE` |
 | `F8` / `Shift+F8` | Commit / roll back the open transaction |
-| `Esc` | Cancel the running query (in its own tab). The results pane's title counts how long it has run (`running… 12 s`) |
+| `Esc` | Cancel the running query (in its own tab). The results pane's title counts how long it has run (`running… 12 s`). When the server can't be reached to be told (a VPN or network that dropped), it says so in orange, the status bar shows *connection lost*, and `Esc` again stops waiting: the next run opens a new session (a read runs on it; anything else isn't run and says so, since a transaction that was open is gone — run it again). A cancel the server refuses (a missing privilege) is only said |
 | `Ctrl+P` / `Ctrl+N` | Previous / next query from history |
 | `Tab` / `Shift+Tab` | Cycle focus: editor → results → schema (`Tab` right after a word completes it instead; `Esc` then `Tab` still moves on) |
 | `Ctrl+↑` / `Ctrl+↓` | Move the border between the editor and the results up / down |
@@ -140,10 +142,10 @@ When focused:
 | `Enter` / `v` | Show the full value of the cell (JSON pretty-printed) |
 | `x` | Show the row vertically, one `column  value` line each. `↑`/`↓` scroll it and then go on to the previous / next row; `←`/`→` go straight to the previous / next row |
 | `X` | All rows one column per line, like the mysql client's `\G` (`*** 1. row ***`, then `name: value`), or back to the table. `↑`/`↓` go field by field into the next row, `PageUp`/`PageDown` a row at a time. Ending a statement with `\G` instead of `;` (`select * from users\G`) shows its result this way; the next run without it goes back to the table |
-| `f` | Follow the foreign key in the selected cell: opens the referenced row in a new tab |
+| `f` | Follow the foreign key in the selected cell: the row it points to, in a pop-over (one column per line), without leaving the result. It works from a join too, when the column is a foreign key in one of its tables. In the pop-over, `e` opens the lookup in a tab of its own and runs it, `y` copies the row |
 | `b` | Chart the selected column of the rows shown: count, sum, min, max and average, the trend as a sparkline, and a bar per row labelled by another column (the first 200) |
 | `\|` | Pipe the rows shown through a shell command (`grep -i vilnius`, `sort -t$'\t' -k3 -n`, `jq '.[].email'`, `mlr --itsv --opprint stats1 -a sum -f total`…) and show its output |
-| `o` | Open the rows shown in the viewer: `$PAGER` (else `less -S`), or `viewer` from `config.toml`, e.g. VisiData |
+| `o` | Open the rows (the marked ones, or those shown) in an app: a menu of formats — CSV, JSON, INSERT statements, TSV, a text table — each with what opens it. By default the system's app for the type (`open` on macOS, `xdg-open` on Linux: a spreadsheet for CSV, an editor for JSON or SQL), in a window of its own while Podėlis runs on; without a desktop to show one (over SSH, a Linux console) `$PAGER`, else `less -S`, in this terminal; `[viewers]` in `config.toml` sets another per format, or one that runs in this terminal (VisiData) |
 | `s` | Sort by the selected column: ascending → descending → off (numbers by value, then text, then NULLs) |
 | `/` | Filter rows (case-insensitive, any column); `Esc` clears |
 | `c` | Edit the cell: type the new value, `Enter` saves, `Ctrl+N` sets NULL, `Esc` cancels |
@@ -159,6 +161,7 @@ When focused:
 | `p` | Pin the result shown, so it's kept however many queries run after it (again unpins) |
 | `↑`/`↓`/`PageUp`/`PageDown`, `Home` / `End` | In MESSAGES: select a message (or click it). `Enter` shows all of it (or double-click), `y` / `Ctrl+C` copies it, `Y` copies every message, `Esc` clears the selection |
 | `↑`/`↓`/`PageUp`/`PageDown`, `←`/`→`, `Home` / `0` | In QUERY PLAN: scroll down and across, back to the top / the left edge (`←`/`→` scroll MESSAGES across too). A plan wider than the pane says which columns show in the footer |
+| click, drag, `Shift+↑`/`↓` | In QUERY PLAN: select lines (`Shift`+click extends to a line; dragging past the edge scrolls). The selection is kept by line, so scrolling keeps it whole; `y` or `Ctrl+C` copies it (else the whole plan), `Y` the whole plan, `Esc` lets go |
 
 **Earlier results.** Each query you run (`F5`, `F6`, `s` in the navigator,
 a comparison…) gets a result of its own, numbered `#1`, `#2`… on the line
@@ -284,7 +287,10 @@ your next query: switch it on or off from the palette ("Connection
 heartbeat", or bind `heartbeat`), with `keepalive = 60` in `config.toml`
 as the interval and default (0 = off). While it runs, the status bar
 shows `♥` before the connection; a failed check turns it red with
-**connection lost** until the next successful check or query. "Copy diagnostics" in the palette
+**connection lost** until the next successful check or query. Without
+it, a run after a minute with none (or after *connection lost*) first
+checks that the server answers: a link that died meanwhile fails in 5 s,
+with nothing run, instead of leaving the query waiting. "Copy diagnostics" in the palette
 copies versions, terminal and settings for a bug report — no hosts, users
 or SQL.
 
@@ -294,8 +300,10 @@ per line, tabs and line breaks inside values written as a space and `\n`,
 `NULL` as an empty field. Commands named `jq`, `gron`, `jaq`, `gojq` or `fx`
 get JSON instead. The command runs through your shell (`sh -c`), so
 pipelines work: `| grep LT | sort | uniq -c`. `o` writes
-the rows to a private temporary file and opens it in the viewer; Podėlis
-hands it the terminal and comes back when it exits.
+the rows to a file in the `opened` folder of Podėlis's config folder (yours
+alone; files there go after a day) and opens it in its app, which Podėlis
+doesn't wait for. A viewer set with `terminal = true` gets the terminal
+instead, and Podėlis comes back when it exits.
 
 **Mouse:** click a pane to focus it, a tab to switch to it, `+` for a new
 tab, the editor to place the cursor (drag to select), a result cell, a

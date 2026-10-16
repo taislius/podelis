@@ -469,6 +469,7 @@ or
 Use this folder instead of the
 .Pa podelis
 folder of the OS config directory.
+Keep it short: the gateway's socket in it can be at most 103 characters long.
 .It Ev ANTHROPIC_API_KEY , Ev OPENAI_API_KEY
 The API key of a model in
 .Pa config.toml
@@ -476,7 +477,9 @@ at Anthropic's or OpenAI's own address, when it has none in the keychain
 .Pq Cm gateway key
 and no
 .Li key_command .
-Only the gateway reads keys.
+Only the gateway reads keys, from the environment it was started with:
+after setting one, run
+.Nm Cm gateway stop .
 .It Ev PODELIS_MODEL
 Set for a model's
 .Li key_command :
@@ -491,13 +494,6 @@ or
 .Li podelis=trace
 (a tracing-subscriber filter).
 The log includes the SQL run.
-.It Ev PAGER
-The result viewer when
-.Li viewer
-isn't set in
-.Pa config.toml
-(otherwise
-.Li less -S ) .
 .It Ev COLORTERM
 .Li truecolor
 or

@@ -43,7 +43,8 @@ same way tools like `lazygit` do.
 - **Editor:** syntax highlighting, line numbers, undo/redo, selection, word
   movement, autocomplete for tables, columns and keywords — including CTE
   names, subquery aliases and the columns they produce — run the selection
-  or the statement under the cursor, find and replace, comment toggling,
+  or the statement under the cursor, select it (`Ctrl+K v`) or **zoom it**
+  alone into a taller pop-over (`Shift+F12`), find and replace, comment toggling,
   bracket matching, **SQL formatting**, **one menu for every action**
   (Ctrl+K, then a letter — or type to search),
   optional **vim keys**, **rebindable keys** and **mouse** support
@@ -94,11 +95,16 @@ same way tools like `lazygit` do.
   and temp tables persist between runs. Run a whole `;`-separated script:
   each statement that returns rows gets its own **result set** (`<` / `>`
   switch, `RESULT 2/3` shows which), the last one first. Cancel a running
-  query on the server (`pg_cancel_backend` / `KILL QUERY`; SQLite interrupts it)
+  query on the server (`pg_cancel_backend` / `KILL QUERY`; SQLite interrupts it).
+  A **dropped link** (a VPN that went down) is noticed: a run after a quiet
+  minute checks the server answers first, and a query stuck on a dead link
+  can be given up on (`Esc` twice)
 - **Results:** type-aware columns, sideways scrolling, sort, filter, a
   full-value view (JSON pretty-printed), copying (Ctrl+C: a cell, rows, marked
   rows as Markdown, CSV, JSON or `INSERT`s), CSV, JSON and SQL `INSERT`
-  export (`export ▾` above the rows lists them all),
+  export (`export ▾` above the rows lists them all), **opening rows in an
+  app** by format (`o`: CSV in a spreadsheet, JSON or SQL in an editor,
+  in their own window; `[viewers]` in `config.toml` picks the programs),
   **earlier results kept**: each query you run gets its own (`#1`, `#2`…,
   `,` / `.` switch, `p` pins), with the statement it ran and its lines in
   the editor, and **editing cells in place** (saved by primary key, through the same
@@ -110,7 +116,8 @@ same way tools like `lazygit` do.
   slowest (or costliest) step, big filtered scans and nested full scans,
   row estimates far off the actual counts, sorts and hashes spilling to
   disk, correlated subqueries. A **record view** (`x`) shows a row
-  vertically, and `f` follows a foreign key to the row it points at
+  vertically, and `f` shows the row a foreign key points at, in a
+  pop-over (from a join's result too; `e` opens it in a tab)
 - **Long queries:** when one that ran 10 s or more finishes while you're in
   another window, the terminal rings and shows a desktop notification
   (iTerm2, WezTerm, Ghostty, kitty…; `notify_after` sets the

@@ -116,12 +116,23 @@ OS and the server version when something is off.
   reasonable.
 - [ ] Run another query while rows are still streaming: the stream is
   cancelled on the server (check with the activity monitor, `Ctrl+K s`).
-- [ ] Sort (`s`), filter (`/`), export (`e` / `J` / `i`), pipe through
-  `sort | uniq -c` (`|`) and open in the viewer (`o`) on a large result.
+- [ ] Sort (`s`), filter (`/`), export (`e` / `J` / `i`), and pipe through
+  `sort | uniq -c` (`|`) on a large result.
+- [ ] Open the rows (`o`) as each format, on macOS and on Linux: CSV in a
+  spreadsheet, JSON and SQL in an editor, each in its own window while
+  Podėlis keeps the terminal; a `[viewers]` entry with `terminal = true`
+  (`vd`) runs in the terminal and Podėlis comes back after it. A program
+  that isn't installed says so in the status bar; `podelis doctor` lists
+  the viewers.
 - [ ] A wide table (many columns): sideways scrolling, and the record view
   (`x`).
 - [ ] Over a slow link (a public server): the UI stays responsive while a
   query runs, and `Esc` cancels it.
+- [ ] A dropped link (turn the VPN off, or `docker pause` the server's
+  container): after a minute idle, F5 or F7 fails in about 5 s with "the
+  server doesn't answer" and *connection lost* in red; during a query,
+  `Esc` says the cancel didn't get through (orange) and `Esc` again stops
+  waiting. Back online, the next run reconnects and the dot is green.
 
 ### Scripts and result sets
 
@@ -232,7 +243,15 @@ Use two databases with the same tables, e.g. `pgbench -i -s 10 a` and
   databases (MySQL) or `sqlite_schema` (SQLite); `.` again hides it. On a
   big PostgreSQL catalog, note how long loading takes with them shown;
   completion offers them only while shown.
-- [ ] Follow a foreign key (`f`) on the employees database.
+- [ ] Follow a foreign key (`f`) on the employees database: the row shows
+  in a pop-over (also from a join of two tables), `e` opens it in a tab;
+  on a column that isn't one, the message lists those that are.
+- [ ] A script of several statements: `Ctrl+K v` (and right-click →
+  *Select the statement*) selects the one under the cursor or pointer;
+  `Shift+F12` shows it alone, `F5` there runs only it, moving out of it
+  shows the next, `Esc` returns. The mouse wheel scrolls the editor
+  without losing a selection (click the statement line above a plan, then
+  scroll).
 - [ ] The activity monitor (`Ctrl+K s`): sessions show, and cancelling or
   ending one works.
 - [ ] Connection info (`Ctrl+K u`).

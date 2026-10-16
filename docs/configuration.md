@@ -15,12 +15,16 @@ hints = "minimal"           # status bar key hints: "minimal" (`^K keys` and the
 export_dir = "~/Downloads"  # where exports go (default: current directory)
 restore_session = true      # reopen the last project's tabs and connections
 mouse = true                # clicks and the wheel (false: terminal selection without Shift)
-viewer = "vd"               # opens result rows (`o`); `{}` is the file. Default: $PAGER, else less -S
 keepalive = 0               # seconds between checks of an idle connection (0: off)
 leader_double_space = false # Space twice quickly in the editor opens the Ctrl+K menu
 notify_after = 10           # a query running this many seconds rings and notifies when done (0: off)
 guard_rows = 1000000        # on production, a read of a whole table this big asks first, agents' is refused (0: off)
 gateway_idle = 30           # minutes the gateway waits with no client before it stops (0: keeps running)
+
+[viewers]                   # what opens result rows (`o`), by format; default: the system's app for the type (no desktop: $PAGER, else less -S)
+csv = "libreoffice --calc"  # `{}` is the file, else it goes last; started on its own, Podėlis runs on
+json = "code"
+tsv = { command = "vd", terminal = true }  # runs in Podėlis's terminal until it exits (the old `viewer = "vd"` still works: this)
 
 [keys]                      # rebind query-screen keys (replaces that action's defaults)
 run = ["F5", "Ctrl+Enter"]
@@ -45,7 +49,8 @@ Ctrl+PageUp), `save_tab` (Ctrl+S), `rename_tab` (Ctrl+K t, F4), `library`
 F9), `palette` (Ctrl+K), `explain_analyze` (Shift+F7, Ctrl+K a),
 `connection_info` (Ctrl+K u), `activity` (Ctrl+K s), `heartbeat`
 (Ctrl+K h), `insert_snippet` (Ctrl+K i, Ctrl+E), `menu` (Ctrl+K m,
-Shift+F10, F10), `zoom` (Ctrl+K z, F12), `projects` (Ctrl+K p),
+Shift+F10, F10), `zoom` (Ctrl+K z, F12), `zoom_statement` (Ctrl+K b,
+Shift+F12), `select_statement` (Ctrl+K v), `projects` (Ctrl+K p),
 `transaction_mode` (Ctrl+K x), `next_warning` (Ctrl+K w). Keys are written like `F5`, `Ctrl+R`,
 `Ctrl+Shift+PageUp`, `Ctrl+Space`; `Ctrl+K x` is a letter in the Ctrl+K
 menu. Unknown actions or keys are reported at startup, and the help screen
@@ -90,7 +95,10 @@ key_command = "pass show openai"   # a command that prints the key
   skipped, not an error. What a `key_command` prints is kept for 15
   minutes, so a password manager isn't asked on every question; a key
   the provider refuses is forgotten at once, so a fixed one is used next
-  time. Only the gateway reads keys; they're never logged or shown.
+  time. Only the gateway reads keys; they're never logged or shown. The
+  variables are read from the gateway's own environment, which it gets
+  from whatever started it: after setting one, `podelis gateway stop` so
+  the next use starts it with the variable.
 - **Addresses** must use `https`; plain `http` only to this machine
   (`localhost`, `127.0.0.1`, `::1`), so a key never travels unencrypted.
 - **Anthropic models** that take it (Opus from 4.5, Sonnet from 4.6, Haiku
@@ -113,7 +121,9 @@ key_command = "pass show openai"   # a command that prints the key
 
 Everything lives in the `podelis` folder of your OS config directory (e.g.
 `~/Library/Application Support/podelis` on macOS, `~/.config/podelis` on
-Linux), or in `$PODELIS_CONFIG_DIR` if set:
+Linux), or in `$PODELIS_CONFIG_DIR` if set (keep that path short: the
+gateway's socket, `gateway/gateway.sock` in it, can be at most 103
+characters long):
 
 - `connections.toml` — projects and their connections. If it can't be
   parsed, it is moved aside to `connections.toml.bak-<timestamp>` rather

@@ -44,6 +44,9 @@ GitHub Actions, kept small to save minutes:
   by hand (`gh workflow run platforms.yml --repo taislius/podelis`, or
   Actions → Platforms → Run workflow).
 - `deny.yml` — `cargo deny` when dependencies change, and weekly.
+- The Linux runners are pinned (`ubuntu-24.04`), not `ubuntu-latest`: a
+  release binary needs at least the glibc it was built against, so
+  building on the newest Ubuntu would leave out older systems.
 - `release.yml` — on a `v*` tag, builds binaries for Linux and macOS and
   attaches them to the release; `packaging/homebrew/podelis.rb`
   is a formula template for a Homebrew tap. Pushing a moved tag runs it

@@ -114,6 +114,17 @@ While editing or adding a connection:
   host (often `localhost`). Through a tunnel, `verify-full` SSL can't match
   the server's hostname; use `require`.
 
+**When the server can't be reached.** Connecting first checks that
+something answers at the server's address, so a server that's down, a
+host name that doesn't resolve or a network the VPN no longer reaches says
+so at once ("can't reach db:5432: connection refused", or after 3 s with no
+answer) with a hint, rather than "pool timed out" after 10 s; so do
+reopening a dropped session and cancelling. For MySQL the check is a
+whole login of its own instead (one more login per connect): MySQL counts
+a connection closed before its handshake against your host, and enough of
+them (its `max_connect_errors`) would block it. A tab whose connection couldn't
+be reopened tries again on the next run (`F5`, `F6`, `F7`).
+
 ## Databases in Docker
 
 A container's published port (`-p 5433:5432`) is

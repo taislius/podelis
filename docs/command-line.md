@@ -81,7 +81,7 @@ into them.
 
 ```sh
 podelis --test prod                       # connect step by step, show where it fails
-podelis doctor                            # config, keychain, password managers, ssh, terminal, viewer, crash log
+podelis doctor                            # config, keychain, password managers, ssh, terminal, viewers, crash log
 podelis doctor -p shop --connections      # …and test every saved connection of a project
 ```
 

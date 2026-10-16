@@ -75,7 +75,9 @@ self-contained adapter folder:
 db/
   mod.rs          Database, the Pool/Session enums (the one dispatch point)
   dialect.rs      trait Dialect + Capabilities + LexerRules + Placeholders
-  run.rs          running, streaming, cancelling, checking statements
+  run.rs          running, streaming, cancelling, checking statements; the
+                  answer check before a run after a quiet while, and a
+                  session given up on (stale) replaced before the next
   catalog.rs  details.rs  info.rs  activity.rs
                   Database methods: each is one `match` over the engine that
                   calls that engine's function
@@ -138,6 +140,7 @@ gateway/
                 process's life), the socket (`gateway/gateway.sock`,
                 0600 in a 0700 folder), connections, stopping when no
                 client has been connected for `gateway_idle`, the call log
+                (each line one write under a file lock: calls end at once)
   client.rs     connect and say hello, call, and start the gateway when
                 none answers (`connect_or_start`, `spawn_gateway`)
   command.rs    `podelis gateway [status | start | stop | models | key | test]`
