@@ -590,11 +590,7 @@ impl Server {
 /// tables a rollback doesn't undo (`MyISAM`, `MEMORY`…). A write to them would
 /// stay while the agent is told nothing changed.
 async fn unrollable(db: &Database) -> Option<String> {
-    if db.engine() != Engine::MySql {
-        return None;
-    }
-    let sql = "SELECT CAST(GROUP_CONCAT(table_name SEPARATOR ', ') AS CHAR) FROM information_schema.tables \
-               WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE' AND engine <> 'InnoDB'";
+    let sql = db.engine().dialect().tables_without_rollback()?;
     let outcome = match db.run(sql, 1).await {
         Ok(outcome) => outcome,
         Err(e) => {
@@ -613,8 +609,8 @@ async fn unrollable(db: &Database) -> Option<String> {
 /// that aren't `InnoDB`). A write that fails in its dry run isn't asked about.
 async fn dry_run_note(db: &Database, profile: &ConnectionProfile, sql: &str) -> Result<String, String> {
     let infos = crate::analyze::analyze(&crate::parse::parse(sql, db.engine()));
-    if db.engine() == Engine::MySql && infos.iter().any(|i| i.kind == crate::analyze::Kind::Ddl) {
-        return Ok("no dry run: MySQL commits schema changes at once".to_string());
+    if db.engine().capabilities().ddl_commits && infos.iter().any(|i| i.kind == crate::analyze::Kind::Ddl) {
+        return Ok(format!("no dry run: {} commits schema changes at once", db.engine().label()));
     }
     if let Some(why) = unrollable(db).await {
         return Ok(format!("no dry run: {why}"));
@@ -632,12 +628,7 @@ async fn run_wrapped(
     sql: &str,
     limit: usize,
 ) -> Result<QueryOutcome, String> {
-    let begin = match (wrap, db.engine()) {
-        (Wrap::ReadOnly, Engine::Postgres) => "BEGIN READ ONLY",
-        (Wrap::ReadOnly, Engine::MySql) => "START TRANSACTION READ ONLY",
-        (_, Engine::MySql) => "START TRANSACTION",
-        _ => "BEGIN",
-    };
+    let begin = db.engine().dialect().begin(wrap == Wrap::ReadOnly);
     db.run_once(begin, 1).await.map_err(|e| crate::db::error_message(&e))?;
     let timeout =
         ConnectForm::from_profile(profile, String::new()).query_timeout().ok().flatten().unwrap_or(DEFAULT_TIMEOUT);

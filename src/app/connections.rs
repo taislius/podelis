@@ -96,9 +96,10 @@ impl ConnectForm {
             original_name: None,
             original_legacy: false,
             name: String::new(),
-            engine: Engine::Postgres,
+            // The first engine (by its `order`): PostgreSQL.
+            engine: Engine::ALL[0],
             host: "localhost".to_string(),
-            port: Engine::Postgres.default_port().to_string(),
+            port: Engine::ALL[0].default_port().to_string(),
             user: String::new(),
             password: String::new(),
             password_command: String::new(),
@@ -782,11 +783,7 @@ impl App {
             && let Err(e) = store::store_password(&account, keep)
             && !keep.is_empty()
         {
-            let pgpass = match form.engine {
-                Engine::Postgres => " (or ~/.pgpass)",
-                Engine::MySql => " (or ~/.my.cnf)",
-                Engine::Sqlite => "",
-            };
+            let pgpass = form.engine.dialect().password_files_note();
             let instead = match crate::db::password_command::installed(crate::doctor::on_path).first() {
                 Some(tool) => format!(
                     "{} is installed: set Passwd cmd to {} and leave Password empty{pgpass}",

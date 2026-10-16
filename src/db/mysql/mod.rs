@@ -22,6 +22,49 @@ pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::MySql>;
 pub(super) static DIALECT: MySql = MySql;
 
 impl Dialect for MySql {
+    fn begin(&self, read_only: bool) -> &'static str {
+        if read_only { "START TRANSACTION READ ONLY" } else { "START TRANSACTION" }
+    }
+
+    fn tables_without_rollback(&self) -> Option<&'static str> {
+        Some(
+            "SELECT CAST(GROUP_CONCAT(table_name SEPARATOR ', ') AS CHAR) FROM information_schema.tables \
+             WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE' AND engine <> 'InnoDB'",
+        )
+    }
+
+    fn password_files_note(&self) -> &'static str {
+        " (or ~/.my.cnf)"
+    }
+
+    fn container_images(&self) -> &'static [&'static str] {
+        &["mysql", "mariadb", "percona-server", "mysql-server"]
+    }
+
+    /// The official mysql and mariadb images': their own user if one was
+    /// made, else root.
+    fn container_login(&self, var: &dyn Fn(&str) -> Option<String>) -> Option<crate::db::ContainerLogin> {
+        use crate::db::ContainerSecret as Secret;
+        let either = |mysql: &'static str, mariadb: &'static str| {
+            var(mysql).map(|v| (mysql, v)).or_else(|| var(mariadb).map(|v| (mariadb, v)))
+        };
+        let database = either("MYSQL_DATABASE", "MARIADB_DATABASE").map(|(_, v)| v).unwrap_or_default();
+        if let Some((_, user)) = either("MYSQL_USER", "MARIADB_USER") {
+            let password = match either("MYSQL_PASSWORD", "MARIADB_PASSWORD") {
+                Some((name, _)) => Some(Secret::Var(name)),
+                None => either("MYSQL_PASSWORD_FILE", "MARIADB_PASSWORD_FILE").map(|(_, f)| Secret::File(f)),
+            };
+            if password.is_some() {
+                return Some(crate::db::ContainerLogin { user, database, password });
+            }
+        }
+        let password = match either("MYSQL_ROOT_PASSWORD", "MARIADB_ROOT_PASSWORD") {
+            Some((name, _)) => Some(Secret::Var(name)),
+            None => either("MYSQL_ROOT_PASSWORD_FILE", "MARIADB_ROOT_PASSWORD_FILE").map(|(_, f)| Secret::File(f)),
+        };
+        Some(crate::db::ContainerLogin { user: "root".to_string(), database, password })
+    }
+
     /// `float` is a 4-byte float here; `timestamp` a moment in time (stored
     /// in UTC, shown in the session's zone).
     fn type_kind(&self, base: &str) -> Option<crate::db::TypeKind> {
@@ -112,6 +155,9 @@ impl Dialect for MySql {
             server_txn_state: false,
             ddl_commits: true,
             stores_create_sql: false,
+            table_sizes: true,
+            plan_as_grid: true,
+            copy_in: false,
         }
     }
     fn lexer(&self) -> LexerRules {

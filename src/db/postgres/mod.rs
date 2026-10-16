@@ -25,6 +25,37 @@ pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::Postgres>;
 pub(super) static DIALECT: Postgres = Postgres;
 
 impl Dialect for Postgres {
+    fn begin(&self, read_only: bool) -> &'static str {
+        if read_only { "BEGIN READ ONLY" } else { "BEGIN" }
+    }
+
+    fn hidden_columns(&self) -> &'static [&'static str] {
+        &["ctid", "xmin", "xmax", "cmin", "cmax", "tableoid"]
+    }
+
+    fn password_files_note(&self) -> &'static str {
+        " (or ~/.pgpass)"
+    }
+
+    fn container_images(&self) -> &'static [&'static str] {
+        &["postgres", "postgis", "timescaledb", "timescaledb-ha"]
+    }
+
+    /// The official postgres image's user, database and password.
+    fn container_login(&self, var: &dyn Fn(&str) -> Option<String>) -> Option<crate::db::ContainerLogin> {
+        use crate::db::ContainerSecret as Secret;
+        let user = var("POSTGRES_USER").unwrap_or_else(|| "postgres".to_string());
+        let database = var("POSTGRES_DB").unwrap_or_else(|| user.clone());
+        let password = if var("POSTGRES_HOST_AUTH_METHOD").as_deref() == Some("trust") {
+            None
+        } else if var("POSTGRES_PASSWORD").is_some() {
+            Some(Secret::Var("POSTGRES_PASSWORD"))
+        } else {
+            var("POSTGRES_PASSWORD_FILE").map(Secret::File)
+        };
+        Some(crate::db::ContainerLogin { user, database, password })
+    }
+
     /// `real` is a 4-byte float here (MySQL's is a double).
     fn type_kind(&self, base: &str) -> Option<crate::db::TypeKind> {
         (base == "real").then_some(crate::db::TypeKind::Float4)
@@ -105,6 +136,9 @@ impl Dialect for Postgres {
             server_txn_state: true,
             ddl_commits: false,
             stores_create_sql: false,
+            table_sizes: true,
+            plan_as_grid: false,
+            copy_in: true,
         }
     }
     fn lexer(&self) -> LexerRules {

@@ -73,6 +73,30 @@ pub struct Capabilities {
     pub ddl_commits: bool,
     /// The catalog keeps each table's CREATE statement (SQLite).
     pub stores_create_sql: bool,
+    /// The catalog knows each table's size on disk (not SQLite).
+    pub table_sizes: bool,
+    /// A plan with several columns is a table worth a grid (MySQL's classic
+    /// EXPLAIN; not SQLite's EXPLAIN QUERY PLAN, a tree).
+    pub plan_as_grid: bool,
+    /// Rows load fastest with `COPY … FROM STDIN` (PostgreSQL).
+    pub copy_in: bool,
+}
+
+/// The login an engine's container was given (see
+/// `Dialect::container_login`).
+#[derive(Debug, PartialEq, Eq)]
+pub struct ContainerLogin {
+    pub user: String,
+    pub database: String,
+    pub password: Option<ContainerSecret>,
+}
+
+/// Where a container's password is: an environment variable, or a file
+/// inside it (`*_PASSWORD_FILE`, as with Docker secrets).
+#[derive(Debug, PartialEq, Eq)]
+pub enum ContainerSecret {
+    Var(&'static str),
+    File(String),
 }
 
 /// How the lexer splits this engine's SQL.
@@ -183,6 +207,34 @@ pub trait Dialect: Sync {
 
     /// A query returning the server's version string.
     fn version_query(&self) -> &'static str;
+    /// The statement that starts a transaction, read-only if `read_only`
+    /// where the engine can.
+    fn begin(&self, _read_only: bool) -> &'static str {
+        "BEGIN"
+    }
+    /// A query listing the tables a rollback doesn't undo (MySQL's
+    /// non-InnoDB ones), as one text value; `None` where every table rolls
+    /// back.
+    fn tables_without_rollback(&self) -> Option<&'static str> {
+        None
+    }
+    /// Columns every table has without listing them (`ctid`, `rowid`).
+    fn hidden_columns(&self) -> &'static [&'static str] {
+        &[]
+    }
+    /// Where its own clients find a password, as a note: " (or ~/.pgpass)".
+    fn password_files_note(&self) -> &'static str {
+        ""
+    }
+    /// The official container images that run it (`postgres`, `mariadb`).
+    fn container_images(&self) -> &'static [&'static str] {
+        &[]
+    }
+    /// The login a container of it was given, from its environment
+    /// (`var`: a variable's value); `None` for an engine without containers.
+    fn container_login(&self, _var: &dyn Fn(&str) -> Option<String>) -> Option<ContainerLogin> {
+        None
+    }
     /// What a type name means here when it means something else than
     /// elsewhere (MySQL's `timestamp` is a moment in time); `None` for the
     /// common meaning (`db::types`).

@@ -67,11 +67,7 @@ pub fn problems(sql: &str, engine: Engine, schema: &Schema) -> Vec<String> {
         }
     }
     // Columns every table has without listing them.
-    let builtin: &[&str] = match engine {
-        Engine::Sqlite => &["rowid", "oid", "_rowid_"],
-        Engine::Postgres => &["ctid", "xmin", "xmax", "cmin", "cmax", "tableoid"],
-        Engine::MySql => &[],
-    };
+    let builtin = engine.dialect().hidden_columns();
     let reads_tables = !columns.is_empty();
     columns.extend(builtin.iter().map(|c| (*c).to_string()));
     if plain && reads_tables {

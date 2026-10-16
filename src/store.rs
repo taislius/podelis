@@ -64,7 +64,7 @@ pub struct Project {
 /// asks). Other connections are as they are.
 pub fn opened_from(profile: &ConnectionProfile, dir: Option<&str>) -> ConnectionProfile {
     let mut opened = profile.clone();
-    if opened.engine == crate::db::Engine::Sqlite
+    if opened.engine.is_file_based()
         && opened.host != ":memory:"
         && std::path::Path::new(&opened.host).is_relative()
         && let Some(dir) = dir.filter(|d| !d.is_empty())

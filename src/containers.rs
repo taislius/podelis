@@ -7,7 +7,7 @@
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use crate::db::{ConnectionMode, Engine, SslMode};
+use crate::db::{ConnectionMode, ContainerSecret, Engine, SslMode};
 use crate::store::ConnectionProfile;
 
 /// A container that runs a database.
@@ -118,28 +118,29 @@ impl Ps {
             |port: u16| self.ports.split(", ").any(|p| p == format!("{port}/tcp") || published_one(p, port).is_some());
         let repo = self.image.rsplit('/').next().unwrap_or_default();
         let repo = repo.split([':', '@']).next().unwrap_or_default().to_lowercase();
-        if listens(5432) || matches!(repo.as_str(), "postgres" | "postgis" | "timescaledb" | "timescaledb-ha") {
-            Some(Engine::Postgres)
-        } else if listens(3306) || matches!(repo.as_str(), "mysql" | "mariadb" | "percona-server" | "mysql-server") {
-            Some(Engine::MySql)
-        } else {
-            None
-        }
+        // The engines in their order: PostgreSQL before MySQL, as a
+        // container listening on both is more likely PostgreSQL's.
+        Engine::ALL.into_iter().filter(|e| !e.is_file_based()).find(|e| {
+            let port = e.default_port().parse().unwrap_or(0);
+            listens(port) || e.dialect().container_images().contains(&repo.as_str())
+        })
     }
 
     fn container(&self, tool: &str, env: &[String]) -> Option<Container> {
         let engine = self.engine()?;
-        let internal = if engine == Engine::Postgres { 5432 } else { 3306 };
+        let internal = engine.default_port().parse().ok()?;
         let profile = published(&self.ports, internal).map(|(host, port)| {
-            let var =
-                |name: &str| env.iter().find_map(|e| e.strip_prefix(name)?.strip_prefix('=')).filter(|v| !v.is_empty());
-            let (user, database, password) = match engine {
-                Engine::Postgres => postgres_login(&var),
-                _ => mysql_login(&var),
+            let var = |name: &str| {
+                env.iter()
+                    .find_map(|e| e.strip_prefix(name)?.strip_prefix('='))
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string)
             };
+            let login = engine.dialect().container_login(&var);
+            let (user, database, password) = login.map_or_else(Default::default, |l| (l.user, l.database, l.password));
             let password_command = match password {
-                Some(Secret::Var(name)) => words([tool, "exec", &self.name, "printenv", name]),
-                Some(Secret::File(path)) => words([tool, "exec", &self.name, "cat", &path]),
+                Some(ContainerSecret::Var(name)) => words([tool, "exec", &self.name, "printenv", name]),
+                Some(ContainerSecret::File(path)) => words([tool, "exec", &self.name, "cat", &path]),
                 None => Vec::new(),
             };
             ConnectionProfile {
@@ -161,53 +162,6 @@ impl Ps {
         });
         Some(Container { name: self.name.clone(), image: self.image.clone(), profile })
     }
-}
-
-/// Where the container's password is: an environment variable, or a file
-/// inside it (`*_PASSWORD_FILE`, as with Docker secrets).
-#[derive(Debug, PartialEq, Eq)]
-enum Secret {
-    Var(&'static str),
-    File(String),
-}
-
-/// The official postgres image's user, database and password.
-fn postgres_login<'a>(var: &impl Fn(&str) -> Option<&'a str>) -> (String, String, Option<Secret>) {
-    let user = var("POSTGRES_USER").unwrap_or("postgres").to_string();
-    let database = var("POSTGRES_DB").map_or_else(|| user.clone(), str::to_string);
-    let password = if var("POSTGRES_HOST_AUTH_METHOD") == Some("trust") {
-        None
-    } else if var("POSTGRES_PASSWORD").is_some() {
-        Some(Secret::Var("POSTGRES_PASSWORD"))
-    } else {
-        var("POSTGRES_PASSWORD_FILE").map(|f| Secret::File(f.to_string()))
-    };
-    (user, database, password)
-}
-
-/// The official mysql and mariadb images': their own user if one was
-/// made, else root.
-fn mysql_login<'a>(var: &impl Fn(&str) -> Option<&'a str>) -> (String, String, Option<Secret>) {
-    let either = |mysql: &'static str, mariadb: &'static str| {
-        var(mysql).map(|v| (mysql, v)).or_else(|| var(mariadb).map(|v| (mariadb, v)))
-    };
-    let database = either("MYSQL_DATABASE", "MARIADB_DATABASE").map(|(_, v)| v.to_string()).unwrap_or_default();
-    if let Some((_, user)) = either("MYSQL_USER", "MARIADB_USER") {
-        let password = match either("MYSQL_PASSWORD", "MARIADB_PASSWORD") {
-            Some((name, _)) => Some(Secret::Var(name)),
-            None => either("MYSQL_PASSWORD_FILE", "MARIADB_PASSWORD_FILE").map(|(_, f)| Secret::File(f.to_string())),
-        };
-        if password.is_some() {
-            return (user.to_string(), database, password);
-        }
-    }
-    let password = match either("MYSQL_ROOT_PASSWORD", "MARIADB_ROOT_PASSWORD") {
-        Some((name, _)) => Some(Secret::Var(name)),
-        None => {
-            either("MYSQL_ROOT_PASSWORD_FILE", "MARIADB_ROOT_PASSWORD_FILE").map(|(_, f)| Secret::File(f.to_string()))
-        }
-    };
-    ("root".to_string(), database, password)
 }
 
 /// Where `internal` is published on this machine, from `docker ps`'s

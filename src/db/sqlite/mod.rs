@@ -23,6 +23,10 @@ pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::Sqlite>;
 pub(super) static DIALECT: Sqlite = Sqlite;
 
 impl Dialect for Sqlite {
+    fn hidden_columns(&self) -> &'static [&'static str] {
+        &["rowid", "oid", "_rowid_"]
+    }
+
     /// Any name is taken (another engine's too: it keeps its affinity).
     fn type_name(&self, kind: &crate::db::TypeKind) -> Option<String> {
         use crate::db::TypeKind as Kind;
@@ -85,6 +89,9 @@ impl Dialect for Sqlite {
             server_txn_state: false,
             ddl_commits: false,
             stores_create_sql: true,
+            table_sizes: false,
+            plan_as_grid: false,
+            copy_in: false,
         }
     }
     fn lexer(&self) -> LexerRules {

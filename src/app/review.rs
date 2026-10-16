@@ -71,9 +71,10 @@ impl App {
                 "{label}: the script has its own BEGIN/COMMIT. Remove it, or switch to auto-commit ({switch})"
             ));
         }
-        if self.engine() == Engine::MySql && infos.iter().any(|i| i.kind == Kind::Ddl) {
+        if self.engine().capabilities().ddl_commits && infos.iter().any(|i| i.kind == Kind::Ddl) {
+            let engine = self.engine().label();
             return Some(format!(
-                "{label}: MySQL saves schema changes at once, so they can't be rolled back. Switch to auto-commit ({switch}) to run them"
+                "{label}: {engine} saves schema changes at once, so they can't be rolled back. Switch to auto-commit ({switch}) to run them"
             ));
         }
         if mode == TxMode::RollbackOnly && matches!(purpose, RunPurpose::CellEdit { .. }) {

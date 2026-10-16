@@ -1235,7 +1235,7 @@ impl App {
     /// `o` in the navigator: orders the tables by name, rows or size,
     /// keeping the selected one selected.
     fn cycle_schema_sort(&mut self) {
-        let sizes = self.engine() != Engine::Sqlite;
+        let sizes = self.engine().capabilities().table_sizes;
         let Some(panel) = &mut self.schema else { return };
         let before = panel.nodes().get(panel.selected).copied();
         panel.sort = panel.sort.next();
@@ -1446,8 +1446,8 @@ impl App {
     fn explain_aside(&mut self, stmt: String, line: usize) {
         let version = self.database.as_ref().map_or("", |db| db.version());
         let explain = self.engine().dialect().explain(&stmt, version);
-        // (SQLite never: see `run_aside`.)
-        let aside = self.engine() != Engine::Sqlite
+        // (A file never: see `run_aside`.)
+        let aside = !self.engine().is_file_based()
             && self.txn == TxnState::Idle
             && crate::params::find(&explain, self.engine()).is_empty();
         match self.database.clone().filter(|_| aside) {
@@ -1635,7 +1635,7 @@ impl App {
             self.plan_request.take().map(|(sql, analyzed, line)| PlanSource::new(sql, analyzed, line));
         // A plan with columns (MySQL's classic EXPLAIN) is a grid too.
         self.unswap_plan_grid();
-        self.tab.plan_grid = (outcome.columns.len() > 1 && self.engine() != Engine::Sqlite).then(|| {
+        self.tab.plan_grid = (outcome.columns.len() > 1 && self.engine().capabilities().plan_as_grid).then(|| {
             let mut grid = Box::<ResultGrid>::default();
             grid.show(outcome);
             grid.table_state.select(Some(0));

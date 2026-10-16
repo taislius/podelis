@@ -361,7 +361,7 @@ pub async fn import(
         }
         // Second pass: the rows.
         let (_, mut rows) = Rows::open(path, format)?;
-        if engine == Engine::Postgres {
+        if engine.capabilities().copy_in {
             let types = &types;
             let progress = &mut *progress;
             let chunks = std::iter::from_fn(move || {
