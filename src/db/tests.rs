@@ -12,7 +12,7 @@ fn quote_ident() {
 /// Live-database tests. Skipped unless e.g. `PODELIS_TEST_MYSQL_PORT` is
 /// set; also reads `_HOST`, `_USER`, `_PASSWORD` and `_DB` (defaults:
 /// 127.0.0.1, root/postgres, empty, empty).
-fn live_params(engine: Engine) -> Option<ConnectParams> {
+pub(in crate::db) fn live_params(engine: Engine) -> Option<ConnectParams> {
     let prefix = match engine {
         Engine::Postgres => "PODELIS_TEST_PG",
         Engine::MySql => "PODELIS_TEST_MYSQL",
@@ -56,11 +56,11 @@ fn tls_failures_are_told_from_other_connect_errors() {
     assert!(super::tls_failure(&denied).is_none());
 }
 
-fn cells(o: &QueryOutcome) -> Vec<Vec<Option<&str>>> {
+pub(in crate::db) fn cells(o: &QueryOutcome) -> Vec<Vec<Option<&str>>> {
     o.rows.iter().map(|r| r.iter().map(|c| c.as_deref()).collect()).collect()
 }
 
-async fn live_common(db: &Database) {
+pub(in crate::db) async fn live_common(db: &Database) {
     // Leading comment, multiple statements, session state persisting.
     let o = db
         .run(
@@ -145,7 +145,7 @@ async fn live_common(db: &Database) {
 }
 
 /// The part of [`live_common`] after streaming.
-async fn live_common_rest(db: &Database) {
+pub(in crate::db) async fn live_common_rest(db: &Database) {
     // Empty results keep their columns and have no stream.
     let (o, stream) = db.run_streaming("SELECT name FROM t WHERE id < 0", 1000).await.unwrap();
     assert_eq!((o.columns, o.rows.len(), stream.is_none()), (vec!["name".to_string()], 0, true));
@@ -157,7 +157,7 @@ async fn live_common_rest(db: &Database) {
     assert_eq!(cells(&db.run("SELECT 1", DEFAULT_ROW_LIMIT).await.unwrap()), vec![vec![Some("1")]]);
 }
 
-async fn live_cancel(db: &Database, slow: &str) {
+pub(in crate::db) async fn live_cancel(db: &Database, slow: &str) {
     let runner = db.clone();
     let slow = slow.to_string();
     let handle = tokio::spawn(async move { runner.run(&slow, DEFAULT_ROW_LIMIT).await });
@@ -180,92 +180,7 @@ async fn live_cancel(db: &Database, slow: &str) {
     assert_eq!(cells(&db.run("SELECT 7", DEFAULT_ROW_LIMIT).await.unwrap()), vec![vec![Some("7")]]);
 }
 
-#[tokio::test]
-async fn live_mysql() {
-    let Some(db) = live_db(Engine::MySql).await else { return };
-    db.run("CREATE DATABASE IF NOT EXISTS podelis_test; USE podelis_test", DEFAULT_ROW_LIMIT).await.unwrap();
-    live_common(&db).await;
-    let o = db
-        .run(
-            "SELECT CAST(1.50 AS DECIMAL(5,2)) d, DATE '2024-02-29' dt, \
-              X'00FF' bin, JSON_OBJECT('k', 1) j, _utf8mb4'žąsis' u",
-            DEFAULT_ROW_LIMIT,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        cells(&o),
-        vec![vec![Some("1.50"), Some("2024-02-29"), Some("0x00FF"), Some("{\"k\": 1}"), Some("žąsis")]]
-    );
-    let o = db
-        .run(
-            "CREATE TEMPORARY TABLE bits (b BIT(8)); INSERT INTO bits VALUES (b'101'); SELECT b FROM bits",
-            DEFAULT_ROW_LIMIT,
-        )
-        .await
-        .unwrap();
-    assert_eq!(cells(&o), vec![vec![Some("5")]]);
-    db.run("CREATE TABLE IF NOT EXISTS podelis_test.people (id INT NOT NULL, nick TEXT)", DEFAULT_ROW_LIMIT)
-        .await
-        .unwrap();
-    let tables = db.tables(false).await.unwrap();
-    assert!(tables.iter().any(|t| t.name == "people"));
-    let cols = db.columns("podelis_test", "people").await.unwrap();
-    assert_eq!(cols.iter().map(|c| (c.name.as_str(), c.nullable)).collect::<Vec<_>>(), [("id", false), ("nick", true)]);
-    let catalog = db.catalog(false).await.unwrap();
-    let people = catalog.iter().find(|(t, _)| t.name == "people").unwrap();
-    assert_eq!(people.1.len(), 2);
-    assert!(people.0.bytes.is_some(), "MySQL keeps data_length + index_length");
-    assert!(catalog.iter().all(|(t, _)| !t.system));
-    let catalog = db.catalog(true).await.unwrap();
-    let tables = catalog
-        .iter()
-        .find(|(t, _)| t.schema.eq_ignore_ascii_case("information_schema") && t.name.eq_ignore_ascii_case("tables"));
-    assert!(tables.is_some_and(|(t, cols)| t.system && !cols.is_empty()));
-    // The server's own sql_mode, read at connect and again on refresh.
-    assert!(!db.sql_mode().contains("PIPES_AS_CONCAT"), "{}", db.sql_mode());
-    let o = db.run("SELECT 'a' || 'b'", DEFAULT_ROW_LIMIT).await.unwrap();
-    assert_eq!(cells(&o), vec![vec![Some("0")]], "|| is OR, as in the mysql client");
-    db.run("SET SESSION sql_mode = 'ANSI'", DEFAULT_ROW_LIMIT).await.unwrap();
-    db.refresh_sql_mode().await;
-    assert!(db.sql_mode().contains("PIPES_AS_CONCAT"), "{}", db.sql_mode());
-    db.run("SET SESSION sql_mode = DEFAULT", DEFAULT_ROW_LIMIT).await.unwrap();
-    live_cancel(&db, "SELECT SLEEP(10)").await;
-    db.run("DROP DATABASE podelis_test", DEFAULT_ROW_LIMIT).await.unwrap();
-}
-
-#[tokio::test]
-async fn live_postgres() {
-    let Some(db) = live_db(Engine::Postgres).await else { return };
-    live_common(&db).await;
-    db.run("CREATE TEMPORARY TABLE IF NOT EXISTS cat (a int, b text)", DEFAULT_ROW_LIMIT).await.unwrap();
-    let catalog = db.catalog(false).await.unwrap();
-    assert!(catalog.iter().all(|(t, _)| t.schema != "pg_catalog"));
-    let catalog = db.catalog(true).await.unwrap();
-    let pg_class = catalog.iter().find(|(t, _)| t.schema == "pg_catalog" && t.name == "pg_class").unwrap();
-    assert!(pg_class.0.system && pg_class.1.iter().any(|c| c.name == "relname"));
-    // Sizes from the catalog: pg_class has pages (and indexes).
-    assert!(pg_class.0.bytes.is_some_and(|b| b > 0), "{:?}", pg_class.0.bytes);
-    assert!(catalog.iter().all(|(t, _)| t.system == matches!(t.schema.as_str(), "pg_catalog" | "information_schema")));
-    let o = db
-        .run(
-            "SELECT true b, '\\x00ff'::bytea bin, '1 day'::interval i, ARRAY[1,2] a, \
-              1.50::numeric n, '{\"k\":1}'::jsonb j",
-            DEFAULT_ROW_LIMIT,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        cells(&o),
-        vec![vec![Some("true"), Some("\\x00ff"), Some("1 day"), Some("{1,2}"), Some("1.50"), Some("{\"k\": 1}")]]
-    );
-    let o = db.run("BEGIN; SET LOCAL search_path TO pg_catalog; SHOW search_path", DEFAULT_ROW_LIMIT).await.unwrap();
-    assert_eq!(cells(&o), vec![vec![Some("pg_catalog")]]);
-    db.run("ROLLBACK", DEFAULT_ROW_LIMIT).await.unwrap();
-    live_cancel(&db, "SELECT pg_sleep(10)").await;
-}
-
-fn sqlite_params(path: &std::path::Path, read_only: bool) -> ConnectParams {
+pub(in crate::db) fn sqlite_params(path: &std::path::Path, read_only: bool) -> ConnectParams {
     ConnectParams {
         engine: Engine::Sqlite,
         host: path.to_string_lossy().into_owned(),
@@ -278,118 +193,6 @@ fn sqlite_params(path: &std::path::Path, read_only: bool) -> ConnectParams {
         ssh: None,
         password_command: Vec::new(),
     }
-}
-
-#[tokio::test]
-async fn a_sqlite_path_keeps_its_brackets() {
-    // Brackets are stripped from IPv6 hosts, not from file names.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("[data].db");
-    let params = sqlite_params(&path, false);
-    assert_eq!(params.file_to_create(), Some(path.to_string_lossy().as_ref()));
-    let db = Database::connect(params).await.unwrap();
-    db.close().await;
-    assert!(path.exists() && !dir.path().join("data].db").exists());
-}
-
-/// SQLite needs no server, so this always runs.
-#[tokio::test]
-async fn live_sqlite() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("t.db");
-    let db = Database::connect(sqlite_params(&path, false)).await.unwrap();
-    live_common(&db).await;
-    // A query that never ends stops when cancelled; a cancel with nothing
-    // running doesn't stop the next one.
-    live_cancel(&db, "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n").await;
-    db.cancel().await.unwrap();
-    assert_eq!(cells(&db.run("SELECT 8", DEFAULT_ROW_LIMIT).await.unwrap()), vec![vec![Some("8")]]);
-    let o = db.run("SELECT 1, 2.5, 'žąsis', X'00FF', NULL", DEFAULT_ROW_LIMIT).await.unwrap();
-    assert_eq!(cells(&o), vec![vec![Some("1"), Some("2.5"), Some("žąsis"), Some("X'00FF'"), None]]);
-    db.run("CREATE TABLE people (id INTEGER NOT NULL, nick TEXT); CREATE VIEW v AS SELECT 1", DEFAULT_ROW_LIMIT)
-        .await
-        .unwrap();
-    let tables = db.tables(false).await.unwrap();
-    let names: Vec<_> = tables.iter().map(|t| (t.name.as_str(), t.is_view)).collect();
-    assert_eq!(names, [("people", false), ("v", true)]);
-    let catalog = db.catalog(false).await.unwrap();
-    let people = catalog.iter().find(|(t, _)| t.name == "people").unwrap();
-    assert_eq!(people.1.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "nick"]);
-    assert!(catalog.iter().all(|(t, _)| !t.system));
-    // System tables: sqlite_schema (never listed in itself) with its columns.
-    let catalog = db.catalog(true).await.unwrap();
-    let schema = catalog.iter().find(|(t, _)| t.name == "sqlite_schema").unwrap();
-    assert!(schema.0.system && schema.1.iter().any(|c| c.name == "sql"));
-    assert!(catalog.iter().any(|(t, _)| t.name == "people" && !t.system));
-    let cols = db.columns("main", "people").await.unwrap();
-    assert_eq!(
-        cols.iter().map(|c| (c.name.as_str(), c.data_type.as_str(), c.nullable)).collect::<Vec<_>>(),
-        [("id", "INTEGER", false), ("nick", "TEXT", true)]
-    );
-    assert_eq!(db.transaction_state().await, None);
-    assert!(db.version().starts_with('3'), "SQLite 3.x: {}", db.version());
-    db.close().await;
-
-    // Read-only mode is enforced by SQLite itself.
-    let ro = Database::connect(sqlite_params(&path, true)).await.unwrap();
-    assert!(ro.run("SELECT count(*) FROM people", DEFAULT_ROW_LIMIT).await.is_ok());
-    assert!(ro.run("INSERT INTO people VALUES (1, 'x')", DEFAULT_ROW_LIMIT).await.is_err());
-}
-
-#[tokio::test]
-async fn live_postgres_transaction_state_and_read_only() {
-    let Some(mut params) = live_params(Engine::Postgres) else { return };
-    let db = Database::connect(params.clone()).await.unwrap();
-    assert_eq!(db.transaction_state().await, Some(TxnState::Idle));
-    db.run("BEGIN", DEFAULT_ROW_LIMIT).await.unwrap();
-    assert_eq!(db.transaction_state().await, Some(TxnState::Open));
-    assert!(db.run("SELECT 1/0", DEFAULT_ROW_LIMIT).await.is_err());
-    assert_eq!(db.transaction_state().await, Some(TxnState::Aborted));
-    // The check before a run: the server answers (with an error, in a
-    // failed transaction), and that's an answer; nothing is reset by it.
-    db.answers_within(std::time::Duration::from_secs(5)).await.unwrap();
-    assert_eq!(db.transaction_state().await, Some(TxnState::Aborted));
-    db.run("ROLLBACK", DEFAULT_ROW_LIMIT).await.unwrap();
-    assert_eq!(db.transaction_state().await, Some(TxnState::Idle));
-
-    let err = db.run("SELECT nope FROM pg_class", DEFAULT_ROW_LIMIT).await.unwrap_err();
-    assert_eq!(error_message(&err), "column \"nope\" does not exist");
-    let err = db.run("SELECT relnam FROM pg_class", DEFAULT_ROW_LIMIT).await.unwrap_err();
-    assert!(error_message(&err).contains("(hint: Perhaps you meant"), "{}", error_message(&err));
-
-    // Error positions point into the submitted text.
-    let err = db.run("SELECT 1;\nSELECT * FRM t", DEFAULT_ROW_LIMIT).await.unwrap_err();
-    assert_eq!(error_position(&err), Some(ErrorPos::Char("SELECT 1;\nSELECT * ".len())));
-
-    params.read_only = true;
-    let ro = Database::connect(params).await.unwrap();
-    let err = ro.run("CREATE TEMPORARY TABLE x (id int); CREATE TABLE y (id int)", DEFAULT_ROW_LIMIT).await;
-    assert!(format!("{:#}", err.unwrap_err()).contains("read-only"));
-}
-
-#[tokio::test]
-async fn live_mysql_error_line_and_read_only() {
-    let Some(mut params) = live_params(Engine::MySql) else { return };
-    let db = Database::connect(params.clone()).await.unwrap();
-    // The check before a run is a ping, not a statement: what the last
-    // statement left (its warnings, its row count) is still there after it.
-    db.run("SELECT CAST('x' AS SIGNED)", DEFAULT_ROW_LIMIT).await.unwrap();
-    db.answers_within(std::time::Duration::from_secs(5)).await.unwrap();
-    let warnings = db.run("SHOW WARNINGS", DEFAULT_ROW_LIMIT).await.unwrap();
-    assert_eq!(warnings.rows.len(), 1, "{:?}", warnings.rows);
-    let err = db.run("SELECT 1,\n2 FROM WHERE", DEFAULT_ROW_LIMIT).await.unwrap_err();
-    assert_eq!(error_position(&err), Some(ErrorPos::Near { line: 2, text: "WHERE".into() }));
-    assert!(error_message(&err).starts_with("syntax error near 'WHERE'"), "{}", error_message(&err));
-    db.run(
-        "CREATE DATABASE IF NOT EXISTS podelis_ro; CREATE TABLE IF NOT EXISTS podelis_ro.t (id int)",
-        DEFAULT_ROW_LIMIT,
-    )
-    .await
-    .unwrap();
-    params.read_only = true;
-    let ro = Database::connect(params).await.unwrap();
-    assert!(ro.run("INSERT INTO podelis_ro.t VALUES (1)", DEFAULT_ROW_LIMIT).await.is_err());
-    db.run("DROP DATABASE podelis_ro", DEFAULT_ROW_LIMIT).await.unwrap();
 }
 
 /// Opt-in: `PODELIS_TEST_SSH_DEST` names an ssh destination that can
@@ -411,7 +214,7 @@ async fn live_ssh_tunnel() {
 }
 
 /// Checks that a statement is judged by the server without running it.
-async fn live_check(db: &Database) {
+pub(in crate::db) async fn live_check(db: &Database) {
     assert_eq!(db.check_statement("SELECT 1").await.unwrap(), CheckOutcome::Ok);
     let CheckOutcome::Problem { syntax, position, .. } = db.check_statement("SELECT * FRO t").await.unwrap() else {
         panic!("syntax error not reported");
@@ -437,29 +240,6 @@ async fn live_check(db: &Database) {
     db.run("DROP TABLE podelis_chk", DEFAULT_ROW_LIMIT).await.unwrap();
 }
 
-#[tokio::test]
-async fn live_check_statement_sqlite() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Database::connect(sqlite_params(&dir.path().join("c.db"), false)).await.unwrap();
-    live_check(&db).await;
-    let CheckOutcome::Problem { position, .. } = db.check_statement("SELECT * FRO t").await.unwrap() else { panic!() };
-    assert_eq!(position, Some(ErrorPos::Token("FRO".into())));
-}
-
-#[tokio::test]
-async fn live_check_statement_postgres() {
-    let Some(db) = live_db(Engine::Postgres).await else { return };
-    live_check(&db).await;
-}
-
-#[tokio::test]
-async fn live_check_statement_mysql() {
-    let Some(db) = live_db(Engine::MySql).await else { return };
-    db.run("CREATE DATABASE IF NOT EXISTS podelis_chk_db; USE podelis_chk_db", DEFAULT_ROW_LIMIT).await.unwrap();
-    live_check(&db).await;
-    db.run("DROP DATABASE podelis_chk_db", DEFAULT_ROW_LIMIT).await.unwrap();
-}
-
 #[test]
 fn ssl_mode_cycles() {
     assert_eq!(SslMode::Prefer.cycle(true), SslMode::Require);
@@ -468,7 +248,7 @@ fn ssl_mode_cycles() {
 }
 
 /// Indexes, foreign keys and definitions, after `setup` created the tables.
-async fn live_details(db: &Database, schema: &str, setup: &str) {
+pub(in crate::db) async fn live_details(db: &Database, schema: &str, setup: &str) {
     db.run(setup, DEFAULT_ROW_LIMIT).await.unwrap();
     let child = db.table_details(schema, "det_child").await.unwrap();
     let mut indexes: Vec<(bool, bool, &str)> =
@@ -489,55 +269,15 @@ async fn live_details(db: &Database, schema: &str, setup: &str) {
 
 // A table-level FOREIGN KEY: MySQL before 9.0 parses a column's inline
 // REFERENCES and ignores it.
-const DETAILS_TABLES: &str = "CREATE TABLE det_parent (id INTEGER PRIMARY KEY);
+pub(in crate::db) const DETAILS_TABLES: &str = "CREATE TABLE det_parent (id INTEGER PRIMARY KEY);
      CREATE TABLE det_child (id INTEGER PRIMARY KEY, parent_id INTEGER, email VARCHAR(100) UNIQUE,
                              FOREIGN KEY (parent_id) REFERENCES det_parent (id));
      CREATE INDEX det_child_parent ON det_child (parent_id);
      CREATE VIEW det_v AS SELECT id FROM det_parent;";
 
-#[tokio::test]
-async fn live_details_sqlite() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Database::connect(sqlite_params(&dir.path().join("d.db"), false)).await.unwrap();
-    live_details(&db, "main", DETAILS_TABLES).await;
-    assert!(db.routines().await.unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn live_details_postgres() {
-    let Some(db) = live_db(Engine::Postgres).await else { return };
-    let setup = format!(
-        "DROP SCHEMA IF EXISTS podelis_det CASCADE; CREATE SCHEMA podelis_det; SET search_path = podelis_det;
-         {DETAILS_TABLES}
-         CREATE FUNCTION det_fn(x integer) RETURNS integer LANGUAGE sql AS 'SELECT x + 1';"
-    );
-    live_details(&db, "podelis_det", &setup).await;
-    let routines = db.routines().await.unwrap();
-    let f = routines.iter().find(|r| r.schema == "podelis_det").expect("det_fn listed");
-    assert_eq!((f.name.as_str(), f.kind.as_str()), ("det_fn(x integer)", "function"));
-    assert!(db.routine_definition(f).await.unwrap().contains("x + 1"));
-    db.run("DROP SCHEMA podelis_det CASCADE", DEFAULT_ROW_LIMIT).await.unwrap();
-}
-
-#[tokio::test]
-async fn live_details_mysql() {
-    let Some(db) = live_db(Engine::MySql).await else { return };
-    let setup = format!(
-        "DROP DATABASE IF EXISTS podelis_det; CREATE DATABASE podelis_det; USE podelis_det;
-         {DETAILS_TABLES}
-         CREATE FUNCTION det_fn(x INT) RETURNS INT DETERMINISTIC RETURN x + 1;"
-    );
-    live_details(&db, "podelis_det", &setup).await;
-    let routines = db.routines().await.unwrap();
-    let f = routines.iter().find(|r| r.name == "det_fn").expect("det_fn listed");
-    assert_eq!(f.kind, "function");
-    assert!(db.routine_definition(f).await.unwrap().contains("x + 1"));
-    db.run("DROP DATABASE podelis_det", DEFAULT_ROW_LIMIT).await.unwrap();
-}
-
 /// What the review flow relies on: `BEGIN;` before the writes in one run
 /// leaves the transaction open, and ROLLBACK undoes them.
-async fn live_begin_in_script(db: &Database, table: &str) {
+pub(in crate::db) async fn live_begin_in_script(db: &Database, table: &str) {
     db.run(&format!("DROP TABLE IF EXISTS {table}; CREATE TABLE {table} (x INT); INSERT INTO {table} VALUES (1)"), 10)
         .await
         .unwrap();
@@ -552,23 +292,9 @@ async fn live_begin_in_script(db: &Database, table: &str) {
     db.run(&format!("DROP TABLE {table}"), 10).await.unwrap();
 }
 
-#[tokio::test]
-async fn live_begin_in_script_postgres() {
-    let Some(db) = live_db(Engine::Postgres).await else { return };
-    live_begin_in_script(&db, "podelis_review").await;
-}
-
-#[tokio::test]
-async fn live_begin_in_script_mysql() {
-    let Some(db) = live_db(Engine::MySql).await else { return };
-    // Its own database: live_mysql drops podelis_test when it's done.
-    db.run("CREATE DATABASE IF NOT EXISTS podelis_script; USE podelis_script", 10).await.unwrap();
-    live_begin_in_script(&db, "podelis_review").await;
-}
-
 /// Killing the session's server process: a read reconnects and runs again,
 /// a write reports the reconnect instead of retrying.
-async fn live_reconnect(db: &Database, other: &Database, pid_sql: &str, kill: &str) {
+pub(in crate::db) async fn live_reconnect(db: &Database, other: &Database, pid_sql: &str, kill: &str) {
     let pid = |o: &QueryOutcome| o.rows[0][0].clone().unwrap();
     let before = pid(&db.run(pid_sql, 10).await.unwrap());
     other.run(&kill.replace("{pid}", &before), 10).await.unwrap();
@@ -585,23 +311,9 @@ async fn live_reconnect(db: &Database, other: &Database, pid_sql: &str, kill: &s
     assert!(db.run(pid_sql, 10).await.is_ok());
 }
 
-#[tokio::test]
-async fn live_reconnect_postgres() {
-    let Some(db) = live_db(Engine::Postgres).await else { return };
-    let other = live_db(Engine::Postgres).await.unwrap();
-    live_reconnect(&db, &other, "SELECT pg_backend_pid()::text", "SELECT pg_terminate_backend({pid})").await;
-}
-
-#[tokio::test]
-async fn live_reconnect_mysql() {
-    let Some(db) = live_db(Engine::MySql).await else { return };
-    let other = live_db(Engine::MySql).await.unwrap();
-    live_reconnect(&db, &other, "SELECT CAST(CONNECTION_ID() AS CHAR)", "KILL {pid}").await;
-}
-
 /// The activity view sees another session's running query, and can cancel
 /// it; EXPLAIN ANALYZE shows actual numbers.
-async fn live_activity(engine: Engine, slow: &str) {
+pub(in crate::db) async fn live_activity(engine: Engine, slow: &str) {
     let Some(db) = live_db(engine).await else { return };
     let other = live_db(engine).await.unwrap();
     let runner = other.clone();
@@ -623,16 +335,6 @@ async fn live_activity(engine: Engine, slow: &str) {
     let plan = engine.dialect().format_plan(&o.columns, &o.rows).unwrap().text;
     // MariaDB's ANALYZE: the actual rows in a column of their own.
     assert!(plan.contains("actual time") || plan.contains("r_rows"), "{plan}");
-}
-
-#[tokio::test]
-async fn live_activity_postgres() {
-    live_activity(Engine::Postgres, "SELECT pg_sleep(10) AS podelis_activity_test").await;
-}
-
-#[tokio::test]
-async fn live_activity_mysql() {
-    live_activity(Engine::MySql, "SELECT SLEEP(10) AS podelis_activity_test").await;
 }
 
 /// Binary values show in each engine's hex notation, and that text goes
@@ -878,35 +580,4 @@ async fn a_session_given_up_on_is_opened_again() {
     // A read is run again, and says it reconnected.
     db.abandon_session();
     assert!(db.run("select 1", 10).await.unwrap().reconnected);
-}
-
-#[tokio::test]
-async fn an_address_nothing_answers_at_says_why_at_once() {
-    // A port nothing listens on: refused, at once (not the pool's timeout).
-    // Port 1: nothing listens there, and nobody can bind it without root
-    // (a port freed for the test could be taken by another test meanwhile).
-    let port = 1;
-    let started = std::time::Instant::now();
-    let err = super::reach("127.0.0.1", port).await.unwrap_err();
-    assert!(started.elapsed() < std::time::Duration::from_secs(1));
-    assert_eq!(err.to_string(), format!("can't reach 127.0.0.1:{port}: connection refused"));
-    assert!(crate::db::is_unreachable(&err));
-    let err = super::reach("db.nowhere.invalid", 5432).await.unwrap_err();
-    assert_eq!(err.to_string(), "can't reach db.nowhere.invalid:5432: no such host");
-    // Something listening: fine.
-    let open = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    super::reach("127.0.0.1", open.local_addr().unwrap().port()).await.unwrap();
-}
-
-#[tokio::test]
-async fn a_mysql_server_that_is_down_says_why_at_once() {
-    // Port 1: nothing listens there, and nobody can bind it without root
-    // (a port freed for the test could be taken by another test meanwhile).
-    let port = 1;
-    let opts = sqlx::mysql::MySqlConnectOptions::new().host("127.0.0.1").port(port).username("root");
-    let started = std::time::Instant::now();
-    let err = super::mysql::connect::try_login(&opts).await.unwrap_err();
-    assert!(started.elapsed() < std::time::Duration::from_secs(1), "not the pool's 10 s");
-    assert_eq!(err.to_string(), format!("can't reach 127.0.0.1:{port}: connection refused"));
-    assert!(crate::db::is_unreachable(&err));
 }

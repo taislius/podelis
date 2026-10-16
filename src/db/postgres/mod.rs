@@ -5,6 +5,8 @@ mod plan;
 
 pub(super) mod cells;
 pub(super) mod connect;
+#[cfg(test)]
+mod db_tests;
 mod copy;
 pub(super) mod passwords;
 pub(super) mod pgpass;

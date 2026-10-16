@@ -5,6 +5,8 @@ use std::fmt::Write as _;
 mod agent_constraints;
 pub(super) mod cells;
 pub(super) mod connect;
+#[cfg(test)]
+mod db_tests;
 pub(super) mod passwords;
 pub(super) mod queries;
 
