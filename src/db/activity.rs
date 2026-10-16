@@ -27,11 +27,7 @@ impl Database {
     /// Sessions on the server, busiest first. Runs on a pool connection, so
     /// it works while this tab's query is running.
     pub async fn activity(&self) -> Result<Vec<Activity>> {
-        let mut sessions = match &self.0.pool {
-            Pool::Postgres(_) => postgres::queries::activity(self).await,
-            Pool::MySql(_) => mysql::queries::activity(self).await,
-            Pool::Sqlite(_) => anyhow::bail!("SQLite has no server sessions to show"),
-        }?;
+        let mut sessions = on_engine!(self.0.engine, engine::queries::activity(self).await)?;
         let own = self.0.backend_id.load(Ordering::SeqCst).to_string();
         for a in &mut sessions {
             a.own = a.id == own;
@@ -43,11 +39,6 @@ impl Database {
     /// session.
     pub async fn stop_session(&self, id: &str, terminate: bool) -> Result<()> {
         let id: i64 = id.parse().context("not a session id")?;
-        match &self.0.pool {
-            Pool::Postgres(_) => postgres::queries::stop_session(self, id, terminate).await?,
-            Pool::MySql(_) => mysql::queries::stop_session(self, id, terminate).await?,
-            Pool::Sqlite(_) => anyhow::bail!("SQLite has no server sessions"),
-        }
-        Ok(())
+        on_engine!(self.0.engine, engine::queries::stop_session(self, id, terminate).await)
     }
 }

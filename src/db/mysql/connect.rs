@@ -1,6 +1,12 @@
 //! Opening a mysql connection: the pool and the session connection.
 
+// Every engine has these functions with one signature, the generated
+// dispatch calling them alike (build.rs): some needn't wait for anything.
+#![allow(clippy::unused_async)]
+
 use super::super::*;
+use sqlx::mysql::{MySql, MySqlConnectOptions, MySqlPoolOptions, MySqlSslMode};
+use super::DriverConnection;
 
 pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, port: u16) -> Result<(Pool, Session)> {
     // sqlx adds PIPES_AS_CONCAT to sql_mode by default; keep the server's
@@ -85,4 +91,27 @@ pub(in crate::db) async fn backend_id(c: &mut PoolConnection<MySql>) -> Result<i
         .await
         .context("failed to read connection id")?;
     Ok(id as i64)
+}
+
+/// The server is told to cancel (`queries::cancel`): nothing to watch here.
+pub(in crate::db) async fn watch_interrupt(_c: &mut DriverConnection, _interrupt: &Arc<AtomicBool>) -> Result<()> {
+    Ok(())
+}
+
+/// Before connecting: nothing more (`connect` logs in once itself first,
+/// `try_login`). Never a bare TCP connection: MySQL counts one closed
+/// before its handshake against the host, and blocks it after enough
+/// (`max_connect_errors`).
+pub(in crate::db) async fn check_before_connect(_host: &str, _port: u16) -> Result<()> {
+    Ok(())
+}
+
+/// Before reopening the session or cancelling: a whole login of its own,
+/// over TCP.
+pub(in crate::db) async fn check_reach(db: &Database) -> Result<()> {
+    let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
+    if p.connect_options().get_socket().is_some() {
+        return Ok(());
+    }
+    try_login(&p.connect_options()).await
 }

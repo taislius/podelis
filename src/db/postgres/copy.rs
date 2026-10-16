@@ -1,6 +1,7 @@
 //! `COPY … FROM STDIN` on PostgreSQL, for loading many rows at once.
 
-use super::*;
+use super::super::*;
+use sqlx::postgres::PgDatabaseError;
 
 impl Database {
     /// Runs `statement`, a `COPY … FROM STDIN`, on the session and sends it

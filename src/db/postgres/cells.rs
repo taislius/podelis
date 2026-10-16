@@ -1,6 +1,7 @@
 //! Decoding Postgres values as text.
 
 use super::super::*;
+use sqlx::postgres::{PgRow, PgValueFormat};
 
 macro_rules! try_decode {
     ($row:expr, $idx:expr, $($ty:ty),+ $(,)?) => {

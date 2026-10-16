@@ -1,6 +1,12 @@
 //! Opening a postgres connection: the pool and the session connection.
 
+// Every engine has these functions with one signature, the generated
+// dispatch calling them alike (build.rs): some needn't wait for anything.
+#![allow(clippy::unused_async)]
+
 use super::super::*;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode, Postgres};
+use super::DriverConnection;
 
 pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, port: u16) -> Result<(Pool, Session)> {
     // `new()` would read ~/.pgpass for the default host and user: it's
@@ -51,4 +57,24 @@ pub(in crate::db) async fn backend_id(c: &mut PoolConnection<Postgres>) -> Resul
         .await
         .context("failed to read backend pid")?;
     Ok(id.into())
+}
+
+/// The server is told to cancel (`queries::cancel`): nothing to watch here.
+pub(in crate::db) async fn watch_interrupt(_c: &mut DriverConnection, _interrupt: &Arc<AtomicBool>) -> Result<()> {
+    Ok(())
+}
+
+/// Before connecting: something answers at the address (a bare TCP
+/// connection, which PostgreSQL 13+ doesn't even log), so a server that's
+/// down says why at once.
+pub(in crate::db) async fn check_before_connect(host: &str, port: u16) -> Result<()> {
+    crate::db::reach(host, port).await
+}
+
+/// Before reopening the session or cancelling: the same.
+pub(in crate::db) async fn check_reach(db: &Database) -> Result<()> {
+    match &db.0.address {
+        Some((host, port)) => crate::db::reach(host, *port).await,
+        None => Ok(()),
+    }
 }

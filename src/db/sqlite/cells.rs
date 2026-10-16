@@ -1,6 +1,7 @@
 //! Decoding SQLite values as text.
 
 use super::super::*;
+use sqlx::sqlite::SqliteRow;
 
 /// Formats a SQLite value by its storage class.
 pub(in crate::db) fn sqlite_cell(row: &SqliteRow, idx: usize) -> Option<String> {

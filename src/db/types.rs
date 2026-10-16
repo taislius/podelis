@@ -1,12 +1,15 @@
 //! Column types across engines: which are the same (PostgreSQL's `int4`,
 //! MySQL's `int`, SQLite's `INTEGER`), and what a type is called on another
-//! engine, for comparing schemas and the SQL that aligns them.
+//! engine, for comparing schemas and the SQL that aligns them. The
+//! vocabulary (`TypeKind`) and the common names are here; each engine's
+//! own (its exceptions, how it writes each kind) are its dialect's
+//! (`Dialect::type_kind`, `Dialect::type_name`).
 
 use super::Engine;
 
 /// A type, by what it holds rather than what an engine calls it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum Kind {
+pub enum TypeKind {
     /// An integer of this many bytes.
     Int(u8),
     Bool,
@@ -38,13 +41,18 @@ fn arguments(ty: &str) -> Vec<u32> {
         .unwrap_or_default()
 }
 
-fn kind(engine: Engine, ty: &str) -> Kind {
+fn kind(engine: Engine, ty: &str) -> TypeKind {
+    use TypeKind as Kind;
     let ty = ty.trim().to_ascii_lowercase();
     let base = ty.split('(').next().unwrap_or_default().trim();
     let args = arguments(&ty);
     let length = args.first().copied();
     if ty.contains("unsigned") || ty.ends_with("[]") {
         return Kind::Other(ty);
+    }
+    // The engine's own meaning of a name first (MySQL's `timestamp`).
+    if let Some(own) = engine.dialect().type_kind(base) {
+        return own;
     }
     match base {
         "tinyint" if length == Some(1) => Kind::Bool,
@@ -56,16 +64,12 @@ fn kind(engine: Engine, ty: &str) -> Kind {
         "bool" | "boolean" => Kind::Bool,
         "numeric" | "decimal" => Kind::Decimal(args.get(1).map(|&scale| (args[0], scale))),
         "float4" => Kind::Float4,
-        // MySQL's `real` is a double unless sql_mode says otherwise.
-        "real" if engine == Engine::Postgres => Kind::Float4,
-        "float" if engine == Engine::MySql => Kind::Float4,
         "float8" | "double precision" | "double" | "real" | "float" => Kind::Float8,
         "varchar" | "character varying" | "nvarchar" | "varchar2" => Kind::Varchar(length),
         "char" | "character" | "bpchar" | "nchar" => Kind::Char(length),
         "text" | "tinytext" | "mediumtext" | "longtext" | "clob" => Kind::Text,
         "date" => Kind::Date,
         "time" | "time without time zone" => Kind::Time,
-        "timestamp" if engine == Engine::MySql => Kind::TimestampTz,
         "timestamp" | "timestamp without time zone" | "datetime" => Kind::Timestamp,
         "timestamptz" | "timestamp with time zone" => Kind::TimestampTz,
         "bytea" | "blob" | "tinyblob" | "mediumblob" | "longblob" | "binary" | "varbinary" => Kind::Binary,
@@ -76,11 +80,12 @@ fn kind(engine: Engine, ty: &str) -> Kind {
 }
 
 /// Whether type `a` on one engine and `b` on another hold the same values.
-/// SQLite only keeps a type's affinity, so beside it any integer matches any
-/// other, and lengths don't count.
+/// Beside an engine that keeps only a type's affinity (SQLite), any integer
+/// matches any other, and lengths don't count.
 pub fn same_type(a_engine: Engine, a: &str, b_engine: Engine, b: &str) -> bool {
+    use TypeKind as Kind;
     let (a, b) = (kind(a_engine, a), kind(b_engine, b));
-    if a_engine != Engine::Sqlite && b_engine != Engine::Sqlite {
+    if !a_engine.dialect().keeps_only_affinity() && !b_engine.dialect().keeps_only_affinity() {
         return a == b;
     }
     let loose = |k: Kind| match k {
@@ -100,73 +105,17 @@ pub fn translate_type(from: Engine, ty: &str, to: Engine) -> Option<String> {
     if from == to {
         return Some(ty.to_string());
     }
-    let sized = |name: &str, n: Option<u32>| n.map_or_else(|| name.to_string(), |n| format!("{name}({n})"));
-    let decimal = |name: &str, ps: Option<(u32, u32)>| ps.map(|(p, s)| format!("{name}({p},{s})"));
-    Some(match (to, kind(from, ty)) {
-        (_, Kind::Other(other)) if to == Engine::Sqlite => other,
-        (_, Kind::Other(_)) => return None,
-        (Engine::Postgres, k) => match k {
-            Kind::Int(1 | 2) => "smallint".into(),
-            Kind::Int(3 | 4) => "integer".into(),
-            Kind::Int(_) => "bigint".into(),
-            Kind::Bool => "boolean".into(),
-            Kind::Decimal(ps) => decimal("numeric", ps).unwrap_or_else(|| "numeric".into()),
-            Kind::Float4 => "real".into(),
-            Kind::Float8 => "double precision".into(),
-            Kind::Varchar(n) => sized("varchar", n),
-            Kind::Char(n) => sized("char", n),
-            Kind::Text => "text".into(),
-            Kind::Date => "date".into(),
-            Kind::Time => "time".into(),
-            Kind::Timestamp => "timestamp".into(),
-            Kind::TimestampTz => "timestamptz".into(),
-            Kind::Binary => "bytea".into(),
-            Kind::Json => "jsonb".into(),
-            Kind::Uuid => "uuid".into(),
-            Kind::Other(_) => unreachable!("handled above"),
-        },
-        (Engine::MySql, k) => match k {
-            Kind::Int(1) => "tinyint".into(),
-            Kind::Int(2) => "smallint".into(),
-            Kind::Int(3) => "mediumint".into(),
-            Kind::Int(4) => "int".into(),
-            Kind::Int(_) => "bigint".into(),
-            Kind::Bool => "boolean".into(),
-            // Unconstrained `numeric` keeps any scale; MySQL's default
-            // (10,0) would round to whole numbers.
-            Kind::Decimal(ps) => decimal("decimal", ps).unwrap_or_else(|| "decimal(65,30)".into()),
-            Kind::Float4 => "float".into(),
-            Kind::Float8 => "double".into(),
-            // MySQL's varchar needs a length; text holds as much as any.
-            Kind::Varchar(Some(n)) => format!("varchar({n})"),
-            Kind::Varchar(None) | Kind::Text => "longtext".into(),
-            Kind::Char(n) if n.is_none_or(|n| n <= 255) => sized("char", n),
-            Kind::Char(_) => return None,
-            Kind::Date => "date".into(),
-            // Microseconds, as PostgreSQL keeps them.
-            Kind::Time => "time(6)".into(),
-            Kind::Timestamp => "datetime(6)".into(),
-            Kind::TimestampTz => "timestamp(6)".into(),
-            Kind::Binary => "longblob".into(),
-            Kind::Json => "json".into(),
-            Kind::Uuid => "char(36)".into(),
-            Kind::Other(_) => unreachable!("handled above"),
-        },
-        (Engine::Sqlite, k) => match k {
-            Kind::Int(_) => "INTEGER".into(),
-            Kind::Bool => "BOOLEAN".into(),
-            Kind::Decimal(ps) => decimal("NUMERIC", ps).unwrap_or_else(|| "NUMERIC".into()),
-            Kind::Float4 | Kind::Float8 => "REAL".into(),
-            Kind::Varchar(n) => sized("VARCHAR", n),
-            Kind::Char(n) => sized("CHAR", n),
-            Kind::Text | Kind::Json | Kind::Uuid | Kind::TimestampTz => "TEXT".into(),
-            Kind::Date => "DATE".into(),
-            Kind::Time => "TIME".into(),
-            Kind::Timestamp => "TIMESTAMP".into(),
-            Kind::Binary => "BLOB".into(),
-            Kind::Other(_) => unreachable!("handled above"),
-        },
-    })
+    to.dialect().type_name(&kind(from, ty))
+}
+
+/// `name(n)`, or `name` without a length: for `Dialect::type_name`.
+pub fn sized(name: &str, n: Option<u32>) -> String {
+    n.map_or_else(|| name.to_string(), |n| format!("{name}({n})"))
+}
+
+/// `name(precision,scale)`, if they're given.
+pub fn decimal(name: &str, ps: Option<(u32, u32)>) -> Option<String> {
+    ps.map(|(p, s)| format!("{name}({p},{s})"))
 }
 
 #[cfg(test)]

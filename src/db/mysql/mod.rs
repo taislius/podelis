@@ -3,6 +3,7 @@
 mod agent_constraints;
 pub(super) mod cells;
 pub(super) mod connect;
+pub(super) mod passwords;
 mod plan;
 pub(super) mod queries;
 
@@ -10,7 +11,84 @@ use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan, hex_
 
 pub struct MySql;
 
+/// A row's value as text: what `db::run` reads results with.
+pub(super) use cells::mysql_cell as cell;
+
+/// What `db::Pool` and `db::Session` hold for this engine (see build.rs).
+pub(super) type DriverPool = sqlx::MySqlPool;
+pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::MySql>;
+
+/// This engine's dialect, for `Engine::dialect`.
+pub(super) static DIALECT: MySql = MySql;
+
 impl Dialect for MySql {
+    /// `float` is a 4-byte float here; `timestamp` a moment in time (stored
+    /// in UTC, shown in the session's zone).
+    fn type_kind(&self, base: &str) -> Option<crate::db::TypeKind> {
+        match base {
+            "float" => Some(crate::db::TypeKind::Float4),
+            "timestamp" => Some(crate::db::TypeKind::TimestampTz),
+            _ => None,
+        }
+    }
+
+    fn type_name(&self, kind: &crate::db::TypeKind) -> Option<String> {
+        use crate::db::TypeKind as Kind;
+        use crate::db::types::{decimal, sized};
+        Some(match kind {
+            Kind::Int(1) => "tinyint".into(),
+            Kind::Int(2) => "smallint".into(),
+            Kind::Int(3) => "mediumint".into(),
+            Kind::Int(4) => "int".into(),
+            Kind::Int(_) => "bigint".into(),
+            Kind::Bool => "boolean".into(),
+            // Unconstrained `numeric` keeps any scale; MySQL's default
+            // (10,0) would round to whole numbers.
+            Kind::Decimal(ps) => decimal("decimal", *ps).unwrap_or_else(|| "decimal(65,30)".into()),
+            Kind::Float4 => "float".into(),
+            Kind::Float8 => "double".into(),
+            // MySQL's varchar needs a length; text holds as much as any.
+            Kind::Varchar(Some(n)) => format!("varchar({n})"),
+            Kind::Varchar(None) | Kind::Text => "longtext".into(),
+            Kind::Char(n) if n.is_none_or(|n| n <= 255) => sized("char", *n),
+            Kind::Char(_) | Kind::Other(_) => return None,
+            Kind::Date => "date".into(),
+            // Microseconds, as PostgreSQL keeps them.
+            Kind::Time => "time(6)".into(),
+            Kind::Timestamp => "datetime(6)".into(),
+            Kind::TimestampTz => "timestamp(6)".into(),
+            Kind::Binary => "longblob".into(),
+            Kind::Json => "json".into(),
+            Kind::Uuid => "char(36)".into(),
+        })
+    }
+
+    /// Its syntax errors start with a long boilerplate sentence.
+    fn database_error_message(&self, err: &dyn sqlx::error::DatabaseError) -> Option<String> {
+        let msg = err.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>()?.message();
+        Some(match msg.find("for the right syntax to use ") {
+            Some(i) => format!("syntax error {}", &msg[i + "for the right syntax to use ".len()..]),
+            None => msg.to_string(),
+        })
+    }
+
+    /// "… at line N", and "near 'rest of the statement' at line N": the
+    /// quoted text is what follows the error, which pins down the column.
+    fn database_error_position(&self, err: &dyn sqlx::error::DatabaseError) -> Option<super::ErrorPos> {
+        use super::ErrorPos;
+        let msg = err.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>()?.message();
+        let at = msg.rfind(" at line ")?;
+        let digits: String = msg[at + " at line ".len()..].chars().take_while(char::is_ascii_digit).collect();
+        let line = digits.parse().ok()?;
+        match msg[..at].find("near '") {
+            Some(i) if msg[..at].ends_with('\'') => {
+                let near = &msg[i + "near '".len()..at - 1];
+                Some(if near.is_empty() { ErrorPos::Line(line) } else { ErrorPos::Near { line, text: near.to_string() } })
+            }
+            _ => Some(ErrorPos::Line(line)),
+        }
+    }
+
     fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
         &agent_constraints::AGENT_CONSTRAINTS
     }

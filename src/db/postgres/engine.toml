@@ -1,0 +1,3 @@
+# This folder is a database engine: build.rs finds it by this file.
+name = "Postgres"   # its Engine variant, as connections.toml writes it
+order = 1    # its place in lists (the connection form cycles in this order)

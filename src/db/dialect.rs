@@ -183,6 +183,39 @@ pub trait Dialect: Sync {
 
     /// A query returning the server's version string.
     fn version_query(&self) -> &'static str;
+    /// What a type name means here when it means something else than
+    /// elsewhere (MySQL's `timestamp` is a moment in time); `None` for the
+    /// common meaning (`db::types`).
+    fn type_kind(&self, _base: &str) -> Option<super::TypeKind> {
+        None
+    }
+    /// How this engine writes a type of `kind`; `None` if it has nothing
+    /// like it.
+    fn type_name(&self, kind: &super::TypeKind) -> Option<String>;
+    /// Whether it keeps only a type's affinity (SQLite): beside it any
+    /// integer is any other, and lengths don't count.
+    fn keeps_only_affinity(&self) -> bool {
+        false
+    }
+    /// `err`'s message made readable (a detail and hint added, boilerplate
+    /// cut), if it's this engine's error; `None` leaves it as it came.
+    fn database_error_message(&self, _err: &dyn sqlx::error::DatabaseError) -> Option<String> {
+        None
+    }
+    /// Where in the submitted SQL `err` says it is, if it's this engine's.
+    fn database_error_position(&self, _err: &dyn sqlx::error::DatabaseError) -> Option<super::ErrorPos> {
+        None
+    }
+    /// A position only the message's text gives (SQLite's `near "x"`), for
+    /// the background syntax check.
+    fn position_in_message(&self, _message: &str) -> Option<super::ErrorPos> {
+        None
+    }
+    /// Whether `err` is what this engine says as it closes the connection
+    /// (beyond SQL's own connection exceptions).
+    fn closes_connection(&self, _err: &dyn sqlx::error::DatabaseError) -> bool {
+        false
+    }
     /// What AI agents may send (`db::agent_constraints`).
     fn agent_constraints(&self) -> &'static super::agent_constraints::AgentConstraints;
 
@@ -236,17 +269,10 @@ pub trait Dialect: Sync {
     }
 }
 
-static POSTGRES: super::postgres::Postgres = super::postgres::Postgres;
-static MYSQL: super::mysql::MySql = super::mysql::MySql;
-static SQLITE: super::sqlite::Sqlite = super::sqlite::Sqlite;
-
 impl Engine {
+    /// Its engine module's dialect (`DIALECT`).
     pub fn dialect(self) -> &'static dyn Dialect {
-        match self {
-            Engine::Postgres => &POSTGRES,
-            Engine::MySql => &MYSQL,
-            Engine::Sqlite => &SQLITE,
-        }
+        on_engine!(self, &engine::DIALECT)
     }
 
     pub fn capabilities(self) -> Capabilities {

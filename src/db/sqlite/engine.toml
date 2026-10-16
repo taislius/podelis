@@ -1,0 +1,3 @@
+# This folder is a database engine: build.rs finds it by this file.
+name = "Sqlite"   # its Engine variant, as connections.toml writes it
+order = 3    # its place in lists (the connection form cycles in this order)

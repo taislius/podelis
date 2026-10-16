@@ -4,6 +4,12 @@ use super::super::activity::Activity;
 use super::super::catalog::{ColumnRow, TableRow};
 use super::super::details::{ForeignKey, IndexInfo};
 use super::super::*;
+use sqlx::PgPool;
+use sqlx::postgres::PgDatabaseError;
+
+use super::cells::pg_cell;
+use super::DriverConnection;
+use super::super::dialect::Scan;
 
 type PgActivityRow = (String, String, String, String, String, Option<i64>, String, String, String);
 
@@ -130,8 +136,9 @@ pub(in crate::db) async fn routine_definition(db: &Database, routine: &RoutineIn
 }
 
 pub(in crate::db) async fn link_rows(
-    p: &PgPool,
+    db: &Database,
 ) -> Result<Vec<(String, String, String, String, String, Option<String>)>> {
+    let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
     Ok(sqlx::query_as(
         "SELECT n.nspname::text, t.relname::text, a.attname::text, fn.nspname::text, ft.relname::text, fa.attname::text
              FROM pg_constraint c
@@ -151,7 +158,8 @@ pub(in crate::db) async fn link_rows(
 
 /// `COMMENT ON` descriptions of tables, views and their columns (the
 /// column's name is null for a table's own).
-pub(in crate::db) async fn comment_rows(p: &PgPool) -> Result<Vec<(String, String, Option<String>, String)>> {
+pub(in crate::db) async fn comment_rows(db: &Database) -> Result<Vec<(String, String, Option<String>, String)>> {
+    let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
     Ok(sqlx::query_as(
         "SELECT n.nspname::text, c.relname::text, a.attname::text, d.description
              FROM pg_description d
@@ -167,7 +175,8 @@ pub(in crate::db) async fn comment_rows(p: &PgPool) -> Result<Vec<(String, Strin
     .await?)
 }
 
-pub(in crate::db) async fn table_details(p: &PgPool, schema: &str, table: &str) -> Result<TableDetails> {
+pub(in crate::db) async fn table_details(db: &Database, schema: &str, table: &str) -> Result<TableDetails> {
+    let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
     let indexes: Vec<(String, bool, bool, String, String)> = sqlx::query_as(
         "SELECT i.relname::text, ix.indisunique, ix.indisprimary,
                     coalesce(string_agg(a.attname::text, ', ' ORDER BY k.ord), ''),
@@ -323,7 +332,8 @@ pub(in crate::db) fn prepare_problem(err: &dyn sqlx::error::DatabaseError) -> Op
 }
 
 /// Cancels backend `id`'s running query.
-pub(in crate::db) async fn cancel(p: &PgPool, id: i64) -> Result<()> {
+pub(in crate::db) async fn cancel(db: &Database, id: i64) -> Result<()> {
+    let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
     sqlx::query("SELECT pg_cancel_backend($1)").bind(id as i32).execute(p).await?;
     Ok(())
 }
@@ -331,7 +341,33 @@ pub(in crate::db) async fn cancel(p: &PgPool, id: i64) -> Result<()> {
 /// The JSON plan of `statement` for the heavy-query guard, made on a pool
 /// connection (a failure there can't abort the session's transaction),
 /// with schemas (`VERBOSE`).
-pub(in crate::db) async fn guard_plan(p: &PgPool, statement: &str) -> Option<String> {
+/// The full scans `statement` would make, planned on a pool connection of
+/// its own: one that fails would otherwise abort the session's open
+/// transaction.
+pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Option<Vec<Scan>> {
+    let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
+    let json = guard_plan(p, statement).await?;
+    Some(db.engine().dialect().full_scans(&[], &[vec![Some(json)]]))
+}
+
+/// Each scan's rows: the plan's, else the catalog's estimate for that
+/// table alone (a catalog can be huge).
+pub(in crate::db) async fn estimated_rows(db: &Database, scans: Vec<Scan>) -> Vec<(String, f64)> {
+    let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
+    let mut out = Vec::new();
+    for scan in scans {
+        let rows = match scan.rows {
+            Some(rows) => Some(rows),
+            None => table_estimate(p, scan.schema.as_deref(), &scan.table).await,
+        };
+        if let Some(rows) = rows {
+            out.push((scan.name(), rows));
+        }
+    }
+    out
+}
+
+async fn guard_plan(p: &PgPool, statement: &str) -> Option<String> {
     let sql = format!("EXPLAIN (FORMAT JSON, VERBOSE) {statement}");
     let row = sqlx::raw_sql(AssertSqlSafe(sql)).fetch_one(p).await.ok()?;
     row.try_get::<serde_json::Value, _>(0).ok().map(|v| v.to_string())
@@ -339,7 +375,7 @@ pub(in crate::db) async fn guard_plan(p: &PgPool, statement: &str) -> Option<Str
 
 /// A table's row count as the planner estimates it (none before it was
 /// first analyzed). Without a schema, as the search path finds it.
-pub(in crate::db) async fn estimated_rows(p: &PgPool, schema: Option<&str>, table: &str) -> Option<f64> {
+async fn table_estimate(p: &PgPool, schema: Option<&str>, table: &str) -> Option<f64> {
     let query = match schema {
         Some(schema) => sqlx::query_scalar::<_, f64>(
             "SELECT c.reltuples::float8 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -353,4 +389,16 @@ pub(in crate::db) async fn estimated_rows(p: &PgPool, schema: Option<&str>, tabl
         .bind(table),
     };
     query.fetch_optional(p).await.ok().flatten().filter(|rows| *rows >= 0.0)
+}
+
+/// Whether the session is inside a transaction, asked: `now()` is frozen
+/// at the transaction's start.
+pub(in crate::db) async fn transaction_state(c: &mut DriverConnection) -> Option<TxnState> {
+    // Simple protocol, so the "statement" is exactly this query.
+    let probe = sqlx::raw_sql("SELECT now() <> statement_timestamp()").fetch_one(&mut **c).await;
+    match probe {
+        Ok(row) => Some(if pg_cell(&row, 0).as_deref() == Some("true") { TxnState::Open } else { TxnState::Idle }),
+        Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("25P02") => Some(TxnState::Aborted),
+        Err(_) => None,
+    }
 }

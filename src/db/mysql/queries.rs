@@ -1,9 +1,29 @@
 //! MySQL: catalog, details and session queries.
 
+// Every engine has these functions with one signature, the generated
+// dispatch calling them alike (build.rs): some needn't wait for anything.
+#![allow(clippy::unused_async)]
+
 use super::super::activity::Activity;
 use super::super::catalog::{ColumnRow, TableRow};
 use super::super::details::{ForeignKey, IndexInfo};
 use super::super::*;
+use sqlx::mysql::{MySql, MySqlDatabaseError};
+use super::DriverConnection;
+use super::super::dialect::Scan;
+
+impl Database {
+    /// The MySQL session connection if it's free right now; otherwise (or
+    /// after `close()`) a query takes one from the pool.
+    pub(in crate::db) fn mysql_session_now(&self) -> Option<MappedMutexGuard<'_, PoolConnection<MySql>>> {
+        let session = self.0.session.try_lock().ok()?;
+        MutexGuard::try_map(session, |s| match s {
+            Session::MySql(c) => Some(c),
+            _ => None,
+        })
+        .ok()
+    }
+}
 
 /// Runs `query` on the session connection if it's free (so it sees the
 /// session's settings), else on one from the pool.
@@ -143,7 +163,8 @@ pub(in crate::db) async fn comment_rows(db: &Database) -> Result<Vec<(String, St
     Ok(fetch_all_on_session!(db, p, query))
 }
 
-pub(in crate::db) async fn table_details(p: &MySqlPool, schema: &str, table: &str) -> Result<TableDetails> {
+pub(in crate::db) async fn table_details(db: &Database, schema: &str, table: &str) -> Result<TableDetails> {
+    let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
     let indexes: Vec<(String, i64, Option<String>)> = sqlx::query_as(
         "SELECT CAST(index_name AS CHAR), CAST(MAX(non_unique) AS SIGNED),
                     CAST(GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ', ') AS CHAR)
@@ -279,7 +300,22 @@ pub(in crate::db) fn prepare_problem(err: &dyn sqlx::error::DatabaseError) -> Op
 }
 
 /// Cancels connection `id`'s running query.
-pub(in crate::db) async fn cancel(p: &MySqlPool, id: i64) -> Result<()> {
+pub(in crate::db) async fn cancel(db: &Database, id: i64) -> Result<()> {
+    let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
     sqlx::raw_sql(AssertSqlSafe(format!("KILL QUERY {id}"))).execute(p).await?;
     Ok(())
+}
+
+/// Its plans are made on the session (as the user's statements run).
+pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Option<Vec<Scan>> {
+    db.scans_by_explain(statement).await
+}
+
+pub(in crate::db) async fn estimated_rows(db: &Database, scans: Vec<Scan>) -> Vec<(String, f64)> {
+    db.estimates_from_catalog(scans).await
+}
+
+/// The transaction state isn't asked: Podėlis tracks BEGIN and COMMIT.
+pub(in crate::db) async fn transaction_state(_c: &mut DriverConnection) -> Option<TxnState> {
+    None
 }

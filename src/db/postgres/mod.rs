@@ -5,6 +5,8 @@ mod plan;
 
 pub(super) mod cells;
 pub(super) mod connect;
+mod copy;
+pub(super) mod passwords;
 pub(super) mod pgpass;
 pub(super) mod queries;
 
@@ -12,7 +14,74 @@ use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan};
 
 pub struct Postgres;
 
+/// A row's value as text: what `db::run` reads results with.
+pub(super) use cells::pg_cell as cell;
+
+/// What `db::Pool` and `db::Session` hold for this engine (see build.rs).
+pub(super) type DriverPool = sqlx::PgPool;
+pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::Postgres>;
+
+/// This engine's dialect, for `Engine::dialect`.
+pub(super) static DIALECT: Postgres = Postgres;
+
 impl Dialect for Postgres {
+    /// `real` is a 4-byte float here (MySQL's is a double).
+    fn type_kind(&self, base: &str) -> Option<crate::db::TypeKind> {
+        (base == "real").then_some(crate::db::TypeKind::Float4)
+    }
+
+    fn type_name(&self, kind: &crate::db::TypeKind) -> Option<String> {
+        use crate::db::TypeKind as Kind;
+        use crate::db::types::{decimal, sized};
+        Some(match kind {
+            Kind::Int(1 | 2) => "smallint".into(),
+            Kind::Int(3 | 4) => "integer".into(),
+            Kind::Int(_) => "bigint".into(),
+            Kind::Bool => "boolean".into(),
+            Kind::Decimal(ps) => decimal("numeric", *ps).unwrap_or_else(|| "numeric".into()),
+            Kind::Float4 => "real".into(),
+            Kind::Float8 => "double precision".into(),
+            Kind::Varchar(n) => sized("varchar", *n),
+            Kind::Char(n) => sized("char", *n),
+            Kind::Text => "text".into(),
+            Kind::Date => "date".into(),
+            Kind::Time => "time".into(),
+            Kind::Timestamp => "timestamp".into(),
+            Kind::TimestampTz => "timestamptz".into(),
+            Kind::Binary => "bytea".into(),
+            Kind::Json => "jsonb".into(),
+            Kind::Uuid => "uuid".into(),
+            Kind::Other(_) => return None,
+        })
+    }
+
+    fn database_error_message(&self, err: &dyn sqlx::error::DatabaseError) -> Option<String> {
+        let pg = err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()?;
+        let mut msg = pg.message().to_string();
+        if let Some(detail) = pg.detail() {
+            msg = format!("{msg}. {detail}");
+        }
+        if let Some(hint) = pg.hint() {
+            msg = format!("{msg} (hint: {hint})");
+        }
+        Some(msg)
+    }
+
+    fn database_error_position(&self, err: &dyn sqlx::error::DatabaseError) -> Option<super::ErrorPos> {
+        let pg = err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()?;
+        match pg.position() {
+            Some(sqlx::postgres::PgErrorPosition::Original(p)) => Some(super::ErrorPos::Char(p.saturating_sub(1))),
+            _ => None,
+        }
+    }
+
+    /// Admin and crash shutdowns (57P01–57P03): said just before the
+    /// connection goes.
+    fn closes_connection(&self, err: &dyn sqlx::error::DatabaseError) -> bool {
+        err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>().is_some()
+            && err.code().is_some_and(|c| matches!(c.as_ref(), "57P01" | "57P02" | "57P03"))
+    }
+
     fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
         &agent_constraints::AGENT_CONSTRAINTS
     }

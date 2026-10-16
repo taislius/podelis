@@ -33,13 +33,6 @@ pub enum CheckOutcome {
     Unsupported,
 }
 
-/// SQLite reports no position, only `near "token": syntax error`.
-pub(super) fn sqlite_near(message: &str) -> Option<ErrorPos> {
-    let start = message.find("near \"")? + "near \"".len();
-    let token = &message[start..start + message[start..].find('"')?];
-    Some(ErrorPos::Token(token.to_string()))
-}
-
 /// Where in the submitted SQL the server says an error is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ErrorPos {
@@ -110,10 +103,11 @@ pub fn is_unreachable(err: &anyhow::Error) -> bool {
 pub fn is_broken(err: &anyhow::Error) -> bool {
     match err.downcast_ref::<sqlx::Error>() {
         Some(sqlx::Error::Io(_) | sqlx::Error::Protocol(_) | sqlx::Error::Tls(_)) => true,
-        // Postgres says why it's closing the connection first: connection
-        // exceptions (08…), and admin/crash shutdown (57P01–57P03).
+        // A connection exception (SQLSTATE class 08), or what an engine
+        // says first when it closes the connection (PostgreSQL's shutdowns).
         Some(sqlx::Error::Database(db)) => {
-            db.code().is_some_and(|c| c.starts_with("08") || matches!(c.as_ref(), "57P01" | "57P02" | "57P03"))
+            db.code().is_some_and(|c| c.starts_with("08"))
+                || Engine::ALL.iter().any(|e| e.dialect().closes_connection(db.as_ref()))
         }
         _ => false,
     }
@@ -123,19 +117,12 @@ pub fn error_message(err: &anyhow::Error) -> String {
     let Some(sqlx::Error::Database(db)) = err.downcast_ref::<sqlx::Error>() else {
         return format!("{err:#}");
     };
-    let mut msg = db.message().to_string();
-    // MySQL's syntax errors start with a long boilerplate sentence.
-    if let Some(i) = msg.find("for the right syntax to use ") {
-        msg = format!("syntax error {}", &msg[i + "for the right syntax to use ".len()..]);
-    }
-    if let Some(pg) = db.try_downcast_ref::<PgDatabaseError>() {
-        if let Some(detail) = pg.detail() {
-            msg = format!("{msg}. {detail}");
-        }
-        if let Some(hint) = pg.hint() {
-            msg = format!("{msg} (hint: {hint})");
-        }
-    }
+    // The engine whose error it is words it (its detail and hint, its
+    // boilerplate cut); else the server's message as it came.
+    let msg = Engine::ALL
+        .iter()
+        .find_map(|e| e.dialect().database_error_message(db.as_ref()))
+        .unwrap_or_else(|| db.message().to_string());
     // Keep context added on top, e.g. "connection lost; reconnected".
     let context: Vec<String> =
         err.chain().take_while(|e| e.downcast_ref::<sqlx::Error>().is_none()).map(ToString::to_string).collect();
@@ -146,23 +133,5 @@ pub fn error_position(err: &anyhow::Error) -> Option<ErrorPos> {
     let Some(sqlx::Error::Database(db)) = err.downcast_ref::<sqlx::Error>() else {
         return None;
     };
-    if let Some(pg) = db.try_downcast_ref::<PgDatabaseError>() {
-        return match pg.position() {
-            Some(PgErrorPosition::Original(p)) => Some(ErrorPos::Char(p.saturating_sub(1))),
-            _ => None,
-        };
-    }
-    let msg = db.message();
-    let at = msg.rfind(" at line ")?;
-    let digits: String = msg[at + " at line ".len()..].chars().take_while(char::is_ascii_digit).collect();
-    let line = digits.parse().ok()?;
-    // "... near 'rest of the statement' at line N": the quoted text is what
-    // follows the error, which pins down the column too.
-    match msg[..at].find("near '") {
-        Some(i) if msg[..at].ends_with('\'') => {
-            let near = &msg[i + "near '".len()..at - 1];
-            Some(if near.is_empty() { ErrorPos::Line(line) } else { ErrorPos::Near { line, text: near.to_string() } })
-        }
-        _ => Some(ErrorPos::Line(line)),
-    }
+    Engine::ALL.iter().find_map(|e| e.dialect().database_error_position(db.as_ref()))
 }

@@ -5,13 +5,55 @@ use std::fmt::Write as _;
 mod agent_constraints;
 pub(super) mod cells;
 pub(super) mod connect;
+pub(super) mod passwords;
 pub(super) mod queries;
 
 use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan, PlanNote, hex_digits};
 
 pub struct Sqlite;
 
+/// A row's value as text: what `db::run` reads results with.
+pub(super) use cells::sqlite_cell as cell;
+
+/// What `db::Pool` and `db::Session` hold for this engine (see build.rs).
+pub(super) type DriverPool = sqlx::SqlitePool;
+pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::Sqlite>;
+
+/// This engine's dialect, for `Engine::dialect`.
+pub(super) static DIALECT: Sqlite = Sqlite;
+
 impl Dialect for Sqlite {
+    /// Any name is taken (another engine's too: it keeps its affinity).
+    fn type_name(&self, kind: &crate::db::TypeKind) -> Option<String> {
+        use crate::db::TypeKind as Kind;
+        use crate::db::types::{decimal, sized};
+        Some(match kind {
+            Kind::Int(_) => "INTEGER".into(),
+            Kind::Bool => "BOOLEAN".into(),
+            Kind::Decimal(ps) => decimal("NUMERIC", *ps).unwrap_or_else(|| "NUMERIC".into()),
+            Kind::Float4 | Kind::Float8 => "REAL".into(),
+            Kind::Varchar(n) => sized("VARCHAR", *n),
+            Kind::Char(n) => sized("CHAR", *n),
+            Kind::Text | Kind::Json | Kind::Uuid | Kind::TimestampTz => "TEXT".into(),
+            Kind::Date => "DATE".into(),
+            Kind::Time => "TIME".into(),
+            Kind::Timestamp => "TIMESTAMP".into(),
+            Kind::Binary => "BLOB".into(),
+            Kind::Other(other) => other.clone(),
+        })
+    }
+
+    fn keeps_only_affinity(&self) -> bool {
+        true
+    }
+
+    /// SQLite reports no position, only `near "token": syntax error`.
+    fn position_in_message(&self, message: &str) -> Option<super::ErrorPos> {
+        let start = message.find("near \"")? + "near \"".len();
+        let token = &message[start..start + message[start..].find('"')?];
+        Some(super::ErrorPos::Token(token.to_string()))
+    }
+
     fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
         &agent_constraints::AGENT_CONSTRAINTS
     }

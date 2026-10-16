@@ -1,6 +1,7 @@
 //! Details loaded on demand for the schema navigator: a table's indexes and
 //! foreign keys, view definitions, and stored functions/procedures.
 
+use super::dialect::Scan;
 use super::*;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -73,14 +74,7 @@ pub(super) fn fk_target(own_schema: &str, schema: &str, table: &str, column: &st
 
 impl Database {
     pub async fn table_details(&self, schema: &str, table: &str) -> Result<TableDetails> {
-        match &self.0.pool {
-            Pool::Postgres(p) => postgres::queries::table_details(p, schema, table).await,
-            Pool::MySql(p) => mysql::queries::table_details(p, schema, table).await,
-            Pool::Sqlite(_) => {
-                let mut c = self.sqlite_session().await?;
-                sqlite::queries::table_details(&mut c, table).await
-            }
-        }
+        on_engine!(self.0.engine, engine::queries::table_details(self, schema, table).await)
     }
 
     /// The tables `sql`'s reads would read in full, with about how many
@@ -88,11 +82,11 @@ impl Database {
     /// against heavy queries asks about. Only reads are planned, at most
     /// 20 statements; one that can't be planned is left out.
     ///
-    /// On PostgreSQL the plans are made on a connection of their own: one
-    /// that fails would otherwise abort the session's open transaction.
+    /// Each engine plans them its own way (`full_scans_of`: PostgreSQL on
+    /// a connection of its own, so one that fails can't abort the
+    /// session's open transaction).
     pub async fn full_scans(&self, sql: &str) -> Result<Vec<(String, f64)>> {
         let engine = self.engine();
-        let dialect = engine.dialect();
         let mut scans = Vec::new();
         for statement in crate::sql::split_statements(sql, engine).into_iter().take(20) {
             let infos = crate::analyze::analyze(&crate::parse::parse(statement, engine));
@@ -103,33 +97,28 @@ impl Database {
             {
                 continue;
             }
-            if let Pool::Postgres(p) = &self.0.pool {
-                let Some(json) = postgres::queries::guard_plan(p, statement).await else { continue };
-                let rows = vec![vec![Some(json)]];
-                scans.extend(dialect.full_scans(&[], &rows));
-                continue;
-            }
-            let Ok(plan) = self.run(&dialect.explain(statement, self.version()), 10_000).await else { continue };
-            scans.extend(dialect.full_scans(&plan.columns, &plan.rows));
+            let found = on_engine!(engine, engine::queries::full_scans_of(self, statement).await);
+            scans.extend(found.unwrap_or_default());
         }
         if scans.iter().all(|s| s.rows.is_some()) {
             return Ok(scans.into_iter().filter_map(|s| Some((s.name(), s.rows?))).collect());
         }
-        let mut out = Vec::new();
-        if let Pool::Postgres(p) = &self.0.pool {
-            // Only the tables scanned, by schema: a catalog can be huge.
-            for scan in scans {
-                let rows = match scan.rows {
-                    Some(rows) => Some(rows),
-                    None => postgres::queries::estimated_rows(p, scan.schema.as_deref(), &scan.table).await,
-                };
-                if let Some(rows) = rows {
-                    out.push((scan.name(), rows));
-                }
-            }
-            return Ok(out);
-        }
+        Ok(on_engine!(engine, engine::queries::estimated_rows(self, scans).await))
+    }
+
+    /// A statement's full scans from its EXPLAIN on the session (for
+    /// engines whose plans don't need a connection of their own).
+    pub(super) async fn scans_by_explain(&self, statement: &str) -> Option<Vec<Scan>> {
+        let dialect = self.engine().dialect();
+        let plan = self.run(&dialect.explain(statement, self.version()), 10_000).await.ok()?;
+        Some(dialect.full_scans(&plan.columns, &plan.rows))
+    }
+
+    /// Scans' rows: the plan's, else the catalog's estimate (all tables
+    /// listed once).
+    pub(super) async fn estimates_from_catalog(&self, scans: Vec<Scan>) -> Vec<(String, f64)> {
         let tables = self.tables(false).await.unwrap_or_default();
+        let mut out = Vec::new();
         for scan in scans {
             #[allow(clippy::cast_precision_loss)] // an estimate
             let estimate = || {
@@ -146,20 +135,14 @@ impl Database {
                 out.push((scan.name(), rows));
             }
         }
-        Ok(out)
+        out
     }
 
     /// Every foreign key of the database (the system catalogs left out), in
     /// one query: what points where, both ways.
     pub async fn links(&self) -> Result<Vec<Link>> {
-        let rows: Vec<(String, String, String, String, String, Option<String>)> = match &self.0.pool {
-            Pool::Postgres(p) => postgres::queries::link_rows(p).await?,
-            Pool::MySql(_) => mysql::queries::link_rows(self).await?,
-            Pool::Sqlite(_) => {
-                let mut c = self.sqlite_session().await?;
-                sqlite::queries::link_rows(&mut c).await?
-            }
-        };
+        let rows: Vec<(String, String, String, String, String, Option<String>)> =
+            on_engine!(self.0.engine, engine::queries::link_rows(self).await?);
         Ok(rows
             .into_iter()
             .map(|(schema, table, column, target_schema, target_table, target_column)| Link {
@@ -176,11 +159,7 @@ impl Database {
     /// Every table, view and column comment (the system catalogs left
     /// out); SQLite has none.
     pub async fn comments(&self) -> Result<Vec<Comment>> {
-        let rows = match &self.0.pool {
-            Pool::Postgres(p) => postgres::queries::comment_rows(p).await?,
-            Pool::MySql(_) => mysql::queries::comment_rows(self).await?,
-            Pool::Sqlite(_) => Vec::new(),
-        };
+        let rows = on_engine!(self.0.engine, engine::queries::comment_rows(self).await?);
         Ok(rows
             .into_iter()
             .filter(|(_, _, _, text)| !text.trim().is_empty())
@@ -191,20 +170,13 @@ impl Database {
     /// User-defined functions and procedures (none on SQLite). Postgres
     /// leaves out those that belong to extensions.
     pub async fn routines(&self) -> Result<Vec<RoutineInfo>> {
-        let rows: Vec<(String, String, String, String)> = match &self.0.pool {
-            Pool::Postgres(_) => postgres::queries::routine_rows(self).await?,
-            Pool::MySql(_) => mysql::queries::routine_rows(self).await?,
-            Pool::Sqlite(_) => Vec::new(),
-        };
+        let rows: Vec<(String, String, String, String)> =
+            on_engine!(self.0.engine, engine::queries::routine_rows(self).await?);
         Ok(rows.into_iter().map(|(schema, name, kind, id)| RoutineInfo { schema, name, kind, id }).collect())
     }
 
     /// The CREATE statement of a function or procedure.
     pub async fn routine_definition(&self, routine: &RoutineInfo) -> Result<String> {
-        match &self.0.pool {
-            Pool::Postgres(_) => postgres::queries::routine_definition(self, routine).await,
-            Pool::MySql(_) => mysql::queries::routine_definition(self, routine).await,
-            Pool::Sqlite(_) => anyhow::bail!("SQLite has no stored functions"),
-        }
+        on_engine!(self.0.engine, engine::queries::routine_definition(self, routine).await)
     }
 }

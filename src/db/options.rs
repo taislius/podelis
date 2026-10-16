@@ -1,15 +1,7 @@
 use super::*;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Engine {
-    Postgres,
-    MySql,
-    Sqlite,
-}
-
+// `Engine` and `Engine::ALL` are build.rs's (`db/mod.rs`).
 impl Engine {
-    pub const ALL: [Engine; 3] = [Engine::Postgres, Engine::MySql, Engine::Sqlite];
-
     pub fn label(self) -> &'static str {
         self.dialect().label()
     }

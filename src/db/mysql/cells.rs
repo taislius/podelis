@@ -1,6 +1,7 @@
 //! Decoding MySQL values as text.
 
 use super::super::*;
+use sqlx::mysql::MySqlRow;
 
 /// Formats a MySQL value. `raw_sql` uses the text protocol, so every value
 /// is its textual form; binary data is shown in hex (`0xDEADBEEF`), as is

@@ -1,8 +1,28 @@
 //! SQLite: catalog, details and session queries.
 
+// Every engine has these functions with one signature, the generated
+// dispatch calling them alike (build.rs): some needn't wait for anything.
+#![allow(clippy::unused_async)]
+
 use super::super::catalog::{ColumnRow, TableRow};
 use super::super::details::{ForeignKey, IndexInfo};
 use super::super::*;
+use sqlx::sqlite::Sqlite;
+use super::DriverConnection;
+use super::super::dialect::Scan;
+
+impl Database {
+    /// The SQLite session connection, waited for (SQLite has one).
+    pub(in crate::db) async fn sqlite_session(&self) -> Result<MappedMutexGuard<'_, PoolConnection<Sqlite>>> {
+        let session = self.0.session.lock().await;
+        self.clear_interrupt();
+        MutexGuard::try_map(session, |s| match s {
+            Session::Sqlite(c) => Some(c),
+            _ => None,
+        })
+        .map_err(|_| anyhow::anyhow!("the connection is closed"))
+    }
+}
 
 /// (name, unique, origin, columns, CREATE INDEX)
 type SqliteIndexRow = (String, i64, String, Option<String>, Option<String>);
@@ -65,8 +85,10 @@ pub(in crate::db) async fn column_info_rows(
 }
 
 pub(in crate::db) async fn link_rows(
-    c: &mut sqlx::SqliteConnection,
+    db: &Database,
 ) -> Result<Vec<(String, String, String, String, String, Option<String>)>> {
+    let mut c = db.sqlite_session().await?;
+    let c: &mut sqlx::SqliteConnection = &mut c;
     Ok(sqlx::query_as(
         "SELECT 'main', m.name, p.\"from\", 'main', p.\"table\", p.\"to\"
              FROM sqlite_schema m JOIN pragma_foreign_key_list(m.name) p
@@ -77,7 +99,9 @@ pub(in crate::db) async fn link_rows(
     .await?)
 }
 
-pub(in crate::db) async fn table_details(c: &mut sqlx::SqliteConnection, table: &str) -> Result<TableDetails> {
+pub(in crate::db) async fn table_details(db: &Database, _schema: &str, table: &str) -> Result<TableDetails> {
+    let mut c = db.sqlite_session().await?;
+    let c: &mut sqlx::SqliteConnection = &mut c;
     let indexes: Vec<SqliteIndexRow> = sqlx::query_as(
         "SELECT il.name, il.\"unique\", il.origin,
                     (SELECT group_concat(name, ', ') FROM pragma_index_info(il.name)),
@@ -144,4 +168,52 @@ pub(in crate::db) fn prepare_problem(err: &dyn sqlx::error::DatabaseError) -> Op
     } else {
         None
     }
+}
+
+/// SQLite is a file: no server sessions to list, or stop.
+pub(in crate::db) async fn activity(_db: &Database) -> Result<Vec<Activity>> {
+    anyhow::bail!("SQLite has no server sessions to show")
+}
+
+pub(in crate::db) async fn stop_session(_db: &Database, _id: i64, _terminate: bool) -> Result<()> {
+    anyhow::bail!("SQLite has no server sessions")
+}
+
+/// … and no network to encrypt.
+pub(in crate::db) async fn tls_info(_db: &Database) -> Option<String> {
+    None
+}
+
+/// SQLite keeps no comments on tables or columns.
+pub(in crate::db) async fn comment_rows(_db: &Database) -> Result<Vec<(String, String, Option<String>, String)>> {
+    Ok(Vec::new())
+}
+
+/// … nor functions or procedures of its own.
+pub(in crate::db) async fn routine_rows(_db: &Database) -> Result<Vec<(String, String, String, String)>> {
+    Ok(Vec::new())
+}
+
+pub(in crate::db) async fn routine_definition(_db: &Database, _routine: &RoutineInfo) -> Result<String> {
+    anyhow::bail!("SQLite has no stored functions")
+}
+
+/// Its plans are made on the session (it has one connection).
+pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Option<Vec<Scan>> {
+    db.scans_by_explain(statement).await
+}
+
+pub(in crate::db) async fn estimated_rows(db: &Database, scans: Vec<Scan>) -> Vec<(String, f64)> {
+    db.estimates_from_catalog(scans).await
+}
+
+/// The connection's progress handler stops the query once it sees this.
+pub(in crate::db) async fn cancel(db: &Database, _id: i64) -> Result<()> {
+    db.0.interrupt.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+/// The transaction state isn't asked: Podėlis tracks BEGIN and COMMIT.
+pub(in crate::db) async fn transaction_state(_c: &mut DriverConnection) -> Option<TxnState> {
+    None
 }

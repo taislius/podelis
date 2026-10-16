@@ -6,16 +6,8 @@ use anyhow::{Context, Result};
 use futures_util::TryStreamExt;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use sqlx::mysql::{MySql, MySqlConnectOptions, MySqlDatabaseError, MySqlPoolOptions, MySqlRow, MySqlSslMode};
 use sqlx::pool::PoolConnection;
-use sqlx::postgres::{
-    PgConnectOptions, PgDatabaseError, PgErrorPosition, PgPoolOptions, PgRow, PgSslMode, PgValueFormat, Postgres,
-};
-use sqlx::sqlite::{Sqlite, SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
-use sqlx::{
-    AssertSqlSafe, Column, Either, Executor, MySqlPool, PgPool, Row, SqlSafeStr, SqlitePool, Statement, TypeInfo,
-    ValueRef,
-};
+use sqlx::{AssertSqlSafe, Column, Either, Executor, Row, SqlSafeStr, Statement, TypeInfo, ValueRef};
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, mpsc, oneshot};
@@ -23,22 +15,22 @@ use uuid::Uuid;
 
 use crate::sql;
 
+// The engines (`Engine`, `Engine::ALL`, `Pool`, `Session`, their modules
+// and `on_engine!` / `on_pool!` / `on_session!`), found by build.rs.
+include!(concat!(env!("OUT_DIR"), "/engines.rs"));
+
 mod activity;
 pub mod agent_constraints;
 mod catalog;
-mod copy;
 mod details;
 mod diagnose;
 mod dialect;
 mod errors;
 mod info;
-mod mysql;
 mod options;
 pub mod password_command;
 pub mod passwords;
-mod postgres;
 mod run;
-mod sqlite;
 #[cfg(test)]
 pub(crate) mod tests;
 mod tunnel;
@@ -54,13 +46,10 @@ pub use errors::{
     CheckOutcome, ErrorPos, error_message, error_position, is_broken, is_reconnected, is_unreachable, sql_literal,
     value_literal,
 };
-use mysql::cells::mysql_cell;
-pub use options::{AgentAccess, ConnectParams, ConnectionMode, Engine, PasswordSource, SslMode, TxMode};
-use postgres::cells::pg_cell;
+pub use options::{AgentAccess, ConnectParams, ConnectionMode, PasswordSource, SslMode, TxMode};
 pub use run::RunError;
-use sqlite::cells::sqlite_cell;
 use tunnel::{Tunnel, open_tunnel};
-pub use types::{same_type, translate_type};
+pub use types::{TypeKind, same_type, translate_type};
 
 /// Default for the rows kept in memory per result set. Rows beyond the limit
 /// are still read from the server (so multi-statement scripts run to
@@ -101,25 +90,11 @@ struct Inner {
     /// The task reading the last streamed result, which holds the session
     /// while it runs: stopped when the session is given up on.
     stream_task: std::sync::Mutex<Option<tokio::task::AbortHandle>>,
-    /// PostgreSQL's TCP address, to check it answers before a new
-    /// connection is made for a session or a cancel (`reach`). None for
-    /// MySQL (a login of its own instead: `mysql::connect::try_login`),
-    /// SQLite, a socket path, or an SSH tunnel (its end is this machine).
+    /// The server's TCP address, for its engine to check it answers before
+    /// a new connection is made for a session or a cancel
+    /// (`connect::check_reach`). None for a file, a socket path, or an SSH
+    /// tunnel (its end is this machine).
     address: Option<(String, u16)>,
-}
-
-enum Pool {
-    Postgres(PgPool),
-    MySql(MySqlPool),
-    Sqlite(SqlitePool),
-}
-
-enum Session {
-    Postgres(PoolConnection<Postgres>),
-    MySql(PoolConnection<MySql>),
-    Sqlite(PoolConnection<Sqlite>),
-    /// After `close()`.
-    Closed,
 }
 
 /// Transaction state of the session connection.
@@ -259,7 +234,7 @@ const REACH_TIMEOUT: Duration = Duration::from_secs(3);
 /// Whether something answers at `host:port` (a TCP connection, closed at
 /// once): the reason in words when not (no such host, refused, no route,
 /// no answer), which sqlx's pool would only report as a timeout.
-async fn reach(host: &str, port: u16) -> Result<()> {
+pub(super) async fn reach(host: &str, port: u16) -> Result<()> {
     let at = address_text(host, port);
     let unreachable = |why: String| anyhow::Error::new(errors::Unreachable(format!("can't reach {at}: {why}")));
     let addrs: Vec<std::net::SocketAddr> =
@@ -281,14 +256,7 @@ impl Database {
     /// made for it after something went wrong: reopening the session,
     /// cancelling. There a server that's down fails at once, with why.
     async fn check_reach(&self) -> Result<()> {
-        match (&self.0.address, &self.0.pool) {
-            (Some((host, port)), _) => reach(host, *port).await,
-            // MySQL: a whole login instead (see `try_login`), over TCP.
-            (None, Pool::MySql(p)) if p.connect_options().get_socket().is_none() => {
-                mysql::connect::try_login(&p.connect_options()).await
-            }
-            (None, _) => Ok(()),
-        }
+        on_engine!(self.0.engine, engine::connect::check_reach(self).await)
     }
 
     pub async fn connect(params: ConnectParams) -> Result<Self> {
@@ -310,23 +278,18 @@ impl Database {
             host = "127.0.0.1".to_string();
             port = local;
         }
-        // PostgreSQL's address first: a server that's down, or an address
-        // no route leads to, says so at once rather than as the pool's
-        // "timed out" 10 s later. Not MySQL's, ever: it counts a connection
-        // closed before its handshake against the host, and blocks it after
-        // enough (`max_connect_errors`).
-        let address = (params.engine == Engine::Postgres && !host.starts_with('/') && tunnel.is_none())
+        // The server's TCP address (not a socket, not a tunnel's end on
+        // this machine): each engine checks it answers its own way first
+        // (`check_before_connect`), so a server that's down says so at once
+        // rather than as the pool's "timed out" 10 s later.
+        let address = (!params.engine.is_file_based() && !host.starts_with('/') && tunnel.is_none())
             .then(|| (host.clone(), port));
         if let Some((host, port)) = &address {
-            reach(host, *port).await?;
+            on_engine!(params.engine, engine::connect::check_before_connect(host, *port).await)?;
         }
         let host = host.as_str();
         let open = |params: ConnectParams| async move {
-            match params.engine {
-                Engine::Postgres => postgres::connect::connect(&params, host, port).await,
-                Engine::MySql => mysql::connect::connect(&params, host, port).await,
-                Engine::Sqlite => sqlite::connect::connect(&params, host).await,
-            }
+            on_engine!(params.engine, engine::connect::connect(&params, host, port).await)
         };
         // `prefer` means TLS if the server can: when it offers TLS the
         // client can't speak (an old MySQL's TLS 1.0/1.1), try without.
@@ -387,28 +350,6 @@ impl Database {
     /// doesn't stop the next query. Called once a query has the session.
     fn clear_interrupt(&self) {
         self.0.interrupt.store(false, Ordering::SeqCst);
-    }
-
-    /// The SQLite session connection, once it's free. Fails after `close()`.
-    async fn sqlite_session(&self) -> Result<MappedMutexGuard<'_, PoolConnection<Sqlite>>> {
-        let session = self.0.session.lock().await;
-        self.clear_interrupt();
-        MutexGuard::try_map(session, |s| match s {
-            Session::Sqlite(c) => Some(c),
-            _ => None,
-        })
-        .map_err(|_| anyhow::anyhow!("the connection is closed"))
-    }
-
-    /// The MySQL session connection if it's free right now; otherwise (or
-    /// after `close()`) a query takes one from the pool.
-    fn mysql_session_now(&self) -> Option<MappedMutexGuard<'_, PoolConnection<MySql>>> {
-        let session = self.0.session.try_lock().ok()?;
-        MutexGuard::try_map(session, |s| match s {
-            Session::MySql(c) => Some(c),
-            _ => None,
-        })
-        .ok()
     }
 
     /// Re-reads the session's `sql_mode`, unless a query is running on it.

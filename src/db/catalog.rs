@@ -12,11 +12,7 @@ impl Database {
     /// catalog tables.
     pub async fn catalog(&self, system: bool) -> Result<Vec<(TableInfo, Vec<ColumnInfo>)>> {
         let tables = self.tables(system).await?;
-        let rows: Vec<ColumnRow> = match &self.0.pool {
-            Pool::Postgres(_) => postgres::queries::column_rows(self, system).await?,
-            Pool::MySql(_) => mysql::queries::column_rows(self, system).await?,
-            Pool::Sqlite(_) => sqlite::queries::column_rows(self, system).await?,
-        };
+        let rows: Vec<ColumnRow> = on_engine!(self.0.engine, engine::queries::column_rows(self, system).await?);
         let mut by_table: std::collections::HashMap<(String, String), Vec<ColumnInfo>> =
             std::collections::HashMap::default();
         for (schema, table, name, data_type, nullable, key) in rows {
@@ -37,11 +33,7 @@ impl Database {
     }
 
     pub async fn tables(&self, system: bool) -> Result<Vec<TableInfo>> {
-        let rows: Vec<TableRow> = match &self.0.pool {
-            Pool::Postgres(_) => postgres::queries::table_rows(self, system).await?,
-            Pool::MySql(_) => mysql::queries::table_rows(self, system).await?,
-            Pool::Sqlite(_) => sqlite::queries::table_rows(self, system).await?,
-        };
+        let rows: Vec<TableRow> = on_engine!(self.0.engine, engine::queries::table_rows(self, system).await?);
         let dialect = self.0.engine.dialect();
         Ok(rows
             .into_iter()
@@ -59,11 +51,8 @@ impl Database {
 
     #[cfg(test)]
     pub async fn columns(&self, schema: &str, table: &str) -> Result<Vec<ColumnInfo>> {
-        let rows: Vec<(String, String, String)> = match &self.0.pool {
-            Pool::Postgres(_) => postgres::queries::column_info_rows(self, schema, table).await?,
-            Pool::MySql(_) => mysql::queries::column_info_rows(self, schema, table).await?,
-            Pool::Sqlite(_) => sqlite::queries::column_info_rows(self, schema, table).await?,
-        };
+        let rows: Vec<(String, String, String)> =
+            on_engine!(self.0.engine, engine::queries::column_info_rows(self, schema, table).await?);
         Ok(rows
             .into_iter()
             .map(|(name, data_type, nullable)| ColumnInfo {

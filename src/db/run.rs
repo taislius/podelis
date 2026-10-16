@@ -1,4 +1,3 @@
-use super::errors::sqlite_near;
 use super::*;
 
 /// Reads up to `n` more rows; `true` once the rows have run out.
@@ -106,19 +105,12 @@ macro_rules! collect_statements {
 }
 
 impl Database {
-    /// Whether the session is inside a transaction. Postgres is asked
-    /// directly (`now()` is frozen at transaction start); other engines
-    /// return `None` and the caller tracks BEGIN/COMMIT itself.
+    /// Whether the session is inside a transaction, where its engine can
+    /// ask (PostgreSQL); `None` elsewhere, and the caller tracks
+    /// BEGIN/COMMIT itself.
     pub async fn transaction_state(&self) -> Option<TxnState> {
         let mut session = self.0.session.lock().await;
-        let Session::Postgres(c) = &mut *session else { return None };
-        // Simple protocol, so the "statement" is exactly this query.
-        let probe = sqlx::raw_sql("SELECT now() <> statement_timestamp()").fetch_one(&mut **c).await;
-        match probe {
-            Ok(row) => Some(if pg_cell(&row, 0).as_deref() == Some("true") { TxnState::Open } else { TxnState::Idle }),
-            Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("25P02") => Some(TxnState::Aborted),
-            Err(_) => None,
-        }
+        on_session!(&mut *session, |c| engine::queries::transaction_state(c).await, closed => None)
     }
 
     /// Runs one or more `;`-separated statements on the session connection
@@ -166,23 +158,16 @@ impl Database {
         let task = tokio::spawn(async move {
             let mut guard = session.lock_owned().await;
             db.clear_interrupt();
-            match &mut *guard {
-                Session::Postgres(c) => {
+            on_session!(
+                &mut *guard,
+                |c| {
                     let stream = sqlx::raw_sql(AssertSqlSafe(sql_owned)).fetch(&mut **c);
-                    serve_stream(stream, pg_cell, page, first_tx, req_rx, db).await;
-                }
-                Session::MySql(c) => {
-                    let stream = sqlx::raw_sql(AssertSqlSafe(sql_owned)).fetch(&mut **c);
-                    serve_stream(stream, mysql_cell, page, first_tx, req_rx, db).await;
-                }
-                Session::Sqlite(c) => {
-                    let stream = sqlx::raw_sql(AssertSqlSafe(sql_owned)).fetch(&mut **c);
-                    serve_stream(stream, sqlite_cell, page, first_tx, req_rx, db).await;
-                }
-                Session::Closed => {
+                    serve_stream(stream, engine::cell, page, first_tx, req_rx, db).await;
+                },
+                closed => {
                     let _ = first_tx.send(Err(anyhow::anyhow!("disconnected")));
                 }
-            }
+            );
         });
         // Kept, so giving up on the session stops it (it holds the session).
         if let Ok(mut slot) = self.0.stream_task.lock() {
@@ -304,12 +289,12 @@ impl Database {
         if self.0.session_changed.load(Ordering::SeqCst) {
             return Ok(None);
         }
+        // A file's connection: an in-memory database is the session's alone.
+        if self.0.engine.capabilities().file_based {
+            return Ok(None);
+        }
         let start = Instant::now();
-        let mut aside = match &self.0.pool {
-            Pool::Postgres(p) => Session::Postgres(p.acquire().await?),
-            Pool::MySql(p) => Session::MySql(p.acquire().await?),
-            Pool::Sqlite(_) => return Ok(None),
-        };
+        let mut aside = on_pool!(&self.0.pool, |p| Session::from(p.acquire().await?));
         let mut results = aside.run(sql, row_limit).await?;
         let statements = results.len();
         let Some(last) = results.pop() else { return Ok(Some(QueryOutcome::default())) };
@@ -320,11 +305,7 @@ impl Database {
         self.check_reach().await?;
         // A new session has the connection's own settings again.
         self.0.session_changed.store(false, Ordering::SeqCst);
-        *session = match &self.0.pool {
-            Pool::Postgres(p) => Session::Postgres(p.acquire().await?),
-            Pool::MySql(p) => Session::MySql(p.acquire().await?),
-            Pool::Sqlite(p) => Session::Sqlite(p.acquire().await?),
-        };
+        *session = on_pool!(&self.0.pool, |p| Session::from(p.acquire().await?));
         session.watch_interrupt(&self.0.interrupt).await?;
         self.0.backend_id.store(session.backend_id().await?, Ordering::SeqCst);
         Ok(())
@@ -339,12 +320,7 @@ impl Database {
             .map_err(|_| anyhow::anyhow!("session busy"))?;
         self.clear_interrupt();
         let sql = AssertSqlSafe(sql.to_string()).into_sql_str();
-        let prepared = match &mut *session {
-            Session::Postgres(c) => (&mut **c).prepare(sql).await.map(drop),
-            Session::MySql(c) => (&mut **c).prepare(sql).await.map(drop),
-            Session::Sqlite(c) => (&mut **c).prepare(sql).await.map(drop),
-            Session::Closed => anyhow::bail!("disconnected"),
-        };
+        let prepared = on_session!(&mut *session, |c| (&mut **c).prepare(sql).await.map(drop), closed => anyhow::bail!("disconnected"));
         let err = match prepared {
             Ok(()) => return Ok(CheckOutcome::Ok),
             Err(e) => e,
@@ -353,15 +329,11 @@ impl Database {
             // I/O or protocol trouble: not something to show as a hint.
             return Ok(CheckOutcome::Unsupported);
         };
-        let problem = match self.0.engine {
-            Engine::Postgres => postgres::queries::prepare_problem(db),
-            Engine::MySql => mysql::queries::prepare_problem(db),
-            Engine::Sqlite => sqlite::queries::prepare_problem(db),
-        };
+        let problem = on_engine!(self.0.engine, engine::queries::prepare_problem(db));
         let Some(syntax) = problem else { return Ok(CheckOutcome::Unsupported) };
         let err = anyhow::Error::from(err);
         let message = error_message(&err);
-        let position = error_position(&err).or_else(|| sqlite_near(&message));
+        let position = error_position(&err).or_else(|| self.0.engine.dialect().position_in_message(&message));
         Ok(CheckOutcome::Problem { message, position, syntax })
     }
 
@@ -401,7 +373,8 @@ impl Database {
     /// from when the session is free: one busy elsewhere (a schema load)
     /// isn't a dead one, and the run waits its turn.
     pub async fn answers_within(&self, limit: Duration) -> Result<()> {
-        if matches!(self.0.pool, Pool::Sqlite(_)) {
+        // A file always answers.
+        if self.0.engine.capabilities().file_based {
             return Ok(());
         }
         let Ok(mut session) = tokio::time::timeout(limit, self.0.session.lock()).await else { return Ok(()) };
@@ -410,11 +383,7 @@ impl Database {
         }
         let ping = async {
             use sqlx::Connection as _;
-            match &mut *session {
-                Session::Postgres(c) => drop(c.ping().await),
-                Session::MySql(c) => drop(c.ping().await),
-                Session::Sqlite(_) | Session::Closed => {}
-            }
+            on_session!(&mut *session, |c| drop(c.ping().await), closed => {});
         };
         if tokio::time::timeout(limit, ping).await.is_ok() {
             return Ok(());
@@ -440,12 +409,7 @@ impl Database {
         if !self.0.stale.swap(false, Ordering::SeqCst) {
             return Ok(false);
         }
-        match std::mem::replace(session, Session::Closed) {
-            Session::Postgres(c) => drop(c.detach()),
-            Session::MySql(c) => drop(c.detach()),
-            Session::Sqlite(c) => drop(c.detach()),
-            Session::Closed => {}
-        }
+        on_session!(std::mem::replace(session, Session::Closed), |c| drop(c.detach()), closed => {});
         if let Err(e) = self.reopen_session(session).await {
             self.0.stale.store(true, Ordering::SeqCst);
             return Err(e.context(errors::NoAnswer));
@@ -466,23 +430,14 @@ impl Database {
     pub async fn cancel(&self) -> Result<()> {
         self.check_reach().await?;
         let id = self.0.backend_id.load(Ordering::SeqCst);
-        match &self.0.pool {
-            Pool::Postgres(p) => postgres::queries::cancel(p, id).await?,
-            Pool::MySql(p) => mysql::queries::cancel(p, id).await?,
-            Pool::Sqlite(_) => self.0.interrupt.store(true, Ordering::SeqCst),
-        }
-        Ok(())
+        on_engine!(self.0.engine, engine::queries::cancel(self, id).await)
     }
 
     pub async fn close(&self) {
         // Hand the session connection back first: the pool's close() waits
         // for every checked-out connection.
         *self.0.session.lock().await = Session::Closed;
-        match &self.0.pool {
-            Pool::Postgres(p) => p.close().await,
-            Pool::MySql(p) => p.close().await,
-            Pool::Sqlite(p) => p.close().await,
-        }
+        on_pool!(&self.0.pool, |p| p.close().await);
     }
 }
 
@@ -513,88 +468,60 @@ impl StatementResult {
     }
 }
 
-/// How many SQLite virtual machine steps go between checks for a cancel:
-/// often enough to stop within milliseconds, rarely enough to cost nothing.
-const INTERRUPT_CHECK_STEPS: i32 = 10_000;
-
 impl Session {
-    /// SQLite: stops the running statement once `interrupt` is set. The
-    /// handler stays with the connection.
+    /// Lets a cancel stop the running statement, where its engine needs
+    /// that set up (SQLite's progress handler).
     pub(super) async fn watch_interrupt(&mut self, interrupt: &Arc<AtomicBool>) -> Result<()> {
-        if let Session::Sqlite(c) = self {
-            let interrupt = Arc::clone(interrupt);
-            c.lock_handle()
-                .await?
-                .set_progress_handler(INTERRUPT_CHECK_STEPS, move || !interrupt.load(Ordering::SeqCst));
-        }
-        Ok(())
+        on_session!(self, |c| engine::connect::watch_interrupt(c, interrupt).await, closed => Ok(()))
     }
 
     pub(super) async fn server_version(&mut self) -> String {
-        let sql = match self {
-            Session::Postgres(_) => Engine::Postgres.dialect().version_query(),
-            Session::MySql(_) => Engine::MySql.dialect().version_query(),
-            Session::Sqlite(_) => Engine::Sqlite.dialect().version_query(),
-            Session::Closed => return String::new(),
-        };
-        let version: Result<String, _> = match self {
-            Session::Postgres(c) => sqlx::query_scalar(sql).fetch_one(&mut **c).await,
-            Session::MySql(c) => sqlx::query_scalar(sql).fetch_one(&mut **c).await,
-            Session::Sqlite(c) => sqlx::query_scalar(sql).fetch_one(&mut **c).await,
-            Session::Closed => return String::new(),
-        };
+        let version: Result<String, _> = on_session!(
+            self,
+            |c| sqlx::query_scalar(engine::DIALECT.version_query()).fetch_one(&mut **c).await,
+            closed => return String::new()
+        );
         // "16.2 (Debian 16.2-1)" → "16.2"
         version.map(|v| v.split_whitespace().next().unwrap_or_default().to_string()).unwrap_or_default()
     }
 
     /// The session's `sql_mode`, for engines that have one.
     pub(super) async fn sql_mode(&mut self) -> Option<String> {
-        match self {
-            Session::MySql(c) => {
-                let sql = Engine::MySql.dialect().sql_mode_query()?;
+        on_session!(
+            self,
+            |c| {
+                let sql = engine::DIALECT.sql_mode_query()?;
                 sqlx::query_scalar(sql).fetch_one(&mut **c).await.ok()
-            }
-            _ => None,
-        }
+            },
+            closed => None
+        )
     }
 
     pub(super) async fn backend_id(&mut self) -> Result<i64> {
-        match self {
-            Session::Postgres(c) => postgres::connect::backend_id(c).await,
-            Session::MySql(c) => mysql::connect::backend_id(c).await,
-            Session::Sqlite(_) | Session::Closed => Ok(0),
-        }
+        on_session!(self, |c| engine::connect::backend_id(c).await, closed => Ok(0))
     }
 
     pub(super) async fn run(&mut self, sql: &str, limit: usize) -> Result<Vec<StatementResult>> {
         let sql = sql.to_string();
-        Ok(match self {
-            Session::Closed => anyhow::bail!("disconnected"),
-            Session::Postgres(c) => collect_statements!(&mut **c, sql, limit, pg_cell),
-            Session::MySql(c) => collect_statements!(&mut **c, sql, limit, mysql_cell),
-            Session::Sqlite(c) => collect_statements!(&mut **c, sql, limit, sqlite_cell),
-        })
+        Ok(on_session!(
+            self,
+            |c| collect_statements!(&mut **c, sql, limit, engine::cell),
+            closed => anyhow::bail!("disconnected")
+        ))
     }
 
     /// Column names and types of a single statement, via a server-side
     /// prepare. `None` if it can't be prepared (e.g. some utility commands).
     pub(super) async fn describe_columns(&mut self, sql: &str) -> Option<Vec<(String, String)>> {
         let sql = AssertSqlSafe(sql.to_string()).into_sql_str();
-        let stmt_columns: Vec<(String, String)> = match self {
-            Session::Closed => return None,
-            Session::Postgres(c) => {
+        let stmt_columns: Vec<(String, String)> = on_session!(
+            self,
+            |c| {
                 let stmt = (&mut **c).prepare(sql).await.ok()?;
                 stmt.columns().iter().map(|c| (c.name().to_string(), c.type_info().name().to_string())).collect()
-            }
-            Session::MySql(c) => {
-                let stmt = (&mut **c).prepare(sql).await.ok()?;
-                stmt.columns().iter().map(|c| (c.name().to_string(), c.type_info().name().to_string())).collect()
-            }
-            Session::Sqlite(c) => {
-                let stmt = (&mut **c).prepare(sql).await.ok()?;
-                stmt.columns().iter().map(|c| (c.name().to_string(), c.type_info().name().to_string())).collect()
-            }
-        };
+            },
+            closed => return None
+        );
         Some(stmt_columns)
     }
 }
