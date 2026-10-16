@@ -50,7 +50,8 @@ pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint
 pub use dialect::PlanNote;
 pub use dialect::{Dialect, LexerRules, Plan, human_rows};
 pub use errors::{
-    CheckOutcome, ErrorPos, error_message, error_position, is_broken, is_reconnected, sql_literal, value_literal,
+    CheckOutcome, ErrorPos, error_message, error_position, is_broken, is_reconnected, is_unreachable, sql_literal,
+    value_literal,
 };
 use mysql::cells::mysql_cell;
 pub use options::{AgentAccess, ConnectParams, ConnectionMode, Engine, PasswordSource, SslMode, TxMode};
@@ -92,6 +93,18 @@ struct Inner {
     /// The session's settings were changed (`USE`, `SET`…): another
     /// connection wouldn't see the same, so nothing runs aside.
     session_changed: AtomicBool,
+    /// The session was given up on mid-call (no answer: a dropped VPN, a
+    /// dead link): its connection is in an unknown state, so the next run
+    /// opens a new one first.
+    stale: AtomicBool,
+    /// The task reading the last streamed result, which holds the session
+    /// while it runs: stopped when the session is given up on.
+    stream_task: std::sync::Mutex<Option<tokio::task::AbortHandle>>,
+    /// PostgreSQL's TCP address, to check it answers before a new
+    /// connection is made for a session or a cancel (`reach`). None for
+    /// MySQL (a login of its own instead: `mysql::connect::try_login`),
+    /// SQLite, a socket path, or an SSH tunnel (its end is this machine).
+    address: Option<(String, u16)>,
 }
 
 enum Pool {
@@ -225,7 +238,58 @@ fn tls_failure(e: &anyhow::Error) -> Option<String> {
     })
 }
 
+/// Why a connection to a server failed, in a user's words.
+fn io_reason(e: &std::io::Error) -> String {
+    match e.kind() {
+        std::io::ErrorKind::ConnectionRefused => "connection refused".into(),
+        std::io::ErrorKind::HostUnreachable | std::io::ErrorKind::NetworkUnreachable => "no route to the host".into(),
+        _ => e.to_string(),
+    }
+}
+
+/// `host:port` as written in messages (an IPv6 address in brackets).
+fn address_text(host: &str, port: u16) -> String {
+    if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") }
+}
+
+/// How long a server's address has to answer `reach`.
+const REACH_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Whether something answers at `host:port` (a TCP connection, closed at
+/// once): the reason in words when not (no such host, refused, no route,
+/// no answer), which sqlx's pool would only report as a timeout.
+async fn reach(host: &str, port: u16) -> Result<()> {
+    let at = address_text(host, port);
+    let unreachable = |why: String| anyhow::Error::new(errors::Unreachable(format!("can't reach {at}: {why}")));
+    let addrs: Vec<std::net::SocketAddr> =
+        match tokio::time::timeout(REACH_TIMEOUT, tokio::net::lookup_host((host, port))).await {
+            Ok(Ok(addrs)) => addrs.collect(),
+            // (`diagnose::hint` adds what to do about each.)
+            Ok(Err(_)) => return Err(unreachable("no such host".into())),
+            Err(_) => return Err(unreachable("its name didn't resolve in time (DNS)".into())),
+        };
+    match tokio::time::timeout(REACH_TIMEOUT, tokio::net::TcpStream::connect(&addrs[..])).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(e)) => Err(unreachable(io_reason(&e))),
+        Err(_) => Err(unreachable(format!("no answer: timed out after {} s", REACH_TIMEOUT.as_secs()))),
+    }
+}
+
 impl Database {
+    /// Checks the server's address answers before a new connection is
+    /// made for it after something went wrong: reopening the session,
+    /// cancelling. There a server that's down fails at once, with why.
+    async fn check_reach(&self) -> Result<()> {
+        match (&self.0.address, &self.0.pool) {
+            (Some((host, port)), _) => reach(host, *port).await,
+            // MySQL: a whole login instead (see `try_login`), over TCP.
+            (None, Pool::MySql(p)) if p.connect_options().get_socket().is_none() => {
+                mysql::connect::try_login(&p.connect_options()).await
+            }
+            (None, _) => Ok(()),
+        }
+    }
+
     pub async fn connect(params: ConnectParams) -> Result<Self> {
         let params = params.with_password().await?;
         // An IPv6 address may come in brackets; a file path is used as given.
@@ -244,6 +308,16 @@ impl Database {
             tunnel = Some(t);
             host = "127.0.0.1".to_string();
             port = local;
+        }
+        // PostgreSQL's address first: a server that's down, or an address
+        // no route leads to, says so at once rather than as the pool's
+        // "timed out" 10 s later. Not MySQL's, ever: it counts a connection
+        // closed before its handshake against the host, and blocks it after
+        // enough (`max_connect_errors`).
+        let address = (params.engine == Engine::Postgres && !host.starts_with('/') && tunnel.is_none())
+            .then(|| (host.clone(), port));
+        if let Some((host, port)) = &address {
+            reach(host, *port).await?;
         }
         let host = host.as_str();
         let open = |params: ConnectParams| async move {
@@ -283,6 +357,9 @@ impl Database {
             sql_mode: std::sync::Mutex::new(sql_mode),
             tls_failed,
             session_changed: AtomicBool::new(false),
+            stale: AtomicBool::new(false),
+            stream_task: std::sync::Mutex::new(None),
+            address,
         })))
     }
 

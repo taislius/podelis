@@ -56,9 +56,22 @@ pub(super) fn draw_query(f: &mut Frame, app: &mut App, body: Rect) {
         if let Some(schema_area) = schema_area {
             draw_schema(f, app, schema_area);
         }
-        let cursor = draw_editor(f, app, editor_area);
-        draw_results(f, app, results_area);
-        cursor
+        // The statement zoom: the editor taller, the results under it. It
+        // stays while another pane has the keys (an Explain from it shows
+        // its plan there); Shift+F12, or Esc in the editor, ends it.
+        if app.statement_zoom {
+            // In place of the editor's pane, taller (two thirds at least);
+            // the results under it, smaller, still whole.
+            let height = editor_area.height.max(main.height.saturating_mul(2) / 3).min(main.height.saturating_sub(5));
+            let popover = Rect { height, ..editor_area };
+            let below = Rect { y: popover.bottom(), height: main.bottom().saturating_sub(popover.bottom()), ..main };
+            draw_results(f, app, below);
+            draw_editor(f, app, popover)
+        } else {
+            let cursor = draw_editor(f, app, editor_area);
+            draw_results(f, app, results_area);
+            cursor
+        }
     };
 
     // Popups, back to front.
@@ -369,8 +382,12 @@ fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
             fact["relation"].as_str().unwrap_or("?"),
             fact["value"].as_str().unwrap_or("?"),
         );
-        let source = fact["source"].as_str().unwrap_or("?");
-        let who = if confirmed { format!("  · {source}") } else { format!("  · {source}, not confirmed: c") };
+        // The fact comes first: a long source (a migrations folder's
+        // path) gets what's left of the row (16 at least), its end kept.
+        let tail = if confirmed { "" } else { ", not confirmed: c" };
+        let left = room.saturating_sub(text.chars().count() + tail.len() + 4).max(16);
+        let source = truncate_start(fact["source"].as_str().unwrap_or("?"), left);
+        let who = format!("  · {source}{tail}");
         let text = truncate(&text, room.saturating_sub(who.chars().count()));
         let style = if confirmed { fg(t.text) } else { fg(t.warn) };
         let mut line = Line::from(vec![Span::styled(text, style), Span::styled(who, dim())]);
@@ -658,6 +675,8 @@ fn text_view_keys(view: &crate::app::CellView) -> &'static [&'static str] {
         &["↑↓ scroll, next row", "←→ row", "y copy row", "Esc close"]
     } else if view.browse {
         &["←→ previous / next table", "↑↓ scroll", "y copy", "Esc close"]
+    } else if view.follow.is_some() {
+        &["e open in a tab", "y copy", "↑↓ scroll", "Esc close"]
     } else if view.sql.is_some() {
         &["↑↓ scroll", "y copy SQL", "e open it in a tab there", "Esc close"]
     } else {
@@ -727,7 +746,8 @@ pub(super) fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
     let Some(confirm) = &app.confirm else { return };
     let color = if confirm.danger { t.error } else { t.accent };
     let mut lines = vec![Line::from(Span::styled(confirm.message.clone(), bold(color))), Line::default()];
-    lines.extend(confirm.details.iter().map(|d| Line::from(Span::styled(format!("  • {d}"), fg(t.text)))));
+    // The details are wrapped below, once the width is known.
+    let details_at = lines.len();
     if !confirm.details.is_empty() {
         lines.push(Line::default());
     }
@@ -755,12 +775,26 @@ pub(super) fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
     if !keys.is_empty() {
         lines.push(Line::from(keys));
     }
-    let width = fit(lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4, 40, area.width.saturating_sub(4));
-    let height = (lines.len() as u16 + 2).min(area.height);
+    let widest_detail = confirm.details.iter().map(|d| d.chars().count() + 4).max().unwrap_or(0);
+    let widest = lines.iter().map(Line::width).max().unwrap_or(0).max(widest_detail);
+    let width = fit(widest as u16 + 4, 40, area.width.saturating_sub(4));
+    // Each detail a bullet, its wrapped lines under its text, not the bullet.
+    let room = usize::from(width.saturating_sub(2)).saturating_sub(4).max(10);
+    let details = confirm.details.iter().flat_map(|d| {
+        super::results::wrap_words(d, room).into_iter().enumerate().map(|(i, part)| {
+            Line::from(Span::styled(format!("{}{part}", if i == 0 { "  • " } else { "    " }), fg(t.text)))
+        })
+    });
+    lines.splice(details_at..details_at, details);
+    let text = Paragraph::new(lines).wrap(Wrap { trim: false });
+    // Counted as wrapped: a line too long for the box takes more rows, and
+    // the last row (its keys) must still show.
+    let rows = text.line_count(width.saturating_sub(2));
+    let height = (u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(2)).min(area.height);
     let rect = centered_box(area, width, height);
     f.render_widget(Clear, rect);
     let title = if confirm.danger { "CONFIRM" } else { "QUESTION" };
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(popup(title, color)), rect);
+    f.render_widget(text.block(popup(title, color)), rect);
 }
 
 #[cfg(test)]

@@ -52,19 +52,31 @@ impl App {
             return;
         }
         match ev.kind {
+            // QUERY PLAN's text: lines selected (Shift extends), dragged on.
+            MouseEventKind::Down(MouseButton::Left)
+                if inside(self.hits.plan, x, y) && self.tab.result_tab == ResultTab::Plan && !self.grid_shown() =>
+            {
+                self.focus = Focus::Results;
+                self.completion = None;
+                self.click_plan(y, ev.modifiers.contains(KeyModifiers::SHIFT));
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 let double =
                     self.last_click.is_some_and(|(t, cx, cy)| t.elapsed() < DOUBLE_CLICK && cx == x && cy == y);
                 self.last_click = Some((Instant::now(), x, y));
                 self.click(x, y, double);
             }
+            MouseEventKind::Drag(MouseButton::Left) if self.plan_dragging => self.drag_plan(y),
             MouseEventKind::Drag(MouseButton::Left) if self.dragging => {
                 let pos = self.editor_pos_at(x, y);
                 let anchor = self.tab.editor.anchor().unwrap_or_else(|| self.tab.editor.cursor());
                 self.tab.editor.set_cursor(pos);
                 self.tab.editor.set_anchor((anchor != pos).then_some(anchor));
             }
-            MouseEventKind::Up(MouseButton::Left) => self.dragging = false,
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.dragging = false;
+                self.plan_dragging = false;
+            }
             // Right-click: select what's under the pointer, then its menu.
             MouseEventKind::Down(MouseButton::Right) => {
                 // Inside the editor's selection it stays, for Copy and Cut.
@@ -301,11 +313,10 @@ impl App {
 
     fn wheel(&mut self, x: u16, y: u16, down: bool) {
         let hits = &self.hits;
+        // The view moves, not the cursor: a selection stays whole.
         if inside(hits.editor, x, y) {
-            for _ in 0..WHEEL_LINES {
-                self.tab.editor.clear_selection();
-                if down { self.tab.editor.move_down() } else { self.tab.editor.move_up() }
-            }
+            let rows = if down { WHEEL_LINES as isize } else { -(WHEEL_LINES as isize) };
+            self.tab.editor.scroll_view(rows, self.editor_height);
         } else if inside(hits.results, x, y) {
             if !self.grid_shown() {
                 let delta = if down { WHEEL_LINES as i16 } else { -(WHEEL_LINES as i16) };

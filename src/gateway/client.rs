@@ -26,7 +26,8 @@ pub enum CallError {
 impl std::fmt::Display for CallError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CallError::Rpc(e) => write!(f, "the gateway refused: {e}"),
+            // Its message says what went wrong; the code is for programs.
+            CallError::Rpc(e) => write!(f, "{}", e.message),
             CallError::Io(e) => write!(f, "the gateway couldn't be reached: {e}"),
         }
     }
@@ -60,7 +61,7 @@ impl Client {
     /// Connects saying hello in `protocol`: another version's, to stop
     /// that gateway.
     async fn connect_speaking(config_dir: &Path, name: &str, protocol: u32) -> Result<Self, CallError> {
-        let stream = UnixStream::connect(super::socket_path(config_dir)).await?;
+        let stream = UnixStream::connect(super::usable_socket_path(config_dir)?).await?;
         let (read, writer) = stream.into_split();
         let mut client =
             Client { reader: BufReader::new(read), writer, next_id: 1, hello: Value::Null, notifications: Vec::new() };
@@ -158,6 +159,8 @@ pub async fn connect_or_start(
             replace_other(config_dir, &e).await?;
         }
         Err(e @ CallError::Rpc(_)) => return Err(e),
+        // No socket could be made there (`usable_socket_path`).
+        Err(CallError::Io(e)) if e.kind() == std::io::ErrorKind::InvalidInput => return Err(CallError::Io(e)),
         Err(CallError::Io(_)) => {}
     }
     start()?;

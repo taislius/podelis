@@ -131,6 +131,16 @@ impl Database {
     /// Like [`run`], for one read: the first `page` rows, and a stream of
     /// the rest. Reconnects and retries once if the connection had dropped.
     pub async fn run_streaming(&self, sql: &str, page: usize) -> Result<(QueryOutcome, Option<RowStream>)> {
+        // A session given up on: renewed first (a stream is one read).
+        let renewed = {
+            let mut session = self.0.session.lock().await;
+            self.renew_if_stale(&mut session).await?
+        };
+        if renewed {
+            let (mut outcome, stream) = self.run_streaming_once(sql, page).await?;
+            outcome.reconnected = true;
+            return Ok((outcome, stream));
+        }
         match self.run_streaming_once(sql, page).await {
             Err(e) if errors::is_broken(&e) => {
                 let mut session = self.0.session.lock().await;
@@ -153,7 +163,7 @@ impl Database {
         let session = Arc::clone(&self.0.session);
         let db = self.clone();
         let sql_owned = sql.to_string();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let mut guard = session.lock_owned().await;
             db.clear_interrupt();
             match &mut *guard {
@@ -174,6 +184,10 @@ impl Database {
                 }
             }
         });
+        // Kept, so giving up on the session stops it (it holds the session).
+        if let Ok(mut slot) = self.0.stream_task.lock() {
+            *slot = Some(task.abort_handle());
+        }
         let (columns, rows, done) = first_rx.await.map_err(|_| anyhow::anyhow!("query task ended"))??;
         let elapsed = start.elapsed();
         // No rows: recover the column names by preparing the statement.
@@ -214,9 +228,15 @@ impl Database {
     async fn run_retrying(&self, sql: &str, row_limit: usize, retry_reads: bool) -> Result<QueryOutcome> {
         let start = Instant::now();
         let mut session = self.0.session.lock().await;
+        // A session given up on is a dropped connection: the same rules as
+        // for one (reads run again, the rest is the user's to rerun).
+        let mut reconnected = self.renew_if_stale(&mut session).await?;
+        if reconnected && (!retry_reads || !self.reads_only(sql)) {
+            let said = anyhow::anyhow!("the old session didn't answer, so this wasn't run: run it again");
+            return Err(said.context(errors::Reconnected));
+        }
         self.clear_interrupt();
         let result = session.run(sql, row_limit).await;
-        let mut reconnected = false;
         let elapsed = start.elapsed();
 
         let mut results = match result {
@@ -227,10 +247,7 @@ impl Database {
                 }
                 // Reads are safe to run again; a write may or may not have
                 // happened, so it's left to the user.
-                let reads_only = crate::analyze::analyze(&crate::parse::parse(sql, self.0.engine))
-                    .iter()
-                    .all(|i| i.kind == crate::analyze::Kind::Read);
-                if !reads_only || !retry_reads {
+                if !self.reads_only(sql) || !retry_reads {
                     return Err(e.context(errors::Reconnected));
                 }
                 reconnected = true;
@@ -300,6 +317,7 @@ impl Database {
     }
 
     pub(super) async fn reopen_session(&self, session: &mut Session) -> Result<()> {
+        self.check_reach().await?;
         // A new session has the connection's own settings again.
         self.0.session_changed.store(false, Ordering::SeqCst);
         *session = match &self.0.pool {
@@ -371,10 +389,82 @@ impl Database {
         }
     }
 
+    /// Whether the server answers within `limit`, before a run after a
+    /// quiet while: a link that died meanwhile (a VPN that dropped) would
+    /// otherwise leave the run waiting for minutes. SQLite always answers.
+    ///
+    /// A protocol ping, not a statement: it can't fail in an aborted
+    /// transaction or replace MySQL's warnings and row counts, and any
+    /// answer counts (an error too: the run decides what it means, with its
+    /// own rules for reconnecting). Nothing is reopened or retried here (an
+    /// open transaction would be lost without a word). The time counts
+    /// from when the session is free: one busy elsewhere (a schema load)
+    /// isn't a dead one, and the run waits its turn.
+    pub async fn answers_within(&self, limit: Duration) -> Result<()> {
+        if matches!(self.0.pool, Pool::Sqlite(_)) {
+            return Ok(());
+        }
+        let Ok(mut session) = tokio::time::timeout(limit, self.0.session.lock()).await else { return Ok(()) };
+        if self.0.stale.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let ping = async {
+            use sqlx::Connection as _;
+            match &mut *session {
+                Session::Postgres(c) => drop(c.ping().await),
+                Session::MySql(c) => drop(c.ping().await),
+                Session::Sqlite(_) | Session::Closed => {}
+            }
+        };
+        if tokio::time::timeout(limit, ping).await.is_ok() {
+            return Ok(());
+        }
+        drop(session);
+        self.abandon_session();
+        Err(anyhow::anyhow!("no answer in {} s", limit.as_secs()).context(errors::NoAnswer))
+    }
+
+    /// The session was given up on mid-call: the next run opens a new one.
+    /// A stream still reading on it is stopped, so the session is free.
+    pub fn abandon_session(&self) {
+        self.0.stale.store(true, Ordering::SeqCst);
+        if let Some(stream) = self.0.stream_task.lock().ok().and_then(|mut t| t.take()) {
+            stream.abort();
+        }
+    }
+
+    /// A session given up on, replaced by a new one: true if it was. Its
+    /// connection goes out of the pool, not back into it: it's mid-call in
+    /// a state nobody knows.
+    async fn renew_if_stale(&self, session: &mut Session) -> Result<bool> {
+        if !self.0.stale.swap(false, Ordering::SeqCst) {
+            return Ok(false);
+        }
+        match std::mem::replace(session, Session::Closed) {
+            Session::Postgres(c) => drop(c.detach()),
+            Session::MySql(c) => drop(c.detach()),
+            Session::Sqlite(c) => drop(c.detach()),
+            Session::Closed => {}
+        }
+        if let Err(e) = self.reopen_session(session).await {
+            self.0.stale.store(true, Ordering::SeqCst);
+            return Err(e.context(errors::NoAnswer));
+        }
+        Ok(true)
+    }
+
+    /// Whether `sql` only reads (safe to run again after a reconnect).
+    fn reads_only(&self, sql: &str) -> bool {
+        crate::analyze::analyze(&crate::parse::parse(sql, self.0.engine))
+            .iter()
+            .all(|i| i.kind == crate::analyze::Kind::Read)
+    }
+
     /// Cancels whatever the session connection is running: the server is
     /// asked over a separate pool connection, since the session one is busy;
     /// SQLite's progress handler sees the interrupt flag.
     pub async fn cancel(&self) -> Result<()> {
+        self.check_reach().await?;
         let id = self.0.backend_id.load(Ordering::SeqCst);
         match &self.0.pool {
             Pool::Postgres(p) => postgres::queries::cancel(p, id).await?,

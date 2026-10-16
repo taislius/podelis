@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 
+use super::pipes::OpenFormat;
 use super::*;
 
 /// The table behind the current result, as far as editing goes.
@@ -259,24 +260,34 @@ impl App {
 impl App {
     /// The marked rows, or else all those shown, as CSV, JSON or INSERTs.
     pub(super) fn copy_rows_as(&mut self, format: ExportFormat) {
-        let Some(results) = self.tab.grid.results.as_ref().filter(|r| !r.columns.is_empty()) else {
+        let format = match format {
+            ExportFormat::Csv => OpenFormat::Csv,
+            ExportFormat::Json => OpenFormat::Json,
+            ExportFormat::Sql => OpenFormat::Sql,
+        };
+        let Some((rows, text)) = self.rows_as(format) else {
             return self.set_status("No rows to copy".to_string(), true);
         };
+        self.copy_text(text, &format!("Copied {rows} row(s) as {}", format.name()));
+    }
+
+    /// The rows to copy or open (the marked ones, else those shown), in
+    /// `format`, and how many; `None` without a result.
+    pub(super) fn rows_as(&self, format: OpenFormat) -> Option<(usize, String)> {
+        let results = self.tab.grid.results.as_ref().filter(|r| !r.columns.is_empty())?;
         let rows: Vec<usize> = if self.tab.grid.marked.is_empty() {
             self.tab.grid.view.clone()
         } else {
             self.tab.grid.marked.iter().copied().collect()
         };
-        let (text, what) = match format {
-            ExportFormat::Csv => (crate::export::csv(results, &rows), "CSV"),
-            ExportFormat::Json => (crate::export::json(results, &rows), "JSON"),
-            ExportFormat::Sql => {
-                let table = self.insert_table();
-                let Some(results) = &self.tab.grid.results else { return };
-                (crate::export::sql_inserts(results, &rows, &table, self.engine()), "INSERT statements")
-            }
+        let text = match format {
+            OpenFormat::Csv => crate::export::csv(results, &rows),
+            OpenFormat::Tsv => crate::export::tsv(results, &rows),
+            OpenFormat::Json => crate::export::json(results, &rows),
+            OpenFormat::Text => crate::export::render(results, &rows, crate::export::Format::Table),
+            OpenFormat::Sql => crate::export::sql_inserts(results, &rows, &self.insert_table(), self.engine()),
         };
-        self.copy_text(text, &format!("Copied {} row(s) as {what}", rows.len()));
+        Some((rows.len(), text))
     }
 }
 

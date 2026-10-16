@@ -345,6 +345,10 @@ async fn live_postgres_transaction_state_and_read_only() {
     assert_eq!(db.transaction_state().await, Some(TxnState::Open));
     assert!(db.run("SELECT 1/0", DEFAULT_ROW_LIMIT).await.is_err());
     assert_eq!(db.transaction_state().await, Some(TxnState::Aborted));
+    // The check before a run: the server answers (with an error, in a
+    // failed transaction), and that's an answer; nothing is reset by it.
+    db.answers_within(std::time::Duration::from_secs(5)).await.unwrap();
+    assert_eq!(db.transaction_state().await, Some(TxnState::Aborted));
     db.run("ROLLBACK", DEFAULT_ROW_LIMIT).await.unwrap();
     assert_eq!(db.transaction_state().await, Some(TxnState::Idle));
 
@@ -367,6 +371,12 @@ async fn live_postgres_transaction_state_and_read_only() {
 async fn live_mysql_error_line_and_read_only() {
     let Some(mut params) = live_params(Engine::MySql) else { return };
     let db = Database::connect(params.clone()).await.unwrap();
+    // The check before a run is a ping, not a statement: what the last
+    // statement left (its warnings, its row count) is still there after it.
+    db.run("SELECT CAST('x' AS SIGNED)", DEFAULT_ROW_LIMIT).await.unwrap();
+    db.answers_within(std::time::Duration::from_secs(5)).await.unwrap();
+    let warnings = db.run("SHOW WARNINGS", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert_eq!(warnings.rows.len(), 1, "{:?}", warnings.rows);
     let err = db.run("SELECT 1,\n2 FROM WHERE", DEFAULT_ROW_LIMIT).await.unwrap_err();
     assert_eq!(error_position(&err), Some(ErrorPos::Near { line: 2, text: "WHERE".into() }));
     assert!(error_message(&err).starts_with("syntax error near 'WHERE'"), "{}", error_message(&err));
@@ -843,4 +853,60 @@ async fn live_plans_aside_while_the_session_is_busy() {
         db.mark_session_changed();
         assert!(db.run_aside(&explain, DEFAULT_ROW_LIMIT).await.unwrap().is_none());
     }
+}
+
+#[tokio::test]
+async fn a_session_given_up_on_is_opened_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db");
+    let db = Database::connect(sqlite_params(&path, false)).await.unwrap();
+    db.run("create temp table only_here (x int)", 10).await.unwrap();
+    db.answers_within(std::time::Duration::from_secs(1)).await.unwrap();
+    // Given up on mid-call: the next run has a session of its own (the
+    // temporary table, the old session's, is gone with it).
+    db.abandon_session();
+    let err = db.run("select * from only_here", 10).await.unwrap_err();
+    assert!(crate::db::error_message(&err).contains("no such table"), "{err:#}");
+    db.run("select 1", 10).await.unwrap();
+    // A write isn't run on the new session: the old one's transaction may
+    // have been open, so it's the user's to run again, told why.
+    db.abandon_session();
+    let err = db.run("create table w (x int)", 10).await.unwrap_err();
+    assert!(crate::db::is_reconnected(&err), "{err:#}");
+    assert!(crate::db::error_message(&err).contains("wasn't run"), "{err:#}");
+    assert!(db.run("select * from w", 10).await.is_err(), "not created");
+    // A read is run again, and says it reconnected.
+    db.abandon_session();
+    assert!(db.run("select 1", 10).await.unwrap().reconnected);
+}
+
+#[tokio::test]
+async fn an_address_nothing_answers_at_says_why_at_once() {
+    // A port nothing listens on: refused, at once (not the pool's timeout).
+    // Port 1: nothing listens there, and nobody can bind it without root
+    // (a port freed for the test could be taken by another test meanwhile).
+    let port = 1;
+    let started = std::time::Instant::now();
+    let err = super::reach("127.0.0.1", port).await.unwrap_err();
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    assert_eq!(err.to_string(), format!("can't reach 127.0.0.1:{port}: connection refused"));
+    assert!(crate::db::is_unreachable(&err));
+    let err = super::reach("db.nowhere.invalid", 5432).await.unwrap_err();
+    assert_eq!(err.to_string(), "can't reach db.nowhere.invalid:5432: no such host");
+    // Something listening: fine.
+    let open = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    super::reach("127.0.0.1", open.local_addr().unwrap().port()).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_mysql_server_that_is_down_says_why_at_once() {
+    // Port 1: nothing listens there, and nobody can bind it without root
+    // (a port freed for the test could be taken by another test meanwhile).
+    let port = 1;
+    let opts = sqlx::mysql::MySqlConnectOptions::new().host("127.0.0.1").port(port).username("root");
+    let started = std::time::Instant::now();
+    let err = super::mysql::connect::try_login(&opts).await.unwrap_err();
+    assert!(started.elapsed() < std::time::Duration::from_secs(1), "not the pool's 10 s");
+    assert_eq!(err.to_string(), format!("can't reach 127.0.0.1:{port}: connection refused"));
+    assert!(crate::db::is_unreachable(&err));
 }

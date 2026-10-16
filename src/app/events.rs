@@ -150,12 +150,7 @@ impl App {
                 self.log(status.clone(), true);
                 self.set_status(status, true);
             }
-            DbEventKind::CancelFailed(err) => {
-                self.cancelling = false;
-                let status = format!("Couldn't cancel query: {}", one_line(&err));
-                self.log(status.clone(), true);
-                self.set_status(status, true);
-            }
+            DbEventKind::CancelFailed(err, unreachable) => self.cancel_failed_with(&err, unreachable),
             DbEventKind::SyntaxChecked { text, hint } => {
                 // Ignore results for text that has since changed.
                 if text == self.tab.editor.text() && self.lint_due.is_none() {
@@ -190,6 +185,11 @@ impl App {
             }
             DbEventKind::SnapshotCompared(result) => self.snapshot_compared(result),
             DbEventKind::RowsCompared { other, result } => self.rows_compared(&other, *result),
+            DbEventKind::Opened(what, command, result) => self.opened(&what, &command, result),
+            DbEventKind::Followed(followed) => {
+                let (found, result) = *followed;
+                self.followed(found, result);
+            }
             DbEventKind::Definition(title, result) => {
                 let browse = std::mem::take(&mut self.routine_definition_pending);
                 match result {
@@ -199,6 +199,22 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Cancelling failed: said, and while it still runs, Esc again stops
+    /// waiting for it.
+    fn cancel_failed_with(&mut self, err: &str, unreachable: bool) {
+        self.cancelling = false;
+        // The server couldn't be reached to be told (not one that refused:
+        // a missing privilege): the connection looks down, and while the
+        // query still runs, Esc again stops waiting for it.
+        let stuck = self.executing && unreachable;
+        self.cancel_failed = stuck;
+        self.connection_lost |= stuck;
+        let again = if stuck { "Esc again stops waiting · " } else { "" };
+        let status = format!("Couldn't cancel: {again}{}", one_line(err));
+        self.log(status.clone(), true);
+        self.set_status(status, true);
     }
 
     /// The connect form's connection is open: make it the tab's.
@@ -251,6 +267,7 @@ impl App {
         self.txn = txn.unwrap_or_else(|| self.tracked_txn_state());
         let rows_affected = outcome.rows_affected.unwrap_or(0);
         self.connection_lost = false;
+        self.cancel_failed = false;
         tracing::debug!(
             rows = outcome.rows.len(),
             elapsed_ms = outcome.elapsed.as_millis(),
@@ -318,9 +335,10 @@ impl App {
 
     pub(super) fn on_query_failed(&mut self, err: &str, position: Option<ErrorPos>, txn: Option<TxnState>) {
         self.stop_watch(": the query failed");
-        if err.contains("couldn't reconnect") {
+        if err.contains("couldn't reconnect") || err.contains("the server doesn't answer") {
             self.connection_lost = true;
         }
+        self.cancel_failed = false;
         tracing::debug!(error = err, "query failed");
         self.task = None;
         let reviewing = std::mem::take(&mut self.run_extra.reviewing);

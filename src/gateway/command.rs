@@ -18,6 +18,7 @@ pub async fn run(command: GatewayCommand, config_dir: &Path, project: Option<&st
         GatewayCommand::Run => foreground(config_dir).await,
         GatewayCommand::Status => match Client::connect(config_dir, "podelis gateway status").await {
             Ok(mut client) => status(&mut client).await,
+            Err(e @ CallError::Io(_)) if unusable(&e) => fail(&e),
             Err(CallError::Io(_)) => say("The gateway isn't running (it starts when a feature needs it).", 1),
             Err(CallError::Rpc(e)) if e.code == super::protocol::code::VERSION => say(
                 "A gateway from another Podėlis version runs: the next use replaces it (or `podelis gateway stop`).",
@@ -37,6 +38,7 @@ pub async fn run(command: GatewayCommand, config_dir: &Path, project: Option<&st
                 Ok(_) => say("The gateway is stopping.", 0),
                 Err(e) => fail(&e),
             },
+            Err(e @ CallError::Io(_)) if unusable(&e) => fail(&e),
             Err(CallError::Io(_)) => say("The gateway isn't running.", 0),
             Err(CallError::Rpc(e)) if e.code == super::protocol::code::VERSION => {
                 match super::client::replace_other(config_dir, &e).await {
@@ -95,6 +97,12 @@ What a model would be shown (about {} tokens):
     );
     let _ = write!(out, "{}", built["text"].as_str().unwrap_or_default());
     0
+}
+
+/// No socket could be made in the config folder (`usable_socket_path`):
+/// not "isn't running", which would hide why.
+fn unusable(e: &CallError) -> bool {
+    matches!(e, CallError::Io(e) if e.kind() == std::io::ErrorKind::InvalidInput)
 }
 
 /// The gateway, started if it isn't running.
@@ -305,11 +313,11 @@ pub async fn ask(config_dir: &Path, project: Option<&str>, model: Option<&str>, 
     for f in answer["suggested"].as_array().into_iter().flatten() {
         let _ = writeln!(
             err,
-            "It assumed: {} {} {} — `podelis memory confirm {}` if that's right (forget if not)",
+            "It assumed: {} {} {} — `podelis memory confirm {id}` if that's right, `podelis memory forget {id}` if not",
             f["subject"].as_str().unwrap_or("?"),
             f["relation"].as_str().unwrap_or("?"),
             f["value"].as_str().unwrap_or("?"),
-            f["id"]
+            id = f["id"]
         );
     }
     if let Some(sql) = answer["sql"].as_str() {

@@ -82,11 +82,19 @@ pub(super) fn draw_app_bar(f: &mut Frame, app: &mut App, area: Rect) {
 /// SQLite file.
 fn endpoint(form: &crate::app::ConnectForm) -> String {
     if form.engine.is_file_based() {
-        return form.host.clone();
+        return home_short(&form.host);
     }
     let user = if form.user.is_empty() { String::new() } else { format!("{}@", form.user) };
     let via = if form.ssh.trim().is_empty() { String::new() } else { format!(" via {}", form.ssh.trim()) };
     format!("{user}{}:{}{via}", form.host, form.port)
+}
+
+/// `path` with the home folder written `~`.
+fn home_short(path: &str) -> String {
+    match std::env::var("HOME").ok().filter(|h| h.len() > 1).and_then(|h| path.strip_prefix(&h).map(str::to_string)) {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("~{rest}"),
+        _ => path.to_string(),
+    }
 }
 
 /// The status bar's connection: state, name, where it goes, the server,
@@ -116,13 +124,22 @@ fn connection_status(app: &App, room: usize) -> Vec<Span<'static>> {
     }
     let engine = app.connect_form.engine.label();
     let version = app.database.as_ref().map(|d| d.version().to_string()).unwrap_or_default();
-    let mut details = format!("{} · {engine} {version}", endpoint(&app.connect_form));
+    let mut rest = format!(" · {engine} {version}");
     if let Some(latency) = app.connect_latency {
-        details = format!("{} · {} ms", details.trim_end(), latency.as_millis());
+        rest = format!("{} · {} ms", rest.trim_end(), latency.as_millis());
     }
-    // Long paths and hosts give way to the messages in the middle.
+    // Long paths and hosts give way to the messages in the middle: a
+    // file's path from its end (the file's name stays), a host from its.
     let used: usize = spans.iter().map(Span::width).sum();
-    spans.push(Span::styled(format!("  {}  ", truncate(details.trim_end(), room.saturating_sub(used + 4))), muted()));
+    let room = room.saturating_sub(used + 4);
+    let at = endpoint(&app.connect_form);
+    let details = if app.connect_form.engine.is_file_based() {
+        let fits = room.saturating_sub(rest.trim_end().chars().count()).max(12);
+        format!("{}{}", truncate_start(&at, fits), rest.trim_end())
+    } else {
+        truncate(&format!("{at}{}", rest.trim_end()), room)
+    };
+    spans.push(Span::styled(format!("  {details}  "), muted()));
     spans
 }
 
@@ -142,8 +159,12 @@ pub(super) fn draw_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
     left.push(Span::raw(" "));
     let mode_w = Line::from(left.clone()).width() as u16;
     if matches!(app.screen, Screen::Query) {
-        // Leave the middle for messages.
-        left.extend(connection_status(app, (area.width as usize / 2).max(24)));
+        // Leave the middle for messages: up to half the bar for the
+        // connection, down to a third while a long message needs the room.
+        let width = area.width as usize;
+        let message = app.status.chars().count() + 6;
+        let room = width.saturating_sub(message).clamp(width / 3, width / 2).max(24);
+        left.extend(connection_status(app, room));
     }
 
     // Rows and timing are in the results pane. What agents did that's worth
@@ -339,6 +360,8 @@ pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String
                     ("Ctrl+C / Ctrl+X / Ctrl+V", "copy / cut / paste"),
                     (&history, "query history"),
                     (k(Action::Find), "find and replace"),
+                    (k(Action::SelectStatement), "select the statement at the cursor"),
+                    (k(Action::ZoomStatement), "the statement alone, taller (F5 runs it; Esc returns)"),
                     (k(Action::InsertSnippet), "insert a snippet / saved query"),
                     (k(Action::Menu), "menu of what you can do here"),
                     (&comment_format, "comment lines · format SQL"),

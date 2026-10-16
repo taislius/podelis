@@ -21,10 +21,6 @@ use tokio::sync::watch;
 
 use super::protocol::{self, RpcError, code};
 
-/// The longest socket path the OS takes (`sun_path` is 104 bytes on
-/// macOS, 108 on Linux; one for the final NUL).
-const MAX_SOCKET_PATH: usize = 103;
-
 /// The call log is cut to its newer half past this.
 const MAX_LOG_BYTES: u64 = 1 << 20;
 
@@ -97,7 +93,7 @@ pub async fn serve(
         Err(std::fs::TryLockError::WouldBlock) => return Ok(Ended::AlreadyRunning),
         Err(std::fs::TryLockError::Error(e)) => return Err(e),
     }
-    let socket = super::socket_path(config_dir);
+    let socket = super::usable_socket_path(config_dir)?;
     let listener = bind(&socket)?;
     let (stop, mut stopped) = watch::channel(None);
     let shared = Arc::new(Shared {
@@ -148,14 +144,6 @@ pub async fn serve(
 /// Listens on `socket`, replacing a file a crashed gateway left (the
 /// caller holds the lock, so no live gateway owns it).
 fn bind(socket: &Path) -> std::io::Result<UnixListener> {
-    if socket.as_os_str().len() > MAX_SOCKET_PATH {
-        return Err(std::io::Error::other(format!(
-            "the gateway's socket path is too long for the OS ({} bytes, at most {MAX_SOCKET_PATH}): {}; \
-             set PODELIS_CONFIG_DIR to a shorter folder",
-            socket.as_os_str().len(),
-            socket.display()
-        )));
-    }
     match std::fs::remove_file(socket) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
         _ => {}
@@ -472,21 +460,27 @@ fn log_call(
     }
 }
 
+/// Appends `entry` as one line. Calls end at the same moment: the line
+/// goes in one write, under the file's lock, and the file is trimmed in
+/// place under it too (a rename would lose another call's line).
 fn append(path: &Path, entry: &Value) -> std::io::Result<()> {
+    use std::io::{Read as _, Seek as _};
+    let line = format!("{entry}\n");
     let mut options = std::fs::OpenOptions::new();
-    options.create(true).append(true);
+    options.create(true).read(true).append(true);
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     let mut file = options.open(path)?;
-    writeln!(file, "{entry}")?;
+    file.lock()?;
+    file.write_all(line.as_bytes())?;
     if file.metadata()?.len() > MAX_LOG_BYTES {
         // Keep the newer half, from a line's start.
-        let text = std::fs::read(path)?;
+        let mut text = Vec::new();
+        file.rewind()?;
+        file.read_to_end(&mut text)?;
         let half = text.len() / 2;
         let start = text[half..].iter().position(|&b| b == b'\n').map_or(text.len(), |i| half + i + 1);
-        let tmp = path.with_extension("jsonl.tmp");
-        std::fs::write(&tmp, &text[start..])?;
-        restrict(&tmp, 0o600);
-        std::fs::rename(tmp, path)?;
+        file.set_len(0)?;
+        file.write_all(&text[start..])?;
     }
     Ok(())
 }

@@ -842,6 +842,101 @@ fn asking_in_plain_language_and_sharing_a_schema() {
     });
     let screen = render(&mut app, 110, 24);
     assert!(screen.contains(" y  this once") && screen.contains(" a  always, for this project"), "{screen}");
+    // A detail too long for the box wraps under its text, and the box
+    // grows with it: its last row (the keys) still shows.
+    if let Some(confirm) = &mut app.confirm {
+        confirm.details = vec![
+            "project 'shop' shares its schemas only with models on this machine, and far (x) isn't one: its \
+             table and column names would go to https://nowhere.invalid/v1"
+                .into(),
+            "Rows are never sent; only the tables that matter for the question.".into(),
+        ];
+    }
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains(" a  always, for this project"), "{screen}");
+    let wrapped = screen.lines().find(|l| l.contains("names would go") || l.contains("would go to")).unwrap();
+    assert!(wrapped.contains("│    "), "indented under the text: {screen}");
+}
+
+#[test]
+fn the_plans_lines_are_selected_by_mouse_and_kept_when_scrolled() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let (mut app, _dir) = query_app();
+    let text = (1..=40).map(|i| format!("step {i}")).collect::<Vec<_>>().join("\n");
+    app.tab.plan = Some(crate::db::Plan { text, notes: Vec::new() });
+    app.tab.result_tab = ResultTab::Plan;
+    app.focus = Focus::Results;
+    let _ = render(&mut app, 110, 30);
+    let area = app.hits.plan;
+    let mouse = |kind, y, modifiers| MouseEvent { kind, column: area.x + 4, row: y, modifiers };
+    // Click on "step 3", drag past the bottom: the plan scrolls, the
+    // selection goes on with it.
+    let row_of = |app: &App, line: i32| u16::try_from(app.hits.plan_first_row + line).unwrap();
+    let at = row_of(&app, 2);
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), at, KeyModifiers::NONE));
+    for _ in 0..5 {
+        app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), area.bottom() + 1, KeyModifiers::NONE));
+        let _ = render(&mut app, 110, 30);
+    }
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), area.bottom(), KeyModifiers::NONE));
+    assert!(app.tab.tab_scroll >= 5, "scrolled: {}", app.tab.tab_scroll);
+    let (from, to) = app.tab.plan_selected.unwrap();
+    assert_eq!(from, 2);
+    // Scrolled back up, it's all still there: copied whole.
+    app.tab.tab_scroll = 0;
+    let screen = render(&mut app, 110, 30);
+    assert!(screen.contains("step 3"));
+    app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    let copied = app.take_clipboard().unwrap();
+    assert!(copied.starts_with("step 3\nstep 4") && copied.ends_with(&format!("step {}", to + 1)), "{copied}");
+    // Shift+↓ goes one further; Shift+click on a line extends to it.
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+    assert_eq!(app.tab.plan_selected, Some((2, to + 1)));
+    app.tab.tab_scroll = 0;
+    let _ = render(&mut app, 110, 30);
+    let at = row_of(&app, 0);
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), at, KeyModifiers::SHIFT));
+    assert_eq!(app.tab.plan_selected, Some((2, 0)));
+    // Esc lets go; `y` then copies the whole plan.
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.tab.plan_selected.is_none());
+}
+
+#[test]
+fn a_long_file_path_gives_way_to_the_message_and_keeps_its_name() {
+    let (mut app, _dir) = query_app();
+    app.connect_form.engine = crate::db::Engine::Sqlite;
+    app.connect_form.host = format!("/data/{}/projects/shop.db", "deep/".repeat(12));
+    app.set_status_for_tests("Couldn't cancel: Esc again stops waiting · pool timed out");
+    let screen = render(&mut app, 120, 24);
+    let bar = screen.lines().last().unwrap();
+    assert!(bar.contains("…") && bar.contains("projects/shop.db"), "{bar}");
+    assert!(bar.contains("Couldn't cancel: Esc again stops waiting · pool timed out"), "{bar}");
+}
+
+#[test]
+fn a_followed_rows_popover_says_it_opens_in_a_tab() {
+    let (mut app, _dir) = query_app();
+    app.cell_view = Some(crate::app::CellView {
+        follow: Some(("→ customers".into(), "SELECT * FROM customers WHERE id = 1;".into())),
+        ..crate::app::CellView::new("→ customers · id = 1".into(), "id    1\nname  Ona\n".into())
+    });
+    let screen = render(&mut app, 110, 24);
+    assert!(screen.contains("→ customers · id = 1") && screen.contains("name  Ona"), "{screen}");
+    assert!(screen.contains("e open in a tab"), "{screen}");
+}
+
+#[test]
+fn the_statement_zoom_shows_the_statement_alone() {
+    let (mut app, _dir) = query_app();
+    app.tab.editor.set_text("select 1;\n\nselect id,\n  name\nfrom t;\n\nselect 3;");
+    app.tab.editor.set_cursor((3, 2));
+    app.statement_zoom = true;
+    let screen = render(&mut app, 110, 30);
+    assert!(screen.contains("THE STATEMENT ALONE"), "{screen}");
+    assert!(screen.contains("3  select id,") && screen.contains("5  from t;"), "{screen}");
+    assert!(!screen.contains("select 1;") && !screen.contains("select 3;"), "only it: {screen}");
+    assert!(screen.contains("QUERY RESULT"), "the results under it: {screen}");
 }
 
 #[test]
@@ -852,6 +947,13 @@ fn the_memory_window_marks_what_waits_for_the_user() {
         facts: vec![
             fact(1, "orders.status", "3 = cancelled", true, "user"),
             fact(2, "orders.total", "VAT included", false, "model:claude"),
+            fact(
+                3,
+                "orders",
+                "note An order: status 1 new, 2 paid",
+                true,
+                &format!("file:/home/{}/db/migrations", "x".repeat(80)),
+            ),
         ],
         ..Default::default()
     });
@@ -860,6 +962,9 @@ fn the_memory_window_marks_what_waits_for_the_user() {
     assert!(screen.contains("orders.status means 3 = cancelled  · user"), "{screen}");
     assert!(screen.contains("orders.total means VAT included  · model:claude, not confirmed: c"), "{screen}");
     assert!(screen.contains("a add · c confirm · d forget · Esc close"), "{screen}");
+    // A long source is cut from its start; the fact stays whole.
+    assert!(screen.contains("orders means note An order: status 1 new, 2 paid  · …x"), "{screen}");
+    assert!(screen.contains("x/db/migrations"), "{screen}");
 }
 
 #[test]

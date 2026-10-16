@@ -321,7 +321,11 @@ fn render(t: &TableInfo, cols: &[ColumnInfo], comments: &[&Comment], keys: &Keys
             .unwrap_or_default()
     };
     let kind = if t.is_view { " (view)" } else { "" };
-    let rows = t.rows.filter(|r| *r >= 0).map(|r| format!(", ~{r} rows")).unwrap_or_default();
+    let rows = t
+        .rows
+        .filter(|r| *r >= 0)
+        .map(|r| format!(", ~{r} {}", if r == 1 { "row" } else { "rows" }))
+        .unwrap_or_default();
     let mut out = format!("{}{kind}{rows}{}\n", qualified(t), said(None));
     for c in cols.iter().take(MAX_COLUMNS) {
         let pk = if c.primary_key { " PK" } else { "" };

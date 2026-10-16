@@ -154,7 +154,11 @@ pub enum ParseOutcome {
 pub fn parse(args: impl IntoIterator<Item = String>) -> ParseOutcome {
     let mut out = Args::default();
     let mut args = args.into_iter();
-    let usage_error = |msg: String| ParseOutcome::Exit(2, format!("{msg}\n\n{USAGE}"));
+    // The forms, not the whole help: the message stays in sight.
+    let usage_error = |msg: String| {
+        let forms = USAGE.split("\n\n").next().unwrap_or(USAGE);
+        ParseOutcome::Exit(2, format!("{msg}\n\n{forms}\n\nMore: podelis --help"))
+    };
     while let Some(arg) = args.next() {
         if gateway_word(&mut out, &arg) {
             continue;
@@ -669,7 +673,12 @@ mod tests {
             (a.execute.as_deref(), a.format, a.limit, a.yes),
             (Some("select 1"), Some(Format::Json), Some(5), true)
         );
-        assert!(matches!(args(&["--frob"]), ParseOutcome::Exit(2, _)));
+        let ParseOutcome::Exit(2, said) = args(&["--frob"]) else { panic!("not a usage error") };
+        assert!(
+            said.starts_with("unknown option: --frob\n\nUsage:") && said.ends_with("More: podelis --help"),
+            "{said}"
+        );
+        assert!(!said.contains("Options:"), "the forms, not the whole help");
         assert!(matches!(args(&["-f", "xml"]), ParseOutcome::Exit(2, _)));
         assert!(matches!(args(&["a", "b"]), ParseOutcome::Exit(2, _)));
         assert!(matches!(args(&["-V"]), ParseOutcome::Exit(0, v) if v.starts_with("podelis ")));

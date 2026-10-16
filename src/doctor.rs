@@ -173,21 +173,30 @@ fn environment_checks(settings: &Settings) -> Vec<Step> {
     }
     steps.push(step("Terminal", if term_hint.is_some() { StepState::Warn } else { StepState::Ok }, term, term_hint));
 
-    let viewer = settings
-        .viewer
-        .clone()
-        .or_else(|| std::env::var("PAGER").ok())
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "less -S".to_string());
-    let program = viewer.split_whitespace().next().unwrap_or_default().to_string();
-    steps.push(if on_path(&program) {
-        step("Viewer", StepState::Ok, format!("{viewer} (o opens results in it)"), None)
+    // What opens result rows (`o`), format by format, as `o` decides it.
+    let chosen: Vec<(&str, crate::settings::Viewer)> =
+        crate::settings::VIEWER_FORMATS.iter().map(|f| (*f, settings.viewer_for(f))).collect();
+    let program = |v: &crate::settings::Viewer| v.command().split_whitespace().next().unwrap_or_default().to_string();
+    let mut programs: Vec<String> = chosen.iter().map(|(_, v)| program(v)).collect();
+    programs.sort();
+    programs.dedup();
+    let missing: Vec<&str> = programs.iter().map(String::as_str).filter(|p| !on_path(p)).collect();
+    let said: Vec<String> = programs
+        .iter()
+        .map(|p| {
+            let formats: Vec<&str> = chosen.iter().filter(|(_, v)| program(v) == *p).map(|(f, _)| *f).collect();
+            let here = chosen.iter().any(|(_, v)| program(v) == *p && v.in_terminal());
+            format!("{}: {p}{}", formats.join(", "), if here { " (in this terminal)" } else { "" })
+        })
+        .collect();
+    steps.push(if missing.is_empty() {
+        step("Viewers", StepState::Ok, format!("{} (o in the results)", said.join("; ")), None)
     } else {
         step(
-            "Viewer",
+            "Viewers",
             StepState::Warn,
-            format!("{program} isn't installed"),
-            Some("set `viewer` in config.toml (e.g. \"less -S\" or \"vd\")"),
+            format!("{} isn't installed", missing.join(", ")),
+            Some("set [viewers] in config.toml (csv = \"libreoffice --calc\", json = \"code\")"),
         )
     });
 
@@ -244,6 +253,23 @@ async fn test_connections(store: &ConnectionStore, project: Option<&str>, out: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn viewers_are_checked_format_by_format() {
+        use crate::settings::Viewer;
+        let mut settings = Settings::default();
+        for f in crate::settings::VIEWER_FORMATS {
+            settings.viewers.insert(f.to_string(), Viewer::Command("true".into()));
+        }
+        // An old `viewer` that `[viewers].tsv` replaced isn't looked for.
+        settings.viewer = Some("no-such-viewer-xyz".into());
+        let viewers = |s: &Settings| environment_checks(s).into_iter().find(|s| s.name == "Viewers").unwrap();
+        let step = viewers(&settings);
+        assert!(step.detail.starts_with("csv, json, sql, tsv, txt: true"), "{}", step.detail);
+        // One format left to a program that isn't there: said.
+        settings.viewers.insert("txt".into(), Viewer::Command("no-such-viewer-xyz".into()));
+        assert_eq!(viewers(&settings).detail, "no-such-viewer-xyz isn't installed");
+    }
 
     #[tokio::test]
     async fn a_saved_connection_whose_file_is_gone_fails() {

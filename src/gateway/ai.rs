@@ -19,10 +19,9 @@ use super::protocol::{self, RpcError, code};
 /// The models in `config.toml`. A file that doesn't parse is said as it
 /// is, not taken for one with no models (its defaults would have none).
 fn configured(config_dir: &Path) -> Result<Vec<ModelConfig>, RpcError> {
-    match crate::settings::Settings::load(config_dir) {
-        (_, Some(warning)) => Err(RpcError::new(code::MODEL, warning)),
-        (settings, None) => Ok(settings.models),
-    }
+    crate::settings::Settings::load_strict(config_dir)
+        .map(|settings| settings.models)
+        .map_err(|e| RpcError::new(code::MODEL, format!("invalid {e}")))
 }
 
 /// `models`: the configured models, the default first, and whether each
@@ -510,7 +509,8 @@ fn suggestions(said: &str) -> (String, Vec<(String, String, String)>) {
 }
 
 /// Keeps what a model suggested as unconfirmed facts (once each), so the
-/// user can confirm them; returns them.
+/// user can confirm them; returns them, with those already waiting to be
+/// confirmed (the answer rests on them just the same).
 async fn keep_suggestions(
     config_dir: &Path,
     caches: &Caches,
@@ -530,7 +530,13 @@ async fn keep_suggestions(
             let same = |f: &super::memory::Fact| {
                 f.subject.eq_ignore_ascii_case(subject) && f.value.eq_ignore_ascii_case(value)
             };
-            if known.iter().any(same) || super::memory::rejected(&mut conn, subject, value).await? {
+            if let Some(waiting) = known.iter().find(|f| same(f)) {
+                if !waiting.confirmed {
+                    kept.push(waiting.clone());
+                }
+                continue;
+            }
+            if super::memory::rejected(&mut conn, subject, value).await? {
                 continue;
             }
             let source = format!("model:{model}");

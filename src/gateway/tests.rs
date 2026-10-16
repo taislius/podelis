@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -134,6 +134,29 @@ async fn a_client_starts_the_gateway_when_none_runs() {
     assert!(again.is_ok());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn calls_at_the_same_moment_keep_the_call_log_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let _server = start(dir.path(), None);
+    connect(dir.path()).await;
+    let calls = (0..20).map(|_| {
+        let dir = dir.path().to_path_buf();
+        tokio::spawn(async move {
+            let mut client = connect(&dir).await;
+            client.call("status", json!({})).await.unwrap();
+        })
+    });
+    for call in calls.collect::<Vec<_>>() {
+        call.await.unwrap();
+    }
+    let log = std::fs::read_to_string(super::log_path(dir.path())).unwrap();
+    // A hello and a status each, and the first hello.
+    assert_eq!(log.lines().count(), 41);
+    for line in log.lines() {
+        assert!(serde_json::from_str::<Value>(line).is_ok(), "a broken line: {line}");
+    }
+}
+
 #[tokio::test]
 async fn the_call_log_names_methods_never_parameters() {
     let dir = tempfile::tempdir().unwrap();
@@ -156,6 +179,12 @@ async fn a_socket_path_too_long_for_the_os_says_so() {
     let deep = dir.path().join("x".repeat(120));
     let err = serve(&deep, Options::new(None), std::future::pending()).await.unwrap_err();
     assert!(err.to_string().contains("PODELIS_CONFIG_DIR"), "{err}");
+    // A client says so at once, not after waiting for a gateway that
+    // can't listen.
+    let asked = Instant::now();
+    let err = connect_or_start(&deep, "tui", || panic!("not started")).await.err().unwrap();
+    assert!(err.to_string().contains("PODELIS_CONFIG_DIR"), "{err}");
+    assert!(asked.elapsed() < Duration::from_secs(1));
 }
 
 /// A model server on this machine: answers each connection with the next
@@ -494,7 +523,7 @@ async fn migrations_teach_the_memory_and_a_models_guesses_wait_for_the_user() {
     let first = claude_answer(
         "```sql\nSELECT count(*) FROM orders WHERE total > 0\n```\nCounts paid orders.\nFACT: orders.total | means | 0 for free orders\n- FACT: bad line",
     );
-    let (url, server) = fake_model(vec![(200, first)]).await;
+    let (url, server) = fake_model(vec![(200, first.clone()), (200, first)]).await;
     let dir = tempfile::tempdir().unwrap();
     saved_shop(dir.path()).await;
     let config =
@@ -534,6 +563,11 @@ async fn migrations_teach_the_memory_and_a_models_guesses_wait_for_the_user() {
         (suggested[0]["confirmed"].clone(), suggested[0]["source"].clone()),
         (json!(false), json!("model:near"))
     );
+    // The same guess again: still said (the answer rests on it), not kept twice.
+    let again = client.call("ask", ask.clone()).await.unwrap();
+    assert_eq!(again["suggested"][0]["id"], suggested[0]["id"]);
+    let listed = client.call("memory.list", json!({ "project": "p" })).await.unwrap();
+    assert_eq!(listed["facts"].as_array().unwrap().len(), 3);
     // Not shown to a model until the user confirms it.
     let built = client.call("context", ask.clone()).await.unwrap();
     assert!(!built["facts"].to_string().contains("free orders"));
@@ -658,8 +692,10 @@ async fn a_client_that_goes_stops_its_model_call() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
+    let (asked_tx, asked_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
+        let _ = asked_tx.send(());
         let mut buf = [0u8; 4096];
         while stream.read(&mut buf).await.is_ok_and(|n| n > 0) {}
         let _ = closed_tx.send(());
@@ -671,8 +707,13 @@ async fn a_client_that_goes_stops_its_model_call() {
     let _gateway = start(dir.path(), None);
     let mut client = connect(dir.path()).await;
     let ask = json!({ "messages": [{ "role": "user", "content": "hi" }] });
-    // The client gives up (Esc in the app): its connection closes.
-    let _ = tokio::time::timeout(Duration::from_millis(300), client.call("complete", ask)).await;
+    // The client gives up (Esc in the app) once the model has been
+    // asked (not before: then there'd be no call to stop): its
+    // connection closes.
+    tokio::select! {
+        _ = client.call("complete", ask) => panic!("the model never answers"),
+        asked = tokio::time::timeout(Duration::from_secs(10), asked_rx) => asked.unwrap().unwrap(),
+    }
     drop(client);
     tokio::time::timeout(Duration::from_secs(3), closed_rx).await.expect("the model call was dropped").unwrap();
 }

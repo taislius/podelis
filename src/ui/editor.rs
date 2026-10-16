@@ -27,11 +27,15 @@ pub(super) fn highlight_style(hl: Highlight) -> Style {
 pub(super) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Option<(u16, u16)> {
     let t = theme();
     let focused = app.focus == Focus::Editor;
-    let info = [app.zoomed.then_some("ZOOMED"), app.vim_mode().map(crate::app::VimMode::label)]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" · ");
+    let info = [
+        app.zoomed.then_some("ZOOMED"),
+        app.statement_zoom.then_some("THE STATEMENT ALONE"),
+        app.vim_mode().map(crate::app::VimMode::label),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ");
     // No line/column readout: the gutter already marks the current line.
     let mut block = pane("Query", &info, focused);
     if app.active_mode == ConnectionMode::Production {
@@ -72,11 +76,26 @@ pub(super) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Option<(u
     app.hits.editor_text = text_area;
     app.tab.editor.scroll_to_cursor(text_area.height as usize, text_area.width as usize);
     app.editor_height = text_area.height as usize;
+    // Zoomed to a statement: only its rows, from its first.
+    let rows = statement_rows(app);
+    if let Some((first, last)) = rows {
+        let height = text_area.height as usize;
+        let ed = &mut app.tab.editor;
+        // As much of it in sight as fits, the cursor always.
+        let fits_from = (last + 1).saturating_sub(height).max(first);
+        ed.scroll_row = ed.scroll_row.clamp(first, fits_from);
+        if ed.cursor_row < ed.scroll_row {
+            ed.scroll_row = ed.cursor_row;
+        } else if ed.cursor_row >= ed.scroll_row + height {
+            ed.scroll_row = ed.cursor_row + 1 - height;
+        }
+    }
     let (scroll_row, cursor_row) = (app.tab.editor.scroll_row, app.tab.editor.cursor_row);
+    let shown_rows = rows.map_or(text_area.height as usize, |(_, last)| (last + 1).saturating_sub(scroll_row));
 
     // Gutter, with the current line's number picked out.
     let numbers: Vec<Line> = (scroll_row..app.tab.editor.lines.len())
-        .take(gutter.height as usize)
+        .take((gutter.height as usize).min(shown_rows))
         .map(|row| {
             let style = if row == cursor_row { bold(t.accent).bg(t.selected) } else { dim() };
             Line::from(Span::styled(format!("{:>w$} ", row + 1, w = gutter_width as usize - 1), style))
@@ -84,7 +103,7 @@ pub(super) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Option<(u
         .collect();
     f.render_widget(Paragraph::new(numbers).style(Style::default().bg(t.inset)), gutter);
 
-    let lines = editor_lines(app, scroll_row, text_area.height as usize);
+    let lines = editor_lines(app, scroll_row, (text_area.height as usize).min(shown_rows));
     f.render_widget(Paragraph::new(lines).scroll((0, app.tab.editor.scroll_col as u16)), text_area);
 
     // The current line: a faint underline across the pane, under the text
@@ -104,7 +123,12 @@ pub(super) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Option<(u
 
     draw_controls(f, app, controls);
 
-    if !focused || text_area.width == 0 || text_area.height == 0 {
+    // Scrolled away from the cursor (the wheel): no cursor on screen.
+    if !focused
+        || text_area.width == 0
+        || text_area.height == 0
+        || !app.tab.editor.cursor_in_view(text_area.height as usize)
+    {
         return None;
     }
     let x = text_area.x + (app.tab.editor.cursor_display_col() - app.tab.editor.scroll_col) as u16;
@@ -116,6 +140,25 @@ pub(super) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Option<(u
         f.set_cursor_position((x, y));
     }
     Some((x, y))
+}
+
+/// The rows the statement zoom shows (first and last): the selected lines,
+/// else the statement at the cursor's, and the cursor's row in any case
+/// (it may sit in the blank between two statements).
+fn statement_rows(app: &App) -> Option<(usize, usize)> {
+    if !app.statement_zoom {
+        return None;
+    }
+    let ed = &app.tab.editor;
+    let cursor = ed.cursor_row;
+    let (first, last) = if let Some(((r0, _), (r1, _))) = ed.selection() {
+        (r0, r1)
+    } else {
+        let text = ed.text();
+        let range = crate::sql::statement_range(&text, ed.cursor_offset(), app.engine());
+        range.map_or((cursor, cursor), |r| (ed.pos_of_offset(r.start).0, ed.pos_of_offset(r.end).0))
+    };
+    Some((first.min(cursor), last.max(cursor)))
 }
 
 /// The visible rows of the editor's text (`count` from `first`) as styled

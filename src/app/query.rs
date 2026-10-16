@@ -4,6 +4,12 @@ use crate::keys::Action;
 /// How soon a second Space counts as a double press.
 const DOUBLE_SPACE: Duration = Duration::from_millis(250);
 
+/// A run after this long without one first checks the server answers.
+const CHECK_AFTER_IDLE: Duration = Duration::from_secs(60);
+
+/// How long the server has to answer that check.
+const ANSWER_WITHIN: Duration = Duration::from_secs(5);
+
 impl App {
     pub(super) fn handle_query_key(&mut self, key: KeyEvent) {
         let after_esc = std::mem::take(&mut self.esc_then_tab);
@@ -98,8 +104,13 @@ impl App {
             {
                 return self.stop_watch("");
             }
+            // Esc leaves the statement's pop-over once it has nothing else
+            // to do in the editor (a selection, vim's modes).
+            KeyCode::Esc if self.statement_zoom && self.focus == Focus::Editor && !self.esc_has_a_job() => {
+                return self.toggle_statement_zoom();
+            }
             // A question being answered: Esc stops it once it has nothing
-            // else to do here (cancelling a query, the zoom, watch mode,
+            // else to do here (cancelling a query, the zooms, watch mode,
             // a filter, vim's modes, a selection come first).
             KeyCode::Esc if self.asking.is_some() && !self.esc_has_a_job() => return self.stop_asking(),
             KeyCode::Tab => return self.cycle_focus(true),
@@ -232,6 +243,9 @@ impl App {
             Focus::Results if self.tab.result_tab == ResultTab::Messages && !self.messages.is_empty() => {
                 return self.copy_message();
             }
+            Focus::Results if self.tab.result_tab == ResultTab::Plan && self.tab.plan.is_some() => {
+                return self.copy_plan(false);
+            }
             Focus::Schema => {
                 if let Some((name, what)) = self.schema_name() {
                     return self.copy_text(name.clone(), &format!("Copied {what} {name}"));
@@ -316,7 +330,17 @@ impl App {
     /// Does what a (configurable) key binding is for.
     pub(super) fn run_action(&mut self, action: Action) {
         let n = self.tabs.len();
+        // A tab whose connection couldn't be opened again: a run tries it
+        // again, and goes ahead once it's open.
+        if matches!(action, Action::Run | Action::RunStatement | Action::Explain | Action::ExplainAnalyze)
+            && let Some(profile) = self.tab_connection_to_retry()
+        {
+            return self.retry_tab_connection(profile, action);
+        }
         match action {
+            // With the statement alone in sight, "everything" is it (or
+            // the selection): not the rest of the script, out of sight.
+            Action::Run if self.statement_zoom => self.execute_current(),
             Action::Run => self.execute_all(),
             Action::RunStatement => self.execute_current(),
             Action::Explain => self.explain_current(),
@@ -348,6 +372,8 @@ impl App {
             Action::InsertSnippet => self.open_snippets(),
             Action::Menu => self.open_menu(None),
             Action::Zoom => self.toggle_zoom(),
+            Action::ZoomStatement => self.toggle_statement_zoom(),
+            Action::SelectStatement => self.select_statement(),
             Action::Heartbeat => self.toggle_heartbeat(),
             Action::TxMode => self.open_tx_picker(),
             Action::Projects => self.open_manager(Screen::Projects),
@@ -359,6 +385,7 @@ impl App {
     /// Shows the focused pane full-screen, or the normal layout again.
     pub(super) fn toggle_zoom(&mut self) {
         self.zoomed = !self.zoomed;
+        self.statement_zoom = false;
         self.completion = None;
         let msg = if self.zoomed {
             format!("Zoomed: Tab moves between panes; {} or Esc returns", self.keymap.label(Action::Zoom))
@@ -366,6 +393,39 @@ impl App {
             String::new()
         };
         self.set_status(msg, false);
+    }
+
+    /// Shows the statement at the cursor (or the selected lines) alone, in
+    /// a pop-over over the query screen, or the whole text again. It's the
+    /// tab's own editor, so what's typed there is in the tab at once.
+    pub(super) fn toggle_statement_zoom(&mut self) {
+        self.statement_zoom = !self.statement_zoom;
+        self.zoomed = false;
+        self.completion = None;
+        if self.statement_zoom {
+            self.focus = Focus::Editor;
+            self.set_status(
+                format!("The statement alone: {} or Esc returns", self.keymap.label(Action::ZoomStatement)),
+                false,
+            );
+        } else {
+            self.set_status(String::new(), false);
+        }
+    }
+
+    /// Selects the statement at the cursor (a right-click puts the cursor
+    /// under the pointer first), from its first word to its end.
+    pub(super) fn select_statement(&mut self) {
+        let text = self.tab.editor.text();
+        let Some(range) = sql::statement_range(&text, self.tab.editor.cursor_offset(), self.engine()) else {
+            return self.set_status("No statement here".into(), true);
+        };
+        self.focus = Focus::Editor;
+        self.completion = None;
+        self.tab.editor.select_offsets(range.start, range.end);
+        let which = sql::Statements::of(&text, self.engine()).position(range.start);
+        let said = which.map_or_else(String::new, |(n, of)| format!(" ({n} of {of})"));
+        self.set_status(format!("Selected the statement{said}"), false);
     }
 
     pub(super) fn cycle_focus(&mut self, forward: bool) {
@@ -635,6 +695,9 @@ impl App {
         if self.tab.result_tab == ResultTab::Messages && self.handle_messages_key(key) {
             return;
         }
+        if self.tab.result_tab == ResultTab::Plan && !self.grid_shown() && self.handle_plan_key(key) {
+            return;
+        }
         if !self.grid_shown() {
             return self.handle_tab_scroll_key(key);
         }
@@ -824,6 +887,14 @@ impl App {
             KeyCode::Char('y') if view.sql.is_some() => {
                 let text = view.sql.as_ref().map(|(sql, _)| sql.clone()).unwrap_or_default();
                 self.copy_text(text, "Copied the SQL");
+            }
+            KeyCode::Char('e') if view.follow.is_some() => {
+                let Some((tab, sql)) = view.follow.take() else { return };
+                self.open_followed(tab, &sql);
+            }
+            KeyCode::Char('y') if view.follow.is_some() => {
+                let text = view.text.clone();
+                self.copy_text(text, "Copied the row");
             }
             KeyCode::Char('e') if view.sql.is_some() => {
                 let Some((sql, conn)) = view.sql.take() else { return };
@@ -1549,6 +1620,7 @@ impl App {
             .format_plan(&outcome.columns, &outcome.rows)
             .unwrap_or_else(|| crate::db::Plan { text: "The server returned no plan.".to_string(), notes: Vec::new() });
         self.tab.plan = Some(plan);
+        self.tab.plan_selected = None;
         self.tab.plan_source =
             self.plan_request.take().map(|(sql, analyzed, line)| PlanSource::new(sql, analyzed, line));
         // A plan with columns (MySQL's classic EXPLAIN) is a grid too.
@@ -1656,6 +1728,10 @@ impl App {
         }
         self.tab.last_run_offset = offset;
         self.last_run_filled = filled;
+        // After a quiet while (or a lost connection), the server is asked
+        // to answer first: a link that died meanwhile fails in seconds
+        // rather than leaving the run waiting.
+        let check_first = self.connection_lost || self.last_activity.elapsed() >= CHECK_AFTER_IDLE;
         self.last_activity = Instant::now();
         self.run_extra.timed_out = None;
         self.run_extra.started = Some(Instant::now());
@@ -1680,6 +1756,9 @@ impl App {
         tracing::debug!(statements = self.last_run_infos.len(), stream, row_limit, "run");
         let sql = if self.run_extra.vertical { sql::without_vertical(&sql, self.engine()) } else { sql };
         self.task = Some(tokio::spawn(async move {
+            if check_first && let Err(e) = db.answers_within(ANSWER_WITHIN).await {
+                return send(DbEventKind::QueryFailed(crate::db::error_message(&e), None, None));
+            }
             if stream {
                 // No transaction probe: the open stream holds the session,
                 // and a single read can't change the transaction state.
@@ -1762,6 +1841,11 @@ impl App {
     }
 
     pub(super) fn cancel_query(&mut self) {
+        // Cancelling failed (the server can't be reached to be told): Esc
+        // again stops waiting here.
+        if self.cancel_failed {
+            return self.stop_waiting();
+        }
         if self.cancelling {
             return;
         }
@@ -1772,9 +1856,29 @@ impl App {
         let send = self.sender();
         tokio::spawn(async move {
             if let Err(e) = db.cancel().await {
-                send(DbEventKind::CancelFailed(crate::db::error_message(&e)));
+                send(DbEventKind::CancelFailed(crate::db::error_message(&e), crate::db::is_unreachable(&e)));
             }
         });
+    }
+
+    /// Gives up on the running query without the server's word: its task is
+    /// dropped, and the session with it (the next run opens a new one). The
+    /// query may still run on the server until it notices.
+    fn stop_waiting(&mut self) {
+        self.cancel_failed = false;
+        self.cancelling = false;
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+        if let Some(db) = &self.database {
+            db.abandon_session();
+        }
+        self.on_query_failed(
+            "stopped waiting: the server doesn't answer, so it couldn't be told to cancel (the query may still \
+             run there); the next run reconnects",
+            None,
+            None,
+        );
     }
 
     /// Disconnects, asking first if a transaction would be rolled back.

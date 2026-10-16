@@ -28,8 +28,9 @@ pub struct MemoryView {
 pub enum GatewayPurpose {
     /// The facts, for the memory window.
     MemoryList(String),
-    /// A change, said in the status bar; then the list again.
-    MemoryChanged(&'static str, String),
+    /// A change, said in the status bar with the fact (as the window
+    /// shows it, where the answer doesn't), then the list again.
+    MemoryChanged(&'static str, String, Option<String>),
 }
 
 impl App {
@@ -72,7 +73,7 @@ impl App {
 
     pub(super) fn gateway_done(&mut self, purpose: GatewayPurpose, result: Result<Value, AskFailure>) {
         let project = match &purpose {
-            GatewayPurpose::MemoryList(p) | GatewayPurpose::MemoryChanged(_, p) => p.clone(),
+            GatewayPurpose::MemoryList(p) | GatewayPurpose::MemoryChanged(_, p, _) => p.clone(),
         };
         // For a project left since: not this one's.
         if self.current_project.as_deref() != Some(project.as_str()) {
@@ -87,8 +88,8 @@ impl App {
                     view.loading = false;
                 }
             }
-            (GatewayPurpose::MemoryChanged(said, project), Ok(fact)) => {
-                let what = fact["subject"].as_str().map_or_else(|| format!("#{}", fact["id"]), |s| format!("{s}…"));
+            (GatewayPurpose::MemoryChanged(said, project, shown), Ok(fact)) => {
+                let what = shown.or_else(|| fact_text(&fact)).unwrap_or_else(|| format!("#{}", fact["id"]));
                 self.set_status(format!("{said} {what}"), false);
                 if same_window {
                     self.load_memory(project);
@@ -122,6 +123,7 @@ impl App {
             return;
         }
         let id = view.facts.get(view.selected).and_then(|f| f["id"].as_i64());
+        let shown = view.facts.get(view.selected).and_then(fact_text);
         let project = view.project_id.clone();
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.memory_view = None,
@@ -130,14 +132,14 @@ impl App {
                 self.gateway_call(
                     "memory.confirm",
                     json!({ "id": id }),
-                    GatewayPurpose::MemoryChanged("Confirmed", project.clone()),
+                    GatewayPurpose::MemoryChanged("Confirmed", project.clone(), shown),
                 );
             }
             KeyCode::Char('d') if id.is_some() => {
                 self.gateway_call(
                     "memory.forget",
                     json!({ "id": id }),
-                    GatewayPurpose::MemoryChanged("Forgot", project.clone()),
+                    GatewayPurpose::MemoryChanged("Forgot", project.clone(), shown),
                 );
             }
             _ => {}
@@ -150,6 +152,13 @@ impl App {
             return self.set_status("Type what it's about, then what's said: orders.status 3 = cancelled".into(), true);
         }
         let params = json!({ "text": text });
-        self.gateway_call("memory.add", params, GatewayPurpose::MemoryChanged("Remembered", project));
+        self.gateway_call("memory.add", params, GatewayPurpose::MemoryChanged("Remembered", project, None));
     }
+}
+
+/// A fact as the window shows it, `subject relation value`, shortened.
+fn fact_text(fact: &Value) -> Option<String> {
+    let part = |k: &str| fact[k].as_str().map(str::to_string);
+    let text = format!("{} {} {}", part("subject")?, part("relation")?, part("value")?);
+    Some(if text.chars().count() > 60 { text.chars().take(59).collect::<String>() + "…" } else { text })
 }

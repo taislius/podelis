@@ -9,6 +9,7 @@ use tokio::io::AsyncWriteExt as _;
 
 use super::*;
 use crate::export;
+use crate::settings::Viewer;
 
 /// A command run with the terminal handed over (the viewer), then removed.
 pub struct External {
@@ -89,26 +90,63 @@ impl App {
         }
     }
 
-    /// `o`: opens the shown rows in the viewer (the main loop runs it).
+    /// `o`: a menu of the formats to open the rows in, each with what
+    /// opens it.
     pub(super) fn open_in_viewer(&mut self) {
-        let Some(results) = self.tab.grid.results.as_ref().filter(|r| !r.columns.is_empty()) else {
+        if self.tab.grid.results.as_ref().is_none_or(|r| r.columns.is_empty()) {
+            return self.set_status("No rows to open".to_string(), true);
+        }
+        self.open_viewer_menu();
+    }
+
+    /// What opens rows in `format` (`Settings::viewer_for`).
+    pub(super) fn viewer_for(&self, format: OpenFormat) -> Viewer {
+        self.settings.viewer_for(format.key())
+    }
+
+    /// Writes the rows (the marked ones, or those shown) in `format` to a
+    /// file of their own and opens it: in its app, which Podėlis doesn't
+    /// wait for, or in this terminal for a viewer that runs in one.
+    pub(super) fn open_rows_as(&mut self, format: OpenFormat) {
+        let Some((rows, text)) = self.rows_as(format) else {
             return self.set_status("No rows to open".to_string(), true);
         };
-        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-        let file = std::env::temp_dir().join(format!("podelis-{}-{stamp}.tsv", std::process::id()));
-        if let Err(e) = store::write_atomic(&file, &export::tsv(results, &self.tab.grid.view)) {
-            return self.set_status(format!("Couldn't write the rows: {e:#}"), true);
-        }
-        let viewer = self
-            .settings
-            .viewer
-            .clone()
-            .or_else(|| std::env::var("PAGER").ok())
-            .filter(|v| !v.trim().is_empty())
-            .unwrap_or_else(|| "less -S".to_string());
+        let dir = opened_dir(&self.data_dir.clone().unwrap_or_else(store::config_dir));
+        let file = match write_opened(&dir, format, &text) {
+            Ok(file) => file,
+            Err(e) => return self.set_status(format!("Couldn't write the rows: {e}"), true),
+        };
+        let viewer = self.viewer_for(format);
         let path = shell_quote(&file.to_string_lossy());
-        let command = if viewer.contains("{}") { viewer.replace("{}", &path) } else { format!("{viewer} {path}") };
-        self.external = Some(External { command, file });
+        let program = viewer.command();
+        let command = if program.contains("{}") { program.replace("{}", &path) } else { format!("{program} {path}") };
+        if viewer.in_terminal() {
+            self.external = Some(External { command, file });
+            return;
+        }
+        if !self.may_reach_outside() {
+            return;
+        }
+        let what = format!("{rows} row(s) as {}", format.name());
+        let send = self.sender();
+        self.set_status(format!("Opening {what}…"), false);
+        let log = dir.join("open.log");
+        tokio::spawn(async move {
+            let result = start_app(&command, &log).await;
+            send(DbEventKind::Opened(what, command, result));
+        });
+    }
+
+    pub(super) fn opened(&mut self, what: &str, command: &str, result: Result<(), String>) {
+        match result {
+            Ok(()) => self.set_status(format!("Opened {what}"), false),
+            // The program, not the whole command: its file's long path
+            // would push out why.
+            Err(e) => {
+                let program = command.split_whitespace().next().unwrap_or(command);
+                self.set_status(format!("Couldn't open {what} with {program}: {e}"), true);
+            }
+        }
     }
 
     /// The program the main loop should run with the terminal, if any.
@@ -126,6 +164,105 @@ impl App {
             Ok(s) => self.set_status(format!("`{}` exited with {s}", external.command), true),
             Err(e) => self.set_status(format!("Couldn't run `{}`: {e}", external.command), true),
         }
+    }
+}
+
+/// The formats rows open in (`o`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenFormat {
+    Csv,
+    Tsv,
+    Json,
+    /// `INSERT` statements.
+    Sql,
+    /// Aligned columns, as `-e` prints them.
+    Text,
+}
+
+impl OpenFormat {
+    pub const ALL: [OpenFormat; 5] =
+        [OpenFormat::Csv, OpenFormat::Json, OpenFormat::Sql, OpenFormat::Tsv, OpenFormat::Text];
+
+    /// Its key in `[viewers]`, and its file's extension.
+    pub fn key(self) -> &'static str {
+        match self {
+            OpenFormat::Csv => "csv",
+            OpenFormat::Tsv => "tsv",
+            OpenFormat::Json => "json",
+            OpenFormat::Sql => "sql",
+            OpenFormat::Text => "txt",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            OpenFormat::Csv => "CSV",
+            OpenFormat::Tsv => "TSV",
+            OpenFormat::Json => "JSON",
+            OpenFormat::Sql => "INSERT statements",
+            OpenFormat::Text => "a text table",
+        }
+    }
+}
+
+/// Rows opened in an app stay this long (the app reads the file when it
+/// likes), then go the next time rows are opened.
+const OPENED_KEPT: std::time::Duration = std::time::Duration::from_hours(24);
+
+/// Where opened rows are written: a folder of the user's alone (a shared
+/// temporary folder would show them to others).
+fn opened_dir(config_dir: &std::path::Path) -> PathBuf {
+    config_dir.join("opened")
+}
+
+/// Writes `text` to a new file in `dir` (made the user's alone), after
+/// removing what's been there for a day.
+fn write_opened(dir: &std::path::Path, format: OpenFormat, text: &str) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let old = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok());
+        if old.is_some_and(|age| age > OPENED_KEPT) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S%.3f");
+    let file = dir.join(format!("rows-{stamp}.{}", format.key()));
+    store::write_atomic(&file, text).map_err(|e| format!("{e:#}"))?;
+    let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
+    Ok(file)
+}
+
+/// Starts `command` on its own (its own process group, no terminal), so
+/// it outlives Podėlis and never draws over it; an app that fails at once
+/// (no such program, no app for the type) is an error, with what it said
+/// (its stderr goes to `log`: a pipe left unread would stop it).
+async fn start_app(command: &str, log: &std::path::Path) -> Result<(), String> {
+    let errors = {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true).mode(0o600);
+        options.open(log).map_err(|e| e.to_string())?
+    };
+    let mut child = tokio::process::Command::from(shell(command))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(errors)
+        .process_group(0)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    // Openers (`open`, `xdg-open`) end once the app has it; an app itself
+    // runs on, and is left to.
+    match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
+        Ok(Ok(status)) if status.success() => Ok(()),
+        Ok(Ok(status)) => {
+            let said = std::fs::read_to_string(log).unwrap_or_default();
+            let said = said.trim().lines().last().unwrap_or_default();
+            Err(if said.is_empty() { format!("it exited with {status}") } else { said.to_string() })
+        }
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Ok(()),
     }
 }
 

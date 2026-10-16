@@ -20,6 +20,8 @@ pub enum Command {
     LoadMore,
     PipeRows,
     OpenRows,
+    /// The rows in this format, in its app.
+    OpenRowsAs(super::pipes::OpenFormat),
     RefreshSchema,
     CopyDiagnostics,
     Help,
@@ -80,7 +82,8 @@ impl Command {
             Command::AgentActivity => "Agent activity: what AI agents ran (podelis mcp)",
             Command::LoadMore => "Load more rows",
             Command::PipeRows => "Pipe rows through a command (grep, sort, jq…)",
-            Command::OpenRows => "Open rows in the viewer (less, VisiData…)",
+            Command::OpenRows => "Open rows in an app: CSV, JSON, SQL… (or a viewer in this terminal)",
+            Command::OpenRowsAs(_) => "Open rows in an app",
             Command::RefreshSchema => "Refresh the navigator",
             Command::CopyDiagnostics => "Copy diagnostics for a bug report",
             Command::Help => "Show all keys",
@@ -133,6 +136,7 @@ impl Command {
             Command::CopyDiagnostics
             | Command::ExportAll(_)
             | Command::CopyRows(_)
+            | Command::OpenRowsAs(_)
             | Command::AgentActivity
             | Command::SwitchTab(_)
             | Command::CompareSchema(_)
@@ -303,6 +307,7 @@ impl App {
             Command::LoadMore => self.load_more(),
             Command::PipeRows => self.open_pipe_prompt(),
             Command::OpenRows => self.open_in_viewer(),
+            Command::OpenRowsAs(format) => self.open_rows_as(format),
             Command::RefreshSchema => self.load_catalog(),
             Command::CopyDiagnostics => {
                 let text = self.diagnostics();

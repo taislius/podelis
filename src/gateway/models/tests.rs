@@ -230,3 +230,17 @@ fn a_last_event_without_its_blank_line_is_kept() {
     assert_eq!(parser.finish(), Some(Event { name: "message_stop".into(), data: "{}".into() }));
     assert_eq!(Parser::default().finish(), None);
 }
+
+#[tokio::test]
+async fn a_request_that_fails_never_says_its_url_or_key() {
+    // Nothing listens there: the request fails before any answer.
+    // Port 1: nothing listens there, and nobody can bind it without root
+    // (a port freed for the test could be taken by another test meanwhile).
+    let port = 1;
+    let url = format!("http://127.0.0.1:{port}/v1/chat?key=SECRET");
+    let e = reqwest::Client::new().get(&url).send().await.unwrap_err();
+    for said in [super::unreachable(&e), super::cause(&e)] {
+        assert!(!said.contains("SECRET") && !said.contains("/v1/chat"), "{said}");
+    }
+    assert!(super::unreachable(&e).contains(&format!("http://127.0.0.1:{port}")));
+}

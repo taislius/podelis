@@ -171,6 +171,17 @@ pub(super) fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Shortens `s` to `max` chars from the start, keeping its end (a
+/// path's last folders).
+pub(super) fn truncate_start(s: &str, max: usize) -> String {
+    let len = s.chars().count();
+    if len <= max {
+        s.to_string()
+    } else {
+        "…".to_string() + &s.chars().skip(len - max.saturating_sub(1)).collect::<String>()
+    }
+}
+
 /// A size in bytes, e.g. `12.4 MB` (powers of 1024, as `du -h`).
 #[allow(clippy::cast_precision_loss)] // display only, one decimal
 pub(super) fn human_bytes(n: i64) -> String {

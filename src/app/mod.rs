@@ -55,6 +55,7 @@ mod overlay;
 mod palette;
 mod params;
 mod pipes;
+mod plan_lines;
 mod projects;
 mod query;
 mod results;
@@ -311,7 +312,8 @@ enum DbEventKind {
     ExportDone(PathBuf, Result<u64, String>),
     MoreFailed(String),
     QueryFailed(String, Option<ErrorPos>, Option<TxnState>),
-    CancelFailed(String),
+    /// Why not, and whether the server couldn't be reached at all.
+    CancelFailed(String, bool),
     Catalog(Result<Vec<(TableInfo, Vec<ColumnInfo>)>, String>),
     Routines(Vec<RoutineInfo>),
     TableDetails {
@@ -345,6 +347,10 @@ enum DbEventKind {
     GatewayDone(memory_view::GatewayPurpose, Box<Result<serde_json::Value, ask::AskFailure>>),
     /// A definition to show (title, text).
     Definition(String, Result<String, String>),
+    /// Rows opened in an app (what, the command), or why they couldn't be.
+    Opened(String, String, Result<(), String>),
+    /// The row a foreign key points to (`f`), looked up.
+    Followed(Box<(follow::Followed, Result<QueryOutcome, String>)>),
     /// The background syntax check of `text`: the server's problem, else
     /// the parser's hint, else the first lint warning.
     SyntaxChecked {
@@ -458,6 +464,10 @@ pub struct Hits {
     /// The MESSAGES lines, and the index of the first one shown.
     pub messages: Rect,
     pub messages_offset: usize,
+    /// QUERY PLAN's text, and the row of it its first plan line is drawn
+    /// on (its notes above it): for clicks and drags selecting lines.
+    pub plan: Rect,
+    pub plan_first_row: i32,
     /// The syntax hint under the editor (a click goes to what it's about).
     pub syntax_hint: Rect,
     /// Editor tab strip: (row, then each tab's x range and index).
@@ -606,6 +616,9 @@ pub struct CellView {
     pub browse: bool,
     /// `y` copies the text itself (a message), saying this.
     pub copies_text: Option<&'static str>,
+    /// A row a foreign key points to (`f`): `e` opens its lookup (the
+    /// tab's name, the SQL) in a tab of its own.
+    pub follow: Option<(String, String)>,
 }
 
 impl CellView {
@@ -619,6 +632,7 @@ impl CellView {
             max_scroll: u16::MAX,
             browse: false,
             copies_text: None,
+            follow: None,
         }
     }
 
@@ -807,6 +821,9 @@ pub struct App {
     pub schema_shown: bool,
     /// The focused pane fills the screen (`z`, Ctrl+K z / F12).
     pub zoomed: bool,
+    /// The editor shows only the statement at the cursor (or the
+    /// selection's lines), in a pop-over (Ctrl+K b / Shift+F12).
+    pub statement_zoom: bool,
     /// A function's definition on its way is for the navigator's popup.
     routine_definition_pending: bool,
     /// The statement of the EXPLAIN on its way, and whether it's ANALYZE.
@@ -852,6 +869,10 @@ pub struct App {
     /// Timeout and review state of the running query.
     run_extra: RunExtra,
     pub cancelling: bool,
+    /// Cancelling the running query failed: Esc again stops waiting.
+    pub cancel_failed: bool,
+    /// A drag selecting the plan's lines.
+    pub plan_dragging: bool,
     /// Mode of the open connection.
     pub active_mode: ConnectionMode,
     /// What happens to writes on this connection (Ctrl+K w).
@@ -996,6 +1017,7 @@ impl App {
             pending_follow: false,
             dragging: false,
             zoomed: false,
+            statement_zoom: false,
             routine_definition_pending: false,
             plan_request: None,
             queued_plan: None,
@@ -1013,6 +1035,8 @@ impl App {
             run_extra: RunExtra::default(),
             executing: false,
             cancelling: false,
+            cancel_failed: false,
+            plan_dragging: false,
             active_mode: ConnectionMode::Normal,
             tx_mode: TxMode::AutoCommit,
             tx_picker: None,

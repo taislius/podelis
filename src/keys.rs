@@ -53,6 +53,8 @@ pub enum Action {
     NextWarning,
     Ask,
     Memory,
+    SelectStatement,
+    ZoomStatement,
 }
 
 impl Action {
@@ -95,6 +97,8 @@ impl Action {
             Action::NextWarning => "Go to the next lint warning",
             Action::Ask => "Ask in plain language: a model writes the SQL (it lands in the editor, not run)",
             Action::Memory => "Project memory: what models are told about your data (confirm their guesses)",
+            Action::SelectStatement => "Select the statement at the cursor",
+            Action::ZoomStatement => "Zoom the statement at the cursor (or the selection) in a pop-over, and back",
         }
     }
 
@@ -123,6 +127,8 @@ impl Action {
             Action::NextWarning => "next warning",
             Action::Ask => "ask in plain language",
             Action::Memory => "project memory (for models)",
+            Action::SelectStatement => "select statement",
+            Action::ZoomStatement => "zoom statement",
             _ => self.describe(),
         }
     }
@@ -144,6 +150,8 @@ impl Action {
                 | Action::Format
                 | Action::InsertSnippet
                 | Action::NextWarning
+                | Action::SelectStatement
+                | Action::ZoomStatement
         )
     }
 
@@ -195,6 +203,8 @@ const ACTIONS: &[(Action, &str, &[&str])] = &[
     (Action::InsertSnippet, "insert_snippet", &["Ctrl+K i", "Ctrl+E"]),
     (Action::Menu, "menu", &["Ctrl+K m", "Shift+F10", "F10"]),
     (Action::Zoom, "zoom", &["Ctrl+K z", "F12"]),
+    (Action::ZoomStatement, "zoom_statement", &["Ctrl+K b", "Shift+F12"]),
+    (Action::SelectStatement, "select_statement", &["Ctrl+K v"]),
     (Action::Heartbeat, "heartbeat", &["Ctrl+K h"]),
     (Action::Projects, "projects", &["Ctrl+K p"]),
     (Action::TxMode, "transaction_mode", &["Ctrl+K x"]),

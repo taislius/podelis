@@ -68,9 +68,42 @@ impl std::fmt::Display for Reconnected {
     }
 }
 
+/// Marks an error meaning the server didn't answer (a dead link, a VPN
+/// that dropped): nothing was run, and the connection looks down.
+#[derive(Debug)]
+pub struct NoAnswer;
+
+impl std::fmt::Display for NoAnswer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the server doesn't answer: the connection looks down (a VPN or network that dropped?)")
+    }
+}
+
 /// Whether the session was reopened after this error.
 pub fn is_reconnected(err: &anyhow::Error) -> bool {
     err.downcast_ref::<Reconnected>().is_some()
+}
+
+/// The server's address couldn't be reached at all (see `db::reach`):
+/// why, in a user's words.
+#[derive(Debug)]
+pub struct Unreachable(pub String);
+
+impl std::fmt::Display for Unreachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unreachable {}
+
+/// Whether the server couldn't be reached at all: the connection broke,
+/// its address didn't answer, or no connection to it could be had in time
+/// (the pool timed out).
+pub fn is_unreachable(err: &anyhow::Error) -> bool {
+    is_broken(err)
+        || err.chain().any(|e| e.downcast_ref::<Unreachable>().is_some())
+        || matches!(err.downcast_ref::<sqlx::Error>(), Some(sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed))
 }
 
 /// Whether the error means the connection itself broke.

@@ -28,6 +28,8 @@ pub fn hint(message: &str) -> Option<&'static str> {
         "ssh can't find that host: check the SSH destination or your ~/.ssh/config"
     } else if has("permission denied (publickey") || (has("ssh") && has("permission denied")) {
         "the SSH key wasn't accepted: check ssh-agent and ~/.ssh/config (Podėlis can't answer password prompts)"
+    } else if has("no route to") || has("network is unreachable") {
+        "the network can't get there: a VPN that's off, or a host on a network you're not on?"
     } else if has("timed out") || has("timeout") || has("time out") {
         "no answer: a firewall, a VPN that's off, or the wrong host? Through SSH, the host is as seen from the SSH server"
     } else if has("failed to lookup address")

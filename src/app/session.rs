@@ -47,6 +47,9 @@ pub struct Conns {
     pub saved_session: SessionUi,
     /// Connections being reopened at startup, by name.
     pub restoring: Vec<String>,
+    /// A run asked for on a tab whose connection is being opened again
+    /// (`retry_tab_connection`): done once it's open.
+    pub after_reconnect: Option<crate::keys::Action>,
     /// Expanded schema tables to restore, by connection name.
     restore_expanded: HashMap<String, Vec<(String, String)>>,
     /// Connect as soon as the saved connection's password is loaded (it was
@@ -278,9 +281,15 @@ impl App {
         self.fetching_more = false;
         self.executing = false;
         self.cancelling = false;
+        self.cancel_failed = false;
         self.tab.grid.results = None;
         self.tab.grid.result_sets.clear();
         self.tabs[self.active_tab].conn = None;
+        // Disconnected on purpose: a run here doesn't open it again
+        // (`tab_connection_to_retry`).
+        if let Some(name) = self.conns.tab_connections.get_mut(self.active_tab) {
+            *name = None;
+        }
         self.switch_conn(None);
         self.release_unused_conns();
         self.save_draft();
@@ -433,7 +442,9 @@ impl App {
         if !self.settings.restore_session {
             return;
         }
-        let Some(project_id) = self.current_project.clone() else { return };
+        if self.current_project.is_none() {
+            return;
+        }
         let session = self.conns.saved_session.clone();
         if !session.on_query {
             return;
@@ -454,10 +465,35 @@ impl App {
             _ => Focus::Editor,
         };
         self.conns.restore_expanded = session.expanded;
-        self.conns.restoring = profiles.iter().map(|p| p.name.clone()).collect();
-        self.set_status(format!("Reconnecting to {}…", self.conns.restoring.join(", ")), false);
         let project = self.project().map(|p| p.name.clone()).unwrap_or_default();
         self.splash = Some(Splash { project, started: Instant::now(), shown: false, done: Vec::new() });
+        self.connect_saved(profiles);
+    }
+
+    /// The saved connection the active tab had in the last session, when
+    /// opening it again then failed (the server was down, the VPN off):
+    /// a run there tries it again rather than saying "not connected".
+    pub(super) fn tab_connection_to_retry(&self) -> Option<ConnectionProfile> {
+        if self.database.is_some() || !self.conns.restoring.is_empty() || self.tabs[self.active_tab].conn.is_some() {
+            return None;
+        }
+        let name = self.conns.tab_connections.get(self.active_tab)?.as_ref()?;
+        self.profiles().iter().find(|p| &p.name == name).cloned()
+    }
+
+    /// Opens the tab's connection again (`tab_connection_to_retry`), then
+    /// does `action` (a run) once it's open.
+    pub(super) fn retry_tab_connection(&mut self, profile: ConnectionProfile, action: crate::keys::Action) {
+        self.conns.after_reconnect = Some(action);
+        self.connect_saved(vec![profile]);
+    }
+
+    /// Opens `profiles` in the background, as the session had them: each
+    /// arrives as `Restored`, for the tabs that used it.
+    fn connect_saved(&mut self, profiles: Vec<ConnectionProfile>) {
+        let Some(project_id) = self.current_project.clone() else { return };
+        self.conns.restoring = profiles.iter().map(|p| p.name.clone()).collect();
+        self.set_status(format!("Reconnecting to {}…", self.conns.restoring.join(", ")), false);
         for profile in profiles {
             let send = self.sender();
             let project_id = project_id.clone();
@@ -499,8 +535,9 @@ impl App {
         let db = match result {
             Ok(db) => db,
             Err(e) => {
-                let msg =
-                    format!("Couldn't reconnect '{}': {} (Ctrl+O to connect)", form.name, form.connect_failure(&e));
+                self.conns.after_reconnect = None;
+                let again = "a run tries again, Ctrl+O picks another";
+                let msg = format!("Couldn't reconnect '{}': {} ({again})", form.name, form.connect_failure(&e));
                 self.log(msg.clone(), true);
                 return self.set_status(msg, true);
             }
@@ -526,8 +563,12 @@ impl App {
         if self.tabs[self.active_tab].conn == Some(id) {
             self.switch_conn(Some(id));
         }
-        if self.conns.restoring.is_empty() && !self.status_is_error {
+        // (A retry for a run: the run says how it went.)
+        if self.conns.restoring.is_empty() && !self.status_is_error && self.conns.after_reconnect.is_none() {
             self.set_status("Session restored".to_string(), false);
+        }
+        if let Some(action) = self.conns.after_reconnect.take().filter(|_| self.database.is_some()) {
+            self.run_action(action);
         }
     }
 

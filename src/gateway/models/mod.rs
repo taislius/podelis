@@ -333,11 +333,12 @@ pub async fn complete(
 ) -> Result<Reply, ModelError> {
     let url = checked_url(config)?;
     if api_key.is_none() && !is_local(&url) {
+        // The API's variable only for its own address (`key`).
+        let or_env = if config.url.is_none() { format!(", or {}", config.api.key_env()) } else { String::new() };
         return Err(ModelError::fatal(format!(
             "model `{0}` has no key: `podelis gateway key {0}` stores one in the keychain \
-             (or set key_command, or {1})",
+             (or set key_command{or_env})",
             config.name,
-            config.api.key_env()
         )));
     }
     let client = http(is_local(&url))?;
@@ -404,7 +405,7 @@ pub(super) fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Durati
 async fn post(request: reqwest::RequestBuilder, body: &Value) -> Result<reqwest::Response, ModelError> {
     let request = request.header(reqwest::header::CONTENT_TYPE, "application/json").body(body.to_string());
     let response = request.send().await.map_err(|e| {
-        let message = format!("couldn't reach the model: {}", without_url(&e));
+        let message = unreachable(&e);
         if e.is_connect() || e.is_timeout() { ModelError::transient(message) } else { ModelError::fatal(message) }
     })?;
     let status = response.status();
@@ -417,16 +418,32 @@ async fn post(request: reqwest::RequestBuilder, body: &Value) -> Result<reqwest:
 }
 
 /// A reqwest error said without its URL (which can carry a query).
-fn without_url(e: &reqwest::Error) -> String {
-    let mut text = e.to_string();
+/// A request that didn't get an answer: where to (the server, without
+/// the path or query), and the innermost cause, which says what went
+/// wrong (refused, DNS, TLS…) where reqwest's own text doesn't.
+fn unreachable(e: &reqwest::Error) -> String {
+    let at = e.url().map_or_else(String::new, |url| {
+        let port = url.port().map_or_else(String::new, |p| format!(":{p}"));
+        format!(" at {}://{}{port}", url.scheme(), url.host_str().unwrap_or("?"))
+    });
+    let why = if e.is_timeout() { "it didn't answer in time".to_string() } else { cause(e) };
+    format!("couldn't reach the model{at}: {why}")
+}
+
+/// What went wrong under reqwest's own words, which name the request's
+/// URL (with any key in its query) but not the reason. Where there's
+/// nothing under them, they're said with the URL cut to its server.
+fn cause(e: &reqwest::Error) -> String {
+    let mut cause: &dyn std::error::Error = e;
+    while let Some(next) = cause.source() {
+        cause = next;
+    }
+    let mut text = cause.to_string();
     if let Some(url) = e.url() {
-        text = text.replace(url.as_str(), &format!("{}://{}", url.scheme(), url.host_str().unwrap_or("?")));
+        let port = url.port().map_or_else(String::new, |p| format!(":{p}"));
+        text = text.replace(url.as_str(), &format!("{}://{}{port}", url.scheme(), url.host_str().unwrap_or("?")));
     }
-    // The cause says what went wrong (DNS, refused, TLS…).
-    match std::error::Error::source(e) {
-        Some(source) => format!("{text}: {source}"),
-        None => text,
-    }
+    text
 }
 
 /// Reads an SSE response, handing each event to `on_event`; it returns
@@ -440,7 +457,7 @@ async fn read_events(
     let mut parser = sse::Parser::default();
     let mut body = response.bytes_stream();
     while let Some(chunk) = body.next().await {
-        let chunk = chunk.map_err(|e| ModelError::transient(format!("the answer broke off: {}", without_url(&e))))?;
+        let chunk = chunk.map_err(|e| ModelError::transient(format!("the answer broke off: {}", cause(&e))))?;
         for event in parser.push(&chunk) {
             if on_event(&event)? {
                 return Ok(true);

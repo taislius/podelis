@@ -63,6 +63,11 @@ impl App {
             .chain([
                 self.action_item("Run (the selection, or everything)", Action::Run),
                 self.action_item("Run the statement at the cursor", Action::RunStatement),
+                self.action_item("Select the statement", Action::SelectStatement),
+                self.action_item(
+                    if self.statement_zoom { "Show the whole text again" } else { "Zoom the statement (alone)" },
+                    Action::ZoomStatement,
+                ),
                 self.action_item("Explain (plan only)", Action::Explain),
                 self.action_item("Explain analyze (runs it)", Action::ExplainAnalyze),
                 self.action_item("Format SQL", Action::Format),
@@ -95,7 +100,7 @@ impl App {
             command("Copy the rows as JSON", Command::CopyRows(ExportFormat::Json)),
             command("Copy the rows as INSERT statements", Command::CopyRows(ExportFormat::Sql)),
             results_item("Pipe the rows through a command", Char('|'), "|"),
-            results_item("Open the rows in the viewer", Char('o'), "o"),
+            results_item("Open the rows in an app (CSV, JSON, SQL…)", Char('o'), "o"),
         ];
         // A plan's table: only what its rows can go to.
         if self.tab.plan_swapped {
@@ -105,6 +110,34 @@ impl App {
         let at = at.unwrap_or((pane.x + 2, pane.y + 1));
         self.completion = None;
         self.menu = Some(Menu { title: "EXPORT", items, selected: 0, at });
+    }
+
+    /// `o`: the formats to open the rows in, each with what opens it.
+    pub(super) fn open_viewer_menu(&mut self) {
+        use super::pipes::OpenFormat;
+        let items = OpenFormat::ALL
+            .into_iter()
+            .map(|format| {
+                let viewer = self.viewer_for(format);
+                let program = viewer.command().split_whitespace().next().unwrap_or_default();
+                let keys = match (program, viewer.in_terminal()) {
+                    ("open" | "xdg-open", false) => "its app".to_string(),
+                    (program, true) => format!("here: {program}"),
+                    (program, false) => program.to_string(),
+                };
+                let label = match format {
+                    OpenFormat::Csv => "As CSV (a spreadsheet)",
+                    OpenFormat::Json => "As JSON",
+                    OpenFormat::Sql => "As INSERT statements (SQL)",
+                    OpenFormat::Tsv => "As TSV (tab-separated)",
+                    OpenFormat::Text => "As a text table",
+                };
+                MenuItem { label, keys, action: MenuAction::Command(super::palette::Command::OpenRowsAs(format)) }
+            })
+            .collect();
+        let pane = self.hits.result_rows;
+        self.completion = None;
+        self.menu = Some(Menu { title: "OPEN THE ROWS", items, selected: 0, at: (pane.x + 2, pane.y + 1) });
     }
 
     /// The results kept from earlier runs: to switch between and pin.
@@ -158,7 +191,7 @@ impl App {
                 },
                 results_item("Follow the foreign key", Char('f'), "f"),
                 results_item("Pipe rows through a command", Char('|'), "|"),
-                results_item("Open rows in the viewer", Char('o'), "o"),
+                results_item("Open rows in an app (CSV, JSON, SQL…)", Char('o'), "o"),
                 results_item("Sort by this column", Char('s'), "s"),
                 results_item("Chart this column", Char('b'), "b"),
                 results_item("Filter rows", Char('/'), "/"),

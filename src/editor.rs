@@ -77,6 +77,10 @@ pub struct TextEditor {
     /// Changes with every edit (and differs between editors), so what's
     /// worked out from the text can be kept until it changes.
     version: u64,
+    /// The view was scrolled (the mouse wheel) with the cursor here and
+    /// the text at this version: it stays where it was put, not following
+    /// the cursor, until either changes.
+    scrolled_from: Option<(Pos, u64)>,
 }
 
 /// The next editor version: one counter for all, so a new editor never
@@ -105,6 +109,7 @@ impl TextEditor {
             redo: History::default(),
             last_edit: None,
             version: next_version(),
+            scrolled_from: None,
         }
     }
 
@@ -210,10 +215,26 @@ impl TextEditor {
         self.scroll_row = scroll.min(self.cursor_row);
     }
 
+    /// Scrolls the view by `rows` (down if positive), leaving the cursor
+    /// and the selection where they are; `height` rows are shown.
+    pub fn scroll_view(&mut self, rows: isize, height: usize) {
+        let last = self.lines.len().saturating_sub(height.max(1));
+        self.scroll_row = self.scroll_row.saturating_add_signed(rows).min(last);
+        self.scrolled_from = Some((self.cursor(), self.version));
+    }
+
+    /// Whether the cursor's row is in a view of `height` rows.
+    pub fn cursor_in_view(&self, height: usize) -> bool {
+        (self.scroll_row..self.scroll_row + height).contains(&self.cursor_row)
+    }
+
     /// Adjusts scroll offsets so the cursor is inside a `height` x `width`
-    /// viewport.
+    /// viewport (not after `scroll_view`, until the cursor or text changes).
     pub fn scroll_to_cursor(&mut self, height: usize, width: usize) {
-        if height > 0 {
+        if self.scrolled_from.is_some_and(|from| from == (self.cursor(), self.version)) {
+            self.scroll_row = self.scroll_row.min(self.lines.len().saturating_sub(1));
+        } else if height > 0 {
+            self.scrolled_from = None;
             if self.cursor_row < self.scroll_row {
                 self.scroll_row = self.cursor_row;
             } else if self.cursor_row >= self.scroll_row + height {
@@ -761,6 +782,27 @@ mod tests {
         e.move_home();
         e.scroll_to_cursor(1, 10);
         assert_eq!(e.scroll_col, 0);
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_view_and_keeps_the_cursor_and_selection() {
+        let mut e = editor("1\n2\n3\n4\n5\n6\n7");
+        e.select_offsets(0, 13);
+        e.scroll_to_cursor(3, 10);
+        assert_eq!(e.scroll_row, 4);
+        e.scroll_view(-3, 3);
+        e.scroll_to_cursor(3, 10);
+        assert_eq!(e.scroll_row, 1, "stays where it was put");
+        assert!(!e.cursor_in_view(3) && e.selection().is_some());
+        e.scroll_view(-9, 3);
+        assert_eq!(e.scroll_row, 0);
+        e.scroll_view(9, 3);
+        assert_eq!(e.scroll_row, 4, "not past the end");
+        // Typing (or moving) brings the cursor back into view.
+        e.scroll_view(-4, 3);
+        e.insert_char('x');
+        e.scroll_to_cursor(3, 10);
+        assert!(e.cursor_in_view(3));
     }
 
     #[test]

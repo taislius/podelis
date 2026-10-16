@@ -283,6 +283,12 @@ pub fn statement_at(text: &str, offset: usize, engine: Engine) -> Option<&str> {
     Statements::of(text, engine).at(offset).map(|r| &text[r])
 }
 
+/// The byte range of the statement the cursor (a byte offset) is in, as
+/// `statement_at` picks it.
+pub fn statement_range(text: &str, offset: usize, engine: Engine) -> Option<Range<usize>> {
+    Statements::of(text, engine).at(offset)
+}
+
 /// A text's statements, to ask which one the cursor is in.
 pub struct Statements {
     segments: Vec<(Range<usize>, Option<Range<usize>>)>,

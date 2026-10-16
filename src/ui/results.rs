@@ -252,12 +252,26 @@ fn draw_no_result(f: &mut Frame, app: &App, area: Rect) {
     let run = app.keymap.short_label(crate::keys::Action::Run);
     let text = if let Some(running) = app.running_label() {
         // "running… 12 s", as the pane's title has it.
-        Paragraph::new(format!(" R{} · Esc cancels it", running.trim_start_matches('r'))).style(fg(t.text))
+        let running = running.trim_start_matches('r');
+        if app.cancel_failed {
+            // Orange: it needs the user (see `stop_waiting`).
+            Paragraph::new(format!(" R{running} · the server didn't take the cancel · Esc again stops waiting"))
+                .style(fg(t.warn))
+        } else {
+            Paragraph::new(format!(" R{running} · Esc cancels it")).style(fg(t.text))
+        }
     } else if let Some(err) = &app.tab.run_error {
+        // The link, not the SQL: nothing to fix in the editor.
+        let link = err.contains("the server doesn't answer") || err.contains("couldn't reconnect");
+        let (said, then) = if link {
+            (" The server doesn't answer:", " Check the network or VPN, then run it again: Podėlis reconnects.")
+        } else {
+            (" The query failed:", " Fix it in the editor and run it again; MESSAGES keeps the error.")
+        };
         Paragraph::new(vec![
-            Line::from(Span::styled(" The query failed:", bold(t.error))),
+            Line::from(Span::styled(said, bold(t.error))),
             Line::from(Span::styled(format!(" {err}"), fg(t.error))),
-            Line::from(Span::styled(" Fix it in the editor and run it again; MESSAGES keeps the error.", dim())),
+            Line::from(Span::styled(then, dim())),
         ])
         .wrap(Wrap { trim: false })
     } else if !app.connected() {
@@ -472,6 +486,8 @@ fn draw_plan(f: &mut Frame, app: &mut App, area: Rect) -> usize {
         Some(plan) => {
             // What stands out first, numbered; the same number marks its step.
             let mut lines = plan_note_lines(app, area.width);
+            let notes = lines.len();
+            let selected = app.tab.plan_selected.map(|(a, b)| a.min(b)..=a.max(b));
             for (n, l) in plan.text.lines().enumerate() {
                 let trimmed = l.trim_start();
                 let marks: Vec<String> = (1..=plan.notes.len())
@@ -489,8 +505,14 @@ fn draw_plan(f: &mut Frame, app: &mut App, area: Rect) -> usize {
                 if !marks.is_empty() {
                     line.push_span(Span::styled(format!("  ◀ {}", marks.join(",")), fg(t.warn)));
                 }
+                if selected.as_ref().is_some_and(|r| r.contains(&n)) {
+                    line = line.style(Style::default().bg(t.selection));
+                }
                 lines.push(line);
             }
+            app.hits.plan = area;
+            app.hits.plan_first_row =
+                i32::from(area.y) + i32::try_from(notes).unwrap_or(0) - i32::from(app.tab.tab_scroll);
             let widest = lines.iter().map(Line::width).max().unwrap_or(0);
             let across = clamp_across(app, widest, area.width);
             f.render_widget(Paragraph::new(lines).scroll((app.tab.tab_scroll, across)), area);
@@ -780,7 +802,7 @@ fn draw_rows_footer(f: &mut Frame, app: &App, footer: Rect, offset: usize, count
 }
 
 /// `text` in lines of at most `width` chars, broken between words.
-fn wrap_words(text: &str, width: usize) -> Vec<String> {
+pub(super) fn wrap_words(text: &str, width: usize) -> Vec<String> {
     let mut lines = vec![String::new()];
     for word in text.split_whitespace() {
         let last = lines.last_mut().expect("never empty");

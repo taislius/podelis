@@ -46,6 +46,28 @@ pub fn socket_path(config_dir: &Path) -> PathBuf {
     dir(config_dir).join("gateway.sock")
 }
 
+/// The longest socket path the OS takes (`sun_path` is 104 bytes on
+/// macOS, 108 on Linux; one for the final NUL).
+const MAX_SOCKET_PATH: usize = 103;
+
+/// The socket's path, if the system can take it: a config folder deep
+/// enough makes it too long, and no gateway could listen there.
+pub fn usable_socket_path(config_dir: &Path) -> std::io::Result<PathBuf> {
+    let socket = socket_path(config_dir);
+    let len = socket.as_os_str().len();
+    if len > MAX_SOCKET_PATH {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "the gateway's socket path is too long for the OS ({len} bytes, at most {MAX_SOCKET_PATH}): {}; \
+                 set PODELIS_CONFIG_DIR to a shorter folder",
+                socket.display()
+            ),
+        ));
+    }
+    Ok(socket)
+}
+
 fn lock_path(config_dir: &Path) -> PathBuf {
     dir(config_dir).join("gateway.lock")
 }

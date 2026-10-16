@@ -35,6 +35,9 @@ pub struct TabState {
     pub result_tab: ResultTab,
     /// Scroll offset of the MESSAGES / QUERY PLAN tabs, down and across.
     pub tab_scroll: u16,
+    /// Lines of the plan's text selected (where it started, where it is
+    /// now; from 0): kept by line, so scrolling keeps it whole.
+    pub plan_selected: Option<(usize, usize)>,
     pub tab_hscroll: u16,
     /// A plan that's a table (MySQL's classic EXPLAIN) as a grid, so the
     /// results' keys work on it. While QUERY PLAN shows it, it's swapped
@@ -465,6 +468,10 @@ impl App {
         self.switch_tab(next);
         self.tabs.remove(closing);
         self.parked.remove(closing);
+        // Each tab's connection from the last session, kept in step.
+        if closing < self.conns.tab_connections.len() {
+            self.conns.tab_connections.remove(closing);
+        }
         if self.active_tab > closing {
             self.active_tab -= 1;
         }

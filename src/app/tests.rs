@@ -690,6 +690,126 @@ async fn finish(app: &mut App) {
 }
 
 #[tokio::test]
+async fn the_statement_at_the_cursor_is_selected_or_zoomed_alone() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    app.tab.editor.set_text("select 'one';\n\nselect 'two'\n  as n;\n\nselect 'three';");
+    app.tab.editor.set_cursor((3, 2));
+    app.run_action(Action::SelectStatement);
+    assert_eq!(app.tab.editor.selected_text().as_deref(), Some("select 'two'\n  as n"));
+    assert_eq!(said(&app), "Selected the statement (2 of 3)");
+    // Zoomed, F5 runs the statement in sight, not the whole script.
+    app.tab.editor.clear_selection();
+    app.run_action(Action::ZoomStatement);
+    assert!(app.statement_zoom && !app.zoomed);
+    app.handle_key(key(KeyCode::F(5)));
+    finish(&mut app).await;
+    let shown = app.tab.grid.results.as_ref().map(|r| r.rows.clone());
+    assert_eq!(shown, Some(vec![vec![Some("two".to_string())]]));
+    // Esc drops a selection first, then shows the whole text again.
+    app.focus = Focus::Editor;
+    app.tab.editor.select_offsets(0, 3);
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.statement_zoom && app.tab.editor.selection().is_none());
+    app.handle_key(key(KeyCode::Esc));
+    assert!(!app.statement_zoom);
+    // Another pane taking the keys (an Explain's plan) leaves it open.
+    app.run_action(Action::ZoomStatement);
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Char(']')));
+    assert!(app.statement_zoom);
+    app.run_action(Action::ZoomStatement);
+    assert!(!app.statement_zoom);
+    // The pane zoom and this one don't go together.
+    app.run_action(Action::ZoomStatement);
+    app.run_action(Action::Zoom);
+    assert!(app.zoomed && !app.statement_zoom);
+}
+
+#[tokio::test]
+async fn rows_open_in_the_app_for_their_format() {
+    use crate::app::pipes::OpenFormat;
+    use crate::settings::Viewer;
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    run_sql(&mut app, "select 1 as n, 'a' as s").await;
+    // (Which program opens a format, by default: `Settings::viewer_for`'s test.)
+    app.settings.viewers.insert("tsv".into(), Viewer::Full { command: "less -S {}".into(), terminal: true });
+    app.settings.viewers.insert("csv".into(), Viewer::Command("libreoffice --calc".into()));
+    for (format, given) in [("json", "open"), ("sql", "xdg-open"), ("txt", "open")] {
+        app.settings.viewers.insert(format.into(), Viewer::Command(given.into()));
+    }
+    assert_eq!(app.viewer_for(OpenFormat::Csv), Viewer::Command("libreoffice --calc".into()));
+    app.open_viewer_menu();
+    let keys: Vec<String> = app.menu.as_ref().unwrap().items.iter().map(|i| i.keys.clone()).collect();
+    assert_eq!(keys, ["libreoffice", "its app", "its app", "here: less", "its app"]);
+    // One in the terminal: the main loop runs it, on a file of the user's alone.
+    app.open_rows_as(OpenFormat::Tsv);
+    let external = app.take_external().expect("run in the terminal");
+    assert!(external.command.starts_with("less -S '") && external.command.ends_with(".tsv'"), "{}", external.command);
+    assert_eq!(std::fs::read_to_string(&external.file).unwrap(), "n\ts\n1\ta\n");
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!((mode(&external.file), mode(external.file.parent().unwrap())), (0o600, 0o700));
+}
+
+#[tokio::test]
+async fn a_cancel_the_server_cant_be_told_lets_esc_stop_waiting() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    // A run that never ends (as on a link that died), and Esc.
+    app.executing = true;
+    app.task = Some(tokio::spawn(std::future::pending()));
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.cancelling);
+    let generation = app.generation;
+    // A server that answers and refuses (no privilege): just said.
+    let refused = DbEventKind::CancelFailed("Access denied; you need the PROCESS privilege".into(), false);
+    app.handle_db_event(DbEvent { generation, run: None, kind: refused });
+    assert!(!app.cancel_failed && !app.connection_lost && app.executing);
+    app.handle_key(key(KeyCode::Esc));
+    let failed = DbEventKind::CancelFailed("pool timed out while waiting for an open connection".into(), true);
+    app.handle_db_event(DbEvent { generation, run: None, kind: failed });
+    assert!(app.cancel_failed && app.connection_lost && app.executing);
+    assert!(said(&app).starts_with("Couldn't cancel: Esc again stops waiting"), "{}", said(&app));
+    // Esc again: no longer waiting; the next run checks the server first.
+    app.handle_key(key(KeyCode::Esc));
+    assert!(!app.executing && app.task.is_none() && !app.cancel_failed);
+    assert!(app.tab.run_error.as_ref().is_some_and(|e| e.contains("stopped waiting")));
+    assert!(app.connection_lost);
+    run_sql(&mut app, "select 7").await;
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("7".to_string())]]);
+    assert!(!app.connection_lost);
+    // A query that ends after a failed cancel leaves nothing armed.
+    app.executing = true;
+    app.task = Some(tokio::spawn(std::future::pending()));
+    app.handle_key(key(KeyCode::Esc));
+    let failed = DbEventKind::CancelFailed("pool timed out".into(), true);
+    app.handle_db_event(DbEvent { generation: app.generation, run: None, kind: failed });
+    app.task = None;
+    app.executing = false;
+    run_sql(&mut app, "select 8").await;
+    assert!(!app.cancel_failed, "the next Esc asks the server again");
+}
+
+#[test]
+fn memory_changes_name_the_fact() {
+    use super::memory_view::GatewayPurpose;
+    let (mut app, _dir) = test_app();
+    let project = project_id(&app);
+    app.current_project = Some(project.clone());
+    // Confirmed or forgotten: the fact as the window showed it (the answer
+    // has only its number).
+    let shown = Some("orders.total unit euro cents".to_string());
+    app.gateway_done(
+        GatewayPurpose::MemoryChanged("Confirmed", project.clone(), shown),
+        Ok(serde_json::json!({ "id": 8 })),
+    );
+    assert_eq!(app.status, "Confirmed orders.total unit euro cents");
+    // Added: the fact the gateway kept, worded the same way.
+    let kept = serde_json::json!({ "id": 9, "subject": "customers.email", "relation": "means", "value": "unique, lower-case" });
+    app.gateway_done(GatewayPurpose::MemoryChanged("Remembered", project, None), Ok(kept));
+    assert_eq!(app.status, "Remembered customers.email means unique, lower-case");
+}
+
+#[tokio::test]
 async fn read_only_mode_refuses_writes() {
     let (mut app, _dir) = connected_app(ConnectionMode::ReadOnly).await;
     run_sql(&mut app, "select 1; delete from t where id = 1").await;
@@ -2423,6 +2543,25 @@ async fn session_is_restored_on_startup() {
     }
     assert!(!dir.path().join("b.db").exists());
     assert!(app.status.contains("doesn't exist"), "{}", app.status);
+    // Once it's back, a run in its tab opens it again and goes ahead: no
+    // need to pick the connection again, or to restart.
+    app.handle_key(alt('2'));
+    assert!(app.database.is_none());
+    std::fs::write(dir.path().join("b.db"), "").unwrap();
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(said(&app).starts_with("Reconnecting to beta"), "{}", said(&app));
+    while app.tab.grid.results.is_none() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    assert_eq!(app.connect_form.name, "beta");
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("beta".to_string())]]);
+    // Disconnected on purpose: a run says so, and doesn't open it again.
+    app.disconnect();
+    app.screen = Screen::Query;
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(app.reconnecting().is_empty() && app.database.is_none());
+    assert!(said(&app).contains("isn't connected"), "{}", said(&app));
 
     // With restore_session = false it stays on the projects screen.
     let (store, _) = ConnectionStore::load_from(dir.path().join("c.toml"));
@@ -2630,7 +2769,7 @@ fn command_palette_finds_and_runs_commands() {
 }
 
 #[tokio::test]
-async fn following_a_foreign_key_opens_the_referenced_row() {
+async fn following_a_foreign_key_shows_the_referenced_row() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
     run_sql(
         &mut app,
@@ -2644,24 +2783,92 @@ async fn following_a_foreign_key_opens_the_referenced_row() {
     app.focus = Focus::Results;
     app.tab.grid.selected_col = 1;
     app.handle_key(key(KeyCode::Char('f')));
-    // The foreign keys load first, then the new tab runs.
-    while app.tabs.len() == 1 || app.executing {
+    // The foreign keys load first, then the row, in a pop-over: no new tab.
+    while app.cell_view.is_none() {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
+    let view = app.cell_view.as_ref().unwrap();
+    assert_eq!(view.title, "→ parent · id = 2");
+    assert!(view.text.contains("id    2") && view.text.contains("name  two"), "{}", view.text);
+    assert_eq!(app.tabs.len(), 1);
+    // `e` opens it in a tab of its own, and runs it.
+    app.handle_key(key(KeyCode::Char('e')));
+    finish(&mut app).await;
     assert_eq!(app.tabs[app.active_tab].name, "→ parent");
     assert_eq!(app.tab.editor.text(), "SELECT * FROM parent WHERE id = 2;");
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("2".to_string()), Some("two".to_string())]]);
 
-    // Not a foreign key: says so (once parent's foreign keys have loaded).
+    // While rows are still streaming (they hold the session): the stream
+    // stops, and the row comes.
+    run_sql(
+        &mut app,
+        "insert into child with recursive n(i) as (select 1 union all select i + 1 from n where i < 5000) \
+         select i + 100, 1 from n",
+    )
+    .await;
+    run_sql(&mut app, "select * from child").await;
+    assert!(app.row_stream.is_some(), "still streaming");
+    app.focus = Focus::Results;
+    app.tab.grid.selected_col = 1;
+    app.cell_view = None;
+    app.handle_key(key(KeyCode::Char('f')));
+    let shown = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while app.cell_view.is_none() {
+            let event = app.poll_db_event().await.unwrap();
+            app.handle_db_event(event);
+        }
+    })
+    .await;
+    assert!(shown.is_ok(), "the lookup waited for the stream");
+    assert!(app.row_stream.is_none());
+
+    // From a join too: the column is a foreign key in one of its tables.
+    app.cell_view = None;
+    run_sql(&mut app, "select c.id, c.parent_id, p.name from child c join parent p on p.id = c.parent_id").await;
+    app.focus = Focus::Results;
+    app.tab.grid.selected_col = 1;
+    app.cell_view = None;
+    app.handle_key(key(KeyCode::Char('f')));
+    let got = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while app.cell_view.is_none() {
+            let event = app.poll_db_event().await.unwrap();
+            app.handle_db_event(event);
+        }
+    })
+    .await;
+    assert!(got.is_ok(), "{:?}", said(&app));
+    assert_eq!(app.cell_view.as_ref().unwrap().title, "→ parent · id = 2");
+
+    // Not a foreign key: says so, and which ones are.
+    app.cell_view = None;
+    app.focus = Focus::Results;
+    app.tab.grid.selected_col = 2;
+    app.handle_key(key(KeyCode::Char('f')));
+    assert_eq!(said(&app), "Can't follow: name isn't a foreign key; these are: parent_id → parent");
+
+    // A table written two ways (a self-join) is one table, not two.
+    app.cell_view = None;
+    run_sql(&mut app, "select c.id, c.parent_id from main.child c join child d on d.id = c.id").await;
     app.focus = Focus::Results;
     app.tab.grid.selected_col = 1;
     app.handle_key(key(KeyCode::Char('f')));
-    while !app.status.starts_with("Can't follow") {
+    while app.cell_view.is_none() {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
-    assert!(app.status.contains("isn't a foreign key"), "{}", app.status);
+    assert_eq!(app.cell_view.as_ref().unwrap().title, "→ parent · id = 2");
+    // An answer for another tab (or connection) than the one now shown:
+    // dropped, so `e` can't run it on the wrong database.
+    app.cell_view = None;
+    let found = super::follow::Followed {
+        title: "parent · id = 2".into(),
+        tab_name: "→ parent".into(),
+        sql: "SELECT 1".into(),
+        asked_from: (app.active_tab + 1, None),
+    };
+    app.followed(found, Ok(outcome(&["id"], &[&[Some("2")]])));
+    assert!(app.cell_view.is_none());
 }
 
 #[tokio::test]
@@ -3767,9 +3974,10 @@ async fn esc_while_asking_does_its_own_job_first() {
     app.tab.editor.select_all();
     app.handle_key(key(KeyCode::Esc));
     assert!(app.asking.is_some() && app.tab.editor.selection().is_none());
-    // Nothing else to do: Esc stops asking.
+    // Nothing else to do: Esc stops asking, and says so.
     app.handle_key(key(KeyCode::Esc));
     assert!(app.asking.is_none());
+    assert_eq!(said(&app), "Stopped asking");
 }
 
 #[test]
