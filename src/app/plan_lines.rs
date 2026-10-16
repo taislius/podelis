@@ -56,17 +56,16 @@ impl App {
     }
 
     /// Dragging over the plan: the selection follows; past its top or
-    /// bottom edge the plan scrolls, and the selection with it.
+    /// bottom edge the plan scrolls (up to its last line), and the
+    /// selection with it.
     pub(super) fn drag_plan(&mut self, y: u16) {
         let Some(lines) = self.plan_line_count() else { return };
         let area = self.hits.plan;
         if y < area.y {
             self.tab.tab_scroll = self.tab.tab_scroll.saturating_sub(1);
         } else if y >= area.bottom() {
-            // Not past the plan's last line (its notes are above it).
-            let notes = self.hits.plan_first_row - i32::from(area.y) + i32::from(self.tab.tab_scroll);
-            let last = notes + i32::try_from(lines).unwrap_or(i32::MAX) - i32::from(area.height);
-            if i32::from(self.tab.tab_scroll) < last {
+            let last = (self.hits.plan_notes + lines).saturating_sub(usize::from(area.height));
+            if usize::from(self.tab.tab_scroll) < last {
                 self.tab.tab_scroll += 1;
             }
         }
@@ -83,29 +82,31 @@ impl App {
         Some(plan.text.lines().count()).filter(|n| *n > 0)
     }
 
-    /// The plan line drawn on screen row `y` (its notes above aren't any).
+    /// The plan line drawn on screen row `y` now (its notes above aren't
+    /// any), from the scroll as it is.
     fn plan_line_at(&self, y: u16) -> Option<usize> {
         let lines = self.plan_line_count()?;
-        let line = i32::from(y) - self.hits.plan_first_row;
-        usize::try_from(line).ok().filter(|l| *l < lines)
+        let shown = usize::from(y.checked_sub(self.hits.plan.y)?) + usize::from(self.tab.tab_scroll);
+        shown.checked_sub(self.hits.plan_notes).filter(|l| *l < lines)
     }
 
     /// The first plan line in sight.
     fn plan_top_line(&self) -> usize {
-        usize::try_from(i32::from(self.hits.plan.y) - self.hits.plan_first_row).unwrap_or(0)
+        usize::from(self.tab.tab_scroll).saturating_sub(self.hits.plan_notes)
     }
 
     /// Scrolls so plan line `line` is in sight.
     fn reveal_plan_line(&mut self, line: usize) {
-        let area = self.hits.plan;
-        let row = self.hits.plan_first_row + i32::try_from(line).unwrap_or(i32::MAX);
-        let shift = if row < i32::from(area.y) {
-            row - i32::from(area.y)
-        } else if row >= i32::from(area.bottom()) {
-            row - i32::from(area.bottom()) + 1
+        let shown = self.hits.plan_notes + line;
+        let height = usize::from(self.hits.plan.height.max(1));
+        let scroll = usize::from(self.tab.tab_scroll);
+        let scroll = if shown < scroll {
+            shown
+        } else if shown >= scroll + height {
+            shown + 1 - height
         } else {
-            0
+            scroll
         };
-        self.tab.tab_scroll = u16::try_from((i32::from(self.tab.tab_scroll) + shift).max(0)).unwrap_or(u16::MAX);
+        self.tab.tab_scroll = u16::try_from(scroll).unwrap_or(u16::MAX);
     }
 }

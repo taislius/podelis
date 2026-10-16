@@ -475,10 +475,11 @@ pub struct Hits {
     /// The MESSAGES lines, and the index of the first one shown.
     pub messages: Rect,
     pub messages_offset: usize,
-    /// QUERY PLAN's text, and the row of it its first plan line is drawn
-    /// on (its notes above it): for clicks and drags selecting lines.
+    /// QUERY PLAN's text, and how many lines of notes come above the plan
+    /// itself: a plan line's row is worked out from them and the scroll
+    /// as it is now (`plan_lines.rs`), never kept from a frame before.
     pub plan: Rect,
-    pub plan_first_row: i32,
+    pub plan_notes: usize,
     /// The syntax hint under the editor (a click goes to what it's about).
     pub syntax_hint: Rect,
     /// Editor tab strip: (row, then each tab's x range and index).

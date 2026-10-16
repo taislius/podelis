@@ -171,6 +171,26 @@ pub(super) fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Shortens `s` to `cols` screen columns with an ellipsis (wide
+/// characters, CJK or emoji, take two).
+pub(super) fn truncate_cols(s: &str, cols: usize) -> String {
+    use unicode_width::{UnicodeWidthChar as _, UnicodeWidthStr as _};
+    if s.width() <= cols {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in s.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w + 1 > cols {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out + "…"
+}
+
 /// Shortens `s` to `max` chars from the start, keeping its end (a
 /// path's last folders).
 pub(super) fn truncate_start(s: &str, max: usize) -> String {

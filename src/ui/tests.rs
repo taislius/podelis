@@ -871,7 +871,10 @@ fn the_plans_lines_are_selected_by_mouse_and_kept_when_scrolled() {
     let mouse = |kind, y, modifiers| MouseEvent { kind, column: area.x + 4, row: y, modifiers };
     // Click on "step 3", drag past the bottom: the plan scrolls, the
     // selection goes on with it.
-    let row_of = |app: &App, line: i32| u16::try_from(app.hits.plan_first_row + line).unwrap();
+    let row_of = |app: &App, line: usize| {
+        u16::try_from(usize::from(app.hits.plan.y) + app.hits.plan_notes + line - usize::from(app.tab.tab_scroll))
+            .unwrap()
+    };
     let at = row_of(&app, 2);
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), at, KeyModifiers::NONE));
     for _ in 0..5 {
@@ -882,6 +885,10 @@ fn the_plans_lines_are_selected_by_mouse_and_kept_when_scrolled() {
     assert!(app.tab.tab_scroll >= 5, "scrolled: {}", app.tab.tab_scroll);
     let (from, to) = app.tab.plan_selected.unwrap();
     assert_eq!(from, 2);
+    // It ends on the bottom line in sight, not one above it.
+    let bottom =
+        usize::from(area.bottom()) - 1 - usize::from(area.y) + usize::from(app.tab.tab_scroll) - app.hits.plan_notes;
+    assert_eq!(to, bottom);
     // Scrolled back up, it's all still there: copied whole.
     app.tab.tab_scroll = 0;
     let screen = render(&mut app, 110, 30);
@@ -892,6 +899,11 @@ fn the_plans_lines_are_selected_by_mouse_and_kept_when_scrolled() {
     // Shift+↓ goes one further; Shift+click on a line extends to it.
     app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
     assert_eq!(app.tab.plan_selected, Some((2, to + 1)));
+    // Right after, before a redraw, a click goes by the scroll it left.
+    let top = usize::from(app.tab.tab_scroll) - app.hits.plan_notes;
+    assert!(top > 0, "Shift+↓ scrolled: {}", app.tab.tab_scroll);
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), area.y, KeyModifiers::SHIFT));
+    assert_eq!(app.tab.plan_selected, Some((2, top)));
     app.tab.tab_scroll = 0;
     let _ = render(&mut app, 110, 30);
     let at = row_of(&app, 0);
@@ -921,9 +933,12 @@ fn the_active_tab_shows_its_whole_name_and_stays_in_sight() {
     let row = screen.lines().nth(2).unwrap();
     assert!(row.contains("›") && row.contains(" + "), "{row}");
     assert!(app.hits.new_tab.is_some());
-    let screen = render(&mut app, 110, 24);
-    let tabs = screen.lines().nth(2).unwrap();
-    assert!(tabs.contains("monthly revenue report 9"), "the active tab's name, whole: {tabs}");
+    // There its 24 columns of name don't fit beside "‹8", "›3" and the `+`
+    // (40 columns of tabs): cut. With 10 more, whole.
+    assert!(row.contains("monthly revenue report…"), "{row}");
+    let screen = render(&mut app, 120, 24);
+    let row = screen.lines().nth(2).unwrap();
+    assert!(row.contains("monthly revenue report 9") && row.contains(" + "), "the active tab's name, whole: {row}");
     // Many tabs: the others squeezed, those before it cut from the start.
     for _ in 0..3 {
         press(&mut app, KeyCode::PageDown, KeyModifiers::CONTROL);
@@ -952,6 +967,21 @@ fn the_active_tab_shows_its_whole_name_and_stays_in_sight() {
     });
     assert_eq!(app.active_tab, before);
     assert!(before < 10);
+    // Whatever is beside the name (a saved query's " ●", wide characters,
+    // the left line after "‹N"), a narrow row keeps the active tab and `+`.
+    let active = app.active_tab;
+    app.tabs[active].saved_id = Some("changed".into());
+    app.tab.editor.set_text("select 1;");
+    for name in ["x".repeat(60), "月次売上レポート".repeat(6)] {
+        app.tabs[active].name = name;
+        for width in [40, 50, 70, 90] {
+            let screen = render(&mut app, width, 24);
+            let row = screen.lines().nth(2).unwrap();
+            assert!(row.contains(" + ") && app.hits.new_tab.is_some(), "the + in sight at {width}: {row}");
+            assert!(row.contains("●"), "the change mark at {width}: {row}");
+            assert!(app.hits.tabs.iter().any(|(_, _, i)| *i == active), "the active tab at {width}: {row}");
+        }
+    }
 }
 
 #[test]

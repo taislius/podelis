@@ -511,8 +511,7 @@ fn draw_plan(f: &mut Frame, app: &mut App, area: Rect) -> usize {
                 lines.push(line);
             }
             app.hits.plan = area;
-            app.hits.plan_first_row =
-                i32::from(area.y) + i32::try_from(notes).unwrap_or(0) - i32::from(app.tab.tab_scroll);
+            app.hits.plan_notes = notes;
             let widest = lines.iter().map(Line::width).max().unwrap_or(0);
             let across = clamp_across(app, widest, area.width);
             f.render_widget(Paragraph::new(lines).scroll((app.tab.tab_scroll, across)), area);
