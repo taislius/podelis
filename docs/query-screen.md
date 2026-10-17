@@ -276,7 +276,9 @@ connections does, with the SQL that changes it back.
 read whose plan reads a whole table of `guard_rows` rows or more (a
 million by default; 0 turns it off) asks before running, naming the table
 and about how many rows. A `LIMIT` that stops the read early (no filter
-or sort in the way) doesn't count.
+or sort in the way) doesn't count. SQLite knows a table's rows once
+`ANALYZE` has counted them (in `sqlite_stat1`); before that its tables
+aren't sized, and nothing asks.
 
 **Connection info and activity** (command palette, or bind keys to
 `connection_info` / `activity`): the info panel shows the server version,
@@ -336,7 +338,7 @@ When focused:
 |---|---|
 | `↑`/`↓`, `PageUp`/`PageDown`, `Home`/`End` (`g`/`G`) | Move by a row, a page, or to the first / last |
 | `/` | Filter tables, views and functions by name (or click the filter line) |
-| `o` | Order the tables by name, by rows, or by size on disk (indexes included; the size then shows instead of the rows). Both are the server's estimates; SQLite has no sizes |
+| `o` | Order the tables by name, by rows, or by size on disk (indexes included; the size then shows instead of the rows). Both are the server's estimates; SQLite has no sizes, and rows once `ANALYZE` has counted them |
 | `Enter` / `→` | Expand a table: its columns (with `→ table.column` for foreign keys) and indexes, scrolled into view; on a function, show its definition |
 | `←` | Collapse |
 | `d` | Show the definition: `CREATE VIEW`, the function source, or a table's columns, keys and indexes (SQLite: its `CREATE TABLE`). In it, `←`/`→` show the previous / next table's (the navigator's selection follows), `y` copies it |

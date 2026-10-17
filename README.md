@@ -190,6 +190,10 @@ podelis app.db                  # a SQLite file (a missing one is created only i
 podelis -p shop prod            # a saved connection (password from the keychain)
 ```
 
+A connection opened by its URL or file is saved in the project once it
+works (passwords in the OS keychain). On the first run, with no project
+yet, it goes into one named `default`, so its tabs and history are kept.
+
 Without the UI, for scripts and pipes, see
 [Without the UI](docs/command-line.md); for AI agents, `podelis mcp` (see
 [For AI agents](docs/agents.md)).
