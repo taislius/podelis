@@ -520,10 +520,10 @@ fn run_buttons(app: &App, width: u16) -> Vec<(String, Action)> {
     ];
     // Leave the tabs room for at least one tab and the `+`.
     let room = (width as usize).saturating_sub(24);
-    while buttons.len() > 1 && buttons.iter().map(|(l, _)| l.chars().count()).sum::<usize>() > room {
+    while buttons.len() > 1 && buttons.iter().map(|(l, _)| l.width()).sum::<usize>() > room {
         buttons.pop();
     }
-    if buttons.iter().map(|(l, _)| l.chars().count()).sum::<usize>() > width as usize {
+    if buttons.iter().map(|(l, _)| l.width()).sum::<usize>() > width as usize {
         buttons.clear();
     }
     buttons
@@ -536,7 +536,7 @@ fn draw_run_buttons(f: &mut Frame, buttons: &[(String, Action)], area: Rect) -> 
     let mut hits = Vec::new();
     let mut spans = Vec::new();
     for (label, action) in buttons {
-        let w = label.chars().count() as u16;
+        let w = u16::try_from(label.width()).unwrap_or(u16::MAX);
         // Quiet like the rest of the chrome; Run, the main one, in bold.
         let style = if *action == Action::Run { bold(t.text).bg(t.inset) } else { muted().bg(t.inset) };
         spans.push(Span::styled(label.clone(), style));

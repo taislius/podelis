@@ -617,7 +617,8 @@ pub async fn memory(
             let files = tokio::task::spawn_blocking(move || super::migrations::read_folder(&reading)).await;
             match files {
                 Ok(Ok(files)) => {
-                    let learned = super::migrations::learn(&files);
+                    let engine = super::migrations::engine_of(&project.connections);
+                    let learned = super::migrations::learn(&files, engine);
                     let source = format!("file:{}", folder.display());
                     mem::replace_source(&mut conn, &source, &learned)
                         .await

@@ -24,7 +24,7 @@ fn files() -> Vec<(String, String)> {
 
 #[test]
 fn a_tables_history_and_its_authors_notes() {
-    let learned = learn(&files());
+    let learned = learn(&files(), engine_of(&[]));
     let fact = |subject: &str, relation: &str| {
         learned.iter().find(|l| l.subject == subject && l.relation == relation).map(|l| l.value.as_str())
     };
@@ -74,4 +74,32 @@ fn a_folder_is_read_in_name_order_with_its_subfolders() {
     // By file name: a folder's name doesn't put its files first or last.
     assert_eq!(names, ["old/20220101_z.sql", "20230101_a.sql", "2024/20240301_b.sql"]);
     assert!(read_folder(&dir.path().join("2024/none")).is_err());
+}
+
+/// Each engine's own quotes around a name (MySQL's backticks among them)
+/// are read as the name.
+#[test]
+fn names_quoted_the_engines_way() {
+    for engine in Engine::ALL {
+        let table = engine.quote_ident("Order Archive");
+        let sql = format!(
+            "-- Old orders, kept for audits.\nCREATE TABLE {table} (id int);\nALTER TABLE {table} ADD COLUMN note text;\n"
+        );
+        let learned = learn(&[("1_archive.sql".into(), sql)], engine);
+        let about: Vec<_> = learned.iter().filter(|l| l.subject.to_lowercase().contains("order archive")).collect();
+        assert!(about.iter().any(|l| l.value.contains("Old orders")), "{engine:?}: {learned:?}");
+        assert!(about.iter().any(|l| l.value.contains("note")), "{engine:?}: {learned:?}");
+    }
+}
+
+#[test]
+fn the_engine_most_connections_use() {
+    let profile = |engine| crate::store::ConnectionProfile {
+        engine,
+        ..crate::db::tests::file_profile("x", std::path::Path::new("x"))
+    };
+    assert_eq!(engine_of(&[]), Engine::ALL[0]);
+    let [first, second, ..] = Engine::ALL;
+    assert_eq!(engine_of(&[profile(second), profile(first), profile(second)]), second);
+    assert_eq!(engine_of(&[profile(second), profile(first)]), first, "a tie: the first listed");
 }

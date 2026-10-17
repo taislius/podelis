@@ -4,12 +4,6 @@
 use super::*;
 use crate::diff::{self, Side, TableShape};
 
-/// A connection's name for messages: its saved name, else its address.
-pub(super) fn conn_label(form: &ConnectForm) -> String {
-    let name = form.name.trim();
-    if name.is_empty() { form.summary() } else { name.to_string() }
-}
-
 /// The other side of a comparison, as it was when it started.
 pub struct Other {
     pub id: u64,
@@ -38,7 +32,7 @@ impl App {
         self.parked_connections()
             .into_iter()
             .filter(|(id, _, _)| Some(*id) != self.conns.active)
-            .map(|(id, _, form)| (id, conn_label(form)))
+            .map(|(id, _, form)| (id, form.short_name()))
             .collect()
     }
 
@@ -62,7 +56,7 @@ impl App {
             }
         };
         let (_, db, form) = self.parked_connections().into_iter().find(|(i, _, _)| *i == id)?;
-        let other = Other { id, name: conn_label(form), engine: db.engine() };
+        let other = Other { id, name: form.short_name(), engine: db.engine() };
         Some((db.clone(), other))
     }
 
@@ -93,7 +87,7 @@ impl App {
             Ok(shapes) => shapes,
             Err(e) => return self.set_status(e, true),
         };
-        let this = conn_label(&self.connect_form);
+        let this = self.connect_form.short_name();
         let diff = diff::schema_diff(
             &here,
             &there,
@@ -128,7 +122,7 @@ impl App {
         let Some(db) = self.database.clone() else { return self.set_status(self.not_connected_message(), true) };
         let (Some(dir), Some(id)) = (&self.data_dir, &self.current_project) else { return };
         let dir = crate::snapshots::dir(dir, id);
-        let connection = conn_label(&self.connect_form);
+        let connection = self.connect_form.short_name();
         self.row_stream = None;
         self.set_status(format!("Saving a snapshot of {connection}'s schema…"), false);
         let send = self.sender();
@@ -180,7 +174,7 @@ impl App {
             Ok(both) => both,
             Err(e) => return self.set_status(e, true),
         };
-        let this = format!("{} now", conn_label(&self.connect_form));
+        let this = format!("{} now", self.connect_form.short_name());
         let then = format!("the snapshot of {} from {}", snapshot.connection, snapshot.taken.replace('T', " "));
         let diff = diff::schema_diff(
             &now,

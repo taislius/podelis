@@ -50,19 +50,38 @@ pub(in crate::db) async fn column_rows(db: &Database, system: bool) -> Result<Ve
     })
 }
 
+/// Tables and views; each table's rows where `ANALYZE` counted them (the
+/// first number of its `sqlite_stat1` rows), for the heavy-query guard and
+/// the navigator's order by rows. SQLite keeps no sizes.
 pub(in crate::db) async fn table_rows(db: &Database, system: bool) -> Result<Vec<TableRow>> {
-    Ok({
-        let mut c = db.sqlite_session().await?;
-        sqlx::query_as(
-            "SELECT 'main', name, type, CAST(NULL AS INTEGER), CAST(NULL AS INTEGER) FROM sqlite_master
-                     WHERE type IN ('table', 'view') AND (?1 OR name NOT LIKE 'sqlite_%')
-                     UNION ALL SELECT 'main', 'sqlite_schema', 'table', NULL, NULL WHERE ?1
-                     ORDER BY 2",
+    let mut c = db.sqlite_session().await?;
+    let counted: Option<i64> = sqlx::query_scalar("SELECT 1 FROM sqlite_master WHERE name = 'sqlite_stat1'")
+        .fetch_optional(&mut **c)
+        .await?;
+    macro_rules! tables {
+        ($rows:literal) => {
+            concat!(
+                "SELECT 'main', m.name, m.type, ",
+                $rows,
+                ", CAST(NULL AS INTEGER) FROM sqlite_master m
+                 WHERE m.type IN ('table', 'view') AND (?1 OR m.name NOT LIKE 'sqlite_%')
+                 UNION ALL SELECT 'main', 'sqlite_schema', 'table', NULL, NULL WHERE ?1
+                 ORDER BY 2"
+            )
+        };
+    }
+    let sql = if counted.is_some() {
+        tables!(
+            "(SELECT CAST(substr(s.stat, 1, instr(s.stat || ' ', ' ') - 1) AS INTEGER)
+              FROM sqlite_stat1 s WHERE s.tbl = m.name LIMIT 1)"
         )
-        .bind(system)
-        .fetch_all(&mut **c)
-        .await?
-    })
+    } else {
+        tables!("CAST(NULL AS INTEGER)")
+    };
+    Ok(sqlx::query_as(sql)
+    .bind(system)
+    .fetch_all(&mut **c)
+    .await?)
 }
 
 #[cfg(test)]
@@ -198,9 +217,33 @@ pub(in crate::db) async fn routine_definition(_db: &Database, _routine: &Routine
     anyhow::bail!("SQLite has no stored functions")
 }
 
-/// Its plans are made on the session (it has one connection).
+/// Its plans are made on the session (it has one connection). Its plan
+/// doesn't show a LIMIT: a plain read of one table that a LIMIT stops
+/// early (nothing that needs every row first) reads no table in full.
 pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Option<Vec<Scan>> {
-    db.scans_by_explain(statement).await
+    let scans = db.scans_by_explain(statement).await?;
+    Some(if stopped_by_limit(statement) && scans.len() == 1 { Vec::new() } else { scans })
+}
+
+/// A LIMIT, and nothing that needs every row before it: no WHERE, ORDER
+/// BY, GROUP BY, HAVING, DISTINCT, JOIN or second table.
+fn stopped_by_limit(statement: &str) -> bool {
+    use crate::sql::TokenKind;
+    let tokens = crate::sql::tokenize(statement, crate::db::Engine::Sqlite);
+    let words: Vec<String> = tokens
+        .iter()
+        .filter(|t| t.kind == TokenKind::Word)
+        .map(|t| statement[t.range.clone()].to_ascii_lowercase())
+        .collect();
+    let has = |w: &str| words.iter().any(|x| x == w);
+    let commas = tokens.iter().any(|t| t.kind == TokenKind::Punct && &statement[t.range.clone()] == ",");
+    has("limit")
+        && !["where", "order", "group", "having", "distinct", "join", "union", "intersect", "except"]
+            .iter()
+            .any(|w| has(w))
+        // A comma between tables joins them; between columns it's harmless,
+        // but can't be told apart here: only `SELECT *` or one column.
+        && !commas
 }
 
 pub(in crate::db) async fn estimated_rows(db: &Database, scans: Vec<Scan>) -> Vec<(String, f64)> {
@@ -216,4 +259,25 @@ pub(in crate::db) async fn cancel(db: &Database, _id: i64) -> Result<()> {
 /// The transaction state isn't asked: Podėlis tracks BEGIN and COMMIT.
 pub(in crate::db) async fn transaction_state(_c: &mut DriverConnection) -> Option<TxnState> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_limit_stops_only_a_plain_read() {
+        for sql in ["SELECT * FROM t LIMIT 5", "select x from t limit 10 offset 5"] {
+            assert!(super::stopped_by_limit(sql), "{sql}");
+        }
+        for sql in [
+            "SELECT * FROM t",
+            "SELECT * FROM t WHERE x = 1 LIMIT 5",
+            "SELECT * FROM t ORDER BY x LIMIT 5",
+            "SELECT DISTINCT x FROM t LIMIT 5",
+            "SELECT * FROM t, u LIMIT 5",
+            "SELECT * FROM t JOIN u ON t.id = u.id LIMIT 5",
+            "SELECT x, count(*) FROM t GROUP BY x LIMIT 5",
+        ] {
+            assert!(!super::stopped_by_limit(sql), "{sql}");
+        }
+    }
 }

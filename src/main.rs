@@ -49,6 +49,7 @@ use crossterm::event::{
 use crossterm::execute;
 use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::DefaultTerminal;
+use tokio::signal::unix::{Signal, SignalKind, signal};
 use tokio::sync::mpsc;
 
 use app::App;
@@ -206,6 +207,14 @@ fn handle_input(app: &mut App, event: Event) {
     }
 }
 
+/// Waits for `signal` (forever if it couldn't be listened for).
+async fn received(signal: &mut Option<Signal>) {
+    match signal {
+        Some(signal) => drop(signal.recv().await),
+        None => std::future::pending().await,
+    }
+}
+
 async fn run(terminal: &mut DefaultTerminal, app: &mut App, enhanced: bool, mouse: bool) -> Result<()> {
     let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Event>();
     // Paused while another program (the viewer) has the terminal, so its
@@ -233,6 +242,11 @@ async fn run(terminal: &mut DefaultTerminal, app: &mut App, enhanced: bool, mous
         }
     });
 
+    // The terminal closing (SIGHUP) or the system asking (SIGTERM) ends the
+    // app as Ctrl+Q does: the tabs saved, connections closed (an open
+    // transaction is rolled back by the server).
+    let mut hangup = signal(SignalKind::hangup()).ok();
+    let mut terminate = signal(SignalKind::terminate()).ok();
     let mut cursor_shape: Option<SetCursorStyle> = None;
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
@@ -275,6 +289,8 @@ async fn run(terminal: &mut DefaultTerminal, app: &mut App, enhanced: bool, mous
                     app.handle_db_event(db_event);
                 }
             }
+            () = received(&mut hangup) => break,
+            () = received(&mut terminate) => break,
         }
 
         // Block cursor in vim Normal/Visual mode, bar in Insert mode.

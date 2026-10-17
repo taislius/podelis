@@ -5,7 +5,7 @@
 //!
 //! No model reads them: the files are parsed here, so this costs nothing
 //! and sends nothing anywhere. The SQL is read loosely (words, not a full
-//! parse), so any dialect's migrations work.
+//! parse), split by the project's engine's rules (its quotes, comments).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -75,13 +75,24 @@ struct History {
     events: Vec<String>,
 }
 
-/// The facts in `files` (name, SQL), oldest first.
-pub fn learn(files: &[(String, String)]) -> Vec<Learned> {
+/// The engine a project's migrations are written for: the one most of its
+/// connections use (with none, the first engine).
+pub fn engine_of(connections: &[crate::store::ConnectionProfile]) -> Engine {
+    // Reversed, so a tie goes to the engine listed first.
+    Engine::ALL
+        .into_iter()
+        .rev()
+        .max_by_key(|e| connections.iter().filter(|c| c.engine == *e).count())
+        .unwrap_or(Engine::ALL[0])
+}
+
+/// The facts in `files` (name, SQL), oldest first, read as `engine`'s SQL.
+pub fn learn(files: &[(String, String)], engine: Engine) -> Vec<Learned> {
     let mut histories: BTreeMap<String, History> = BTreeMap::new();
     let mut notes: Vec<Learned> = Vec::new();
     for (name, text) in files {
         let when = date_of(name).map_or_else(|| name.clone(), |d| format!("{d}, {name}"));
-        for (comment, words, strings) in statements(text) {
+        for (comment, words, strings) in statements(text, engine) {
             let said = |what: String, histories: &mut BTreeMap<String, History>, table: &str| {
                 histories.entry(table.to_lowercase()).or_default().events.push(format!("{what} ({when})"));
             };
@@ -211,8 +222,8 @@ fn alter_changes(words: &[&str], upper: &[&str]) -> Vec<(String, String)> {
 /// Each statement of `text`: the `--` comment right above it (lines
 /// joined), its words (names and keywords, quoted names with their
 /// quotes), and its string literals' text.
-fn statements(text: &str) -> Vec<(Option<String>, Vec<String>, Vec<String>)> {
-    let tokens = sql::tokenize(text, Engine::Postgres);
+fn statements(text: &str, engine: Engine) -> Vec<(Option<String>, Vec<String>, Vec<String>)> {
+    let tokens = sql::tokenize(text, engine);
     let mut out = Vec::new();
     let mut comment: Vec<String> = Vec::new();
     let mut words: Vec<String> = Vec::new();

@@ -351,8 +351,9 @@ impl ConnectForm {
     /// Its name for the status bar and messages: the saved name, else
     /// the file's name or `host/database`.
     pub fn short_name(&self) -> String {
-        if !self.name.is_empty() {
-            return self.name.clone();
+        let name = self.name.trim();
+        if !name.is_empty() {
+            return name.to_string();
         }
         if self.engine.is_file_based() {
             return std::path::Path::new(&self.host)
@@ -848,15 +849,7 @@ impl App {
                 self.connect_form.original_legacy = legacy;
                 return Some((format!("Already saved as '{name}'"), false));
             }
-            let base = if form.engine.is_file_based() {
-                std::path::Path::new(&form.host)
-                    .file_name()
-                    .map_or_else(|| form.host.clone(), |n| n.to_string_lossy().into_owned())
-            } else if form.database.is_empty() {
-                form.host.clone()
-            } else {
-                format!("{}/{}", form.host, form.database)
-            };
+            let base = form.short_name();
             self.connect_form.name = self.free_name(&project_id, &base);
         }
         self.save_connection();
