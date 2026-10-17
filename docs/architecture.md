@@ -37,6 +37,13 @@ generation so results from a superseded connection are ignored.
 
 ## The app's building blocks
 
+`App` holds the app's state, much of it in parts that change together:
+`tab` (the shown tab, `TabState`), `connection` (the shown tab's
+connection, `Connection`: parked per tab and swapped in, like tabs), `run`
+(the query running), `notes` (what's said), `panes` (the layout),
+`manager` (the projects and connections screen), `agents` (the agents
+view) and `hits` (where the UI drew what can be clicked).
+
 A few pieces in `app/` are shared, so the same thing works the same way
 everywhere:
 
@@ -61,10 +68,12 @@ everywhere:
   with the same keys through `edit_at_end`.
 - **Lists** (`list.rs`): `list::step` moves any list's selection, with a
   `Nav` saying whether it wraps, takes j/k and Home/End, or Tab.
-- **Messages** (`mod.rs`): `set_status` puts a message where it belongs.
+- **Messages** (`mod.rs`): what's said is `App::notes` (`Notes`, in
+  `messages.rs`). `set_status` puts a message where it belongs.
   Said while handling a key, click or paste with the editor or the results
   focused (no popup, find bar or cell prompt open), it goes to that pane's
-  footer (`editor_note`, `results_note`) and to MESSAGES; otherwise to the
+  footer (`notes.editor_note`, `notes.results_note`) and to MESSAGES
+  (`notes.log`); otherwise to the
   status bar. A run's progress and outcome use `set_result_status`, for the
   results pane's footer. They last until the next key (a run's until it
   ends). The MESSAGES tab is a list (`messages.rs`): one can be selected,
