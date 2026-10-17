@@ -177,9 +177,9 @@ fn a_key_comes_from_the_keychain_then_its_command() {
     assert_eq!(key(&m).unwrap(), (None, KeySource::Missing));
     m.key_command = Some("printf 'from-command\\nignored'".into());
     assert_eq!(key(&m).unwrap(), (Some("from-command".to_string()), KeySource::Command));
-    crate::store::set_password(&ModelConfig::keychain_account(&m.name), "from-keychain").unwrap();
+    crate::config::store::set_password(&ModelConfig::keychain_account(&m.name), "from-keychain").unwrap();
     assert_eq!(key(&m).unwrap(), (Some("from-keychain".to_string()), KeySource::Keychain));
-    crate::store::delete_password(&ModelConfig::keychain_account(&m.name)).unwrap();
+    crate::config::store::delete_password(&ModelConfig::keychain_account(&m.name)).unwrap();
     let local = config(Api::OpenAi, "qwen3:8b", Some("http://127.0.0.1:11434/v1"));
     assert_eq!(key(&local).unwrap().1, KeySource::Local);
 }
@@ -190,7 +190,7 @@ fn settings_read_models_from_config_toml() {
     let toml = "[[models]]\nname = \"claude\"\napi = \"anthropic\"\nmodel = \"claude-opus-5-5\"\n\n\
                 [[models]]\nname = \"local\"\napi = \"openai\"\nurl = \"http://localhost:11434/v1\"\nmodel = \"qwen3:8b\"\n";
     std::fs::write(dir.path().join("config.toml"), toml).unwrap();
-    let (settings, warning) = crate::settings::Settings::load(dir.path());
+    let (settings, warning) = crate::config::settings::Settings::load(dir.path());
     assert!(warning.is_none(), "{warning:?}");
     let names: Vec<&str> = settings.models.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(names, ["claude", "local"]);

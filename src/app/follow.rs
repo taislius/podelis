@@ -31,7 +31,7 @@ impl App {
     /// Runs the lookup on the tab's connection (it sees what the tab sees,
     /// its open transaction too) and shows the row when it comes.
     fn look_up(&mut self, found: Followed) {
-        if self.executing {
+        if self.run.executing {
             return self.set_status("A query is running: follow the key once it's done".into(), true);
         }
         let Some(db) = self.database.clone() else { return };
@@ -178,7 +178,7 @@ impl App {
         } else {
             engine.quote_ident(&fk.target_table)
         };
-        let literal = crate::params::literal(&value, engine);
+        let literal = crate::sql::params::literal(&value, engine);
         let sql = format!("SELECT * FROM {table} WHERE {} = {literal};", engine.quote_ident(&target_column));
         Ok(Some(Followed {
             title: format!("{} · {target_column} = {}", fk.target_table, truncate_value(&value)),
@@ -195,9 +195,9 @@ fn query_tables(sql: &str, engine: crate::db::Engine) -> Vec<(Option<String>, St
     let parsed = parse(sql, engine);
     let Some(Ok(statements)) = parsed.statements.last().map(|s| s.ast.as_ref()) else { return Vec::new() };
     let mut tables: Vec<(Option<String>, String)> = Vec::new();
-    for scope in crate::scope::lower(statements) {
+    for scope in crate::sql::scope::lower(statements) {
         for table in &scope.tables {
-            if let crate::scope::Source::Table { schema, name } = &table.source
+            if let crate::sql::scope::Source::Table { schema, name } = &table.source
                 && !scope.is_cte(&name.to_lowercase())
                 && !tables.iter().any(|(s, n)| s == schema && n == name)
             {

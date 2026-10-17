@@ -4,8 +4,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::config::keys::KeySpec;
 use crate::db::DEFAULT_ROW_LIMIT;
-use crate::keys::KeySpec;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]

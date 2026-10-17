@@ -128,7 +128,7 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     let rows = result_grid.and_then(|g| g.results.as_ref()).map(|r| {
         if r.columns.is_empty() {
             format!("{} affected", r.rows_affected.unwrap_or(0))
-        } else if app.row_stream.is_some() || result_grid.is_some_and(|g| g.cut_short) {
+        } else if app.run.stream.is_some() || result_grid.is_some_and(|g| g.cut_short) {
             format!("{}+ rows", r.total_rows)
         } else {
             format!("{} rows", r.total_rows)
@@ -249,11 +249,11 @@ fn draw_across_footer(f: &mut Frame, app: &App, footer: Rect, widest: usize, wid
 /// to get one.
 fn draw_no_result(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let run = app.keymap.short_label(crate::keys::Action::Run);
+    let run = app.keymap.short_label(crate::config::keys::Action::Run);
     let text = if let Some(running) = app.running_label() {
         // "running… 12 s", as the pane's title has it.
         let running = running.trim_start_matches('r');
-        if app.cancel_failed {
+        if app.run.cancel_failed {
             // Orange: it needs the user (see `stop_waiting`).
             Paragraph::new(format!(" R{running} · the server didn't take the cancel · Esc again stops waiting"))
                 .style(fg(t.warn))
@@ -763,11 +763,11 @@ fn draw_rows_footer(f: &mut Frame, app: &App, footer: Rect, offset: usize, count
         Span::styled(format!("   NULL AS {NULL_SYMBOL}"), dim()),
     ]);
     let shown = app.tab.grid.view.len();
-    let plus = if app.row_stream.is_some() || app.tab.grid.cut_short { "+" } else { "" };
+    let plus = if app.run.stream.is_some() || app.tab.grid.cut_short { "+" } else { "" };
     let mut right = vec![Span::styled(format!("1–{shown} / {}{plus}", results.total_rows), bold(t.text))];
-    if app.fetching_more {
+    if app.run.fetching_more {
         right.push(Span::styled("  · loading…", fg(t.warn)));
-    } else if app.row_stream.is_some() {
+    } else if app.run.stream.is_some() {
         right.push(Span::styled("  · scroll or M for more", dim()));
     } else if results.truncated() || app.tab.grid.cut_short {
         right.push(Span::styled("  · M loads more", dim()));

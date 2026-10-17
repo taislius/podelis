@@ -9,22 +9,23 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use unicode_width::UnicodeWidthStr;
 
-use crate::analyze::{self, HintSource, Kind, StatementInfo, SyntaxHint, TxnOp};
-use crate::complete::{self, Candidate, TableRef};
+use crate::config::history::{self, History};
+use crate::config::settings::{EditorMode, Settings};
+use crate::config::store::{self, ConnectionProfile, ConnectionStore, Project};
 use crate::db::{
     CheckOutcome, ColumnInfo, ConnectParams, ConnectionMode, Database, Engine, ErrorPos, Page, QueryOutcome,
     RoutineInfo, RowStream, SslMode, TableDetails, TableInfo, TxnState,
 };
 use crate::editor::{Pos, TextEditor};
-use crate::history::{self, History};
-use crate::params::Filled;
-use crate::parse::{ParsedScript, parse};
-use crate::settings::{EditorMode, Settings};
 use crate::sql;
-use crate::store::{self, ConnectionProfile, ConnectionStore, Project};
-pub use agents::{AgentQuery, AgentsView, short_dir, short_time};
+use crate::sql::analyze::{self, HintSource, Kind, StatementInfo, SyntaxHint, TxnOp};
+use crate::sql::complete::{self, Candidate, TableRef};
+use crate::sql::params::Filled;
+use crate::sql::parse::{ParsedScript, parse};
+pub use agents::{AgentQuery, Agents, short_dir, short_time};
 pub use find::FindBar;
 pub use grid::ResultGrid;
+pub use hits::Hits;
 pub use input::{InputResult, LineInput};
 use list::Nav;
 pub use overlay::Overlay;
@@ -44,6 +45,7 @@ mod events;
 mod find;
 mod follow;
 mod grid;
+mod hits;
 mod info;
 mod input;
 mod list;
@@ -280,7 +282,7 @@ pub struct ContainerPicker {
     /// Which search this is: a result for an earlier, closed one is dropped.
     pub request: u64,
     pub loading: bool,
-    pub found: Vec<crate::containers::Container>,
+    pub found: Vec<crate::system::containers::Container>,
     pub selected: usize,
     pub error: Option<String>,
     /// About the selected container (why it can't be used), until the
@@ -337,7 +339,7 @@ enum DbEventKind {
         result: Result<Database, String>,
     },
     /// The running database containers, or why they couldn't be listed.
-    ContainersFound(u64, Result<Vec<crate::containers::Container>, String>),
+    ContainersFound(u64, Result<Vec<crate::system::containers::Container>, String>),
     /// The server's sessions, for the activity view.
     ActivityLoaded(Result<Vec<crate::db::Activity>, String>),
     /// A session's query was cancelled or the session ended.
@@ -387,7 +389,7 @@ enum DbEventKind {
     /// A schema snapshot saved: its file and how many tables, or why not.
     SnapshotSaved(Result<(PathBuf, usize), String>),
     /// This connection's schema and a saved snapshot of it, to compare.
-    SnapshotCompared(Result<(Vec<crate::diff::TableShape>, crate::snapshots::Snapshot), String>),
+    SnapshotCompared(Result<(Vec<crate::transfer::diff::TableShape>, crate::transfer::snapshots::Snapshot), String>),
     /// Both sides' schemas, for comparing.
     SchemaCompared {
         other: compare::Other,
@@ -446,66 +448,37 @@ pub enum ExportFormat {
     Sql,
 }
 
-/// Where the UI last drew the clickable parts, for the mouse.
-#[derive(Clone, Debug, Default)]
-pub struct Hits {
-    pub schema: Option<Rect>,
-    /// The schema's filter line (a click starts typing in it).
-    pub schema_filter: Rect,
-    /// The schema tree's rows, and the index of the first one shown.
-    pub schema_list: Rect,
-    pub schema_offset: usize,
-    /// The connection in the status bar (a click shows its info).
-    pub connection: Rect,
-    /// The note about what agents did, in the status bar (a click opens
-    /// the agent window).
-    pub agent_note: Rect,
-    /// The project's name in the top bar (a click switches project).
-    pub project: Rect,
-    pub editor: Rect,
-    pub editor_text: Rect,
-    /// The write modes in the editor's footer.
-    pub tx_mode: Rect,
-    /// The line above a plan saying what it's for (a click goes there).
-    pub plan_source: Rect,
-    /// The same above a result, and its kept results' numbers: x ranges
-    /// and indices into `runs`.
-    pub run_source: Rect,
-    pub run_tabs: Vec<(u16, u16, usize)>,
-    /// The MESSAGES lines, and the index of the first one shown.
-    pub messages: Rect,
-    pub messages_offset: usize,
-    /// QUERY PLAN's text, and how many lines of notes come above the plan
-    /// itself: a plan line's row is worked out from them and the scroll
-    /// as it is now (`plan_lines.rs`), never kept from a frame before.
-    pub plan: Rect,
-    pub plan_notes: usize,
-    /// The syntax hint under the editor (a click goes to what it's about).
-    pub syntax_hint: Rect,
-    /// Editor tab strip: (row, then each tab's x range and index).
-    pub tabs: Vec<(u16, u16, usize)>,
-    pub tabs_y: u16,
-    /// The `+` after the tabs.
-    pub new_tab: Option<(u16, u16)>,
-    /// The run buttons right of the tabs: x ranges and actions.
-    pub run_buttons: Vec<(u16, u16, crate::keys::Action)>,
-    pub results: Rect,
-    /// The result table's body rows, and each visible column's x range.
-    pub result_rows: Rect,
-    pub result_cols: Vec<(u16, u16, usize)>,
-    /// The open pop-up menu.
-    pub menu: Rect,
-    /// The projects and connections panes: each list's rows and the
-    /// index of the first one shown, and the settings pane.
-    pub manager_projects: (Rect, usize),
-    pub manager_connections: (Rect, usize),
-    pub manager_settings: Rect,
-    /// The results pane's tabs: their x ranges, and their row.
-    pub result_tabs: Vec<(u16, u16, ResultTab)>,
-    /// `export ▾` and `menu ▾` right of them: x ranges, and whether it's
-    /// the export menu.
-    pub result_buttons: Vec<(u16, u16, bool)>,
-    pub result_tabs_y: u16,
+/// The query running, one at a time across the tabs: whose it is, on
+/// which connection, since when, and what it's for.
+#[derive(Default)]
+pub struct Run {
+    /// A query (or check, or comparison) is running.
+    pub executing: bool,
+    /// Which run the events in flight are for.
+    id: u64,
+    /// When the running query (or check, or comparison) started.
+    since: Option<Instant>,
+    /// The tab a read is running for, while other tabs can be shown.
+    owner: Option<usize>,
+    /// The connection the running query runs on: cancelled there, whichever
+    /// tab (and connection) is shown meanwhile.
+    db: Option<Database>,
+    /// Purpose of the next run, and of the one in flight.
+    purpose: RunPurpose,
+    /// Timeout and review state of the running query.
+    extra: RunExtra,
+    /// Its cancel was asked for and hasn't come back yet.
+    pub cancelling: bool,
+    /// Cancelling the running query failed: Esc again stops waiting.
+    pub cancel_failed: bool,
+    /// Further rows of the current (streamed) result, fetched on demand.
+    pub stream: Option<RowStream>,
+    /// More rows of the stream are on their way.
+    pub fetching_more: bool,
+    /// What the statements of the running query do (for transaction tracking).
+    infos: Vec<StatementInfo>,
+    /// Parameter substitutions in the last run, for mapping error positions.
+    filled: Option<Filled>,
 }
 
 /// Extra state of the running query.
@@ -665,6 +638,12 @@ pub struct Confirm {
 }
 
 pub struct App {
+    /// The query running (one at a time across the tabs): its state.
+    pub run: Run,
+    /// What agents did and asked for (the agents view).
+    pub agents: Agents,
+    /// The sharing question, waiting while another confirmation is open.
+    pending_share: Option<Confirm>,
     pub screen: Screen,
     pub store: ConnectionStore,
     /// Id of the open project.
@@ -697,8 +676,6 @@ pub struct App {
     data_dir: Option<PathBuf>,
     /// Lines visible in the editor, recorded by the UI for PageUp/PageDown.
     pub editor_height: usize,
-    /// Parameter substitutions in the last run, for mapping error positions.
-    last_run_filled: Option<Filled>,
     pub param_form: Option<ParamForm>,
     /// Asking to commit or roll back writes run in a transaction.
     pub review: Option<review::Review>,
@@ -748,7 +725,7 @@ pub struct App {
     handling_input: bool,
     lint_due: Option<Instant>,
     pub settings: Settings,
-    pub keymap: crate::keys::KeyMap,
+    pub keymap: crate::config::keys::KeyMap,
     pub connections_selected: usize,
     /// Message on the connections screen, and whether it's an error.
     pub connections_message: Option<(String, bool)>,
@@ -773,8 +750,6 @@ pub struct App {
     /// How long connecting took, for the application bar.
     pub connect_latency: Option<Duration>,
     connect_started: Option<Instant>,
-    /// Purpose of the next run, and of the one in flight.
-    running_purpose: RunPurpose,
     /// The open cell-edit prompt.
     pub cell_edit: Option<CellEdit>,
     /// Vim state, used when `editor_mode = "vim"`.
@@ -789,32 +764,11 @@ pub struct App {
     parked: Vec<Option<TabState>>,
     pub active_tab: usize,
     /// The project's saved queries.
-    pub library: crate::library::Library,
+    pub library: crate::config::library::Library,
     /// The F3 library/search window.
     pub library_view: Option<LibraryView>,
     /// Save-as / rename prompt.
     pub tab_prompt: Option<TabPrompt>,
-    /// Further rows of the current (streamed) result, fetched on demand.
-    pub row_stream: Option<RowStream>,
-    /// What AI agents ran in this project, newest first; read when the
-    /// library opens.
-    pub agent_log: Vec<AgentQuery>,
-    /// The agent log file as it was read (path, modified, size).
-    agent_log_stamp: Option<(PathBuf, std::time::SystemTime, u64)>,
-    /// The log by agent session, the most recently active first.
-    pub agent_sessions: Vec<crate::agents::Session>,
-    /// What agents did that's worth a look since the window was last open.
-    pub agent_alerts: crate::agents::Alerts,
-    agent_checked: Option<Instant>,
-    /// When the user last looked at what agents did, as last read.
-    agent_seen: Option<String>,
-    /// When an agent's write was put to the user: keys in its first moment
-    /// were meant for something else.
-    agent_asked: Option<Instant>,
-    /// The sharing question, waiting while another confirmation is open.
-    pending_share: Option<Confirm>,
-    /// The agent activity window.
-    pub agents_view: Option<AgentsView>,
     /// Watch mode: the last query run again every few seconds.
     pub watch: Option<watch::Watch>,
     /// The run starting now is watch mode's (others stop it).
@@ -824,7 +778,6 @@ pub struct App {
     same_result: bool,
     /// "Export all rows" in progress: what stops it, and the file it writes.
     export_task: Option<(tokio::sync::oneshot::Sender<()>, PathBuf)>,
-    pub fetching_more: bool,
     pub completion: Option<Completion>,
     /// Row limit for the next run only.
     next_row_limit: Option<usize>,
@@ -841,12 +794,6 @@ pub struct App {
     /// The statement of the EXPLAIN on its way, and whether it's ANALYZE.
     /// And the editor line it starts on.
     plan_request: Option<(String, bool, usize)>,
-    /// When the running query (or check, or comparison) started.
-    running_since: Option<Instant>,
-    /// Which run the events in flight are for.
-    run_id: u64,
-    /// The tab a read is running for, while other tabs can be shown.
-    run_owner: Option<usize>,
     /// F7 while a query ran: the statement to plan (and its line) next.
     queued_plan: Option<(String, usize)>,
     /// Pane sizes moved with Ctrl+arrows: the navigator's width (`None`
@@ -877,17 +824,8 @@ pub struct App {
     /// The status is about a run (its outcome or progress): the results
     /// pane shows it, not the status bar.
     pub status_in_results: bool,
-    pub executing: bool,
-    /// Timeout and review state of the running query.
-    run_extra: RunExtra,
-    pub cancelling: bool,
-    /// Cancelling the running query failed: Esc again stops waiting.
-    pub cancel_failed: bool,
     /// A drag selecting the plan's lines.
     pub plan_dragging: bool,
-    /// The connection the running query runs on: cancelled there, whichever
-    /// tab (and connection) is shown meanwhile.
-    running_db: Option<Database>,
     /// Mode of the open connection.
     pub active_mode: ConnectionMode,
     /// What happens to writes on this connection (Ctrl+K w).
@@ -897,8 +835,6 @@ pub struct App {
     pub txn: TxnState,
     /// A question waiting for y/n.
     pub confirm: Option<Confirm>,
-    /// What the statements of the running query do (for transaction tracking).
-    last_run_infos: Vec<StatementInfo>,
     pub should_quit: bool,
     clipboard: Option<String>,
     /// A long query ended: announced by the main loop (bell, notification).
@@ -951,7 +887,6 @@ impl App {
             history: History::load_from(None),
             data_dir,
             editor_height: 1,
-            last_run_filled: None,
             menu: None,
             row_form: None,
             pipe_prompt: None,
@@ -978,7 +913,7 @@ impl App {
             handling_input: false,
             lint_due: None,
             settings: Settings::default(),
-            keymap: crate::keys::KeyMap::default(),
+            keymap: crate::config::keys::KeyMap::default(),
             connections_selected: 0,
             connections_message: None,
             confirm_delete: false,
@@ -995,7 +930,6 @@ impl App {
             splash: None,
             connect_latency: None,
             connect_started: None,
-            running_purpose: RunPurpose::Query,
             cell_edit: None,
             vim: Vim::default(),
             conns: session::Conns::default(),
@@ -1003,24 +937,13 @@ impl App {
             tab: TabState::default(),
             parked: vec![None],
             active_tab: 0,
-            library: crate::library::Library::load_from(None),
+            library: crate::config::library::Library::load_from(None),
             library_view: None,
             tab_prompt: None,
-            row_stream: None,
-            agent_log: Vec::new(),
-            agent_log_stamp: None,
-            agent_sessions: Vec::new(),
-            agent_alerts: crate::agents::Alerts::default(),
-            agent_checked: None,
-            agent_seen: None,
-            agent_asked: None,
-            pending_share: None,
-            agents_view: None,
             watch: None,
             watch_rerun: false,
             same_result: false,
             export_task: None,
-            fetching_more: false,
             completion: None,
             next_row_limit: None,
             hits: Hits::default(),
@@ -1036,9 +959,6 @@ impl App {
             routine_definition_pending: false,
             plan_request: None,
             queued_plan: None,
-            running_since: None,
-            run_id: 0,
-            run_owner: None,
             schema_width: None,
             editor_percent: 40,
             schema_shown: false,
@@ -1047,23 +967,20 @@ impl App {
             status: String::new(),
             status_is_error: false,
             status_in_results: false,
-            run_extra: RunExtra::default(),
-            executing: false,
-            cancelling: false,
-            cancel_failed: false,
             plan_dragging: false,
-            running_db: None,
             active_mode: ConnectionMode::Normal,
             tx_mode: TxMode::AutoCommit,
             tx_picker: None,
             txn: TxnState::Idle,
             confirm: None,
-            last_run_infos: Vec::new(),
             should_quit: false,
             clipboard: None,
             notification: None,
             terminal_focused: None,
             generation: 0,
+            run: Run::default(),
+            agents: Agents::default(),
+            pending_share: None,
             task: None,
             db_tx,
             db_rx,
@@ -1098,7 +1015,7 @@ impl App {
     /// Announces the end of a run that took at least `notify_after`, unless
     /// the terminal is known to have focus (then you saw it end).
     fn notify_if_long(&mut self, what: impl FnOnce(Duration) -> String) {
-        let Some(started) = self.run_extra.started.take() else { return };
+        let Some(started) = self.run.extra.started.take() else { return };
         let after = self.settings.notify_after;
         if after == 0 || started.elapsed() < Duration::from_secs(after) || self.terminal_focused == Some(true) {
             return;
@@ -1192,7 +1109,7 @@ impl App {
     /// For the running query's outcome (see [`DbEvent::run`]).
     fn run_sender(&self) -> impl Fn(DbEventKind) + Send + 'static {
         let tx = self.db_tx.clone();
-        let (generation, run) = (self.generation, Some(self.run_id));
+        let (generation, run) = (self.generation, Some(self.run.id));
         move |kind| {
             let _ = tx.send(DbEvent { generation, run, kind });
         }
@@ -1200,26 +1117,26 @@ impl App {
 
     /// The tab a read is running for, while other tabs can be shown.
     pub fn run_owner(&self) -> Option<usize> {
-        self.run_owner.filter(|_| self.executing)
+        self.run.owner.filter(|_| self.run.executing)
     }
 
     /// The run is this tab's (or one no tab can be left during).
     pub(super) fn running_here(&self) -> bool {
-        self.executing && self.run_owner.is_none_or(|t| t == self.active_tab)
+        self.run.executing && self.run.owner.is_none_or(|t| t == self.active_tab)
     }
 
     /// A run that keeps every tab where it is: a write, a check, a comparison.
     pub(super) fn blocks_tabs(&self) -> bool {
-        self.executing && self.run_owner.is_none()
+        self.run.executing && self.run.owner.is_none()
     }
 
     fn invalidate_tasks(&mut self) {
-        self.running_db = None;
+        self.run.db = None;
         // A check on its way is for the connection before: its answer will
         // be dropped (another generation), so it's no longer awaited.
         self.pinging = false;
         self.generation += 1;
-        self.run_id += 1;
+        self.run.id += 1;
         self.queued_plan = None;
         if let Some(task) = self.task.take() {
             task.abort();
@@ -1238,7 +1155,7 @@ impl App {
     /// Queues `text` for the system clipboard and reports it in the status bar.
     fn copy_text(&mut self, text: String, status: &str) {
         // Over SSH the terminal carries the copy, and many drop a big one.
-        let status = if crate::clipboard::over_ssh() && text.len() > crate::clipboard::OSC52_LIMIT {
+        let status = if crate::system::clipboard::over_ssh() && text.len() > crate::system::clipboard::OSC52_LIMIT {
             #[allow(clippy::cast_precision_loss)] // display only
             let kb = text.len() as f64 / 1000.0;
             format!("{status} ({kb:.0} kB: over SSH, a copy this big may not reach your clipboard; export it instead)")
@@ -1333,7 +1250,7 @@ impl App {
         if !self.running_here() {
             return None;
         }
-        let secs = self.running_since.map_or(0, |since| since.elapsed().as_secs());
+        let secs = self.run.since.map_or(0, |since| since.elapsed().as_secs());
         Some(match secs {
             0 => "running…".to_string(),
             1..60 => format!("running… {secs} s"),
@@ -1488,7 +1405,7 @@ impl App {
         if let ConfirmAction::AgentWrite(request) = &confirm.action {
             // Only y, or n / Esc, answer; and not in the first moment
             // (a key being typed as it appeared).
-            let settled = self.agent_asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
+            let settled = self.agents.asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
             let answer = match key.code {
                 KeyCode::Char('y' | 'Y') => Some(true),
                 KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(false),
@@ -1508,7 +1425,7 @@ impl App {
         if let ConfirmAction::ShareSchema { question, project_id } = &confirm.action {
             // It came by itself, maybe while typing: only y, a, or n / Esc
             // answer it, and not in its first moment (as an agent's write).
-            let settled = self.agent_asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
+            let settled = self.agents.asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
             let answer = match key.code {
                 KeyCode::Char('y' | 'Y') => Some(Some(false)),
                 KeyCode::Char('a' | 'A') => Some(Some(true)),
@@ -1553,7 +1470,7 @@ impl App {
 
     fn key(&mut self, key: KeyEvent) {
         // Messages last until the next key; the MESSAGES tab keeps outcomes.
-        if !self.executing {
+        if !self.run.executing {
             self.status.clear();
             self.status_is_error = false;
         }

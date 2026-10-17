@@ -77,7 +77,7 @@ struct History {
 
 /// The engine a project's migrations are written for: the one most of its
 /// connections use (with none, the first engine).
-pub fn engine_of(connections: &[crate::store::ConnectionProfile]) -> Engine {
+pub fn engine_of(connections: &[crate::config::store::ConnectionProfile]) -> Engine {
     // Reversed, so a tie goes to the engine listed first.
     Engine::ALL
         .into_iter()

@@ -89,9 +89,9 @@ impl Database {
         let engine = self.engine();
         let mut scans = Vec::new();
         for statement in crate::sql::split_statements(sql, engine).into_iter().take(20) {
-            let infos = crate::analyze::analyze(&crate::parse::parse(statement, engine));
+            let infos = crate::sql::analyze::analyze(&crate::sql::parse::parse(statement, engine));
             let starts = statement.trim_start().get(..7).unwrap_or_default().to_ascii_lowercase();
-            if infos.iter().any(|i| i.kind != crate::analyze::Kind::Read)
+            if infos.iter().any(|i| i.kind != crate::sql::analyze::Kind::Read)
                 || starts.starts_with("explain")
                 || starts.starts_with("show")
             {

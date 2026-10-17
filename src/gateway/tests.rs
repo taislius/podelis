@@ -254,7 +254,7 @@ async fn complete_asks_the_model_streams_its_answer_and_tries_again_when_busy() 
     let config =
         format!("[[models]]\nname = \"fake\"\napi = \"anthropic\"\nurl = \"{url}\"\nmodel = \"claude-opus-5-5\"\n");
     std::fs::write(dir.path().join("config.toml"), config).unwrap();
-    crate::store::set_password("model:fake", "sk-test-key").unwrap();
+    crate::config::store::set_password("model:fake", "sk-test-key").unwrap();
     let _gateway = start(dir.path(), None);
     let mut client = connect(dir.path()).await;
 
@@ -288,7 +288,7 @@ async fn complete_asks_the_model_streams_its_answer_and_tries_again_when_busy() 
         log.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).find(|l| l["method"] == "complete").unwrap();
     assert_eq!((complete["model"].clone(), complete["output_tokens"].clone()), (json!("fake"), json!(3)));
     assert!(!log.contains("Write SQL") && !log.contains("select 1") && !log.contains("sk-test-key"));
-    crate::store::delete_password("model:fake").unwrap();
+    crate::config::store::delete_password("model:fake").unwrap();
 }
 
 #[tokio::test]
@@ -323,9 +323,9 @@ pub(crate) async fn saved_shop(dir: &Path) {
                insert into customers values (1, 'secret@example.com', 'LT');";
     db.run(sql, 1).await.unwrap();
     db.close().await;
-    let (mut store, _) = crate::store::ConnectionStore::load_from(dir.join("connections.toml"));
+    let (mut store, _) = crate::config::store::ConnectionStore::load_from(dir.join("connections.toml"));
     let project = store.add_project("p").unwrap();
-    let profile = crate::store::ConnectionProfile {
+    let profile = crate::config::store::ConnectionProfile {
         name: "shop".into(),
         engine: crate::db::tests::file_engine(),
         host: file.to_string_lossy().into_owned(),
@@ -444,7 +444,7 @@ async fn ask_shows_a_schema_to_a_far_model_only_if_the_project_shares_it() {
     saved_shop(dir.path()).await;
     let config = "[[models]]\nname = \"far\"\napi = \"anthropic\"\nurl = \"https://models.example\"\nmodel = \"claude-opus-5-5\"\n";
     std::fs::write(dir.path().join("config.toml"), config).unwrap();
-    crate::store::set_password("model:far", "sk-far").unwrap();
+    crate::config::store::set_password("model:far", "sk-far").unwrap();
     let _gateway = start(dir.path(), None);
     let mut client = connect(dir.path()).await;
     let ask = json!({ "project": "p", "connection": "shop", "question": "orders per customer" });
@@ -457,7 +457,7 @@ async fn ask_shows_a_schema_to_a_far_model_only_if_the_project_shares_it() {
         e.message
     );
     assert_eq!(e.data.as_ref().unwrap()["project"], json!("p"));
-    crate::store::delete_password("model:far").unwrap();
+    crate::config::store::delete_password("model:far").unwrap();
 }
 
 #[tokio::test]
@@ -573,7 +573,7 @@ async fn an_agent_gets_its_tools_from_the_gateway_through_mcp_open() {
     let dir = tempfile::tempdir().unwrap();
     saved_shop(dir.path()).await;
     // Shared with agents, to read.
-    let (mut store, _) = crate::store::ConnectionStore::load_from(dir.path().join("connections.toml"));
+    let (mut store, _) = crate::config::store::ConnectionStore::load_from(dir.path().join("connections.toml"));
     let project_id = store.project_by_name("p").unwrap().id.clone();
     let mut shop = store.project_by_name("p").unwrap().connections[0].clone();
     shop.agents = crate::db::AgentAccess::Read;
@@ -583,8 +583,8 @@ async fn an_agent_gets_its_tools_from_the_gateway_through_mcp_open() {
     let opened = client.call("mcp.open", json!({ "project": "p", "name": "my agent", "dir": "/src/shop" })).await;
     assert_eq!(opened.unwrap(), json!({ "mcp": true }));
     // The connection is MCP now: a real MCP client on it.
-    let agent = crate::mcp::tests::TestAgent.serve(client.into_stream()).await.unwrap();
-    let call = crate::mcp::tests::call;
+    let agent = crate::agents::mcp::tests::TestAgent.serve(client.into_stream()).await.unwrap();
+    let call = crate::agents::mcp::tests::call;
     let listed = call(&agent, "connections", json!({})).await;
     assert!(listed.contains("shop (SQLite): agents may read"), "{listed}");
     let rows = call(&agent, "query", json!({ "connection": "shop", "sql": "select email from customers" })).await;
@@ -759,7 +759,7 @@ async fn an_openai_answer_without_done_still_counts() {
 #[tokio::test]
 async fn projects_differing_only_in_case_are_told_apart_by_id() {
     let dir = tempfile::tempdir().unwrap();
-    let (mut store, _) = crate::store::ConnectionStore::load_from(dir.path().join("connections.toml"));
+    let (mut store, _) = crate::config::store::ConnectionStore::load_from(dir.path().join("connections.toml"));
     let _ = store.add_project("Shop");
     let second = store.add_project("shop");
     // (If the store refuses names differing in case, there's nothing to tell apart.)
@@ -776,7 +776,7 @@ async fn a_relative_sqlite_file_is_the_askers() {
     let dir = tempfile::tempdir().unwrap();
     saved_shop(dir.path()).await;
     // Saved as `shop.db`, from the folder it's in.
-    let (mut store, _) = crate::store::ConnectionStore::load_from(dir.path().join("connections.toml"));
+    let (mut store, _) = crate::config::store::ConnectionStore::load_from(dir.path().join("connections.toml"));
     let id = store.project_by_name("p").unwrap().id.clone();
     let mut shop = store.project_by_name("p").unwrap().connections[0].clone();
     shop.host = "shop.db".into();

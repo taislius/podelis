@@ -14,10 +14,10 @@ use std::ops::Range;
 use sqlparser::ast::{BinaryOperator, Expr, LimitClause, Query, SetExpr, Spanned, Statement, Value, Visit, Visitor};
 use sqlparser::tokenizer::Span;
 
-use crate::analyze::{HintSource, SyntaxHint};
 use crate::db::Engine;
-use crate::parse::{ParsedScript, ParsedStatement};
-use crate::scope::{self, Scope, Source};
+use crate::sql::analyze::{HintSource, SyntaxHint};
+use crate::sql::parse::{ParsedScript, ParsedStatement};
+use crate::sql::scope::{self, Scope, Source};
 
 /// One warning: its rule's name, what's wrong, and where in the statement.
 struct Finding {
@@ -193,7 +193,7 @@ fn is_null(expr: &Expr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::parse;
+    use crate::sql::parse::parse;
 
     const PG: Engine = Engine::Postgres;
     const MY: Engine = Engine::MySql;

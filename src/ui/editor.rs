@@ -5,10 +5,10 @@ use std::cell::RefCell;
 use std::ops::Range;
 
 use super::*;
-use crate::analyze::HintSource;
+use crate::config::keys::Action;
 use crate::db::Engine;
 use crate::editor::Pos;
-use crate::keys::Action;
+use crate::sql::analyze::HintSource;
 use unicode_width::UnicodeWidthStr as _;
 
 pub(super) fn highlight_style(hl: Highlight) -> Style {
@@ -425,7 +425,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Option<(u16, u16
         if tab.saved_id.is_some() && app.tab_dirty(i) {
             spans.push(Span::styled(" ●", fg(t.warn).bg(bg)));
         }
-        if !active && app.executing && app.run_owner() == Some(i) {
+        if !active && app.run.executing && app.run_owner() == Some(i) {
             spans.push(Span::styled(" …", fg(t.accent).bg(bg)));
         }
         spans.push(Span::styled(" ", Style::default().bg(bg)));

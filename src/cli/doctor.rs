@@ -5,9 +5,9 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+use crate::config::settings::Settings;
+use crate::config::store::{self, ConnectionStore};
 use crate::db::{Step, StepState};
-use crate::settings::Settings;
-use crate::store::{self, ConnectionStore};
 
 fn step(name: &'static str, state: StepState, detail: impl Into<String>, hint: Option<&'static str>) -> Step {
     Step { name, state, detail: detail.into(), elapsed: None, hint }
@@ -57,7 +57,7 @@ pub fn environment(settings: &Settings) -> Vec<(String, String)> {
             ),
         ),
     ];
-    let crash = crate::crash::log_path();
+    let crash = crate::system::crash::log_path();
     if let Ok(meta) = std::fs::metadata(&crash) {
         out.push(("Crash log".to_string(), format!("{} ({} bytes)", crash.display(), meta.len())));
     }
@@ -108,7 +108,7 @@ pub async fn run(
     });
 
     let (settings, settings_warning) = Settings::load(&dir);
-    let (_, key_warnings) = crate::keys::KeyMap::new(&settings.keys);
+    let (_, key_warnings) = crate::config::keys::KeyMap::new(&settings.keys);
     let problems: Vec<String> = settings_warning.into_iter().chain(key_warnings).collect();
     steps.push(if problems.is_empty() {
         let exists = dir.join("config.toml").is_file();
@@ -174,9 +174,10 @@ fn environment_checks(settings: &Settings) -> Vec<Step> {
     steps.push(step("Terminal", if term_hint.is_some() { StepState::Warn } else { StepState::Ok }, term, term_hint));
 
     // What opens result rows (`o`), format by format, as `o` decides it.
-    let chosen: Vec<(&str, crate::settings::Viewer)> =
-        crate::settings::VIEWER_FORMATS.iter().map(|f| (*f, settings.viewer_for(f))).collect();
-    let program = |v: &crate::settings::Viewer| v.command().split_whitespace().next().unwrap_or_default().to_string();
+    let chosen: Vec<(&str, crate::config::settings::Viewer)> =
+        crate::config::settings::VIEWER_FORMATS.iter().map(|f| (*f, settings.viewer_for(f))).collect();
+    let program =
+        |v: &crate::config::settings::Viewer| v.command().split_whitespace().next().unwrap_or_default().to_string();
     let mut programs: Vec<String> = chosen.iter().map(|(_, v)| program(v)).collect();
     programs.sort();
     programs.dedup();
@@ -200,7 +201,7 @@ fn environment_checks(settings: &Settings) -> Vec<Step> {
         )
     });
 
-    let crash = crate::crash::log_path();
+    let crash = crate::system::crash::log_path();
     steps.push(match std::fs::metadata(&crash) {
         Ok(m) => step(
             "Crashes",
@@ -256,9 +257,9 @@ mod tests {
 
     #[test]
     fn viewers_are_checked_format_by_format() {
-        use crate::settings::Viewer;
+        use crate::config::settings::Viewer;
         let mut settings = Settings::default();
-        for f in crate::settings::VIEWER_FORMATS {
+        for f in crate::config::settings::VIEWER_FORMATS {
             settings.viewers.insert(f.to_string(), Viewer::Command("true".into()));
         }
         // An old `viewer` that `[viewers].tsv` replaced isn't looked for.
@@ -277,7 +278,7 @@ mod tests {
         let (mut store, _) = ConnectionStore::load_from(dir.path().join("c.toml"));
         let project = store.add_project("p").unwrap();
         let path = dir.path().join("gone.db");
-        let profile = crate::store::ConnectionProfile {
+        let profile = crate::config::store::ConnectionProfile {
             name: "gone".into(),
             engine: crate::db::tests::file_engine(),
             host: path.to_string_lossy().into_owned(),

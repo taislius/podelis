@@ -2,6 +2,12 @@
 //! boundaries (semicolons outside strings/comments) and to colour the editor;
 //! it never rejects input.
 
+pub(crate) mod analyze;
+pub(crate) mod complete;
+pub(crate) mod lint;
+pub(crate) mod params;
+pub(crate) mod parse;
+pub(crate) mod scope;
 use std::ops::Range;
 
 use crate::db::{Engine, LexerRules};

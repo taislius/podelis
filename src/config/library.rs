@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::store::write_atomic;
+use crate::config::store::write_atomic;
 
 /// The group whose saved queries autocomplete offers as snippets.
 pub const SNIPPETS: &str = "snippets";

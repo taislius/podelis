@@ -3,10 +3,10 @@
 
 use proptest::prelude::*;
 
-use crate::complete::{self, TableRef};
 use crate::db::{ColumnInfo, Engine, ErrorPos};
 use crate::editor::TextEditor;
-use crate::{analyze, sql};
+use crate::sql::complete::{self, TableRef};
+use crate::{sql, sql::analyze};
 
 /// SQL-ish text: keywords, quotes, comments, dollar quotes, unicode, newlines.
 fn sqlish() -> impl Strategy<Value = String> {
@@ -121,13 +121,13 @@ proptest! {
 
     #[test]
     fn analysis_never_panics(text in sqlish(), engine in engine()) {
-        let parsed = crate::parse::parse(&text, engine);
+        let parsed = crate::sql::parse::parse(&text, engine);
         let _ = analyze::analyze(&parsed);
         let _ = analyze::edit_source(&parsed);
         if let Some(hint) = analyze::syntax_hint(&parsed) {
             prop_assert!(hint.offset.is_none_or(|o| o <= text.len()));
         }
-        for hint in crate::lint::lints(&parsed, "") {
+        for hint in crate::sql::lint::lints(&parsed, "") {
             let end = hint.offset.unwrap_or(0) + hint.len.unwrap_or(0);
             prop_assert!(end <= text.len() && text.is_char_boundary(end));
         }
@@ -190,19 +190,19 @@ proptest! {
 
     #[test]
     fn library_search_never_panics(query in "\\PC{0,20}", text in sqlish()) {
-        let _ = crate::library::matches(&query, &[&text]);
+        let _ = crate::config::library::matches(&query, &[&text]);
     }
 
     #[test]
     fn parameters_fill_and_map_back(text in sqlish(), engine in engine(), value in "\\PC{0,8}") {
-        let params = crate::params::find(&text, engine);
+        let params = crate::sql::params::find(&text, engine);
         for p in &params {
             for r in &p.ranges {
                 prop_assert!(text.is_char_boundary(r.start) && text.is_char_boundary(r.end));
             }
         }
         let values = vec![value; params.len()];
-        let filled = crate::params::fill(&text, &params, &values, engine);
+        let filled = crate::sql::params::fill(&text, &params, &values, engine);
         for offset in 0..=filled.sql.len() {
             prop_assert!(filled.to_original(offset) <= text.len());
         }

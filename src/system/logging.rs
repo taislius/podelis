@@ -7,7 +7,7 @@ use std::path::PathBuf;
 /// Starts logging if `PODELIS_LOG` is set. Returns the log's path.
 pub fn init() -> Option<PathBuf> {
     let filter = std::env::var("PODELIS_LOG").ok().filter(|v| !v.trim().is_empty())?;
-    let path = crate::store::config_dir().join("podelis.log");
+    let path = crate::config::store::config_dir().join("podelis.log");
     std::fs::create_dir_all(path.parent()?).ok()?;
     let mut options = std::fs::OpenOptions::new();
     options.create(true).append(true);

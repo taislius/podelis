@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::*;
-use crate::library::{self, Library};
+use crate::config::library::{self, Library};
 
 /// A tab's state: the active tab's is `App::tab`, the others are parked.
 #[derive(Default)]
@@ -363,10 +363,10 @@ impl App {
     /// Closes an open stream (which holds the session) as its tab is
     /// hidden; the rows left can be loaded again with `M`.
     pub(super) fn close_stream(&mut self) {
-        if self.row_stream.take().is_some() {
+        if self.run.stream.take().is_some() {
             self.tab.grid.cut_short = true;
         }
-        self.fetching_more = false;
+        self.run.fetching_more = false;
     }
 
     pub(super) fn switch_tab(&mut self, i: usize) {
@@ -391,7 +391,7 @@ impl App {
         // A query running in one tab: said in its results, else in the bar.
         if self.running_here() {
             self.set_result_status("Running… (Esc to cancel)".to_string(), false);
-        } else if self.executing {
+        } else if self.run.executing {
             self.status = self.running_elsewhere("its outcome is said here when it's done");
             (self.status_is_error, self.status_in_results) = (false, false);
         }
@@ -449,7 +449,7 @@ impl App {
     }
 
     pub(super) fn close_tab(&mut self) {
-        if self.executing {
+        if self.run.executing {
             return self.set_status("Wait for the query to finish before closing the tab".into(), true);
         }
         let closing = self.active_tab;
@@ -461,7 +461,7 @@ impl App {
             self.tabs[0] = TabMeta { name: "Query 1".into(), saved_id: None, conn: self.tabs[0].conn };
             let mut fresh = TabState::default();
             swap_tab(self, &mut fresh);
-            self.row_stream = None;
+            self.run.stream = None;
             return;
         }
         let next = if closing + 1 < self.tabs.len() { closing + 1 } else { closing - 1 };

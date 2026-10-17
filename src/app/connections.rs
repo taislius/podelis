@@ -401,7 +401,7 @@ impl App {
     pub(super) fn handle_connections_key(&mut self, key: KeyEvent) {
         // A single key bound to `projects` (none by default: F11 is macOS's
         // Show Desktop) works here too; ← does the same.
-        if self.keymap.action(key) == Some(crate::keys::Action::Projects) {
+        if self.keymap.action(key) == Some(crate::config::keys::Action::Projects) {
             return self.open_manager(Screen::Projects);
         }
         if self.moving_to.is_some() {
@@ -476,13 +476,17 @@ impl App {
         let send = self.sender();
         // No runtime in unit tests: they hand over what was found.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            drop(
-                runtime.spawn_blocking(move || send(DbEventKind::ContainersFound(request, crate::containers::find()))),
-            );
+            drop(runtime.spawn_blocking(move || {
+                send(DbEventKind::ContainersFound(request, crate::system::containers::find()));
+            }));
         }
     }
 
-    pub(crate) fn containers_found(&mut self, request: u64, result: Result<Vec<crate::containers::Container>, String>) {
+    pub(crate) fn containers_found(
+        &mut self,
+        request: u64,
+        result: Result<Vec<crate::system::containers::Container>, String>,
+    ) {
         let Some(picker) = self.containers.as_mut().filter(|p| p.request == request) else { return };
         picker.loading = false;
         match result {
@@ -694,10 +698,10 @@ impl App {
                 KeyCode::Char('t') => self.test_connection(),
                 KeyCode::Char('y') => self.copy_connect_field(),
                 // Where the terminal doesn't paste by itself.
-                KeyCode::Char('v') => match crate::clipboard::read() {
+                KeyCode::Char('v') => match crate::system::clipboard::read() {
                     Ok(text) => self.handle_paste(&text),
                     Err(e) => {
-                        self.connect_form.error = Some(crate::clipboard::read_failed(&e));
+                        self.connect_form.error = Some(crate::system::clipboard::read_failed(&e));
                     }
                 },
                 // Clearing and deleting a word, as in every input.
@@ -799,7 +803,7 @@ impl App {
             && !keep.is_empty()
         {
             let pgpass = form.engine.dialect().password_files_note();
-            let instead = match crate::db::password_command::installed(crate::doctor::on_path).first() {
+            let instead = match crate::db::password_command::installed(crate::cli::doctor::on_path).first() {
                 Some(tool) => format!(
                     "{} is installed: set Passwd cmd to {} and leave Password empty{pgpass}",
                     tool.label,

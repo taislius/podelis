@@ -183,7 +183,7 @@ async fn a_mysql_server_that_is_down_says_why_at_once() {
 /// kept as written; a bad value puts nothing in.
 #[tokio::test]
 async fn live_import_types() {
-    use crate::import::tests::{import_failing, import_sample};
+    use crate::transfer::import::tests::{import_failing, import_sample};
     let Some((db, _)) = own_live_db("podelis_import_types").await else { return };
     let o = import_sample(&db, "pets_types").await;
     assert_eq!(o.rows[1][2].as_deref(), Some("0"), "BOOLEAN is TINYINT(1)");

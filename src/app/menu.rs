@@ -3,7 +3,7 @@
 //! key. Choosing an item does exactly what its key does.
 
 use super::*;
-use crate::keys::Action;
+use crate::config::keys::Action;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {

@@ -2,7 +2,7 @@
 //! or the rows the statement at the cursor returns on each.
 
 use super::*;
-use crate::diff::{self, Side, TableShape};
+use crate::transfer::diff::{self, Side, TableShape};
 
 /// The other side of a comparison, as it was when it started.
 pub struct Other {
@@ -62,13 +62,13 @@ impl App {
 
     /// Compares this tab's schema with another connection's.
     pub(super) fn compare_schema(&mut self, id: Option<u64>) {
-        if self.executing {
+        if self.run.executing {
             return;
         }
         let Some(db) = self.database.clone() else { return self.set_status(self.not_connected_message(), true) };
         let Some((there, other)) = self.compare_target(id) else { return };
         // An open stream holds this side's session.
-        self.row_stream = None;
+        self.run.stream = None;
         self.set_status(format!("Comparing the schema with {}…", other.name), false);
         let send = self.sender();
         tokio::spawn(async move {
@@ -110,9 +110,9 @@ impl App {
     }
 
     /// The project's schema snapshots, newest first.
-    pub(super) fn snapshots(&self) -> Vec<crate::snapshots::Saved> {
+    pub(super) fn snapshots(&self) -> Vec<crate::transfer::snapshots::Saved> {
         match (&self.data_dir, &self.current_project) {
-            (Some(dir), Some(id)) => crate::snapshots::list(&crate::snapshots::dir(dir, id)),
+            (Some(dir), Some(id)) => crate::transfer::snapshots::list(&crate::transfer::snapshots::dir(dir, id)),
             _ => Vec::new(),
         }
     }
@@ -121,9 +121,9 @@ impl App {
     pub(super) fn snapshot_schema(&mut self) {
         let Some(db) = self.database.clone() else { return self.set_status(self.not_connected_message(), true) };
         let (Some(dir), Some(id)) = (&self.data_dir, &self.current_project) else { return };
-        let dir = crate::snapshots::dir(dir, id);
+        let dir = crate::transfer::snapshots::dir(dir, id);
         let connection = self.connect_form.short_name();
-        self.row_stream = None;
+        self.run.stream = None;
         self.set_status(format!("Saving a snapshot of {connection}'s schema…"), false);
         let send = self.sender();
         tokio::spawn(async move {
@@ -131,8 +131,8 @@ impl App {
                 let tables = shapes(&db).await?;
                 let now = chrono::Local::now();
                 let taken = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
-                let snapshot = crate::snapshots::Snapshot { connection, engine: db.engine(), taken, tables };
-                let path = crate::snapshots::save(&dir, &snapshot, now).map_err(|e| format!("{e:#}"))?;
+                let snapshot = crate::transfer::snapshots::Snapshot { connection, engine: db.engine(), taken, tables };
+                let path = crate::transfer::snapshots::save(&dir, &snapshot, now).map_err(|e| format!("{e:#}"))?;
                 Ok((path, snapshot.tables.len()))
             }
             .await;
@@ -156,12 +156,12 @@ impl App {
     pub(super) fn compare_snapshot(&mut self, index: usize) {
         let Some(db) = self.database.clone() else { return self.set_status(self.not_connected_message(), true) };
         let Some(saved) = self.snapshots().into_iter().nth(index) else { return };
-        self.row_stream = None;
+        self.run.stream = None;
         self.set_status(format!("Comparing with the snapshot of {} from {}…", saved.connection, saved.taken), false);
         let send = self.sender();
         tokio::spawn(async move {
             let result = async {
-                let snapshot = crate::snapshots::load(&saved.path).map_err(|e| format!("{e:#}"))?;
+                let snapshot = crate::transfer::snapshots::load(&saved.path).map_err(|e| format!("{e:#}"))?;
                 Ok((shapes(&db).await?, snapshot))
             }
             .await;
@@ -169,7 +169,10 @@ impl App {
         });
     }
 
-    pub(super) fn snapshot_compared(&mut self, result: Result<(Vec<TableShape>, crate::snapshots::Snapshot), String>) {
+    pub(super) fn snapshot_compared(
+        &mut self,
+        result: Result<(Vec<TableShape>, crate::transfer::snapshots::Snapshot), String>,
+    ) {
         let (now, snapshot) = match result {
             Ok(both) => both,
             Err(e) => return self.set_status(e, true),
@@ -201,7 +204,7 @@ impl App {
     /// Runs the selection, or the statement at the cursor, on this and
     /// another connection and shows the rows that differ.
     pub(super) fn compare_rows(&mut self, id: Option<u64>) {
-        if self.executing {
+        if self.run.executing {
             return;
         }
         let Some(db) = self.database.clone() else { return self.set_status(self.not_connected_message(), true) };
@@ -218,10 +221,10 @@ impl App {
             return self.set_status("Only reads can be compared: the query runs on both connections".into(), true);
         }
         let Some((there, other)) = self.compare_target(id) else { return };
-        self.row_stream = None;
-        self.executing = true;
-        self.running_since = Some(Instant::now());
-        self.run_owner = None;
+        self.run.stream = None;
+        self.run.executing = true;
+        self.run.since = Some(Instant::now());
+        self.run.owner = None;
         self.set_result_status(format!("Running on this connection and on {}…", other.name), false);
         let send = self.sender();
         let limit = self.settings.row_limit;
@@ -237,7 +240,7 @@ impl App {
     }
 
     pub(super) fn rows_compared(&mut self, other: &Other, result: Result<(QueryOutcome, QueryOutcome), String>) {
-        self.executing = false;
+        self.run.executing = false;
         self.task = None;
         // A plan asked for meanwhile: the comparison is shown instead.
         self.queued_plan = None;

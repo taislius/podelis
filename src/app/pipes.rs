@@ -8,8 +8,8 @@ use std::process::Stdio;
 use tokio::io::AsyncWriteExt as _;
 
 use super::*;
-use crate::export;
-use crate::settings::Viewer;
+use crate::config::settings::Viewer;
+use crate::transfer::export;
 
 /// A command run with the terminal handed over (the viewer), then removed.
 pub struct External {

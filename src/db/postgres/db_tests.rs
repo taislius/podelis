@@ -160,7 +160,7 @@ async fn an_address_nothing_answers_at_says_why_at_once() {
 /// named by its line.
 #[tokio::test]
 async fn live_import_types() {
-    use crate::import::tests::{import_failing, import_sample};
+    use crate::transfer::import::tests::{import_failing, import_sample};
     let Some(db) = live_db(Engine::Postgres).await else { return };
     let o = import_sample(&db, "pets_types").await;
     let types: Vec<String> = o.column_types.iter().map(|t| t.to_lowercase()).collect();

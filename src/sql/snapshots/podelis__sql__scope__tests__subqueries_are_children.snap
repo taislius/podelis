@@ -1,5 +1,5 @@
 ---
-source: src/scope.rs
+source: src/sql/scope.rs
 expression: "outline(\"select * from (select id from a) x where x.id in (select a_id from b where exists (select 1 from c))\")"
 ---
 select from [(subquery)] where ctes []

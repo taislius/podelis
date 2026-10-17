@@ -19,7 +19,7 @@ use super::protocol::{self, RpcError, code};
 /// The models in `config.toml`. A file that doesn't parse is said as it
 /// is, not taken for one with no models (its defaults would have none).
 fn configured(config_dir: &Path) -> Result<Vec<ModelConfig>, RpcError> {
-    crate::settings::Settings::load_strict(config_dir)
+    crate::config::settings::Settings::load_strict(config_dir)
         .map(|settings| settings.models)
         .map_err(|e| RpcError::new(code::MODEL, format!("invalid {e}")))
 }
@@ -203,7 +203,7 @@ impl Caches {
 /// A schema, when it was loaded, and the connection's settings then
 /// (changed ones load it again).
 struct Loaded {
-    profile: crate::store::ConnectionProfile,
+    profile: crate::config::store::ConnectionProfile,
     at: std::time::Instant,
     schema: std::sync::Arc<Schema>,
 }
@@ -243,8 +243,8 @@ pub async fn context(config_dir: &Path, caches: &Caches, params: &Value) -> (Res
 /// The project named (the last one opened when `None`), read from
 /// `connections.toml` without changing it: a background process mustn't
 /// move the user's file aside.
-pub(crate) fn find_project(config_dir: &Path, name: Option<&str>) -> Result<crate::store::Project, String> {
-    let (store, warning) = crate::store::ConnectionStore::peek(config_dir.join("connections.toml"));
+pub(crate) fn find_project(config_dir: &Path, name: Option<&str>) -> Result<crate::config::store::Project, String> {
+    let (store, warning) = crate::config::store::ConnectionStore::peek(config_dir.join("connections.toml"));
     // The app names it by id (`id:<id>`): names are matched ignoring case,
     // and two projects may differ only in case.
     let found = match name {
@@ -292,7 +292,7 @@ struct Source {
     schema: std::sync::Arc<Schema>,
     project: String,
     project_id: String,
-    share: crate::store::ShareSchema,
+    share: crate::config::store::ShareSchema,
 }
 
 /// The connection's schema: cached, or loaded through a read-only
@@ -315,7 +315,7 @@ async fn load(
         ));
     };
     // A relative SQLite file is the asker's, from its folder.
-    let profile = crate::store::opened_from(saved, dir);
+    let profile = crate::config::store::opened_from(saved, dir);
     let source = |schema: std::sync::Arc<Schema>| Source {
         schema,
         project: project.name.clone(),
@@ -332,9 +332,10 @@ async fn load(
     }
     let project_id = project.id.clone();
     let for_password = profile.clone();
-    let (password, _) = tokio::task::spawn_blocking(move || crate::store::saved_password(&project_id, &for_password))
-        .await
-        .map_err(|e| e.to_string())?;
+    let (password, _) =
+        tokio::task::spawn_blocking(move || crate::config::store::saved_password(&project_id, &for_password))
+            .await
+            .map_err(|e| e.to_string())?;
     let mut params = crate::app::ConnectForm::from_profile(&profile, password).params()?;
     // Reading the catalog is all it does.
     params.read_only = true;
@@ -410,7 +411,7 @@ pub async fn ask(
     };
     about["model"] = json!(config.name);
     let once = params.get("share_once").and_then(Value::as_bool).unwrap_or(false);
-    if source.share == crate::store::ShareSchema::Local && !models::on_this_machine(&config) && !once {
+    if source.share == crate::config::store::ShareSchema::Local && !models::on_this_machine(&config) && !once {
         let message = format!(
             "project '{}' shares its schemas only with models on this machine, and {} ({}) isn't one: \
              its table and column names would go to {}",
@@ -612,7 +613,7 @@ pub async fn memory(
             let Some(folder) = text("folder") else {
                 return (Err(RpcError::new(code::INVALID_PARAMS, "memory.learn needs the `folder`")), about);
             };
-            let folder = crate::settings::expand_home(folder);
+            let folder = crate::config::settings::expand_home(folder);
             let reading = folder.clone();
             let files = tokio::task::spawn_blocking(move || super::migrations::read_folder(&reading)).await;
             match files {

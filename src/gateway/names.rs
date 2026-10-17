@@ -15,12 +15,12 @@ use sqlparser::ast::{Expr, Query, SelectItem, SetExpr, Statement, Visit, Visitor
 
 use super::context::Schema;
 use crate::db::Engine;
-use crate::scope::{self, Source};
+use crate::sql::scope::{self, Source};
 
 /// What's wrong with `sql` for `schema`: names it uses that aren't
 /// there, or why it couldn't be read at all.
 pub fn problems(sql: &str, engine: Engine, schema: &Schema) -> Vec<String> {
-    let script = crate::parse::parse(sql, engine);
+    let script = crate::sql::parse::parse(sql, engine);
     let mut statements: Vec<Statement> = Vec::new();
     for s in &script.statements {
         if let Ok(parsed) = &s.ast {

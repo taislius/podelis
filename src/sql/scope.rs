@@ -162,7 +162,7 @@ mod tests {
 
     use super::*;
     use crate::db::Engine;
-    use crate::parse::parse;
+    use crate::sql::parse::parse;
 
     /// The scopes of `sql` as an indented outline.
     fn outline(sql: &str) -> String {

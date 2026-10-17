@@ -3,8 +3,8 @@
 
 use super::*;
 use crate::app::{ConnectForm, fields_for};
+use crate::config::store::ConnectionProfile;
 use crate::db::{AgentAccess, Engine, SslMode};
-use crate::store::ConnectionProfile;
 
 /// A connection's settings to show, borrowed from the form being edited or
 /// from a saved connection.

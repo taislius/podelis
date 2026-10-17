@@ -212,7 +212,8 @@ async fn connection(stream: UnixStream, shared: Arc<Shared>) {
     if let Some(agent) = agent {
         // The agent's session, until it goes or the gateway stops.
         let mut stopping = shared.stop.subscribe();
-        let session = crate::mcp::serve_on(&shared.config_dir, &agent.project, agent.name, agent.dir, reader, write);
+        let session =
+            crate::agents::mcp::serve_on(&shared.config_dir, &agent.project, agent.name, agent.dir, reader, write);
         tokio::select! {
             ended = session => {
                 if let Err(e) = ended {
@@ -274,7 +275,7 @@ async fn watched(
 
 /// An agent whose `podelis mcp` asked for an MCP session.
 struct Agent {
-    project: crate::store::Project,
+    project: crate::config::store::Project,
     name: Option<String>,
     dir: Option<String>,
 }

@@ -6,8 +6,8 @@ use crate::app::{short_dir, short_time};
 
 pub(super) fn draw_agents(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let Some(view) = &app.agents_view else { return };
-    let session = view.session.and_then(|i| app.agent_sessions.get(i));
+    let Some(view) = &app.agents.view else { return };
+    let session = view.session.and_then(|i| app.agents.sessions.get(i));
     let rect = centered_box(area, area.width.saturating_sub(6).max(40), area.height.saturating_sub(4).max(8));
     f.render_widget(Clear, rect);
     let title = match session {
@@ -31,7 +31,7 @@ pub(super) fn draw_agents(f: &mut Frame, app: &App, area: Rect) {
     // The search, and what's shown.
     let what = match session {
         Some(s) => format!("{} of {} calls", rows.len(), s.calls()),
-        None => format!("{} of {} sessions", rows.len(), app.agent_sessions.len()),
+        None => format!("{} of {} sessions", rows.len(), app.agents.sessions.len()),
     };
     let only = if view.flagged_only { " · only what's worth a look" } else { "" };
     let mut search = vec![Span::styled(" / ", bold(t.accent))];
@@ -58,7 +58,7 @@ pub(super) fn draw_agents(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(head).style(Style::default().bg(t.inset)), top);
 
     if rows.is_empty() {
-        let empty = if app.agent_sessions.is_empty() {
+        let empty = if app.agents.sessions.is_empty() {
             " No agent has used this project's connections. Share one in its settings (AI agents), then add \
              `podelis mcp` to your agent."
         } else {
@@ -70,8 +70,8 @@ pub(super) fn draw_agents(f: &mut Frame, app: &App, area: Rect) {
     let items: Vec<ListItem> = rows
         .iter()
         .map(|&i| match session {
-            None => session_row(&app.agent_sessions[i], w),
-            Some(_) => call_row(&app.agent_log[i], w),
+            None => session_row(&app.agents.sessions[i], w),
+            Some(_) => call_row(&app.agents.log[i], w),
         })
         .collect();
     let mut state = ListState::default().with_selected(Some(view.selected.min(items.len() - 1)));

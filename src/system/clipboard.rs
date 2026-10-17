@@ -82,7 +82,7 @@ pub fn write(text: &str) -> Result<(), String> {
     let set = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
     let tools = write_tools(cfg!(target_os = "macos"), set("WAYLAND_DISPLAY"), set("DISPLAY"));
     let mut last = "no clipboard tool here".to_string();
-    for tool in tools.into_iter().filter(|t| crate::doctor::on_path(t[0])) {
+    for tool in tools.into_iter().filter(|t| crate::cli::doctor::on_path(t[0])) {
         match run_with_input(tool, text) {
             Ok(()) => return Ok(()),
             Err(e) => last = format!("{}: {e}", tool[0]),
@@ -122,7 +122,7 @@ fn run_with_input(tool: &[&str], text: &str) -> Result<(), String> {
 
 /// The clipboard's text, or why it couldn't be read.
 pub fn read() -> Result<String, String> {
-    let installed: Vec<_> = tools().into_iter().filter(|t| crate::doctor::on_path(t[0])).collect();
+    let installed: Vec<_> = tools().into_iter().filter(|t| crate::cli::doctor::on_path(t[0])).collect();
     if installed.is_empty() {
         return Err("no clipboard tool here (pbpaste, wl-paste, xclip or xsel)".to_string());
     }

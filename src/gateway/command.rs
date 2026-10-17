@@ -134,7 +134,7 @@ fn list_models(listed: &serde_json::Value) -> i32 {
 /// `key <model>`: asks for the key without showing it and stores it in
 /// the OS keychain, where only the gateway reads it.
 fn store_key(config_dir: &Path, name: &str) -> i32 {
-    let (settings, _) = crate::settings::Settings::load(config_dir);
+    let (settings, _) = crate::config::settings::Settings::load(config_dir);
     if !settings.models.iter().any(|m| m.name == name) {
         let known: Vec<&str> = settings.models.iter().map(|m| m.name.as_str()).collect();
         let known = if known.is_empty() { "none yet".to_string() } else { known.join(", ") };
@@ -144,7 +144,7 @@ fn store_key(config_dir: &Path, name: &str) -> i32 {
         return say("Nothing stored.", 1);
     };
     let account = super::models::ModelConfig::keychain_account(name);
-    match crate::store::store_password(&account, key.trim()) {
+    match crate::config::store::store_password(&account, key.trim()) {
         Ok(()) => say(&format!("Stored in the OS keychain (service podelis, account {account})."), 0),
         Err(e) => {
             let _ = writeln!(std::io::stderr(), "Couldn't store it: {e:#}");
@@ -187,7 +187,7 @@ async fn test(config_dir: &Path, name: Option<&str>) -> i32 {
 
 /// Runs the gateway here until Ctrl+C, `stop` or the idle time.
 async fn foreground(config_dir: &Path) -> i32 {
-    let (settings, _) = crate::settings::Settings::load(config_dir);
+    let (settings, _) = crate::config::settings::Settings::load(config_dir);
     let idle = super::idle_from_minutes(settings.gateway_idle);
     let socket = super::socket_path(config_dir);
     // Ctrl+C, or SIGTERM from `kill`, launchd or systemd: stop cleanly
@@ -351,8 +351,8 @@ fn allow(message: &str, data: Option<&Value>) -> Option<()> {
                 let _ = writeln!(err, "Couldn't tell which project to save it for: sent this once.");
                 return Some(());
             };
-            let (mut store, _) = crate::store::ConnectionStore::load();
-            match store.set_share_schema(id, crate::store::ShareSchema::All) {
+            let (mut store, _) = crate::config::store::ConnectionStore::load();
+            match store.set_share_schema(id, crate::config::store::ShareSchema::All) {
                 Ok(()) => {
                     let _ = writeln!(err, "Project '{project}' now shares its schemas with every model set up.");
                     Some(())
@@ -392,7 +392,7 @@ pub async fn memory(config_dir: &Path, project: Option<&str>, words: &[String]) 
         }
         "learn" => {
             // The gateway may run elsewhere: the folder goes as a full path.
-            let folder = crate::settings::expand_home(&words[1]);
+            let folder = crate::config::settings::expand_home(&words[1]);
             let folder = std::fs::canonicalize(&folder).unwrap_or(folder);
             params["folder"] = json!(folder.display().to_string());
             ("memory.learn", "")

@@ -94,7 +94,7 @@ fn names_quoted_the_engines_way() {
 
 #[test]
 fn the_engine_most_connections_use() {
-    let profile = |engine| crate::store::ConnectionProfile {
+    let profile = |engine| crate::config::store::ConnectionProfile {
         engine,
         ..crate::db::tests::file_profile("x", std::path::Path::new("x"))
     };

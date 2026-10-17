@@ -1,8 +1,8 @@
 //! Application bar (top), status bar (bottom) and the help overlay.
 
 use super::*;
-use crate::keys::Action;
-use crate::settings::Hints;
+use crate::config::keys::Action;
+use crate::config::settings::Hints;
 
 /// A connection's name, or for an unsaved one its file or host/database.
 pub(super) fn draw_app_bar(f: &mut Frame, app: &mut App, area: Rect) {

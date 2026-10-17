@@ -56,7 +56,7 @@ impl App {
     fn overlay_states(&self) -> [(Overlay, bool); 17] {
         // The text view shows a session's query or an agent's call in front
         // of their windows.
-        let over_list = self.activity.is_some() || self.agents_view.is_some();
+        let over_list = self.activity.is_some() || self.agents.view.is_some();
         [
             (Overlay::Confirm, self.confirm.is_some()),
             (Overlay::Menu, self.menu.is_some()),
@@ -67,7 +67,7 @@ impl App {
             (Overlay::Palette, self.palette.is_some()),
             (Overlay::CellView, self.cell_view.is_some() && over_list),
             (Overlay::Activity, self.activity.is_some()),
-            (Overlay::Agents, self.agents_view.is_some()),
+            (Overlay::Agents, self.agents.view.is_some()),
             (Overlay::TxPicker, self.tx_picker.is_some()),
             (Overlay::Review, self.review.is_some()),
             (Overlay::ParamForm, self.param_form.is_some()),

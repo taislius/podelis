@@ -141,7 +141,7 @@ impl App {
     /// times and rows. Writes run in a transaction (or savepoint) that's
     /// rolled back, after a confirmation.
     pub(super) fn explain_analyze_current(&mut self) {
-        if self.executing || self.database.is_none() {
+        if self.run.executing || self.database.is_none() {
             return;
         }
         let engine = self.engine();

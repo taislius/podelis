@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::store::write_atomic;
+use crate::config::store::write_atomic;
 
 const MAX_ENTRIES: usize = 500;
 /// A query this long (a pasted dump, a generated script) isn't kept: the

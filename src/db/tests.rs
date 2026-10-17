@@ -216,8 +216,8 @@ pub(crate) fn file_params(path: &std::path::Path, read_only: bool) -> ConnectPar
 }
 
 /// A saved connection `name` to the file database at `path`.
-pub(crate) fn file_profile(name: &str, path: &std::path::Path) -> crate::store::ConnectionProfile {
-    crate::store::ConnectionProfile {
+pub(crate) fn file_profile(name: &str, path: &std::path::Path) -> crate::config::store::ConnectionProfile {
+    crate::config::store::ConnectionProfile {
         name: name.into(),
         engine: file_engine(),
         host: path.to_string_lossy().into_owned(),

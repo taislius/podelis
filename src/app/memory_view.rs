@@ -54,7 +54,7 @@ impl App {
         if let Some(id) = &self.current_project {
             params["project"] = json!(format!("id:{id}"));
         }
-        let config_dir = self.data_dir.clone().unwrap_or_else(crate::store::config_dir);
+        let config_dir = self.data_dir.clone().unwrap_or_else(crate::config::store::config_dir);
         let send = self.sender();
         tokio::spawn(async move {
             let result = match connect_or_start(&config_dir, "podelis", || spawn_gateway(&config_dir)).await {

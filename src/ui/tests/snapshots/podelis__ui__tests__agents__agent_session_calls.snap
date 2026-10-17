@@ -1,5 +1,5 @@
 ---
-source: src/ui/tests.rs
+source: src/ui/tests/agents.rs
 expression: "render(&mut app, 120, 14)"
 ---
 " >_  PODĖLIS v0.0.0   │  project  shop ▼                                                                                "

@@ -478,10 +478,11 @@ fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
     // work elsewhere, they're just not what's at hand there.
     keys.retain(|(_, a)| app.focus == Focus::Editor || !a.is_editor_action());
     // The navigator doesn't write: no write modes there.
-    keys.retain(|(_, a)| app.focus != Focus::Schema || *a != crate::keys::Action::TxMode);
+    keys.retain(|(_, a)| app.focus != Focus::Schema || *a != crate::config::keys::Action::TxMode);
     // Commit and roll back only with a transaction to end.
     keys.retain(|(_, a)| {
-        app.txn != TxnState::Idle || !matches!(a, crate::keys::Action::Commit | crate::keys::Action::Rollback)
+        app.txn != TxnState::Idle
+            || !matches!(a, crate::config::keys::Action::Commit | crate::config::keys::Action::Rollback)
     });
     keys.sort_by_key(|(c, _)| ORDER.find(*c).unwrap_or(ORDER.len()));
     let mut leader: Vec<(String, String)> =
@@ -530,7 +531,8 @@ fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
     let height = (lines.len() as u16 + 2).min(area.height);
     let rect = Rect { y: area.y + area.height.saturating_sub(height).min(2), ..centered_box(area, width, height) };
     f.render_widget(Clear, rect);
-    let title = app.keymap.label(crate::keys::Action::Palette).split(" · ").next().unwrap_or_default().to_uppercase();
+    let title =
+        app.keymap.label(crate::config::keys::Action::Palette).split(" · ").next().unwrap_or_default().to_uppercase();
     f.render_widget(Paragraph::new(lines).block(popup(&title, t.accent)), rect);
 }
 

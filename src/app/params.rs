@@ -1,7 +1,7 @@
 //! Asking for query parameter values before a run.
 
 use super::*;
-use crate::params::{self, Param};
+use crate::sql::params::{self, Param};
 
 /// The popup that asks for parameter values.
 pub struct ParamForm {

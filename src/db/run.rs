@@ -249,9 +249,9 @@ impl Database {
         if parts.len() == statements {
             for (i, result) in results.iter_mut().enumerate() {
                 let read = || {
-                    crate::analyze::analyze(&crate::parse::parse(parts[i], self.0.engine))
+                    crate::sql::analyze::analyze(&crate::sql::parse::parse(parts[i], self.0.engine))
                         .iter()
-                        .all(|s| s.kind == crate::analyze::Kind::Read)
+                        .all(|s| s.kind == crate::sql::analyze::Kind::Read)
                 };
                 if result.columns.is_none() && (i + 1 == statements || read()) {
                     result.columns = session.describe_columns(parts[i]).await;
@@ -419,9 +419,9 @@ impl Database {
 
     /// Whether `sql` only reads (safe to run again after a reconnect).
     fn reads_only(&self, sql: &str) -> bool {
-        crate::analyze::analyze(&crate::parse::parse(sql, self.0.engine))
+        crate::sql::analyze::analyze(&crate::sql::parse::parse(sql, self.0.engine))
             .iter()
-            .all(|i| i.kind == crate::analyze::Kind::Read)
+            .all(|i| i.kind == crate::sql::analyze::Kind::Read)
     }
 
     /// Cancels whatever the session connection is running: the server is

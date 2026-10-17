@@ -15,7 +15,7 @@ const MAX_LOG_BYTES: u64 = 512 * 1024;
 static BACKGROUND: Mutex<Option<String>> = Mutex::new(None);
 
 pub fn log_path() -> PathBuf {
-    crate::store::config_dir().join("crash.log")
+    crate::config::store::config_dir().join("crash.log")
 }
 
 /// Appends the panic to the crash log. Returns the log's path if written.
@@ -94,7 +94,7 @@ mod tests {
         let _ = std::panic::catch_unwind(|| panic!("crash-log-test {}", 42));
         std::panic::set_hook(previous);
         let entry = captured.lock().unwrap().clone();
-        assert!(entry.contains("panic: crash-log-test 42 at src/crash.rs:"), "{entry}");
+        assert!(entry.contains(&format!("panic: crash-log-test 42 at {}:", file!())), "{entry}");
         assert!(entry.contains(env!("CARGO_PKG_VERSION")) && entry.contains("<backtrace>"));
     }
 }

@@ -14,10 +14,10 @@ use crate::app::{
     App, ConnectField, Focus, LibraryItem, LineInput, Overlay, PromptKind, ResultTab, SchemaNode, SchemaSection,
     Screen, TabPromptKind, TxMode, display_prefix, visible_columns,
 };
+use crate::config::store::ConnectionProfile;
+use crate::config::theme::theme;
 use crate::db::{ConnectionMode, TxnState};
 use crate::sql::{self, Highlight};
-use crate::store::ConnectionProfile;
-use crate::theme::theme;
 
 /// Narrowest the schema navigator gets.
 const SCHEMA_WIDTH: u16 = 30;

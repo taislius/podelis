@@ -8,7 +8,7 @@ use sqlparser::ast::{
 };
 
 use crate::db::{Engine, ErrorPos};
-use crate::parse::{ParsedScript, ParsedStatement, line_col_offset};
+use crate::sql::parse::{ParsedScript, ParsedStatement, line_col_offset};
 use crate::sql::{self, TokenKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,7 +58,7 @@ pub fn analyze(script: &ParsedScript) -> Vec<StatementInfo> {
                     // Rules that look inside the statement (an EXPLAIN that
                     // doesn't run it needs no confirmation).
                     let modifies = matches!(kind, Kind::Write | Kind::Ddl);
-                    (kind, risk.or_else(|| crate::lint::risk(stmt, script.engine).filter(|_| modifies)))
+                    (kind, risk.or_else(|| crate::sql::lint::risk(stmt, script.engine).filter(|_| modifies)))
                 }
                 None => classify_words(&words),
             };
@@ -309,7 +309,7 @@ pub fn error_range(sent: &str, position: &ErrorPos) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::parse;
+    use crate::sql::parse::parse;
 
     const PG: Engine = Engine::Postgres;
     const MY: Engine = Engine::MySql;

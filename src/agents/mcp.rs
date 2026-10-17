@@ -19,8 +19,8 @@ use serde::Deserialize;
 
 use crate::agents::{self, Entry, Verdict, Wrap};
 use crate::app::ConnectForm;
+use crate::config::store::{self, ConnectionProfile, ConnectionStore};
 use crate::db::{AgentAccess, ConnectionMode, Database, Engine, QueryOutcome, RunError};
-use crate::store::{self, ConnectionProfile, ConnectionStore};
 
 /// Rows a query returns unless the agent asks for more, and the most it can.
 const DEFAULT_ROWS: usize = 100;
@@ -416,7 +416,7 @@ impl Server {
         };
         self.write_log(entry);
         let Some(plan) = dialect.format_plan(&outcome.columns, &outcome.rows) else {
-            return text(crate::export::render_all_rows(&outcome, crate::export::Format::Table));
+            return text(crate::transfer::export::render_all_rows(&outcome, crate::transfer::export::Format::Table));
         };
         let mut out = String::new();
         if !plan.notes.is_empty() {
@@ -608,8 +608,8 @@ async fn unrollable(db: &Database) -> Option<String> {
 /// none (MySQL commits schema changes at once, and can't roll back tables
 /// that aren't `InnoDB`). A write that fails in its dry run isn't asked about.
 async fn dry_run_note(db: &Database, profile: &ConnectionProfile, sql: &str) -> Result<String, String> {
-    let infos = crate::analyze::analyze(&crate::parse::parse(sql, db.engine()));
-    if db.engine().capabilities().ddl_commits && infos.iter().any(|i| i.kind == crate::analyze::Kind::Ddl) {
+    let infos = crate::sql::analyze::analyze(&crate::sql::parse::parse(sql, db.engine()));
+    if db.engine().capabilities().ddl_commits && infos.iter().any(|i| i.kind == crate::sql::analyze::Kind::Ddl) {
         return Ok(format!("no dry run: {} commits schema changes at once", db.engine().label()));
     }
     if let Some(why) = unrollable(db).await {
@@ -734,7 +734,7 @@ where
         .reading(config_dir.join("connections.toml"))
         .named(name)
         .in_dir(dir)
-        .guarding(crate::settings::Settings::load(config_dir).0.guard_rows);
+        .guarding(crate::config::settings::Settings::load(config_dir).0.guard_rows);
     let service = server.serve((read, write)).await.map_err(|e| e.to_string())?;
     let _ = service.waiting().await;
     Ok(())

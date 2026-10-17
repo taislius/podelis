@@ -2,7 +2,7 @@
 //! loads, syntax checks) and the periodic tick.
 
 use super::*;
-use crate::keys::Action;
+use crate::config::keys::Action;
 
 impl App {
     pub fn handle_db_event(&mut self, event: DbEvent) {
@@ -25,9 +25,9 @@ impl App {
         }
         match event.run {
             // A run's outcome: for the tab it ran in, even if another is shown.
-            Some(run) if run != self.run_id => return,
+            Some(run) if run != self.run.id => return,
             Some(_) => {
-                let owner = self.run_owner.filter(|&t| t < self.tabs.len()).unwrap_or(self.active_tab);
+                let owner = self.run.owner.filter(|&t| t < self.tabs.len()).unwrap_or(self.active_tab);
                 return self.apply_in_tab(owner, event.kind);
             }
             None if event.generation != self.generation => {
@@ -144,8 +144,8 @@ impl App {
             DbEventKind::ExportProgress(rows) => self.export_progress(rows),
             DbEventKind::ExportDone(path, result) => self.export_done(&path, result),
             DbEventKind::MoreFailed(err) => {
-                self.fetching_more = false;
-                self.row_stream = None;
+                self.run.fetching_more = false;
+                self.run.stream = None;
                 let status = format!("Couldn't load more rows: {}", one_line(&err));
                 self.log(status.clone(), true);
                 self.set_status(status, true);
@@ -204,12 +204,12 @@ impl App {
     /// Cancelling failed: said, and while it still runs, Esc again stops
     /// waiting for it.
     fn cancel_failed_with(&mut self, err: &str, unreachable: bool) {
-        self.cancelling = false;
+        self.run.cancelling = false;
         // The server couldn't be reached to be told (not one that refused:
         // a missing privilege): the connection looks down, and while the
         // query still runs, Esc again stops waiting for it.
-        let stuck = self.executing && unreachable;
-        self.cancel_failed = stuck;
+        let stuck = self.run.executing && unreachable;
+        self.run.cancel_failed = stuck;
         self.connection_lost |= stuck;
         let again = if stuck { "Esc again stops waiting · " } else { "" };
         let status = format!("Couldn't cancel: {again}{}", one_line(err));
@@ -257,18 +257,18 @@ impl App {
     }
 
     pub(super) fn on_query_done(&mut self, outcome: QueryOutcome, txn: Option<TxnState>, stream: Option<RowStream>) {
-        self.running_db = None;
+        self.run.db = None;
         self.task = None;
-        self.executing = false;
+        self.run.executing = false;
         self.note_session_changes();
         // The schema (or, after USE/SET, its visibility) may have changed.
-        if self.last_run_infos.iter().any(|i| matches!(i.kind, Kind::Ddl | Kind::Session)) {
+        if self.run.infos.iter().any(|i| matches!(i.kind, Kind::Ddl | Kind::Session)) {
             self.load_catalog();
         }
         self.txn = txn.unwrap_or_else(|| self.tracked_txn_state());
         let rows_affected = outcome.rows_affected.unwrap_or(0);
         self.connection_lost = false;
-        self.cancel_failed = false;
+        self.run.cancel_failed = false;
         tracing::debug!(
             rows = outcome.rows.len(),
             elapsed_ms = outcome.elapsed.as_millis(),
@@ -279,7 +279,7 @@ impl App {
         if reconnected {
             self.txn = TxnState::Idle;
         }
-        match std::mem::take(&mut self.running_purpose) {
+        match std::mem::take(&mut self.run.purpose) {
             RunPurpose::Query => {
                 self.tab.run_error = None;
                 let grid = &self.tab.grid;
@@ -291,12 +291,12 @@ impl App {
                 // `\G` turns the vertical layout on for its result; the next
                 // run without it turns it off again (`X` keeps it on).
                 let grid = &mut self.tab.grid;
-                if self.run_extra.vertical {
+                if self.run.extra.vertical {
                     (grid.vertical, grid.vertical_by_g) = (true, true);
                 } else if std::mem::take(&mut grid.vertical_by_g) {
                     grid.vertical = false;
                 }
-                if let Some(prefix) = self.run_extra.status_prefix.take() {
+                if let Some(prefix) = self.run.extra.status_prefix.take() {
                     self.status = format!("{prefix} · {}", self.status);
                 }
                 // (The RESULT tab was shown as it started: a plan asked for
@@ -305,7 +305,7 @@ impl App {
                 if stream.is_some() {
                     self.status.push_str(" · more load as you scroll");
                 }
-                self.row_stream = stream;
+                self.run.stream = stream;
                 let status = self.status.clone();
                 self.log(status, false);
             }
@@ -317,22 +317,22 @@ impl App {
         if reconnected {
             self.status.push_str(" · the connection had dropped: reconnected (session settings were reset)");
         }
-        if std::mem::take(&mut self.run_extra.reviewing) {
+        if std::mem::take(&mut self.run.extra.reviewing) {
             self.open_review(rows_affected);
         }
-        if self.run_extra.dry_run.is_some() {
+        if self.run.extra.dry_run.is_some() {
             self.end_dry_run(review::DryRun::Done(rows_affected));
         }
         // MySQL reports some interrupted statements (e.g. SLEEP) as
         // ordinary results: stopped by the connection's limit, it's said so.
-        if let Some(limit) = self.run_extra.timed_out.take() {
-            self.cancelling = false;
+        if let Some(limit) = self.run.extra.timed_out.take() {
+            self.run.cancelling = false;
             self.status = format!(
                 "Timed out after {} s (the connection's limit), stopped early: {}",
                 limit.as_secs(),
                 self.status
             );
-        } else if std::mem::take(&mut self.cancelling) {
+        } else if std::mem::take(&mut self.run.cancelling) {
             self.status.push_str(" · cancel requested");
         }
         // The outcome is shown with the results.
@@ -342,35 +342,35 @@ impl App {
     }
 
     pub(super) fn on_query_failed(&mut self, err: &str, position: Option<ErrorPos>, txn: Option<TxnState>) {
-        self.running_db = None;
+        self.run.db = None;
         self.stop_watch(": the query failed");
         if err.contains("couldn't reconnect") || err.contains("the server doesn't answer") {
             self.connection_lost = true;
         }
-        self.cancel_failed = false;
+        self.run.cancel_failed = false;
         tracing::debug!(error = err, "query failed");
         self.task = None;
-        let reviewing = std::mem::take(&mut self.run_extra.reviewing);
-        self.executing = false;
+        let reviewing = std::mem::take(&mut self.run.extra.reviewing);
+        self.run.executing = false;
         // Statements before the failing one ran.
         self.note_session_changes();
-        let query = matches!(std::mem::take(&mut self.running_purpose), RunPurpose::Query);
+        let query = matches!(std::mem::take(&mut self.run.purpose), RunPurpose::Query);
         if let Some(txn) = txn {
             self.txn = txn;
         }
-        let prefix = match self.run_extra.timed_out.take() {
+        let prefix = match self.run.extra.timed_out.take() {
             Some(limit) => format!("Timed out after {} s (the connection's limit): ", limit.as_secs()),
-            None if self.cancelling => "Cancelled: ".to_string(),
+            None if self.run.cancelling => "Cancelled: ".to_string(),
             None => String::new(),
         };
-        self.cancelling = false;
+        self.run.cancelling = false;
         let mut status = format!("{prefix}{}", one_line(err));
         if let Some(marker) = position.and_then(|p| self.locate_error(&p)) {
             let (row, col) = marker.0;
             let _ = write!(status, " (line {}, col {})", row + 1, col + 1);
             self.tab.error_marker = Some(marker);
         }
-        let dry_run = self.run_extra.dry_run.is_some();
+        let dry_run = self.run.extra.dry_run.is_some();
         if reviewing || dry_run {
             // BEGIN ran before the failing statement.
             if txn.is_none() {
@@ -448,12 +448,12 @@ impl App {
             self.agents_tick();
         }
         self.share_tick();
-        if let Some((deadline, limit)) = self.run_extra.deadline
-            && self.executing
+        if let Some((deadline, limit)) = self.run.extra.deadline
+            && self.run.executing
             && Instant::now() >= deadline
         {
-            self.run_extra.deadline = None;
-            self.run_extra.timed_out = Some(limit);
+            self.run.extra.deadline = None;
+            self.run.extra.timed_out = Some(limit);
             self.cancel_query();
         }
         self.check_background_panic();
@@ -461,11 +461,11 @@ impl App {
 
     /// Reports a background task that panicked (it never reports back).
     fn check_background_panic(&mut self) {
-        if let Some(message) = crate::crash::take_background() {
-            self.executing = false;
+        if let Some(message) = crate::system::crash::take_background() {
+            self.run.executing = false;
             self.task = None;
-            self.row_stream = None;
-            let log = crate::crash::log_path();
+            self.run.stream = None;
+            let log = crate::system::crash::log_path();
             self.set_status(format!("Internal error: {message} (details in {})", log.display()), true);
         }
     }
@@ -481,7 +481,7 @@ impl App {
         let text = self.tab.editor.text();
         // Ask the server when it's safe: never inside a transaction (preparing
         // can take locks there) or while a query runs on the session.
-        let server_ok = self.settings.server_syntax_check && self.txn == TxnState::Idle && !self.executing;
+        let server_ok = self.settings.server_syntax_check && self.txn == TxnState::Idle && !self.run.executing;
         let db = self.database.clone().filter(|_| server_ok);
         let check = self.local_check();
         // Parsing and linting a long script takes a while: off the UI thread,
@@ -549,7 +549,7 @@ impl App {
         if text != self.tab.last_run_text {
             return None;
         }
-        let (start, end) = if let Some(filled) = &self.last_run_filled {
+        let (start, end) = if let Some(filled) = &self.run.filled {
             let (start, len) = analyze::error_range(&filled.sql, position)?;
             let start = filled.to_original(start);
             (start, filled.to_original(start + len).max(start))
@@ -567,7 +567,7 @@ impl App {
     /// MySQL's implicit commit on DDL).
     pub(super) fn tracked_txn_state(&self) -> TxnState {
         let mut state = self.txn;
-        for info in &self.last_run_infos {
+        for info in &self.run.infos {
             state = match info.kind {
                 Kind::Transaction(TxnOp::Begin) => TxnState::Open,
                 Kind::Transaction(TxnOp::Commit | TxnOp::Rollback) => TxnState::Idle,
@@ -600,7 +600,7 @@ impl LocalCheck {
 
     /// Every lint warning, unless lints are turned off.
     fn lints(&self, parsed: &ParsedScript) -> Vec<SyntaxHint> {
-        if self.lint { crate::lint::lints(parsed, &self.sql_mode) } else { Vec::new() }
+        if self.lint { crate::sql::lint::lints(parsed, &self.sql_mode) } else { Vec::new() }
     }
 }
 

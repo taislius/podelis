@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Engine;
-use crate::diff::TableShape;
+use crate::transfer::diff::TableShape;
 
 #[derive(Serialize, Deserialize)]
 pub struct Snapshot {
@@ -39,7 +39,7 @@ pub fn save(dir: &Path, snapshot: &Snapshot, now: chrono::DateTime<chrono::Local
         snapshot.connection.chars().map(|c| if matches!(c, '/' | '\\' | '@') { '_' } else { c }).collect();
     let path = dir.join(format!("{name}@{}.json", now.format("%Y-%m-%d_%H-%M-%S")));
     let text = serde_json::to_string(snapshot).context("writing the snapshot")?;
-    crate::store::write_atomic(&path, &text)?;
+    crate::config::store::write_atomic(&path, &text)?;
     Ok(path)
 }
 

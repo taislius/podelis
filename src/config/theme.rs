@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 
 use ratatui::style::Color;
 
-use crate::settings::ThemeName;
+use crate::config::settings::ThemeName;
 
 #[derive(Clone, Copy)]
 pub struct Theme {

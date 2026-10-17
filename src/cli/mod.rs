@@ -3,13 +3,14 @@
 //!
 //! Runs before (or instead of) the TUI, so printing is fine here.
 
+pub(crate) mod doctor;
 use std::io::{IsTerminal as _, Read as _, Write as _};
 
-use crate::analyze::{self, Kind};
 use crate::app::ConnectForm;
+use crate::config::store::{self, ConnectionStore};
 use crate::db::{ConnectionMode, Database, QueryOutcome};
-use crate::export::{self, Format};
-use crate::store::{self, ConnectionStore};
+use crate::sql::analyze::{self, Kind};
+use crate::transfer::export::{self, Format};
 
 pub const USAGE: &str = "\
 Usage: podelis [OPTIONS] [CONNECTION]
@@ -408,7 +409,7 @@ async fn execute_inner(args: &Args, store: &ConnectionStore) -> Result<(), Failu
     };
     let form = resolve(args, store)?;
     let engine = form.engine;
-    let infos = analyze::analyze(&crate::parse::parse(&sql, engine));
+    let infos = analyze::analyze(&crate::sql::parse::parse(&sql, engine));
     if let Some(write) = infos.iter().find(|i| i.modifies())
         && form.mode == ConnectionMode::ReadOnly
     {
@@ -596,19 +597,19 @@ async fn import_inner(args: &Args, store: &ConnectionStore) -> Result<(), Failur
     if form.mode == ConnectionMode::Production && !args.yes {
         return Err(Failure::refused("production connection: add --yes to import"));
     }
-    let table = args.table.clone().unwrap_or_else(|| crate::import::table_name_for(&file));
+    let table = args.table.clone().unwrap_or_else(|| crate::transfer::import::table_name_for(&file));
     let db = connect(&form, args).await?;
     // On a terminal, a line that keeps saying how far it's got.
     let terminal = std::io::stderr().is_terminal();
     let mut shown: Option<std::time::Instant> = None;
-    let mut show = |p: crate::import::Progress| {
+    let mut show = |p: crate::transfer::import::Progress| {
         let end = p.bytes >= p.size;
         if terminal && (end || shown.is_none_or(|at| at.elapsed() >= std::time::Duration::from_millis(100))) {
             let _ = write!(std::io::stderr(), "\r\x1b[K{p}");
             shown = Some(std::time::Instant::now());
         }
     };
-    let result = crate::import::import(&db, &file, &table, args.delimiter, &mut show).await;
+    let result = crate::transfer::import::import(&db, &file, &table, args.delimiter, &mut show).await;
     if shown.is_some() {
         let _ = write!(std::io::stderr(), "\r\x1b[K");
     }
@@ -728,7 +729,7 @@ mod tests {
 
     #[test]
     fn the_man_page_lists_every_option() {
-        let man = include_str!("../docs/podelis.1");
+        let man = include_str!("../../docs/podelis.1");
         // `--project` in USAGE is `Fl -project` in mdoc.
         let options = USAGE
             .split_whitespace()

@@ -88,7 +88,7 @@ impl App {
         // By id: two projects' names may differ only in case.
         let project = self.current_project.as_ref().map(|id| format!("id:{id}")).unwrap_or_default();
         let connection = question.connection.clone();
-        let config_dir = self.data_dir.clone().unwrap_or_else(crate::store::config_dir);
+        let config_dir = self.data_dir.clone().unwrap_or_else(crate::config::store::config_dir);
         self.ask_count += 1;
         let id = self.ask_count;
         let tx = self.db_tx.clone();
@@ -230,7 +230,7 @@ impl App {
             && let Some(question) = self.pending_share.take()
         {
             // A question that came by itself: a moment before keys count.
-            self.agent_asked = Some(Instant::now());
+            self.agents.asked = Some(Instant::now());
             self.confirm = Some(question);
         }
     }
@@ -242,7 +242,7 @@ impl App {
         // gateway didn't say), then asked as allowed.
         let id = project_id.map(str::to_string).or_else(|| self.current_project.clone()).filter(|_| always);
         let saved = match id {
-            Some(id) => match self.store.set_share_schema(&id, crate::store::ShareSchema::All) {
+            Some(id) => match self.store.set_share_schema(&id, crate::config::store::ShareSchema::All) {
                 Ok(()) => true,
                 Err(e) => return self.set_status(format!("Couldn't save it: {e:#}"), true),
             },

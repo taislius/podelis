@@ -1,5 +1,5 @@
 ---
-source: src/scope.rs
+source: src/sql/scope.rs
 expression: "outline(\"with p as (select 1 as n), q as (select * from p) select * from q, (with r as (select 2) select * from r) s; \\\n             select * from p\")"
 ---
 select from [] ctes [p, q]

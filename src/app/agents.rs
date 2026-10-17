@@ -48,8 +48,8 @@ impl AgentQuery {
         self.flag.as_deref().or_else(|| {
             self.lint
                 .get_or_init(|| {
-                    let script = crate::parse::parse(&self.entry.sql, self.engine);
-                    crate::lint::lints(&script, "").first().map(|h| h.message.clone())
+                    let script = crate::sql::parse::parse(&self.entry.sql, self.engine);
+                    crate::sql::lint::lints(&script, "").first().map(|h| h.message.clone())
                 })
                 .as_deref()
         })
@@ -101,6 +101,30 @@ pub fn short_time(at: &str) -> String {
     at.get(5..16).unwrap_or(at).replace('T', " ")
 }
 
+/// What agents did and asked for, as reviewed in the agents view: the
+/// log, its sessions and alerts, the writes waiting for an answer.
+#[derive(Default)]
+pub struct Agents {
+    /// What AI agents ran in this project, newest first; read when the
+    /// library opens.
+    pub log: Vec<AgentQuery>,
+    /// The agent log file as it was read (path, modified, size).
+    pub(super) log_stamp: Option<(PathBuf, std::time::SystemTime, u64)>,
+    /// The log by agent session, the most recently active first.
+    pub sessions: Vec<crate::agents::Session>,
+    /// What agents did that's worth a look since the window was last open.
+    pub alerts: crate::agents::Alerts,
+    /// When the log was last checked for alerts (every `ALERT_CHECK`).
+    pub(super) checked: Option<Instant>,
+    /// When the user last looked at what agents did, as last read.
+    pub(super) seen: Option<String>,
+    /// When an agent's write was put to the user: keys in its first moment
+    /// were meant for something else.
+    pub(super) asked: Option<Instant>,
+    /// The agent activity window.
+    pub view: Option<AgentsView>,
+}
+
 impl App {
     /// Reads what AI agents ran in this project (`podelis mcp`), newest
     /// first: again only when the file has changed since, since a big log
@@ -113,18 +137,18 @@ impl App {
             let meta = std::fs::metadata(p).ok()?;
             Some((p.clone(), meta.modified().ok()?, meta.len()))
         });
-        if stamp.is_some() && stamp == self.agent_log_stamp {
+        if stamp.is_some() && stamp == self.agents.log_stamp {
             return false;
         }
-        self.agent_log = path
+        self.agents.log = path
             .map(|p| crate::agents::read(&p))
             .unwrap_or_default()
             .into_iter()
             .rev()
             .map(|entry| AgentQuery::new(entry, engine))
             .collect();
-        self.agent_log_stamp = stamp;
-        self.agent_sessions = crate::agents::sessions(self.agent_log.iter().map(|q| &q.entry));
+        self.agents.log_stamp = stamp;
+        self.agents.sessions = crate::agents::sessions(self.agents.log.iter().map(|q| &q.entry));
         true
     }
 
@@ -163,7 +187,7 @@ impl App {
         details.push(String::new());
         details.push(request.dry_run.clone());
         self.notification = Some(format!("{} asks to write on {}", request.agent, request.connection));
-        self.agent_asked = Some(Instant::now());
+        self.agents.asked = Some(Instant::now());
         self.confirm = Some(Confirm {
             message: format!("{} asks to write on {}{place}. Allow it?", request.agent, request.connection),
             details,
@@ -190,38 +214,38 @@ impl App {
     /// Not while the window is open: it shows what was there when it
     /// opened, and the rows it points at stay put.
     pub(super) fn agents_tick(&mut self) {
-        if self.agents_view.is_some() || self.agent_checked.is_some_and(|at| at.elapsed() < ALERT_CHECK) {
+        if self.agents.view.is_some() || self.agents.checked.is_some_and(|at| at.elapsed() < ALERT_CHECK) {
             return;
         }
-        self.agent_checked = Some(Instant::now());
+        self.agents.checked = Some(Instant::now());
         self.update_agent_alerts();
     }
 
     pub fn update_agent_alerts(&mut self) {
         let reread = self.load_agent_log();
         let seen = self.agent_paths().and_then(|(_, seen)| crate::agents::read_seen(&seen));
-        if reread || seen != self.agent_seen {
-            self.agent_alerts = crate::agents::alerts_since(self.agent_log.iter().map(|q| &q.entry), seen.as_deref());
-            self.agent_seen = seen;
+        if reread || seen != self.agents.seen {
+            self.agents.alerts = crate::agents::alerts_since(self.agents.log.iter().map(|q| &q.entry), seen.as_deref());
+            self.agents.seen = seen;
         }
     }
 
     /// Forgets the agent log and window of the project being left.
     pub(super) fn reset_agents(&mut self) {
-        self.agent_log.clear();
-        self.agent_log_stamp = None;
-        self.agent_sessions.clear();
-        self.agent_alerts = Alerts::default();
-        self.agent_seen = None;
-        self.agent_checked = None;
-        self.agents_view = None;
+        self.agents.log.clear();
+        self.agents.log_stamp = None;
+        self.agents.sessions.clear();
+        self.agents.alerts = Alerts::default();
+        self.agents.seen = None;
+        self.agents.checked = None;
+        self.agents.view = None;
     }
 
     /// The status bar's note: what agents did that's worth a look since the
     /// window was last opened (while anything is shared with them).
     pub fn agent_note(&self) -> Option<String> {
-        let Alerts { refused, failed, wrote, dry_runs } = self.agent_alerts;
-        if !self.agent_alerts.any() || !self.watching_agents() {
+        let Alerts { refused, failed, wrote, dry_runs } = self.agents.alerts;
+        if !self.agents.alerts.any() || !self.watching_agents() {
             return None;
         }
         let dry = if dry_runs == 1 { "dry run" } else { "dry runs" };
@@ -236,12 +260,12 @@ impl App {
     /// Opens the agent activity window, and marks everything in it seen.
     pub fn open_agents(&mut self) {
         self.load_agent_log();
-        if let (Some((_, seen)), Some(newest)) = (self.agent_paths(), self.agent_log.first()) {
+        if let (Some((_, seen)), Some(newest)) = (self.agent_paths(), self.agents.log.first()) {
             crate::agents::write_seen(&seen, &newest.entry.at);
-            self.agent_seen = Some(newest.entry.at.clone());
+            self.agents.seen = Some(newest.entry.at.clone());
         }
-        self.agent_alerts = Alerts::default();
-        self.agents_view = Some(AgentsView {
+        self.agents.alerts = Alerts::default();
+        self.agents.view = Some(AgentsView {
             session: None,
             selected: 0,
             sessions_filter: LineInput::default(),
@@ -254,17 +278,17 @@ impl App {
     /// The rows shown: sessions (indexes into `agent_sessions`) or, with a
     /// session open, its calls (indexes into `agent_log`), as filtered.
     pub fn agents_rows(&self) -> Vec<usize> {
-        let Some(view) = &self.agents_view else { return Vec::new() };
+        let Some(view) = &self.agents.view else { return Vec::new() };
         let text = view.filter.text();
-        match view.session.and_then(|i| self.agent_sessions.get(i)) {
-            None => (0..self.agent_sessions.len())
+        match view.session.and_then(|i| self.agents.sessions.get(i)) {
+            None => (0..self.agents.sessions.len())
                 .filter(|&i| {
-                    let s = &self.agent_sessions[i];
+                    let s = &self.agents.sessions[i];
                     let flagged = s.refused + s.failed + s.wrote + s.dry_runs > 0;
                     let dir = s.dir.as_deref().unwrap_or_default();
                     let mut fields = vec![s.label(), &s.agent, dir];
                     fields.extend(s.connections.iter().map(String::as_str));
-                    (!view.flagged_only || flagged) && crate::library::matches(text, &fields)
+                    (!view.flagged_only || flagged) && crate::config::library::matches(text, &fields)
                 })
                 .collect(),
             Some(session) => session
@@ -274,10 +298,13 @@ impl App {
                 .filter(|&i| {
                     // Searching uses what's cheap to know; only `!` checks
                     // each call's SQL for lint warnings.
-                    let q = &self.agent_log[i];
+                    let q = &self.agents.log[i];
                     let flag = q.flag.as_deref().unwrap_or_default();
                     (!view.flagged_only || q.notice().is_some())
-                        && crate::library::matches(text, &[&q.entry.sql, &q.entry.connection, &q.entry.tool, flag])
+                        && crate::config::library::matches(
+                            text,
+                            &[&q.entry.sql, &q.entry.connection, &q.entry.tool, flag],
+                        )
                 })
                 .collect(),
         }
@@ -285,7 +312,7 @@ impl App {
 
     pub fn handle_agents_key(&mut self, key: KeyEvent) {
         let rows = self.agents_rows();
-        let Some(view) = &mut self.agents_view else { return };
+        let Some(view) = &mut self.agents.view else { return };
         if view.filtering {
             match key.code {
                 KeyCode::Enter => view.filtering = false,
@@ -314,10 +341,10 @@ impl App {
                 if let Some(open) = view.session.take() {
                     view.filter = std::mem::take(&mut view.sessions_filter);
                     let rows = self.agents_rows();
-                    let Some(view) = &mut self.agents_view else { return };
+                    let Some(view) = &mut self.agents.view else { return };
                     view.selected = rows.iter().position(|&i| i == open).unwrap_or(0);
                 } else {
-                    self.agents_view = None;
+                    self.agents.view = None;
                 }
             }
             KeyCode::Char('/') => view.filtering = true,
@@ -339,15 +366,15 @@ impl App {
                 }
             }
             KeyCode::Char('o') if view.session.is_some() => {
-                let Some(q) = row.and_then(|i| self.agent_log.get(i)) else { return };
+                let Some(q) = row.and_then(|i| self.agents.log.get(i)) else { return };
                 let (sql, ran_on) = (q.entry.sql.clone(), q.entry.connection.clone());
                 let name = q.entry.name.clone().unwrap_or_else(|| q.entry.agent.clone());
-                self.agents_view = None;
+                self.agents.view = None;
                 self.open_sql_in_tab(Some(name.clone()), &sql, None);
                 self.set_status(format!("{name} ran this on {ran_on}; here it runs on this tab's connection"), false);
             }
             KeyCode::Char('y') if view.session.is_some() => {
-                if let Some(q) = row.and_then(|i| self.agent_log.get(i)) {
+                if let Some(q) = row.and_then(|i| self.agents.log.get(i)) {
                     let sql = q.entry.sql.clone();
                     self.copy_text(sql, "Copied the agent's SQL");
                 }
@@ -358,7 +385,7 @@ impl App {
 
     /// One call in full, for the text view.
     fn agent_query_text(&self, i: usize) -> String {
-        let Some(q) = self.agent_log.get(i) else { return String::new() };
+        let Some(q) = self.agents.log.get(i) else { return String::new() };
         let e = &q.entry;
         let mut agent = e.agent.clone();
         if let Some(v) = &e.agent_version {

@@ -1,36 +1,17 @@
 mod agents;
-mod analyze;
 mod app;
 mod chart;
 mod cli;
-mod clipboard;
-mod complete;
-mod containers;
-mod crash;
+mod config;
 mod db;
-mod diff;
-mod doctor;
 mod editor;
-mod export;
 #[cfg(test)]
 mod fuzz_tests;
 mod gateway;
-mod history;
-mod import;
-mod keys;
-mod library;
-mod lint;
-mod logging;
-mod mcp;
-mod params;
-mod parse;
 mod related;
-mod scope;
-mod settings;
-mod snapshots;
 mod sql;
-mod store;
-mod theme;
+mod system;
+mod transfer;
 mod ui;
 
 use std::io::{Write as _, stdout};
@@ -53,7 +34,7 @@ use tokio::signal::unix::{Signal, SignalKind, signal};
 use tokio::sync::mpsc;
 
 use app::App;
-use store::ConnectionStore;
+use config::store::ConnectionStore;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -64,24 +45,27 @@ async fn main() -> Result<()> {
             std::process::exit(code);
         }
     };
-    let log_path = logging::init();
+    let log_path = system::logging::init();
     let (store, store_warning) = ConnectionStore::load();
     if args.mcp {
         let name = args.name.clone().or_else(|| std::env::var("PODELIS_AGENT").ok());
-        std::process::exit(mcp::run(&store::config_dir(), args.project.as_deref(), name).await);
+        std::process::exit(agents::mcp::run(&config::store::config_dir(), args.project.as_deref(), name).await);
     }
     if let Some(words) = &args.memory {
-        std::process::exit(gateway::command::memory(&store::config_dir(), args.project.as_deref(), words).await);
+        std::process::exit(
+            gateway::command::memory(&config::store::config_dir(), args.project.as_deref(), words).await,
+        );
     }
     if let Some(words) = &args.ask {
         let (project, model) = (args.project.as_deref(), args.model.as_deref());
-        std::process::exit(gateway::command::ask(&store::config_dir(), project, model, words).await);
+        std::process::exit(gateway::command::ask(&config::store::config_dir(), project, model, words).await);
     }
     if let Some(command) = args.gateway.clone() {
-        std::process::exit(gateway::command::run(command, &store::config_dir(), args.project.as_deref()).await);
+        std::process::exit(gateway::command::run(command, &config::store::config_dir(), args.project.as_deref()).await);
     }
     if args.doctor {
-        let code = doctor::run(&store, store_warning.as_deref(), args.project.as_deref(), args.test_connections).await;
+        let code =
+            cli::doctor::run(&store, store_warning.as_deref(), args.project.as_deref(), args.test_connections).await;
         std::process::exit(code);
     }
     if args.test {
@@ -93,13 +77,13 @@ async fn main() -> Result<()> {
     if args.execute.is_some() {
         std::process::exit(cli::execute(&args, &store).await);
     }
-    let config_dir = store::config_dir();
+    let config_dir = config::store::config_dir();
     if let Some(id) = &store.migrated_project {
-        history::migrate_legacy(&config_dir.join("history.jsonl"), &config_dir.join("history"), id);
+        config::history::migrate_legacy(&config_dir.join("history.jsonl"), &config_dir.join("history"), id);
     }
-    let (settings, settings_warning) = settings::Settings::load(&store::config_dir());
-    theme::set_theme(settings.theme);
-    let (keymap, key_warnings) = keys::KeyMap::new(&settings.keys);
+    let (settings, settings_warning) = config::settings::Settings::load(&config::store::config_dir());
+    config::theme::set_theme(settings.theme);
+    let (keymap, key_warnings) = config::keys::KeyMap::new(&settings.keys);
     let warnings: Vec<String> = store_warning.into_iter().chain(settings_warning).chain(key_warnings).collect();
     let warning = (!warnings.is_empty()).then(|| warnings.join("\n"));
     if let Some(path) = &log_path {
@@ -120,11 +104,11 @@ async fn main() -> Result<()> {
 
     let ratatui_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let log = crash::record(info);
+        let log = system::crash::record(info);
         // A background task's panic (a query, a catalog load) doesn't end
         // the app: leave the terminal alone and let the UI report it.
         if std::thread::current().name() != Some("main") {
-            crash::note_background(info);
+            system::crash::note_background(info);
             return;
         }
         restore_input_modes(enhanced, mouse);
@@ -172,7 +156,7 @@ fn restore_input_modes(enhanced: bool, mouse: bool) {
 /// terminal), else via the OSC 52 escape sequence, which works over SSH in
 /// most modern terminals (tmux needs `set -g set-clipboard on`).
 fn copy_to_clipboard(text: String) {
-    if clipboard::write(&text).is_ok() {
+    if system::clipboard::write(&text).is_ok() {
         return;
     }
     let _ = execute!(

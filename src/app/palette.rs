@@ -2,7 +2,7 @@
 //! typing anything else searches every action by name (the palette).
 
 use super::*;
-use crate::keys::Action;
+use crate::config::keys::Action;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -162,7 +162,7 @@ pub struct Palette {
     opened: Instant,
     /// The saved schema snapshots, read once when it opens (it's searched
     /// on every key).
-    snapshots: Vec<crate::snapshots::Saved>,
+    snapshots: Vec<crate::transfer::snapshots::Saved>,
 }
 
 impl App {

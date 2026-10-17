@@ -163,7 +163,7 @@ impl App {
 
     /// INSERT with the filled-in fields; empty ones get their default.
     fn submit_row_insert(&mut self) {
-        if self.executing {
+        if self.run.executing {
             return self.set_status("A query is running: the row stays here until it's done".to_string(), true);
         }
         let Some(form) = self.row_form.take() else { return };
@@ -173,7 +173,7 @@ impl App {
             .iter()
             .zip(&form.values)
             .filter(|(_, v)| !v.is_empty())
-            .map(|(c, v)| (engine.quote_ident(&c.name), crate::params::literal(v, engine)))
+            .map(|(c, v)| (engine.quote_ident(&c.name), crate::sql::params::literal(v, engine)))
             .collect();
         let sql = if filled.is_empty() {
             engine.dialect().insert_defaults(&form.table_sql)
@@ -236,7 +236,7 @@ impl App {
         if let (true, Some((sql, offset))) = (refresh, self.tab.last_sql.clone()) {
             let infos = self.tab.last_query_infos.clone();
             self.rerun_shown(sql, offset, infos);
-            self.run_extra.status_prefix = Some(msg);
+            self.run.extra.status_prefix = Some(msg);
         }
     }
 
@@ -281,11 +281,13 @@ impl App {
             self.tab.grid.marked.iter().copied().collect()
         };
         let text = match format {
-            OpenFormat::Csv => crate::export::csv(results, &rows),
-            OpenFormat::Tsv => crate::export::tsv(results, &rows),
-            OpenFormat::Json => crate::export::json(results, &rows),
-            OpenFormat::Text => crate::export::render(results, &rows, crate::export::Format::Table),
-            OpenFormat::Sql => crate::export::sql_inserts(results, &rows, &self.insert_table(), self.engine()),
+            OpenFormat::Csv => crate::transfer::export::csv(results, &rows),
+            OpenFormat::Tsv => crate::transfer::export::tsv(results, &rows),
+            OpenFormat::Json => crate::transfer::export::json(results, &rows),
+            OpenFormat::Text => crate::transfer::export::render(results, &rows, crate::transfer::export::Format::Table),
+            OpenFormat::Sql => {
+                crate::transfer::export::sql_inserts(results, &rows, &self.insert_table(), self.engine())
+            }
         };
         Some((rows.len(), text))
     }

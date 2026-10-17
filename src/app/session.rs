@@ -49,7 +49,7 @@ pub struct Conns {
     pub restoring: Vec<String>,
     /// A run asked for on a tab whose connection is being opened again
     /// (`retry_tab_connection`): done once it's open.
-    pub after_reconnect: Option<crate::keys::Action>,
+    pub after_reconnect: Option<crate::config::keys::Action>,
     /// Expanded schema tables to restore, by connection name.
     restore_expanded: HashMap<String, Vec<(String, String)>>,
     /// Connect as soon as the saved connection's password is loaded (it was
@@ -129,7 +129,7 @@ impl App {
     /// asking first if a transaction would be rolled back. With `panes`,
     /// `target`'s connections take the keys rather than its tabs.
     pub(super) fn switch_project(&mut self, target: Option<String>, panes: bool) {
-        if self.executing {
+        if self.run.executing {
             return self.set_status("Wait for the query to finish (or press Esc) first".to_string(), true);
         }
         if self.any_open_transaction() {
@@ -257,8 +257,8 @@ impl App {
     /// Closes every connection (when the project's tabs are replaced).
     pub(super) fn close_all_connections(&mut self) {
         self.invalidate_tasks();
-        self.row_stream = None;
-        self.executing = false;
+        self.run.stream = None;
+        self.run.executing = false;
         let mut current = ConnSlot::default();
         swap_conn(self, &mut current);
         let slots = std::iter::once(current).chain(self.conns.parked.drain().map(|(_, s)| s));
@@ -291,11 +291,11 @@ impl App {
     pub(super) fn disconnect(&mut self) {
         self.invalidate_tasks();
         // Closing the stream first lets close() take the session.
-        self.row_stream = None;
-        self.fetching_more = false;
-        self.executing = false;
-        self.cancelling = false;
-        self.cancel_failed = false;
+        self.run.stream = None;
+        self.run.fetching_more = false;
+        self.run.executing = false;
+        self.run.cancelling = false;
+        self.run.cancel_failed = false;
         self.tab.grid.results = None;
         self.tab.grid.result_sets.clear();
         self.tabs[self.active_tab].conn = None;
@@ -315,7 +315,7 @@ impl App {
     /// Ctrl+O: picks a connection for this tab, or for a new tab if this
     /// one is connected.
     pub(super) fn open_connection(&mut self) {
-        if self.executing {
+        if self.run.executing {
             return self.set_status("Wait for the query to finish (or press Esc) first".into(), true);
         }
         self.open_manager(Screen::Connections);
@@ -513,7 +513,7 @@ impl App {
 
     /// Opens the tab's connection again (`tab_connection_to_retry`), then
     /// does `action` (a run) once it's open.
-    pub(super) fn retry_tab_connection(&mut self, profile: ConnectionProfile, action: crate::keys::Action) {
+    pub(super) fn retry_tab_connection(&mut self, profile: ConnectionProfile, action: crate::config::keys::Action) {
         self.conns.after_reconnect = Some(action);
         self.connect_saved(vec![profile]);
     }

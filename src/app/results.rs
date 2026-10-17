@@ -1,5 +1,5 @@
 use super::*;
-pub use crate::export::display_prefix;
+pub use crate::transfer::export::display_prefix;
 
 pub const NULL_TEXT: &str = "NULL";
 pub(super) const MAX_COL_WIDTH: usize = 40;
