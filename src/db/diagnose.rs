@@ -20,7 +20,10 @@ pub fn is_auth_failure(message: &str) -> bool {
 pub fn hint(message: &str) -> Option<&'static str> {
     let m = message.to_lowercase();
     let has = |s: &str| m.contains(s);
-    Some(if has("connection refused") {
+    Some(if has("the connection's limit") {
+        // A query that ran too long, on a server that answered.
+        "the query took longer than the connection's timeout: narrow it, or raise Timeout in the connection's settings"
+    } else if has("connection refused") {
         "nothing is listening there: is the server running, and are the host and port right?"
     } else if has("host key verification failed") {
         "ssh doesn't know this host yet: connect once with `ssh` from a shell to accept its key"
@@ -331,6 +334,8 @@ mod tests {
 
     #[test]
     fn hints_for_common_errors() {
+        let slow = hint("timed out after 1 s (the connection's limit)").unwrap();
+        assert!(slow.contains("query took longer") && !slow.contains("firewall"), "{slow}");
         assert!(hint("Connection refused (os error 61)").unwrap().contains("listening"));
         assert!(hint("password authentication failed for user \"app\"").unwrap().contains("password"));
         assert!(
