@@ -14,3 +14,44 @@ pub(in crate::db) static AGENT_CONSTRAINTS: AgentConstraints = AgentConstraints 
         ("attach", "a connection is one database file: another one is a connection of its own"),
     ],
 };
+
+/// Its own statements, in its syntax; the rules every engine shares are
+/// tested in `crate::agents`.
+#[cfg(test)]
+mod tests {
+    use crate::agents::{Verdict, Wrap, verdict};
+    use crate::db::{AgentAccess, ConnectionMode, Engine};
+
+    fn verdict_on(sql: &str) -> Verdict {
+        verdict(AgentAccess::Write, ConnectionMode::Normal, sql, Engine::Sqlite)
+    }
+
+    /// Why it's refused.
+    fn refused(sql: &str) -> String {
+        match verdict_on(sql) {
+            Verdict::Refuse(said) => said,
+            Verdict::Run(wrap) => panic!("ran {sql}: {wrap:?}"),
+        }
+    }
+
+    /// How it runs.
+    fn run(sql: &str) -> Wrap {
+        match verdict_on(sql) {
+            Verdict::Run(wrap) => wrap,
+            Verdict::Refuse(said) => panic!("refused {sql}: {said}"),
+        }
+    }
+
+    #[test]
+    fn its_own_statements() {
+        for (sql, why) in [
+            ("select load_extension('x')", "loads code into the database"),
+            ("attach 'other.db' as o", "not ATTACH: a connection is one database file"),
+            ("pragma writable_schema = 1", "not PRAGMA: describe_table tells"),
+        ] {
+            assert!(refused(sql).contains(why), "{sql}: {}", refused(sql));
+        }
+        assert_eq!(run("replace into t values (1)"), Wrap::Commit);
+        assert_eq!(run("values (1), (2)"), Wrap::Commit);
+    }
+}

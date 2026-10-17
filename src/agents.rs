@@ -456,71 +456,83 @@ mod tests {
     use super::*;
     use crate::db::Engine;
 
+    /// The rules for every engine, in SQL any of them takes; each engine's
+    /// own statements are tested in its folder (`agent_constraints.rs`).
     #[test]
     fn what_agents_may_run() {
         use AgentAccess::{Approve, Read, Write};
         use ConnectionMode::{Normal, Production, ReadOnly};
-        let v = |access, mode, sql| verdict(access, mode, sql, Engine::Postgres);
-        let refused = |access, mode, sql| matches!(v(access, mode, sql), Verdict::Refuse(_));
-        assert_eq!(v(Read, Normal, "select * from t"), Verdict::Run(Wrap::ReadOnly));
-        assert_eq!(v(Read, Production, "select * from t"), Verdict::Run(Wrap::ReadOnly));
-        assert!(refused(Read, Normal, "update t set x = 1 where id = 2"));
-        assert!(refused(Write, ReadOnly, "insert into t values (1)"));
-        assert_eq!(v(Write, Normal, "update t set x = 1 where id = 2"), Verdict::Run(Wrap::Commit));
-        assert_eq!(v(Write, Normal, "create table u (id int)"), Verdict::Run(Wrap::Commit));
-        assert_eq!(v(Write, Production, "update t set x = 1 where id = 2"), Verdict::Run(Wrap::DryRun));
-        // Reads on production are rolled back too: a function may write.
-        assert_eq!(v(Write, Production, "select nextval('s')"), Verdict::Run(Wrap::ReadOnly));
-        for destructive in ["delete from t", "drop table t", "truncate t", "update t set x = 1"] {
-            assert!(refused(Write, Normal, destructive), "{destructive}");
+        for engine in Engine::ALL {
+            let v = |access, mode, sql| verdict(access, mode, sql, engine);
+            let refused = |access, mode, sql| matches!(v(access, mode, sql), Verdict::Refuse(_));
+            assert_eq!(v(Read, Normal, "select * from t"), Verdict::Run(Wrap::ReadOnly), "{engine:?}");
+            assert_eq!(v(Read, Production, "select * from t"), Verdict::Run(Wrap::ReadOnly), "{engine:?}");
+            assert!(refused(Read, Normal, "update t set x = 1 where id = 2"), "{engine:?}");
+            assert!(refused(Write, ReadOnly, "insert into t values (1)"), "{engine:?}");
+            assert_eq!(v(Write, Normal, "update t set x = 1 where id = 2"), Verdict::Run(Wrap::Commit), "{engine:?}");
+            assert_eq!(v(Write, Normal, "create table u (id int)"), Verdict::Run(Wrap::Commit), "{engine:?}");
+            assert_eq!(
+                v(Write, Production, "update t set x = 1 where id = 2"),
+                Verdict::Run(Wrap::DryRun),
+                "{engine:?}"
+            );
+            // Reads on production are rolled back too: a function may write.
+            assert_eq!(v(Write, Production, "select f(1)"), Verdict::Run(Wrap::ReadOnly), "{engine:?}");
+            for destructive in ["delete from t", "drop table t", "truncate t", "update t set x = 1"] {
+                assert!(refused(Write, Normal, destructive), "{engine:?} {destructive}");
+            }
+            assert!(refused(Write, Production, "alter table t add column y int"), "{engine:?}");
+            // Approved by the user: asked for each write, production included;
+            // still never anything destructive.
+            assert_eq!(v(Approve, Production, "update t set x = 1 where id = 2"), Verdict::Run(Wrap::Ask));
+            assert_eq!(v(Approve, Production, "alter table t add column y int"), Verdict::Run(Wrap::Ask));
+            assert_eq!(v(Approve, Normal, "select * from t"), Verdict::Run(Wrap::ReadOnly));
+            assert!(refused(Approve, Production, "delete from t"), "{engine:?}");
+            assert!(refused(Approve, ReadOnly, "insert into t values (1)"), "{engine:?}");
+            // Nothing that changes the session or ends Podėlis's transaction.
+            for sql in [
+                "set x = 1",
+                "begin; insert into t values (1); commit",
+                "update t set x = 1 where id = 2; commit",
+                "select 1; set x = 1",
+                "use other_db",
+                "call purge()",
+                "lock table t",
+                "grant all on t to public",
+                "",
+            ] {
+                for access in [Read, Write, Approve] {
+                    assert!(refused(access, Normal, sql), "{engine:?} {sql}");
+                }
+            }
         }
-        assert!(refused(Write, Production, "alter table t add column y int"));
-        // Approved by the user: asked for each write, production included;
-        // still never anything destructive.
-        assert_eq!(v(Approve, Production, "update t set x = 1 where id = 2"), Verdict::Run(Wrap::Ask));
-        assert_eq!(v(Approve, Production, "alter table t add column y int"), Verdict::Run(Wrap::Ask));
-        assert_eq!(v(Approve, Normal, "select * from t"), Verdict::Run(Wrap::ReadOnly));
-        assert!(refused(Approve, Production, "delete from t"));
-        assert!(refused(Approve, ReadOnly, "insert into t values (1)"));
-        // Nothing that changes the session or ends Podėlis's transaction.
-        for sql in [
-            "SET default_transaction_read_only = off",
-            "BEGIN READ WRITE; insert into t values (1); COMMIT",
-            "update t set x = 1 where id = 2; commit",
-            "select 1; set autocommit = 1",
-            "use other_db",
-            "call purge()",
-            "do $$ begin delete from t; end $$",
-            "copy t to program 'rm -rf /'",
-            "lock tables t write",
-            "grant all on t to public",
-            "select pg_terminate_backend(pid) from pg_stat_activity",
-            "select lo_export(1, '/tmp/x')",
-            "select pg_advisory_lock(1)",
-            "",
-        ] {
-            assert!(refused(Write, Normal, sql), "{sql}");
-            assert!(refused(Read, Normal, sql), "{sql}");
-            assert!(refused(Approve, Normal, sql), "{sql}");
+    }
+
+    /// Each engine's constraints, as it gives them: what reaches past the
+    /// data is refused saying what it does, a better way is named, and
+    /// another engine's words are names like any other.
+    #[test]
+    fn each_engine_by_its_own_constraints() {
+        for engine in Engine::ALL {
+            let rules = engine.dialect().agent_constraints();
+            let said = |sql: &str| match verdict(AgentAccess::Write, ConnectionMode::Normal, sql, engine) {
+                Verdict::Refuse(said) => said,
+                Verdict::Run(wrap) => panic!("{engine:?} ran {sql}: {wrap:?}"),
+            };
+            for (word, does) in rules.outside {
+                assert!(said(&format!("select {word}(1)")).contains(does), "{engine:?} {word}");
+            }
+            for (word, way) in rules.instead {
+                assert!(said(&format!("{word} x")).contains(way), "{engine:?} {word}");
+            }
+            let theirs =
+                Engine::ALL.iter().flat_map(|e| e.dialect().agent_constraints().outside.iter().map(|(w, _)| *w));
+            for word in theirs.filter(|w| !rules.outside.iter().any(|(o, _)| o == w)) {
+                let sql = format!("select {word} from t");
+                let ran = verdict(AgentAccess::Write, ConnectionMode::Normal, &sql, engine);
+                assert_eq!(ran, Verdict::Run(Wrap::Commit), "{engine:?} {sql}");
+            }
         }
-        // Each engine by its own constraints (`db::agent_constraints`).
-        let on = |engine, sql| verdict(Write, Normal, sql, engine);
-        for (engine, sql, why) in [
-            (Engine::MySql, "select * from users into outfile '/tmp/x'", "writes a file on the server"),
-            (Engine::MySql, "select load_file('/etc/passwd')", "reads a file on the server"),
-            (Engine::Sqlite, "select load_extension('x')", "loads code into the database"),
-            (Engine::Sqlite, "attach 'other.db' as o", "not ATTACH: a connection is one database file"),
-            (Engine::Sqlite, "pragma writable_schema = 1", "not PRAGMA: describe_table tells"),
-            (Engine::Postgres, "replace into t values (1)", "not REPLACE: agents can run queries"),
-            (Engine::Postgres, "replace into t values (1)", "schema changes on PostgreSQL"),
-            (Engine::MySql, "set autocommit = 1", "not SET: Podėlis runs each call in a transaction of its own"),
-        ] {
-            let Verdict::Refuse(said) = on(engine, sql) else { panic!("{engine:?} ran {sql}") };
-            assert!(said.contains(why), "{engine:?} {sql}: {said}");
-        }
-        // Another engine's words are a name like any other.
-        assert_eq!(on(Engine::Postgres, "select attach, outfile from t"), Verdict::Run(Wrap::Commit));
-        assert_eq!(on(Engine::MySql, "replace into t values (1)"), Verdict::Run(Wrap::Commit));
     }
 
     #[test]
@@ -592,13 +604,16 @@ mod tests {
 
     #[test]
     fn what_agents_may_explain() {
-        let e = |sql| explainable(sql, Engine::Postgres);
-        assert!(e("select * from t where id = 1").is_ok());
-        assert!(e("delete from t").is_ok(), "planning it doesn't run it");
-        assert!(e("select 1; delete from t").is_err());
-        // A message quoting the agent's own SQL can't open the door.
-        assert!(e("set x = 'destructive'").is_err());
-        assert!(e("select pg_terminate_backend(1)").is_err());
+        for engine in Engine::ALL {
+            let e = |sql: &str| explainable(sql, engine);
+            assert!(e("select * from t where id = 1").is_ok(), "{engine:?}");
+            assert!(e("delete from t").is_ok(), "planning it doesn't run it");
+            assert!(e("select 1; delete from t").is_err(), "{engine:?}");
+            // A message quoting the agent's own SQL can't open the door.
+            assert!(e("set x = 'destructive'").is_err(), "{engine:?}");
+            let outside = engine.dialect().agent_constraints().outside;
+            assert!(outside.iter().all(|(word, _)| e(&format!("select {word}(1)")).is_err()), "{engine:?}");
+        }
     }
 
     /// Agents writing at once (as separate servers do) lose no lines and
