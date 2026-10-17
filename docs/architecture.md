@@ -109,7 +109,9 @@ db/
     agent_constraints.rs
                   what agents may start a statement with (reads, writes),
                   and what reaches past the data here (files on the server,
-                  other sessions, locks, other servers), each with why
+                  other sessions, locks, other servers), each with why;
+                  tested on statements in its own syntax (`agents.rs`
+                  tests the rules every engine shares, over Engine::ALL)
     db_tests.rs   its own Database tests
 ```
 
@@ -149,7 +151,9 @@ Outside `db/`, code doesn't name an engine except in tests.
    lacks. Capabilities decide what the app offers, so unsupported features
    simply don't show.
 3. Its live tests in its `db_tests.rs`, calling the shared helpers in
-   `db/tests.rs` (and a `PODELIS_TEST_*` server in CI).
+   `db/tests.rs` (and a `PODELIS_TEST_*` server in CI). The shared tests
+   (`Engine::ALL`, as in `agents.rs`) take it in on their own; its own
+   statements for agents are tested in its `agent_constraints.rs`.
 
 ## The gateway
 
