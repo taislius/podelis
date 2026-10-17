@@ -29,6 +29,10 @@ Quitting from here (`q`, `Ctrl+Q`, `Ctrl+C`) asks first if a transaction is open
 | `Esc` | Back to the project's tabs (with none open: to the project you left, or quit) |
 | `q` | Quit (asks if a transaction is open) |
 
+A URL or file opened from the command line (`podelis postgres://…`)
+before there is any project goes into one named `default`, so its tabs
+and history are kept; rename it with `r`.
+
 A project's schemas (table and column names, comments) are shown only to
 AI models on this machine, when asking in plain language, unless the
 project allows more (`share_schema = "all"`): see [AI models](ai.md).

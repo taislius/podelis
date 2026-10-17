@@ -21,12 +21,26 @@ random SQL-ish text to the lexer, splitter, analyzer, completion, parameter
 handling and editor; failures they find are saved in `proptest-regressions/`
 and re-run first.
 
+**Where tests go.** Tests sit with the code they test, as Rust's unit
+tests do: a `#[cfg(test)] mod tests` at the end of a file, or a file of
+their own beside it once they grow (`src/app/tests.rs`, `src/ui/tests.rs`,
+an engine's `src/db/<engine>/db_tests.rs`). Being inside the crate, they
+can reach private code (`App`, its keys, what the UI drew), which is most
+of what they check. Cargo's `tests/` folder is for integration tests:
+crates of their own that see only a library's public API. Podėlis is a
+program, not a library, so that folder is only for tests that run the
+built `podelis` from outside (its path is in `CARGO_BIN_EXE_podelis`), like
+a user or a script would: `-e`, `--format`, exit codes, `--help`.
+
 The gateway's tests (`src/gateway/`) need no API keys and spend nothing:
 they run the gateway in the test and answer as a model from a small fake
 server on localhost (`fake_model`, Anthropic's streamed format), and
 check what it was sent. To try a real model by hand, set `PODELIS_CONFIG_DIR`
 to a scratch folder with a `[[models]]` entry, then `podelis gateway test`;
 `podelis gateway stop` ends a gateway left running from a scratch folder.
+`PODELIS_CONFIG_DIR` moves files only: passwords of connections saved
+there still go to your OS keychain (service `podelis`, account
+`<project id>/<connection>`), so remove those after trying things by hand.
 
 The Rust version is pinned in `rust-toolchain.toml` (rustup installs it on
 first use), so local builds and CI see the same lints. Lints are configured
