@@ -25,7 +25,9 @@ the last project opened, or in `-p`). Without one, `-e`, `--import` and
 `--test` use `$DATABASE_URL`.
 
 **Output.** `-f` picks `table` (aligned, like psql), `csv`, `tsv` or `json`
-(an array of objects, one per row, values as strings or `null`). TSV keeps
+(an array of objects, one per row, values as strings or `null`). CSV
+follows RFC 4180: lines end in CRLF, and a field with a comma, quote or line
+break is quoted (`NULL` is an empty field). TSV keeps
 each row on one line: tabs and line breaks inside values become a space and
 `\n`, and `NULL` an empty field (as when piping rows with `|`). The
 default is a table on a terminal and CSV when piped. A script whose

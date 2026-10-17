@@ -4,17 +4,30 @@ Podėlis is one binary with three layers:
 
 ```
 src/
-  main.rs, cli.rs        startup, command line, -e / --test / --import, doctor
+  main.rs                startup and the event loop
+  cli/                   without the UI: -e / --test / --import (mod.rs),
+                         and doctor
   app/                   state and behaviour (no drawing): screens, tabs, keys,
-                         editing, running queries, the schema navigator…
+                         editing, running queries (query/), the navigator…
   ui/                    drawing with ratatui; reads the app's state
   db/                    talking to databases (below)
-  export.rs              results as CSV, TSV, JSON, INSERTs or a table, for
-                         exports, pipes and -e alike
-  sql.rs, analyze.rs,    SQL text: lexing, statement splitting, analysis,
-  complete.rs, params.rs completion, parameters (engine rules come from db)
-  parse.rs, scope.rs,    the syntax tree: parsing once, scopes, lint rules
-  lint.rs                (see "SQL checks")
+  sql/                   SQL text, never a connection: the lexer and
+                         statement splitter (mod.rs), analysis (analyze),
+                         completion, parameters, and the syntax tree:
+                         parsing once (parse), scopes, lint rules (see "SQL
+                         checks"); engine rules come from db
+  agents/                what agents may run (mod.rs), their log and
+                         approvals, and the MCP server (`podelis mcp`)
+  gateway/               the separate gateway process: models, context,
+                         memory, migrations (see "The gateway")
+  transfer/              data in and out: CSV import, exports (CSV, TSV,
+                         JSON, INSERTs, a table: for exports, pipes and -e
+                         alike), comparing connections, result snapshots
+  config/                on disk: projects and connections (store),
+                         settings, keys, themes, history, the query library
+  system/                the clipboard, database containers, crash reports,
+                         the debug log
+  editor.rs              the text editor (TextEditor)
 ```
 
 The app owns all state; the UI only draws it (and records where it drew
@@ -56,11 +69,12 @@ everywhere:
   results pane's footer. They last until the next key (a run's until it
   ends). The MESSAGES tab is a list (`messages.rs`): one can be selected,
   opened whole and copied.
-- **Runs and tabs** (`query.rs`, `tabs.rs`, `events.rs`): one query runs
-  at a time (`executing`). A read records its tab (`run_owner`), and other
-  tabs can then be shown; a write, a review or a comparison leaves it
-  `None`, which keeps every tab in place (`blocks_tabs`). A run's events
-  carry its `run_id` rather than the connection's `generation`, so they
+- **Runs and tabs** (`query/`, `tabs.rs`, `events.rs`): one query runs
+  at a time; its state is `App::run` (`Run`: `executing`, its id, owner
+  tab, connection, purpose, stream…). A read records its tab (`run.owner`),
+  and other tabs can then be shown; a write, a review or a comparison
+  leaves it `None`, which keeps every tab in place (`blocks_tabs`). A run's
+  events carry its id rather than the connection's `generation`, so they
   outlive connection switches (not a disconnect), and `in_tab` applies
   them to the owner tab, swapping its state and connection in and back
   out. F7 meanwhile plans on a pool connection (`Database::run_aside`)
@@ -91,7 +105,7 @@ db/
                   the type vocabulary, where passwords are looked for
   agent_constraints.rs
                   the shape of what AI agents may send (each engine fills
-                  it in); `agents.rs` applies it without naming engines
+                  it in); `agents/` applies it without naming engines
   tests.rs        the tests every engine shares, and their helpers
   postgres/  mysql/  sqlite/
     engine.toml   its name (the Engine variant, as connections.toml writes
@@ -110,7 +124,7 @@ db/
                   what agents may start a statement with (reads, writes),
                   and what reaches past the data here (files on the server,
                   other sessions, locks, other servers), each with why;
-                  tested on statements in its own syntax (`agents.rs`
+                  tested on statements in its own syntax (`agents/`
                   tests the rules every engine shares, over Engine::ALL)
     db_tests.rs   its own Database tests, and what the shared ones need
                   of it: its test server (`live_params`), a database of a
@@ -156,8 +170,8 @@ Outside `db/`, code doesn't name an engine except in tests.
 3. Its tests: in its `db_tests.rs`, `live_params`, `own_live_db` and
    `TEST_SQL` (the compiler asks for them), then its own tests calling the
    shared helpers in `db/tests.rs` (and a `PODELIS_TEST_*` server in CI).
-   The shared tests run over `Engine::ALL` (in `db/tests.rs`, `agents.rs`,
-   `import.rs`, `diff.rs`, `mcp.rs` and the app's), so they take it in on
+   The shared tests run over `Engine::ALL` (in `db/tests.rs`, `agents/`,
+   `transfer/import.rs`, `transfer/diff.rs`, `agents/mcp.rs` and the app's), so they take it in on
    their own; tests that need a database always there use the file
    engine (`file_engine()`, by the `file_based` capability). Its own
    statements for agents are tested in its `agent_constraints.rs`.
@@ -190,7 +204,7 @@ gateway/
   migrations.rs a folder of SQL migrations read into facts, without a model:
                 each table's history, comments above statements, COMMENT ON
   names.rs      a model's SQL checked against the schema: tables (CTE-aware,
-                from `scope.rs`) and, where every source is a real table,
+                from `sql/scope.rs`) and, where every source is a real table,
                 columns
   context.rs    what a model is shown of a database for a question: tables
                 matched by name, column names and comments, their foreign-key
@@ -339,7 +353,7 @@ In `sqlparser` a dialect isn't a separate parser: there is one parser, and
 the dialect is a trait of switches (about 140 `supports_*` methods) and hooks
 for quoting and precedence. Podėlis picks it per connection:
 `Dialect::parser()` in each engine's `mod.rs` returns `PostgreSqlDialect`,
-`MySqlDialect` or `SQLiteDialect`. Our own lexer in `sql.rs` makes the same
+`MySqlDialect` or `SQLiteDialect`. Our own lexer in `sql/mod.rs` makes the same
 per-engine choices through `LexerRules`, so statement splitting gets dollar
 quotes and backticks right even when `sqlparser` gives up.
 
@@ -397,7 +411,7 @@ staying quiet when it fails is the correct response.
 
 #### Where dialect rules live
 
-**The facts go in the engine folders; the rules go in `lint.rs`.**
+**The facts go in the engine folders; the rules go in `sql/lint.rs`.**
 
 ```rust
 // db/dialect.rs: the question, with a default
@@ -461,12 +475,16 @@ and why:
 
 ## Tests
 
-- Unit tests next to the code; app behaviour in `app/tests.rs`; drawing in
-  `ui/tests.rs` with insta snapshots (`ui/snapshots/`).
+- Unit tests next to the code; app behaviour in `app/tests/` and drawing in
+  `ui/tests/` (a file per topic, shared helpers in their `mod.rs`), with
+  insta snapshots in `ui/tests/snapshots/`.
+- The command line from outside, the built program run as a script would
+  (`tests/cli.rs`): formats, a script's result sets, stdin, `--limit`,
+  exit codes, `--help`.
 - Live-database tests in `db/tests.rs` and each engine's `db_tests.rs` run against real PostgreSQL and MySQL
   when `PODELIS_TEST_PG_PORT` / `PODELIS_TEST_MYSQL_PORT` are set; SQLite
   always runs.
-- Property tests (`fuzz_tests.rs`) throw random SQL-ish text at the lexer,
+- Property tests (`src/fuzz_tests.rs`) throw random SQL-ish text at the lexer,
   splitter, analyzer, completion, parameters and editor.
 - `scripts/check.sh` runs formatting, clippy (pedantic, warnings as errors),
   all tests and cargo-deny; the git pre-push hook runs it.

@@ -153,6 +153,8 @@ or
 .Cm json
 (an array of objects, one per row; values are strings or
 .Li null ) .
+CSV follows RFC 4180: lines end in CRLF, and a field with a comma, quote or
+line break is quoted.
 TSV keeps each row on one line: tabs and line breaks inside values become
 a space and
 .Ql \en ,

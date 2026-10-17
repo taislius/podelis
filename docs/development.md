@@ -23,14 +23,16 @@ and re-run first.
 
 **Where tests go.** Tests sit with the code they test, as Rust's unit
 tests do: a `#[cfg(test)] mod tests` at the end of a file, or a file of
-their own beside it once they grow (`src/app/tests.rs`, `src/ui/tests.rs`,
-an engine's `src/db/<engine>/db_tests.rs`). Being inside the crate, they
+their own beside it once they grow (an engine's
+`src/db/<engine>/db_tests.rs`), or a folder of files by topic
+(`src/app/tests/`, `src/ui/tests/`). Being inside the crate, they
 can reach private code (`App`, its keys, what the UI drew), which is most
 of what they check. Cargo's `tests/` folder is for integration tests:
 crates of their own that see only a library's public API. Podėlis is a
 program, not a library, so that folder is only for tests that run the
 built `podelis` from outside (its path is in `CARGO_BIN_EXE_podelis`), like
-a user or a script would: `-e`, `--format`, exit codes, `--help`.
+a user or a script would: `-e`, `--format`, exit codes, `--help`
+(`tests/cli.rs`).
 
 The gateway's tests (`src/gateway/`) need no API keys and spend nothing:
 they run the gateway in the test and answer as a model from a small fake
