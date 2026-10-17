@@ -456,6 +456,27 @@ fn truncated_status() {
     assert!(app.status.ends_with("· 2 statements"));
 }
 
+#[tokio::test]
+async fn an_address_on_the_first_run_opens_a_default_project_that_keeps_the_tabs() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("c.toml");
+    let file = dir.path().join("shop.db");
+    std::fs::write(&file, "").unwrap();
+    let address = file.to_string_lossy().into_owned();
+    let (store, _) = ConnectionStore::load_from(path.clone());
+    let mut app = App::new(store, None, Some(dir.path().to_path_buf()));
+    app.start(None, Some(&address));
+    assert_eq!(app.store.project_by_name("default").map(|p| Some(p.id.clone())), Some(app.current_project.clone()));
+    app.tab.editor.insert_str("select 'kept'");
+    app.save_draft();
+    // The next run, with the same address, finds that project and its tabs.
+    let (store, _) = ConnectionStore::load_from(path);
+    let mut app = App::new(store, None, Some(dir.path().to_path_buf()));
+    app.start(None, Some(&address));
+    assert_eq!(app.store.projects.len(), 1);
+    assert_eq!(app.tab.editor.text(), "select 'kept'");
+}
+
 #[test]
 fn drafts_survive_project_switches_and_restarts() {
     let dir = tempfile::tempdir().unwrap();
@@ -833,6 +854,13 @@ async fn esc_stops_only_its_own_tabs_query_and_others_say_whose_runs() {
     app.handle_key(key(KeyCode::Esc));
     assert!(!app.cancelling && app.executing);
     assert_eq!(said(&app), "Tab “Query 1” on alpha is running a query: Alt+1 goes to it, Esc there stops it");
+    // A connection without a saved name (from a URL) is named by its address.
+    app.handle_key(alt('1'));
+    app.connect_form.name.clear();
+    app.handle_key(alt('2'));
+    app.focus = Focus::Editor;
+    app.handle_key(key(KeyCode::Esc));
+    assert!(said(&app).starts_with("Tab “Query 1” on ") && said(&app).contains("a.db"), "{}", said(&app));
     // (Once it's under way: a cancel before the run starts is cleared by it.)
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     // In its own tab, Esc stops it on its own connection.

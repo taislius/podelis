@@ -23,7 +23,8 @@ Usage: podelis [OPTIONS] [CONNECTION]
        podelis gateway context [-p <project>] <connection> <question>
 
 CONNECTION is a URL (postgres://…, mysql://…, sqlite:…), a SQLite file, or
-the name of a saved connection in the project. Without one, Podėlis reopens
+the name of a saved connection in the project (with no project yet, a URL
+or file goes into a project named default). Without one, Podėlis reopens
 your last session.
 
 Options:

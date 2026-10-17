@@ -70,6 +70,9 @@ pub struct Splash {
 
 const SPLASH_DELAY: Duration = Duration::from_millis(200);
 
+/// The project an address opened on the first run goes into.
+const DEFAULT_PROJECT: &str = "default";
+
 #[cfg(test)]
 impl Splash {
     pub fn for_tests(shown: bool) -> Self {
@@ -219,15 +222,16 @@ impl App {
         }
     }
 
-    /// The other tabs' connections: id, database and form.
-    /// A connection's name, by its id: the shown one's or a parked one's.
+    /// A connection's name, by its id (the shown one's or a parked one's):
+    /// its saved name, else its file's name or `host/database`.
     pub(super) fn conn_name(&self, id: u64) -> Option<String> {
         if self.conns.active == Some(id) {
-            return Some(self.connect_form.name.clone()).filter(|n| !n.is_empty());
+            return Some(self.connect_form.short_name());
         }
-        self.conns.parked.get(&id).map(|slot| slot.connect_form.name.clone()).filter(|n| !n.is_empty())
+        self.conns.parked.get(&id).map(|slot| slot.connect_form.short_name())
     }
 
+    /// The other tabs' connections: id, database and form.
     pub(super) fn parked_connections(&self) -> Vec<(u64, &Database, &ConnectForm)> {
         let mut out: Vec<_> = self
             .conns
@@ -406,7 +410,23 @@ impl App {
         {
             self.open_project(&id);
         }
-        match crate::cli::classify(connection) {
+        let target = crate::cli::classify(connection);
+        // An address with no project yet (the first run): one called
+        // "default" keeps its tabs and history, as any session's.
+        if self.current_project.is_none() && !matches!(target, crate::cli::Target::Saved(_)) {
+            let id = match self.store.project_by_name(DEFAULT_PROJECT) {
+                Some(p) => Ok(p.id.clone()),
+                None => self.store.add_project(DEFAULT_PROJECT),
+            };
+            match id {
+                Ok(id) => self.open_project(&id),
+                Err(e) => {
+                    self.status =
+                        format!("Couldn't create the “{DEFAULT_PROJECT}” project ({e:#}): tabs won't be kept");
+                }
+            }
+        }
+        match target {
             crate::cli::Target::Saved(name) => {
                 let profile = self.profiles().iter().find(|p| p.name.eq_ignore_ascii_case(&name)).cloned();
                 if let Some(profile) = profile {

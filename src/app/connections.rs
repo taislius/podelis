@@ -348,6 +348,20 @@ impl ConnectForm {
         })
     }
 
+    /// Its name for the status bar and messages: the saved name, else
+    /// the file's name or `host/database`.
+    pub fn short_name(&self) -> String {
+        if !self.name.is_empty() {
+            return self.name.clone();
+        }
+        if self.engine.is_file_based() {
+            return std::path::Path::new(&self.host)
+                .file_name()
+                .map_or_else(|| self.host.clone(), |n| n.to_string_lossy().into_owned());
+        }
+        if self.database.is_empty() { self.host.clone() } else { format!("{}/{}", self.host, self.database) }
+    }
+
     pub fn summary(&self) -> String {
         if self.engine.is_file_based() {
             return format!("{} {}", self.engine.label(), self.host);

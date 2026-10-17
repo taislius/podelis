@@ -5,18 +5,6 @@ use crate::keys::Action;
 use crate::settings::Hints;
 
 /// A connection's name, or for an unsaved one its file or host/database.
-fn connection_label(form: &crate::app::ConnectForm) -> String {
-    if !form.name.is_empty() {
-        return form.name.clone();
-    }
-    if form.engine.is_file_based() {
-        return std::path::Path::new(&form.host)
-            .file_name()
-            .map_or_else(|| form.host.clone(), |n| n.to_string_lossy().into_owned());
-    }
-    if form.database.is_empty() { form.host.clone() } else { format!("{}/{}", form.host, form.database) }
-}
-
 pub(super) fn draw_app_bar(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
     f.render_widget(Block::default().style(Style::default().bg(t.panel)), area);
@@ -112,7 +100,7 @@ fn connection_status(app: &App, room: usize) -> Vec<Span<'static>> {
     let (dot, name_style) = if app.connection_lost { (fg(t.error), bold(t.error)) } else { (fg(t.ok), bold(t.ok)) };
     let mut spans = vec![
         Span::styled(if app.settings.keepalive > 0 { "♥ " } else { "● " }, dot),
-        Span::styled(connection_label(&app.connect_form), name_style),
+        Span::styled(app.connect_form.short_name(), name_style),
     ];
     if app.connection_lost {
         spans.push(Span::styled(" · connection lost", bold(t.error)));
