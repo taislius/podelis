@@ -4,10 +4,10 @@ use super::super::*;
 
 impl App {
     pub(in crate::app) fn toggle_schema(&mut self) {
-        self.schema_visible = !self.schema_visible;
-        if self.schema_visible {
+        self.panes.schema_visible = !self.panes.schema_visible;
+        if self.panes.schema_visible {
             self.focus = Focus::Schema;
-            if self.schema.is_none() {
+            if self.connection.schema.is_none() {
                 self.load_catalog();
             }
         } else if self.focus == Focus::Schema {
@@ -18,8 +18,8 @@ impl App {
     /// (Re)loads the catalog in the background, keeping the current one
     /// visible meanwhile.
     pub(in crate::app) fn load_catalog(&mut self) {
-        let Some(db) = self.database.clone() else { return };
-        self.schema.get_or_insert_with(SchemaPanel::default).loading = true;
+        let Some(db) = self.connection.database.clone() else { return };
+        self.connection.schema.get_or_insert_with(SchemaPanel::default).loading = true;
         let send = self.sender();
         let system = self.settings.system_tables;
         tokio::spawn(async move {
@@ -43,7 +43,7 @@ impl App {
     #[allow(clippy::too_many_lines)] // one arm per key
     pub(in crate::app) fn handle_schema_key(&mut self, key: KeyEvent) {
         let engine = self.engine();
-        let Some(panel) = &mut self.schema else { return };
+        let Some(panel) = &mut self.connection.schema else { return };
         if panel.filter_editing {
             match panel.filter.handle(key) {
                 InputResult::Submit => panel.filter_editing = false,
@@ -127,7 +127,7 @@ impl App {
                 // After everything, a blank line apart: never inside another
                 // statement. Then it runs, alone (as F6 would).
                 self.append_statement(&query);
-                if self.database.is_some() {
+                if self.connection.database.is_some() {
                     self.execute_current();
                 }
             }
@@ -139,7 +139,7 @@ impl App {
     /// keeping the selected one selected.
     pub(in crate::app) fn cycle_schema_sort(&mut self) {
         let sizes = self.engine().capabilities().table_sizes;
-        let Some(panel) = &mut self.schema else { return };
+        let Some(panel) = &mut self.connection.schema else { return };
         let before = panel.nodes().get(panel.selected).copied();
         panel.sort = panel.sort.next();
         // SQLite keeps no sizes: there's nothing to order by.

@@ -55,6 +55,7 @@ mod messages;
 mod mouse;
 mod overlay;
 mod palette;
+mod panes;
 mod params;
 mod pipes;
 mod plan_lines;
@@ -640,6 +641,14 @@ pub struct Confirm {
 pub struct App {
     /// The query running (one at a time across the tabs): its state.
     pub run: Run,
+    /// What's said to the user.
+    pub notes: messages::Notes,
+    /// The panes' layout.
+    pub panes: panes::Panes,
+    /// The projects and connections screen's state.
+    pub manager: projects::Manager,
+    /// The shown tab's connection; the other tabs' are parked (`Conns`).
+    pub connection: session::Connection,
     /// What agents did and asked for (the agents view).
     pub agents: Agents,
     /// The sharing question, waiting while another confirmation is open.
@@ -648,34 +657,9 @@ pub struct App {
     pub store: ConnectionStore,
     /// Id of the open project.
     pub current_project: Option<String>,
-    /// The project last left for the project list; Esc there goes back to it.
-    left_project: Option<String>,
-    pub projects_selected: usize,
-    /// Message on the projects screen, and whether it's an error.
-    pub projects_message: Option<(String, bool)>,
-    pub project_prompt: Option<Prompt>,
-    /// The projects and connections panes were opened over the work (so
-    /// leaving the project from them reopens it on its tabs next time).
-    manager_from_query: bool,
-    /// The active tab's connection form, set aside while the settings pane
-    /// edits another connection's (connecting takes a new tab instead).
-    form_stash: Option<ConnectForm>,
-    /// The active tab was opened, or disconnected, to pick a connection:
-    /// leaving the panes drops it if it's still empty and unconnected.
-    drop_blank_tab: bool,
-    pub confirm_delete_project: bool,
-    /// While moving a connection: the selected index into `move_targets()`.
-    pub moving_to: Option<usize>,
-    /// Picking a running database container (`c` in the connections).
-    /// (Boxed: `App` is part of every async test's future.)
-    pub containers: Option<Box<ContainerPicker>>,
-    /// The number of the last container search started.
-    containers_request: u64,
     /// Config folder holding per-project history and editor drafts; `None`
     /// disables persistence (tests).
     data_dir: Option<PathBuf>,
-    /// Lines visible in the editor, recorded by the UI for PageUp/PageDown.
-    pub editor_height: usize,
     pub param_form: Option<ParamForm>,
     /// Asking to commit or roll back writes run in a transaction.
     pub review: Option<review::Review>,
@@ -715,40 +699,18 @@ pub struct App {
     /// (connecting, `ssh`, shell commands).
     #[cfg(test)]
     pub(crate) sandbox: bool,
-    /// A note about typing (e.g. "No completions") in the editor's footer,
-    /// next to where you type; gone with the next key.
-    pub editor_note: Option<String>,
-    pub editor_note_is_error: bool,
-    /// The same for the results pane, with whether it's an error.
-    pub results_note: Option<(String, bool)>,
     /// Handling a key, click or paste (see `on_input`).
     handling_input: bool,
     lint_due: Option<Instant>,
     pub settings: Settings,
     pub keymap: crate::config::keys::KeyMap,
-    pub connections_selected: usize,
-    /// Message on the connections screen, and whether it's an error.
-    pub connections_message: Option<(String, bool)>,
-    pub confirm_delete: bool,
-    pub loading_profile: bool,
-    pub connect_form: ConnectForm,
     history: History,
     pub focus: Focus,
-    pub database: Option<Database>,
-    pub connection_summary: String,
     /// Full-value popup for the selected cell.
     pub cell_view: Option<CellView>,
-    /// Outcomes and errors of recent runs, oldest first.
-    pub messages: Vec<Message>,
-    /// The message selected in MESSAGES (`messages.rs`), and whether the
-    /// next drawing scrolls it into view.
-    pub message_selected: Option<usize>,
-    pub reveal_message: bool,
     pub help_visible: bool,
     /// Reopening the session's connections (Esc or any key hides it).
     pub splash: Option<session::Splash>,
-    /// How long connecting took, for the application bar.
-    pub connect_latency: Option<Duration>,
     connect_started: Option<Instant>,
     /// The open cell-edit prompt.
     pub cell_edit: Option<CellEdit>,
@@ -781,14 +743,6 @@ pub struct App {
     pub completion: Option<Completion>,
     /// Row limit for the next run only.
     next_row_limit: Option<usize>,
-    /// Whether the schema navigator is actually on screen (the UI hides it
-    /// in narrow terminals even when toggled on).
-    pub schema_shown: bool,
-    /// The focused pane fills the screen (`z`, Ctrl+K z / F12).
-    pub zoomed: bool,
-    /// The editor shows only the statement at the cursor (or the
-    /// selection's lines), in a pop-over (Ctrl+K b / Shift+F12).
-    pub statement_zoom: bool,
     /// A function's definition on its way is for the navigator's popup.
     routine_definition_pending: bool,
     /// The statement of the EXPLAIN on its way, and whether it's ANALYZE.
@@ -796,17 +750,8 @@ pub struct App {
     plan_request: Option<(String, bool, usize)>,
     /// F7 while a query ran: the statement to plan (and its line) next.
     queued_plan: Option<(String, usize)>,
-    /// Pane sizes moved with Ctrl+arrows: the navigator's width (`None`
-    /// for a quarter of the screen) and the editor's share of the height,
-    /// in percent.
-    pub schema_width: Option<u16>,
-    pub editor_percent: u16,
     /// Clickable areas from the last frame.
     pub hits: Hits,
-    /// For double clicks and drags: the last click (time, column, row), and
-    /// whether a drag in the editor is selecting.
-    last_click: Option<(Instant, u16, u16)>,
-    dragging: bool,
     /// When the connection was last used (for keep-alive checks), and
     /// whether a check is running.
     last_activity: Instant,
@@ -817,22 +762,8 @@ pub struct App {
     heartbeat_secs: u64,
     /// `f` is waiting for the result table's foreign keys to load.
     pending_follow: bool,
-    pub schema: Option<SchemaPanel>,
-    pub schema_visible: bool,
-    pub status: String,
-    pub status_is_error: bool,
-    /// The status is about a run (its outcome or progress): the results
-    /// pane shows it, not the status bar.
-    pub status_in_results: bool,
-    /// A drag selecting the plan's lines.
-    pub plan_dragging: bool,
-    /// Mode of the open connection.
-    pub active_mode: ConnectionMode,
-    /// What happens to writes on this connection (Ctrl+K w).
-    pub tx_mode: TxMode,
     /// Picking the write mode: the highlighted one.
     pub tx_picker: Option<TxMode>,
-    pub txn: TxnState,
     /// A question waiting for y/n.
     pub confirm: Option<Confirm>,
     pub should_quit: bool,
@@ -873,20 +804,8 @@ impl App {
             screen: Screen::Projects,
             store,
             current_project: None,
-            left_project: None,
-            projects_selected,
-            projects_message,
-            project_prompt: None,
-            manager_from_query: false,
-            form_stash: None,
-            drop_blank_tab: false,
-            confirm_delete_project: false,
-            moving_to: None,
-            containers: None,
-            containers_request: 0,
             history: History::load_from(None),
             data_dir,
-            editor_height: 1,
             menu: None,
             row_form: None,
             pipe_prompt: None,
@@ -907,28 +826,14 @@ impl App {
             drafts: tabs::Drafts::default(),
             #[cfg(test)]
             sandbox: false,
-            editor_note: None,
-            editor_note_is_error: false,
-            results_note: None,
             handling_input: false,
             lint_due: None,
             settings: Settings::default(),
             keymap: crate::config::keys::KeyMap::default(),
-            connections_selected: 0,
-            connections_message: None,
-            confirm_delete: false,
-            loading_profile: false,
-            connect_form: ConnectForm::new(),
             focus: Focus::Editor,
-            database: None,
-            connection_summary: String::new(),
             cell_view: None,
-            messages: Vec::new(),
-            message_selected: None,
-            reveal_message: false,
             help_visible: false,
             splash: None,
-            connect_latency: None,
             connect_started: None,
             cell_edit: None,
             vim: Vim::default(),
@@ -947,31 +852,15 @@ impl App {
             completion: None,
             next_row_limit: None,
             hits: Hits::default(),
-            last_click: None,
             last_activity: Instant::now(),
             connection_lost: false,
             heartbeat_secs: 30,
             pinging: false,
             pending_follow: false,
-            dragging: false,
-            zoomed: false,
-            statement_zoom: false,
             routine_definition_pending: false,
             plan_request: None,
             queued_plan: None,
-            schema_width: None,
-            editor_percent: 40,
-            schema_shown: false,
-            schema: None,
-            schema_visible: false,
-            status: String::new(),
-            status_is_error: false,
-            status_in_results: false,
-            plan_dragging: false,
-            active_mode: ConnectionMode::Normal,
-            tx_mode: TxMode::AutoCommit,
             tx_picker: None,
-            txn: TxnState::Idle,
             confirm: None,
             should_quit: false,
             clipboard: None,
@@ -979,6 +868,20 @@ impl App {
             terminal_focused: None,
             generation: 0,
             run: Run::default(),
+            notes: messages::Notes::default(),
+            panes: panes::Panes { editor_percent: 40, editor_height: 1, ..panes::Panes::default() },
+            manager: projects::Manager {
+                project_selected: projects_selected,
+                project_message: projects_message,
+                ..projects::Manager::default()
+            },
+            connection: session::Connection {
+                form: ConnectForm::new(),
+                mode: ConnectionMode::Normal,
+                tx_mode: TxMode::AutoCommit,
+                txn: TxnState::Idle,
+                ..session::Connection::default()
+            },
             agents: Agents::default(),
             pending_share: None,
             task: None,
@@ -1024,7 +927,7 @@ impl App {
     }
 
     pub fn engine(&self) -> Engine {
-        self.database.as_ref().map_or(self.connect_form.engine, Database::engine)
+        self.connection.database.as_ref().map_or(self.connection.form.engine, Database::engine)
     }
 
     pub fn project(&self) -> Option<&Project> {
@@ -1054,9 +957,9 @@ impl App {
 
     fn open_project(&mut self, id: &str) {
         if let Err(e) = self.store.set_last_project(id) {
-            self.connections_message = Some((format!("Couldn't save last project: {e:#}"), true));
+            self.manager.connection_message = Some((format!("Couldn't save last project: {e:#}"), true));
         } else {
-            self.connections_message = None;
+            self.manager.connection_message = None;
         }
         if self.current_project.as_deref() != Some(id) {
             self.save_draft();
@@ -1064,8 +967,8 @@ impl App {
             self.reset_agents();
             self.history = History::load_from(self.history_path(id));
             self.load_tabs(id);
-            self.connections_selected = 0;
-            self.manager_from_query = false;
+            self.manager.connection_selected = 0;
+            self.manager.from_query = false;
         }
         self.current_project = Some(id.to_string());
         self.screen = Screen::Connections;
@@ -1169,29 +1072,29 @@ impl App {
     /// Adds a line to the MESSAGES tab (keeps the last 200).
     fn log(&mut self, text: String, is_error: bool) {
         let time = chrono::Local::now().format("%H:%M:%S").to_string();
-        self.messages.push(Message { time, text, is_error });
-        if self.messages.len() > 200 {
-            self.messages.remove(0);
+        self.notes.log.push(Message { time, text, is_error });
+        if self.notes.log.len() > 200 {
+            self.notes.log.remove(0);
             // The selected one stays selected (or goes with the oldest).
-            self.message_selected = self.message_selected.and_then(|i| i.checked_sub(1));
+            self.notes.selected = self.notes.selected.and_then(|i| i.checked_sub(1));
         }
     }
 
     /// Whether keys are going into a text field (so `?` types a `?`).
     pub fn typing(&self) -> bool {
         match self.screen {
-            Screen::Projects => self.project_prompt.is_some(),
+            Screen::Projects => self.manager.project_prompt.is_some(),
             Screen::Connections => false,
             Screen::Connect => true,
             Screen::Query => match self.top_overlay() {
                 Some(overlay) => overlay.takes_text(),
                 None => {
                     self.focus == Focus::Editor
-                        || self.project_prompt.is_some()
+                        || self.manager.project_prompt.is_some()
                         || self.find.is_some()
                         || self.cell_edit.is_some()
                         || self.tab.grid.filter_editing
-                        || self.schema.as_ref().is_some_and(|s| s.filter_editing)
+                        || self.connection.schema.as_ref().is_some_and(|s| s.filter_editing)
                 }
             },
         }
@@ -1228,20 +1131,20 @@ impl App {
             };
         if footer {
             // Gone with the next key: MESSAGES keeps it.
-            if self.messages.last().is_none_or(|m| m.text != status) {
+            if self.notes.log.last().is_none_or(|m| m.text != status) {
                 self.log(status.clone(), is_error);
             }
             if self.focus == Focus::Editor {
-                self.editor_note = Some(status);
-                self.editor_note_is_error = is_error;
+                self.notes.editor_note = Some(status);
+                self.notes.editor_note_is_error = is_error;
             } else {
-                self.results_note = Some((status, is_error));
+                self.notes.results_note = Some((status, is_error));
             }
             return;
         }
-        self.status = status;
-        self.status_is_error = is_error;
-        self.status_in_results = false;
+        self.notes.status = status;
+        self.notes.status_is_error = is_error;
+        self.notes.status_in_results = false;
     }
 
     /// What runs, for the results pane's title: with whole seconds once
@@ -1260,9 +1163,9 @@ impl App {
 
     /// A run's progress or outcome, in the results pane's footer.
     fn set_result_status(&mut self, status: String, is_error: bool) {
-        self.status = status;
-        self.status_is_error = is_error;
-        self.status_in_results = true;
+        self.notes.status = status;
+        self.notes.status_is_error = is_error;
+        self.notes.status_in_results = true;
     }
 
     /// Runs `handle` for a key, click or paste: what it reports while the
@@ -1365,24 +1268,24 @@ impl App {
         match self.screen {
             Screen::Query => self.paste_on_query_screen(text),
             Screen::Projects => {
-                if let Some(prompt) = &mut self.project_prompt {
+                if let Some(prompt) = &mut self.manager.project_prompt {
                     prompt.text.insert_str(text);
                 }
             }
-            Screen::Connect if !self.connect_form.connecting => {
+            Screen::Connect if !self.connection.form.connecting => {
                 // A pasted connection URL fills in the whole form.
                 if looks_like_url(text) {
-                    match self.connect_form.apply_url(text.trim()) {
+                    match self.connection.form.apply_url(text.trim()) {
                         Ok(()) => {
-                            self.connect_form.error = None;
-                            self.connect_form.info = Some("Filled in from the URL".to_string());
+                            self.connection.form.error = None;
+                            self.connection.form.info = Some("Filled in from the URL".to_string());
                         }
-                        Err(e) => self.connect_form.error = Some(e),
+                        Err(e) => self.connection.form.error = Some(e),
                     }
                     return;
                 }
-                let focus = self.connect_form.focus;
-                if let Some(field) = self.connect_form.field_mut(focus) {
+                let focus = self.connection.form.focus;
+                if let Some(field) = self.connection.form.field_mut(focus) {
                     input::paste_at_end(field, text);
                 }
             }
@@ -1471,12 +1374,12 @@ impl App {
     fn key(&mut self, key: KeyEvent) {
         // Messages last until the next key; the MESSAGES tab keeps outcomes.
         if !self.run.executing {
-            self.status.clear();
-            self.status_is_error = false;
+            self.notes.status.clear();
+            self.notes.status_is_error = false;
         }
-        self.editor_note = None;
-        self.editor_note_is_error = false;
-        self.results_note = None;
+        self.notes.editor_note = None;
+        self.notes.editor_note_is_error = false;
+        self.notes.results_note = None;
         // A key hides the reopening card; a key typed before it showed counts.
         if let Some(splash) = self.splash.take()
             && splash.shown

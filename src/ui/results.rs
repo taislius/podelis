@@ -58,7 +58,7 @@ pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Results;
     // How long it ran is the result's, in its footer.
     let info = app.running_label().unwrap_or_default();
-    let info = if app.zoomed { format!("ZOOMED · {info}") } else { info };
+    let info = if app.panes.zoomed { format!("ZOOMED · {info}") } else { info };
     let block = pane("Query result", &info, focused);
     app.hits.results = area;
     app.hits.result_rows = Rect::default();
@@ -105,8 +105,9 @@ pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
     }
     // What a key here did, else the last run's outcome (or progress), until
     // the next key; the cell info comes back after it.
-    let run = (app.status_in_results && !app.status.is_empty()).then_some((&app.status, app.status_is_error));
-    if let Some((message, is_error)) = app.results_note.as_ref().map(|(m, e)| (m, *e)).or(run)
+    let run = (app.notes.status_in_results && !app.notes.status.is_empty())
+        .then_some((&app.notes.status, app.notes.status_is_error));
+    if let Some((message, is_error)) = app.notes.results_note.as_ref().map(|(m, e)| (m, *e)).or(run)
         && app.cell_edit.is_none()
     {
         let style = if is_error { bold(t.error) } else { fg(t.text) };
@@ -160,9 +161,9 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     };
     left.extend(tab(label, rows, app.tab.result_tab == ResultTab::Rows));
     tab_hits.push((start, area.x + width(&left), ResultTab::Rows));
-    let errors = app.messages.iter().filter(|m| m.is_error).count();
-    let msg_extra = (!app.messages.is_empty()).then(|| {
-        if errors > 0 { format!("{} · {errors} err", app.messages.len()) } else { app.messages.len().to_string() }
+    let errors = app.notes.log.iter().filter(|m| m.is_error).count();
+    let msg_extra = (!app.notes.log.is_empty()).then(|| {
+        if errors > 0 { format!("{} · {errors} err", app.notes.log.len()) } else { app.notes.log.len().to_string() }
     });
     let tab_x = area.x + width(&left);
     left.extend(tab("MESSAGES".into(), msg_extra, app.tab.result_tab == ResultTab::Messages));
@@ -287,13 +288,14 @@ fn draw_no_result(f: &mut Frame, app: &App, area: Rect) {
 /// Returns the widest line's width.
 fn draw_messages(f: &mut Frame, app: &mut App, area: Rect) -> usize {
     let t = theme();
-    if app.messages.is_empty() {
+    if app.notes.log.is_empty() {
         f.render_widget(Paragraph::new(" No messages yet.").style(dim()), area);
         return 0;
     }
-    let selected = app.message_selected;
+    let selected = app.notes.selected;
     let lines: Vec<Line> = app
-        .messages
+        .notes
+        .log
         .iter()
         .enumerate()
         .map(|(i, m)| {
@@ -308,7 +310,7 @@ fn draw_messages(f: &mut Frame, app: &mut App, area: Rect) -> usize {
     let bottom = (lines.len() as u16).saturating_sub(area.height);
     let mut scroll = bottom.saturating_sub(app.tab.tab_scroll);
     // A message selected with the keys is scrolled into view.
-    if let Some(sel) = selected.filter(|_| std::mem::take(&mut app.reveal_message)) {
+    if let Some(sel) = selected.filter(|_| std::mem::take(&mut app.notes.reveal)) {
         let sel = u16::try_from(sel).unwrap_or(u16::MAX);
         if sel < scroll {
             scroll = sel;

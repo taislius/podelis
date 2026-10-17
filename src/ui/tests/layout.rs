@@ -14,7 +14,7 @@ fn renders_at_any_size() {
                 2 => Screen::Connect,
                 _ => Screen::Query,
             };
-            app.schema_visible = true;
+            app.panes.schema_visible = true;
             app.help_visible = screen == 1;
             app.cell_view = Some(CellView { scroll: 3, ..CellView::new("x".into(), "y\n".repeat(50)) });
             app.confirm = Some(Confirm {
@@ -94,21 +94,21 @@ fn mouse_clicks_follow_the_layout() {
     assert_eq!(app.active_tab, 0);
     // The wheel over the schema moves its selection.
     let schema = app.hits.schema.unwrap();
-    let before = app.schema.as_ref().unwrap().selected;
+    let before = app.connection.schema.as_ref().unwrap().selected;
     app.handle_mouse(MouseEvent {
         kind: MouseEventKind::ScrollDown,
         column: schema.x + 2,
         row: schema.y + 4,
         modifiers: KeyModifiers::NONE,
     });
-    assert_ne!(app.schema.as_ref().unwrap().selected, before);
+    assert_ne!(app.connection.schema.as_ref().unwrap().selected, before);
     // Clicking the filter line starts typing in it.
     let filter = app.hits.schema_filter;
     click(&mut app, filter.x + 3, filter.y);
     assert_eq!(app.focus, Focus::Schema);
-    assert!(app.schema.as_ref().unwrap().filter_editing);
+    assert!(app.connection.schema.as_ref().unwrap().filter_editing);
     app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
-    assert_eq!(app.schema.as_ref().unwrap().filter.text(), "u");
+    assert_eq!(app.connection.schema.as_ref().unwrap().filter.text(), "u");
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn ctrl_arrows_resize_the_panes() {
     for _ in 0..40 {
         ctrl(&mut app, KeyCode::Up);
     }
-    assert_eq!(app.editor_percent, 10);
+    assert_eq!(app.panes.editor_percent, 10);
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn zoom_a_pane_and_click_result_tabs() {
     let (mut app, _dir) = query_app();
     app.focus = Focus::Results;
     app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
-    assert!(app.zoomed);
+    assert!(app.panes.zoomed);
     let screen = render(&mut app, 90, 16);
     assert!(screen.contains("ZOOMED") && !screen.contains("┌ SQL ─"), "only the results pane:\n{screen}");
     assert_snapshot!(screen);
@@ -184,10 +184,10 @@ fn zoom_a_pane_and_click_result_tabs() {
     assert_eq!(app.tab.result_tab, ResultTab::Rows);
     // Esc returns to the normal layout; F12 zooms the editor.
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(!app.zoomed);
+    assert!(!app.panes.zoomed);
     app.focus = Focus::Editor;
     app.handle_key(KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE));
-    assert!(app.zoomed);
+    assert!(app.panes.zoomed);
     assert!(!render(&mut app, 90, 16).contains("QUERY RESULT"));
     // Double-clicking a pane title toggles the zoom.
     app.handle_key(KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE));
@@ -196,7 +196,7 @@ fn zoom_a_pane_and_click_result_tabs() {
     let press = click(title.x + 3, title.y);
     app.handle_mouse(press);
     app.handle_mouse(press);
-    assert!(app.zoomed && app.focus == Focus::Results);
+    assert!(app.panes.zoomed && app.focus == Focus::Results);
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn clicking_the_project_in_the_top_bar_switches_project() {
         modifiers: KeyModifiers::NONE,
     });
     assert!(matches!(app.screen, Screen::Connections));
-    assert_eq!(app.connections_selected, 1);
+    assert_eq!(app.manager.connection_selected, 1);
     assert!(render(&mut app, 120, 20).contains("Host  db.internal"));
 }
 
@@ -247,20 +247,20 @@ fn clicks_wait_for_a_connection_attempt_and_miss_the_borders() {
     };
     let (mut app, _dir) = app();
     app.screen = Screen::Connect;
-    app.connect_form.focus = ConnectField::Host;
+    app.connection.form.focus = ConnectField::Host;
     let _ = render(&mut app, 120, 24);
     // The settings pane's top border isn't a field.
     let settings = app.hits.manager_settings;
     click(&mut app, settings.x + 4, settings.y);
-    assert_eq!(app.connect_form.focus, ConnectField::Host);
+    assert_eq!(app.connection.form.focus, ConnectField::Host);
     click(&mut app, settings.x + 4, settings.y + 1);
-    assert_eq!(app.connect_form.focus, ConnectField::Name);
+    assert_eq!(app.connection.form.focus, ConnectField::Name);
     // While connecting, the project's name in the top bar waits.
-    app.connect_form.connecting = true;
+    app.connection.form.connecting = true;
     let project = app.hits.project;
     click(&mut app, project.x + 1, project.y);
     assert!(matches!(app.screen, Screen::Connect));
-    app.connect_form.connecting = false;
+    app.connection.form.connecting = false;
     click(&mut app, project.x + 1, project.y);
     assert!(matches!(app.screen, Screen::Projects));
 }

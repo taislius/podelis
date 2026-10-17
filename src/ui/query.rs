@@ -16,15 +16,15 @@ pub(crate) fn schema_width(resized: Option<u16>, total: u16) -> u16 {
 }
 
 pub(super) fn draw_query(f: &mut Frame, app: &mut App, body: Rect) {
-    let show_schema = app.schema_visible && body.width >= SCHEMA_MIN_TOTAL_WIDTH;
-    app.schema_shown = show_schema;
+    let show_schema = app.panes.schema_visible && body.width >= SCHEMA_MIN_TOTAL_WIDTH;
+    app.panes.schema_shown = show_schema;
     if !show_schema && app.focus == Focus::Schema {
         app.focus = Focus::Editor;
     }
     let (schema_area, main) = if show_schema {
         let [s, m] = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(schema_width(app.schema_width, body.width)), Constraint::Min(20)])
+            .constraints([Constraint::Length(schema_width(app.panes.schema_width, body.width)), Constraint::Min(20)])
             .areas(body);
         (Some(s), m)
     } else {
@@ -32,11 +32,11 @@ pub(super) fn draw_query(f: &mut Frame, app: &mut App, body: Rect) {
     };
     let [editor_area, results_area] = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(app.editor_percent), Constraint::Min(5)])
+        .constraints([Constraint::Percentage(app.panes.editor_percent), Constraint::Min(5)])
         .areas(main);
 
     // Zoomed: only the focused pane, using the whole body.
-    let cursor = if app.zoomed {
+    let cursor = if app.panes.zoomed {
         // The top bar's project, drawn already, stays clickable.
         app.hits = crate::app::Hits { project: app.hits.project, ..crate::app::Hits::default() };
         match app.focus {
@@ -59,7 +59,7 @@ pub(super) fn draw_query(f: &mut Frame, app: &mut App, body: Rect) {
         // The statement zoom: the editor taller, the results under it. It
         // stays while another pane has the keys (an Explain from it shows
         // its plan there); Shift+F12, or Esc in the editor, ends it.
-        if app.statement_zoom {
+        if app.panes.statement_zoom {
             // In place of the editor's pane, taller (two thirds at least);
             // the results under it, smaller, still whole.
             let height = editor_area.height.max(main.height.saturating_mul(2) / 3).min(main.height.saturating_sub(5));
@@ -352,7 +352,7 @@ fn draw_ask_prompt(f: &mut Frame, app: &App, area: Rect) {
         Line::from(Span::styled(" a model writes the SQL from the tables that matter (never their rows)", dim())),
         Line::from(Span::styled(" it lands in the editor and doesn't run · ↵ ask · Esc cancel", dim())),
     ];
-    let title = format!("ASK ABOUT {}", app.connect_form.name.to_uppercase());
+    let title = format!("ASK ABOUT {}", app.connection.form.name.to_uppercase());
     f.render_widget(Paragraph::new(lines).block(popup(&title, t.accent)), rect);
 }
 
@@ -481,7 +481,7 @@ fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
     keys.retain(|(_, a)| app.focus != Focus::Schema || *a != crate::config::keys::Action::TxMode);
     // Commit and roll back only with a transaction to end.
     keys.retain(|(_, a)| {
-        app.txn != TxnState::Idle
+        app.connection.txn != TxnState::Idle
             || !matches!(a, crate::config::keys::Action::Commit | crate::config::keys::Action::Rollback)
     });
     keys.sort_by_key(|(c, _)| ORDER.find(*c).unwrap_or(ORDER.len()));
@@ -594,7 +594,7 @@ fn draw_tx_picker(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .map(|&mode| {
             let row = if mode == highlighted { Style::default().bg(t.active) } else { Style::default() };
-            let current = if mode == app.tx_mode { "●" } else { " " };
+            let current = if mode == app.connection.tx_mode { "●" } else { " " };
             Line::from(vec![
                 Span::styled(format!(" {} ", mode.letter()), bold(t.on_accent).bg(t.accent)),
                 Span::styled(format!(" {current} {:<14} ", mode.label()), bold(t.text_bright).patch(row)),
@@ -707,7 +707,8 @@ fn fitting_hints(keys: &[&str], width: usize) -> String {
 pub(super) fn draw_cell_view(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
     // The navigator on screen, for definitions to sit beside.
-    let navigator = app.hits.schema.filter(|_| app.schema_shown && !app.zoomed && app.screen == Screen::Query);
+    let navigator =
+        app.hits.schema.filter(|_| app.panes.schema_shown && !app.panes.zoomed && app.screen == Screen::Query);
     let Some(view) = &mut app.cell_view else { return };
     // As big as the text needs, up to nearly the whole screen. Stepping
     // through tables or rows (←/→), one size for all, so it doesn't jump.

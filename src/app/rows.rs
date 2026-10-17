@@ -46,14 +46,14 @@ pub(super) fn to_markdown(outcome: &QueryOutcome, rows: &[usize]) -> String {
 impl App {
     /// The editable table behind the current result, or why there isn't one.
     pub(super) fn edit_table(&self) -> Result<EditTable, String> {
-        if self.active_mode == ConnectionMode::ReadOnly {
+        if self.connection.mode == ConnectionMode::ReadOnly {
             return Err("this connection is read-only".into());
         }
         let results = self.tab.grid.results.as_ref().ok_or("no results")?;
         let (sql, _) = self.tab.last_sql.as_ref().ok_or("no query")?;
         let source = analyze::edit_source(&parse(sql, self.engine()))
             .ok_or("only results of a plain SELECT from one table (no joins or grouping) can be edited")?;
-        let catalog = self.schema.as_ref().ok_or("the schema hasn't loaded yet")?;
+        let catalog = self.connection.schema.as_ref().ok_or("the schema hasn't loaded yet")?;
         let mut matches = catalog
             .tables
             .iter()
@@ -208,7 +208,7 @@ impl App {
             details.push(format!("… and {} more", conditions.len() - 5));
         }
         let infos = analyze::analyze(&parse(&sql, self.engine()));
-        let offer_transaction = self.txn == TxnState::Idle;
+        let offer_transaction = self.connection.txn == TxnState::Idle;
         self.confirm = Some(Confirm {
             message: format!("Delete {} row(s) from {}?", rows.len(), table.name),
             details,

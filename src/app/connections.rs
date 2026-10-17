@@ -404,26 +404,26 @@ impl App {
         if self.keymap.action(key) == Some(crate::config::keys::Action::Projects) {
             return self.open_manager(Screen::Projects);
         }
-        if self.moving_to.is_some() {
+        if self.manager.moving_to.is_some() {
             return self.handle_move_key(key);
         }
-        if self.containers.is_some() {
+        if self.manager.containers.is_some() {
             return self.handle_containers_key(key);
         }
-        if self.loading_profile {
+        if self.manager.loading_profile {
             if key.code == KeyCode::Esc {
                 self.invalidate_tasks();
-                self.loading_profile = false;
+                self.manager.loading_profile = false;
                 self.conns.auto_connect = false;
             }
             return;
         }
-        if self.confirm_delete {
-            self.confirm_delete = false;
+        if self.manager.confirm_delete {
+            self.manager.confirm_delete = false;
             if matches!(key.code, KeyCode::Char('y' | 'Y')) {
                 self.delete_selected();
             } else {
-                self.connections_message = None;
+                self.manager.connection_message = None;
             }
             return;
         }
@@ -431,35 +431,36 @@ impl App {
             return;
         }
         let len = self.profiles().len();
-        let on_profile = self.connections_selected < len;
+        let on_profile = self.manager.connection_selected < len;
         // The row after the connections is "new connection".
-        if let Some(i) = list::step(self.connections_selected, len + 1, key, Nav::LIST) {
-            self.connections_selected = i;
+        if let Some(i) = list::step(self.manager.connection_selected, len + 1, key, Nav::LIST) {
+            self.manager.connection_selected = i;
             return;
         }
         match key.code {
             KeyCode::Esc => self.leave_connections(),
             KeyCode::Char('q') => self.request_quit(),
             KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => {
-                self.connections_message = None;
+                self.manager.connection_message = None;
                 self.screen = Screen::Projects;
             }
             KeyCode::Char('m') if on_profile => {
                 if self.move_targets().is_empty() {
-                    self.connections_message = Some(("Create another project first (← then n)".to_string(), true));
+                    self.manager.connection_message =
+                        Some(("Create another project first (← then n)".to_string(), true));
                 } else {
-                    self.connections_message = None;
-                    self.moving_to = Some(0);
+                    self.manager.connection_message = None;
+                    self.manager.moving_to = Some(0);
                 }
             }
-            KeyCode::Char('d') if on_profile => self.confirm_delete = true,
+            KeyCode::Char('d') if on_profile => self.manager.confirm_delete = true,
             KeyCode::Char('c') => self.find_containers(),
             // Into the settings pane, to change them.
             KeyCode::Right | KeyCode::Char('l' | 'e') | KeyCode::Tab => self.edit_selected_connection(),
             KeyCode::Enter if on_profile => {
                 self.free_tab_for_form();
                 self.conns.auto_connect = true;
-                self.load_profile(self.profiles()[self.connections_selected].clone());
+                self.load_profile(self.profiles()[self.manager.connection_selected].clone());
             }
             KeyCode::Char('n') | KeyCode::Enter => self.new_connection(),
             _ => {}
@@ -469,10 +470,11 @@ impl App {
     /// Lists the running database containers, off the UI thread (it runs
     /// `docker`), to pick one.
     fn find_containers(&mut self) {
-        self.connections_message = None;
-        self.containers_request += 1;
-        let request = self.containers_request;
-        self.containers = Some(Box::new(ContainerPicker { request, loading: true, ..ContainerPicker::default() }));
+        self.manager.connection_message = None;
+        self.manager.containers_request += 1;
+        let request = self.manager.containers_request;
+        self.manager.containers =
+            Some(Box::new(ContainerPicker { request, loading: true, ..ContainerPicker::default() }));
         let send = self.sender();
         // No runtime in unit tests: they hand over what was found.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
@@ -487,7 +489,7 @@ impl App {
         request: u64,
         result: Result<Vec<crate::system::containers::Container>, String>,
     ) {
-        let Some(picker) = self.containers.as_mut().filter(|p| p.request == request) else { return };
+        let Some(picker) = self.manager.containers.as_mut().filter(|p| p.request == request) else { return };
         picker.loading = false;
         match result {
             Ok(found) => {
@@ -500,14 +502,14 @@ impl App {
     }
 
     fn handle_containers_key(&mut self, key: KeyEvent) {
-        let Some(picker) = &mut self.containers else { return };
+        let Some(picker) = &mut self.manager.containers else { return };
         if let Some(i) = list::step(picker.selected, picker.found.len(), key, Nav::LIST) {
             picker.selected = i;
             picker.note = None;
             return;
         }
         match key.code {
-            KeyCode::Esc | KeyCode::Char('c' | 'q') => self.containers = None,
+            KeyCode::Esc | KeyCode::Char('c' | 'q') => self.manager.containers = None,
             KeyCode::Enter => {
                 let Some(container) = picker.found.get(picker.selected).cloned() else { return };
                 let Some(profile) = container.profile else {
@@ -515,7 +517,7 @@ impl App {
                         Some(format!("'{}' doesn't publish its database port: start it with -p", container.name));
                     return;
                 };
-                self.containers = None;
+                self.manager.containers = None;
                 self.fill_from_container(&container.name, profile);
             }
             _ => {}
@@ -527,22 +529,23 @@ impl App {
     /// new one under a name not yet taken. Enter then connects (and saves it).
     fn fill_from_container(&mut self, container: &str, mut profile: ConnectionProfile) {
         let Some(project_id) = self.current_project.clone() else {
-            self.connections_message = Some(("Open a project first".to_string(), true));
+            self.manager.connection_message = Some(("Open a project first".to_string(), true));
             return;
         };
         if let Some(saved) = self.saved_like(&profile).cloned() {
             if let Some(i) = self.profiles().iter().position(|p| p.name == saved.name) {
-                self.connections_selected = i;
+                self.manager.connection_selected = i;
             }
             let said = format!("'{container}' is already saved as '{}'", saved.name);
             self.load_profile(saved);
-            self.connections_message = Some((said, false));
+            self.manager.connection_message = Some((said, false));
             return;
         }
         profile.name = self.free_name(&project_id, &profile.name);
         self.new_connection();
-        self.connect_form = ConnectForm { original_name: None, ..ConnectForm::from_profile(&profile, String::new()) };
-        self.connect_form.info = Some(format!("From the container '{container}': Enter connects, Ctrl+S saves"));
+        self.connection.form =
+            ConnectForm { original_name: None, ..ConnectForm::from_profile(&profile, String::new()) };
+        self.connection.form.info = Some(format!("From the container '{container}': Enter connects, Ctrl+S saves"));
     }
 
     /// A saved connection of the open project to the same place: server,
@@ -573,16 +576,16 @@ impl App {
     /// An empty form in the settings pane, for a new connection.
     fn new_connection(&mut self) {
         self.stash_active_form();
-        self.connections_message = None;
-        self.connections_selected = self.profiles().len();
-        self.connect_form = ConnectForm::new();
+        self.manager.connection_message = None;
+        self.manager.connection_selected = self.profiles().len();
+        self.connection.form = ConnectForm::new();
         self.screen = Screen::Connect;
     }
 
     /// The selected connection's settings, to change (its password comes
     /// from the keychain first), or a new one's.
     pub(super) fn edit_selected_connection(&mut self) {
-        match self.profiles().get(self.connections_selected).cloned() {
+        match self.profiles().get(self.manager.connection_selected).cloned() {
             Some(profile) => self.load_profile(profile),
             None => self.new_connection(),
         }
@@ -592,8 +595,8 @@ impl App {
     /// block on an unlock prompt.
     pub(super) fn load_profile(&mut self, profile: ConnectionProfile) {
         let Some(project_id) = self.current_project.clone() else { return };
-        self.loading_profile = true;
-        self.connections_message = None;
+        self.manager.loading_profile = true;
+        self.manager.connection_message = None;
         let send = self.sender();
         tokio::task::spawn_blocking(move || {
             let (password, note) = store::saved_password(&project_id, &profile);
@@ -602,15 +605,15 @@ impl App {
     }
 
     pub(super) fn handle_move_key(&mut self, key: KeyEvent) {
-        let Some(idx) = self.moving_to else { return };
+        let Some(idx) = self.manager.moving_to else { return };
         if let Some(i) = list::step(idx, self.move_targets().len(), key, Nav::LIST) {
-            self.moving_to = Some(i);
+            self.manager.moving_to = Some(i);
             return;
         }
         match key.code {
-            KeyCode::Esc => self.moving_to = None,
+            KeyCode::Esc => self.manager.moving_to = None,
             KeyCode::Enter => {
-                self.moving_to = None;
+                self.manager.moving_to = None;
                 if let Some(target) = self.move_targets().get(idx).map(|p| p.id.clone()) {
                     self.move_selected(&target);
                 }
@@ -622,13 +625,13 @@ impl App {
     /// Moves the selected connection, and its keychain entry, to another project.
     pub(super) fn move_selected(&mut self, target: &str) {
         let (Some(from), Some(profile)) =
-            (self.current_project.clone(), self.profiles().get(self.connections_selected).cloned())
+            (self.current_project.clone(), self.profiles().get(self.manager.connection_selected).cloned())
         else {
             return;
         };
         let target_name = self.store.project(target).map(|p| p.name.clone()).unwrap_or_default();
         if self.store.name_taken(target, None, &profile.name) {
-            self.connections_message =
+            self.manager.connection_message =
                 Some((format!("'{target_name}' already has a connection named '{}'", profile.name), true));
             return;
         }
@@ -638,53 +641,53 @@ impl App {
         // read stops the move: the password would be lost with the old entry.
         let (password, note) = store::saved_password(&from, &profile);
         if let Some(note) = note {
-            self.connections_message = Some((format!("Couldn't move password: {note}"), true));
+            self.manager.connection_message = Some((format!("Couldn't move password: {note}"), true));
             return;
         }
         if !password.is_empty()
             && let Err(e) = store::store_password(&new_account, &password)
         {
-            self.connections_message = Some((format!("Couldn't move password: {e:#}"), true));
+            self.manager.connection_message = Some((format!("Couldn't move password: {e:#}"), true));
             return;
         }
         match self.store.move_connection(&from, &profile.name, target) {
             Ok(()) => {
                 let _ = store::delete_password(&old_account);
-                self.connections_message = Some((format!("Moved '{}' to '{target_name}'", profile.name), false));
+                self.manager.connection_message = Some((format!("Moved '{}' to '{target_name}'", profile.name), false));
                 let len = self.profiles().len();
-                if self.connections_selected > 0 && self.connections_selected >= len {
-                    self.connections_selected -= 1;
+                if self.manager.connection_selected > 0 && self.manager.connection_selected >= len {
+                    self.manager.connection_selected -= 1;
                 }
             }
             Err(e) => {
                 let _ = store::delete_password(&new_account);
-                self.connections_message = Some((format!("Couldn't move: {e:#}"), true));
+                self.manager.connection_message = Some((format!("Couldn't move: {e:#}"), true));
             }
         }
     }
 
     pub(super) fn delete_selected(&mut self) {
         let Some(project_id) = self.current_project.clone() else { return };
-        let Some(profile) = self.profiles().get(self.connections_selected).cloned() else { return };
+        let Some(profile) = self.profiles().get(self.manager.connection_selected).cloned() else { return };
         let name = profile.name.clone();
         match self.store.delete(&project_id, &name) {
             Ok(()) => {
                 let _ = store::delete_password(&store::keychain_account(&project_id, &profile));
-                self.connections_message = Some((format!("Deleted '{name}'"), false));
-                if self.connections_selected > 0 && self.connections_selected >= self.profiles().len() {
-                    self.connections_selected -= 1;
+                self.manager.connection_message = Some((format!("Deleted '{name}'"), false));
+                if self.manager.connection_selected > 0 && self.manager.connection_selected >= self.profiles().len() {
+                    self.manager.connection_selected -= 1;
                 }
             }
-            Err(e) => self.connections_message = Some((format!("Couldn't delete: {e:#}"), true)),
+            Err(e) => self.manager.connection_message = Some((format!("Couldn't delete: {e:#}"), true)),
         }
     }
 
     pub(super) fn handle_connect_key(&mut self, key: KeyEvent) {
-        if self.connect_form.connecting {
+        if self.connection.form.connecting {
             if key.code == KeyCode::Esc {
                 self.invalidate_tasks();
-                self.connect_form.connecting = false;
-                self.connect_form.info = Some("Connection attempt cancelled".to_string());
+                self.connection.form.connecting = false;
+                self.connection.form.info = Some("Connection attempt cancelled".to_string());
             }
             return;
         }
@@ -701,12 +704,12 @@ impl App {
                 KeyCode::Char('v') => match crate::system::clipboard::read() {
                     Ok(text) => self.handle_paste(&text),
                     Err(e) => {
-                        self.connect_form.error = Some(crate::system::clipboard::read_failed(&e));
+                        self.connection.form.error = Some(crate::system::clipboard::read_failed(&e));
                     }
                 },
                 // Clearing and deleting a word, as in every input.
                 KeyCode::Char('u' | 'w') => {
-                    let form = &mut self.connect_form;
+                    let form = &mut self.connection.form;
                     if let Some(field) = form.field_mut(form.focus) {
                         input::edit_at_end(field, key);
                     }
@@ -716,7 +719,7 @@ impl App {
             return;
         }
 
-        let form = &mut self.connect_form;
+        let form = &mut self.connection.form;
         match key.code {
             // Esc and Shift+Tab back to the connections, Tab round to the
             // projects; changes not saved are dropped.
@@ -749,7 +752,7 @@ impl App {
     /// Ctrl+Y in the form: copies the focused field's value (not the
     /// password).
     pub(super) fn copy_connect_field(&mut self) {
-        let form = &mut self.connect_form;
+        let form = &mut self.connection.form;
         let focus = form.focus;
         form.error = None;
         if focus == ConnectField::Password {
@@ -774,7 +777,7 @@ impl App {
 
     pub(super) fn save_connection(&mut self) {
         let Some(project_id) = self.current_project.clone() else { return };
-        let form = &mut self.connect_form;
+        let form = &mut self.connection.form;
         form.info = None;
         form.error = None;
         let profile = form.to_profile();
@@ -839,25 +842,25 @@ impl App {
     /// named after where it goes. Returns what to say about it.
     pub(super) fn keep_new_connection(&mut self) -> Option<(String, bool)> {
         let project_id = self.current_project.clone()?;
-        if self.connect_form.original_name.is_some() {
+        if self.connection.form.original_name.is_some() {
             return None;
         }
-        if self.connect_form.name.trim().is_empty() {
+        if self.connection.form.name.trim().is_empty() {
             // Already saved (same server, user, database and tunnel): that
             // one is used rather than a copy.
-            let form = &self.connect_form;
+            let form = &self.connection.form;
             if let Some(saved) = self.saved_like(&form.to_profile()).map(|p| (p.name.clone(), p.legacy_keychain)) {
                 let (name, legacy) = saved;
-                self.connect_form.name.clone_from(&name);
-                self.connect_form.original_name = Some(name.clone());
-                self.connect_form.original_legacy = legacy;
+                self.connection.form.name.clone_from(&name);
+                self.connection.form.original_name = Some(name.clone());
+                self.connection.form.original_legacy = legacy;
                 return Some((format!("Already saved as '{name}'"), false));
             }
             let base = form.short_name();
-            self.connect_form.name = self.free_name(&project_id, &base);
+            self.connection.form.name = self.free_name(&project_id, &base);
         }
         self.save_connection();
-        let form = &mut self.connect_form;
+        let form = &mut self.connection.form;
         let said = match form.error.take() {
             Some(e) => (format!("Connected, but not saved: {e} (Ctrl+S in the connection form)"), true),
             None => (format!("Saved as '{}' in this project", form.name), false),
@@ -871,16 +874,16 @@ impl App {
         if !self.may_reach_outside() {
             return;
         }
-        let params = match self.connect_form.params() {
+        let params = match self.connection.form.params() {
             Ok(p) => p,
             Err(e) => {
-                self.connect_form.error = Some(e);
+                self.connection.form.error = Some(e);
                 return;
             }
         };
-        self.connect_form.error = None;
-        self.connect_form.info = Some("Testing the connection…".to_string());
-        let title = format!("CONNECTION TEST · {}", self.connect_form.summary());
+        self.connection.form.error = None;
+        self.connection.form.info = Some("Testing the connection…".to_string());
+        let title = format!("CONNECTION TEST · {}", self.connection.form.summary());
         let send = self.sender();
         tokio::spawn(async move {
             let steps = crate::db::diagnose(params).await;
@@ -889,21 +892,21 @@ impl App {
     }
 
     pub(super) fn start_connect(&mut self) {
-        let params = match self.connect_form.params() {
+        let params = match self.connection.form.params() {
             Ok(p) => p,
             Err(e) => {
-                self.connect_form.error = Some(e);
+                self.connection.form.error = Some(e);
                 return;
             }
         };
         // A missing SQLite file is usually a typo: say so, and create it only
         // when asked again for the same path.
         // The approval is used up here, so a later attempt asks again.
-        let approved = self.connect_form.create_file.take();
+        let approved = self.connection.form.create_file.take();
         if let Some(path) = params.file_to_create()
             && approved.as_deref() != Some(path)
         {
-            let form = &mut self.connect_form;
+            let form = &mut self.connection.form;
             form.create_file = Some(path.to_string());
             form.error = None;
             form.info = Some(format!("{path} doesn't exist: Enter again to create a new database there"));
@@ -914,16 +917,16 @@ impl App {
         }
         // Edited over a connected tab: that tab keeps its connection, and
         // this one opens in a new tab.
-        if self.form_stash.is_some() {
-            let form = std::mem::take(&mut self.connect_form);
+        if self.manager.form_stash.is_some() {
+            let form = std::mem::take(&mut self.connection.form);
             self.restore_active_form();
             self.free_tab_for_form();
-            self.connect_form = form;
+            self.connection.form = form;
         }
-        self.connect_form.connecting = true;
+        self.connection.form.connecting = true;
         self.connect_started = Some(Instant::now());
-        self.connect_form.error = None;
-        self.connect_form.info = None;
+        self.connection.form.error = None;
+        self.connection.form.info = None;
         let send = self.sender();
         self.task = Some(tokio::spawn(async move {
             match Database::connect(params).await {

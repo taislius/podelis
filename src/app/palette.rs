@@ -192,7 +192,7 @@ impl App {
         if let Some(palette) = &mut self.palette {
             palette.menu = true;
         }
-        self.status.clear();
+        self.notes.status.clear();
     }
 
     /// Commands whose description contains every word typed.

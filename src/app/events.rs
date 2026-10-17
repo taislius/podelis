@@ -61,11 +61,11 @@ impl App {
         if i == self.active_tab {
             return self.apply_shown(kind);
         }
-        let before = self.status.clone();
+        let before = self.notes.status.clone();
         self.in_tab(i, |app| app.apply_shown(kind));
-        if self.status != before && !self.status.is_empty() {
-            self.status = format!("{}: {}", self.tabs[i].name, self.status);
-            self.status_in_results = false;
+        if self.notes.status != before && !self.notes.status.is_empty() {
+            self.notes.status = format!("{}: {}", self.tabs[i].name, self.notes.status);
+            self.notes.status_in_results = false;
         }
     }
 
@@ -99,14 +99,14 @@ impl App {
     fn apply_event(&mut self, kind: DbEventKind) {
         match kind {
             DbEventKind::PasswordLoaded(profile, password, note) => {
-                self.loading_profile = false;
+                self.manager.loading_profile = false;
                 self.stash_active_form();
-                self.connect_form = ConnectForm::from_profile(&profile, password);
+                self.connection.form = ConnectForm::from_profile(&profile, password);
                 // Without the keychain, the database's own sources (PGPASSWORD,
                 // ~/.pgpass) may still have the password: connect anyway.
                 let connect_now = std::mem::take(&mut self.conns.auto_connect);
-                self.connect_form.error = note.as_ref().map(|n| format!("No saved password: {n}"));
-                self.connect_form.keychain_note = note;
+                self.connection.form.error = note.as_ref().map(|n| format!("No saved password: {n}"));
+                self.connection.form.keychain_note = note;
                 self.screen = Screen::Connect;
                 if connect_now {
                     self.start_connect();
@@ -116,7 +116,7 @@ impl App {
             DbEventKind::ConnectFailed(err) => {
                 tracing::info!(error = %err, "connect failed");
                 self.task = None;
-                let form = &mut self.connect_form;
+                let form = &mut self.connection.form;
                 form.connecting = false;
                 // A wrong or missing password: ready to type it (unless a
                 // password command supplied it; that's for the command to fix).
@@ -168,12 +168,12 @@ impl App {
             DbEventKind::ActivityLoaded(result) => self.activity_loaded(result),
             DbEventKind::SessionStopped(result) => self.session_stopped(result),
             DbEventKind::Diagnosed(title, report) => {
-                self.connect_form.info = None;
+                self.connection.form.info = None;
                 self.cell_view = Some(CellView::new(title, report));
             }
             DbEventKind::PipeDone(command, result) => self.pipe_done(&command, result),
             DbEventKind::Routines(routines) => {
-                if let Some(panel) = &mut self.schema {
+                if let Some(panel) = &mut self.connection.schema {
                     panel.routines = routines;
                 }
             }
@@ -222,34 +222,34 @@ impl App {
         tracing::info!(engine = ?db.engine(), version = db.version(), "connected");
         self.task = None;
         let project = self.project().map(|p| p.name.clone()).unwrap_or_default();
-        let form = std::mem::take(&mut self.connect_form);
+        let form = std::mem::take(&mut self.connection.form);
         self.attach_connection(db);
-        self.connect_form = form;
-        self.connection_summary = format!("[{project}] {}", self.connect_form.summary());
-        self.active_mode = self.connect_form.mode;
-        self.tx_mode = self.connect_form.tx_mode();
-        self.txn = TxnState::Idle;
-        self.connect_form.connecting = false;
-        self.connect_form.error = None;
+        self.connection.form = form;
+        self.connection.summary = format!("[{project}] {}", self.connection.form.summary());
+        self.connection.mode = self.connection.form.mode;
+        self.connection.tx_mode = self.connection.form.tx_mode();
+        self.connection.txn = TxnState::Idle;
+        self.connection.form.connecting = false;
+        self.connection.form.error = None;
         self.tab.grid.results = None;
         self.tab.grid.result_sets.clear();
-        self.schema = None;
-        self.schema_visible = true;
+        self.connection.schema = None;
+        self.panes.schema_visible = true;
         self.load_catalog();
         self.screen = Screen::Query;
         self.focus = Focus::Editor;
-        self.connect_latency = self.connect_started.take().map(|s| s.elapsed());
-        let ms = self.connect_latency.map(|d| format!(" in {} ms", d.as_millis())).unwrap_or_default();
-        self.log(format!("Connected to {}{ms}", self.connect_form.summary()), false);
+        self.connection.latency = self.connect_started.take().map(|s| s.elapsed());
+        let ms = self.connection.latency.map(|d| format!(" in {} ms", d.as_millis())).unwrap_or_default();
+        self.log(format!("Connected to {}{ms}", self.connection.form.summary()), false);
         self.set_status(String::new(), false);
         if let Some((said, is_error)) = self.keep_new_connection() {
-            self.connection_summary = format!("[{project}] {}", self.connect_form.summary());
+            self.connection.summary = format!("[{project}] {}", self.connection.form.summary());
             self.set_status(said, is_error);
         }
         // SSL mode `prefer` gave up on TLS: say so, it's not what was asked.
-        let tls_failed = self.database.as_ref().and_then(|db| db.tls_failed().map(str::to_string));
+        let tls_failed = self.connection.database.as_ref().and_then(|db| db.tls_failed().map(str::to_string));
         if let Some(why) = tls_failed {
-            let ssh = if self.connect_form.ssh.trim().is_empty() { "" } else { " (the SSH tunnel still encrypts)" };
+            let ssh = if self.connection.form.ssh.trim().is_empty() { "" } else { " (the SSH tunnel still encrypts)" };
             let warning = format!("Not encrypted: TLS isn't possible with this server, so it connected without{ssh}");
             self.log(format!("{warning}. TLS failed: {why}"), true);
             self.set_status(format!("{warning} · details in MESSAGES"), true);
@@ -265,7 +265,7 @@ impl App {
         if self.run.infos.iter().any(|i| matches!(i.kind, Kind::Ddl | Kind::Session)) {
             self.load_catalog();
         }
-        self.txn = txn.unwrap_or_else(|| self.tracked_txn_state());
+        self.connection.txn = txn.unwrap_or_else(|| self.tracked_txn_state());
         let rows_affected = outcome.rows_affected.unwrap_or(0);
         self.connection_lost = false;
         self.run.cancel_failed = false;
@@ -277,7 +277,7 @@ impl App {
         );
         let reconnected = outcome.reconnected;
         if reconnected {
-            self.txn = TxnState::Idle;
+            self.connection.txn = TxnState::Idle;
         }
         match std::mem::take(&mut self.run.purpose) {
             RunPurpose::Query => {
@@ -297,16 +297,16 @@ impl App {
                     grid.vertical = false;
                 }
                 if let Some(prefix) = self.run.extra.status_prefix.take() {
-                    self.status = format!("{prefix} · {}", self.status);
+                    self.notes.status = format!("{prefix} · {}", self.notes.status);
                 }
                 // (The RESULT tab was shown as it started: a plan asked for
                 // meanwhile stays in view.)
                 self.tab.tab_scroll = 0;
                 if stream.is_some() {
-                    self.status.push_str(" · more load as you scroll");
+                    self.notes.status.push_str(" · more load as you scroll");
                 }
                 self.run.stream = stream;
-                let status = self.status.clone();
+                let status = self.notes.status.clone();
                 self.log(status, false);
             }
             RunPurpose::Explain => self.show_plan(outcome),
@@ -315,7 +315,7 @@ impl App {
             RunPurpose::RowChange(what) => self.rows_changed(what, &outcome),
         }
         if reconnected {
-            self.status.push_str(" · the connection had dropped: reconnected (session settings were reset)");
+            self.notes.status.push_str(" · the connection had dropped: reconnected (session settings were reset)");
         }
         if std::mem::take(&mut self.run.extra.reviewing) {
             self.open_review(rows_affected);
@@ -327,17 +327,17 @@ impl App {
         // ordinary results: stopped by the connection's limit, it's said so.
         if let Some(limit) = self.run.extra.timed_out.take() {
             self.run.cancelling = false;
-            self.status = format!(
+            self.notes.status = format!(
                 "Timed out after {} s (the connection's limit), stopped early: {}",
                 limit.as_secs(),
-                self.status
+                self.notes.status
             );
         } else if std::mem::take(&mut self.run.cancelling) {
-            self.status.push_str(" · cancel requested");
+            self.notes.status.push_str(" · cancel requested");
         }
         // The outcome is shown with the results.
-        self.status_in_results = true;
-        let status = self.status.clone();
+        self.notes.status_in_results = true;
+        let status = self.notes.status.clone();
         self.notify_if_long(|took| format!("Query finished in {}: {status}", format_elapsed(took)));
     }
 
@@ -356,7 +356,7 @@ impl App {
         self.note_session_changes();
         let query = matches!(std::mem::take(&mut self.run.purpose), RunPurpose::Query);
         if let Some(txn) = txn {
-            self.txn = txn;
+            self.connection.txn = txn;
         }
         let prefix = match self.run.extra.timed_out.take() {
             Some(limit) => format!("Timed out after {} s (the connection's limit): ", limit.as_secs()),
@@ -374,7 +374,7 @@ impl App {
         if reviewing || dry_run {
             // BEGIN ran before the failing statement.
             if txn.is_none() {
-                self.txn = TxnState::Open;
+                self.connection.txn = TxnState::Open;
             }
             if dry_run {
                 status.push_str(" · rolled back (rollback-only)");
@@ -385,7 +385,7 @@ impl App {
         }
         self.log(status.clone(), true);
         self.set_status(status.clone(), true);
-        self.status_in_results = true;
+        self.notes.status_in_results = true;
         // Said where its result would be.
         if query {
             self.tab.run_error = Some(status.clone());
@@ -398,7 +398,7 @@ impl App {
 
     /// Installs a freshly loaded catalog, keeping expanded tables expanded.
     pub(super) fn apply_catalog(&mut self, result: Result<Vec<(TableInfo, Vec<ColumnInfo>)>, String>) {
-        let Some(panel) = &mut self.schema else { return };
+        let Some(panel) = &mut self.connection.schema else { return };
         panel.loading = false;
         match result {
             Ok(tables) => {
@@ -420,7 +420,7 @@ impl App {
                 panel.error = None;
                 panel.selected = query::step_selectable(&panel.nodes(), panel.selected, 1);
                 self.restore_expanded_tables();
-                let Some(panel) = &mut self.schema else { return };
+                let Some(panel) = &mut self.connection.schema else { return };
                 // Details were dropped with the old list: reload the open ones.
                 let open: Vec<usize> = (0..panel.tables.len()).filter(|&t| panel.tables[t].expanded).collect();
                 for t in open {
@@ -481,8 +481,9 @@ impl App {
         let text = self.tab.editor.text();
         // Ask the server when it's safe: never inside a transaction (preparing
         // can take locks there) or while a query runs on the session.
-        let server_ok = self.settings.server_syntax_check && self.txn == TxnState::Idle && !self.run.executing;
-        let db = self.database.clone().filter(|_| server_ok);
+        let server_ok =
+            self.settings.server_syntax_check && self.connection.txn == TxnState::Idle && !self.run.executing;
+        let db = self.connection.database.clone().filter(|_| server_ok);
         let check = self.local_check();
         // Parsing and linting a long script takes a while: off the UI thread,
         // like the server check. The result is dropped if the text changed.
@@ -515,7 +516,7 @@ impl App {
         LocalCheck {
             engine: self.engine(),
             lint: self.settings.lint,
-            sql_mode: self.database.as_ref().map(Database::sql_mode).unwrap_or_default(),
+            sql_mode: self.connection.database.as_ref().map(Database::sql_mode).unwrap_or_default(),
         }
     }
 
@@ -566,7 +567,7 @@ impl App {
     /// server can't be asked about: follows BEGIN/COMMIT/ROLLBACK (and
     /// MySQL's implicit commit on DDL).
     pub(super) fn tracked_txn_state(&self) -> TxnState {
-        let mut state = self.txn;
+        let mut state = self.connection.txn;
         for info in &self.run.infos {
             state = match info.kind {
                 Kind::Transaction(TxnOp::Begin) => TxnState::Open,

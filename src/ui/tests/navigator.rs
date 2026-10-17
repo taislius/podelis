@@ -31,7 +31,7 @@ fn a_definition_sits_beside_the_navigator() {
 #[test]
 fn system_tables_in_their_own_section() {
     let (mut app, _dir) = query_app();
-    let panel = app.schema.as_mut().unwrap();
+    let panel = app.connection.schema.as_mut().unwrap();
     for (schema, name, is_view) in [("pg_catalog", "pg_class", false), ("information_schema", "tables", true)] {
         let info =
             TableInfo { schema: schema.into(), name: name.into(), is_view, rows: None, bytes: None, system: true };
@@ -52,7 +52,7 @@ fn hidden_schema_pane_cannot_keep_focus() {
     let (mut app, _dir) = query_app();
     app.focus = Focus::Schema;
     let _ = render(&mut app, 60, 20); // too narrow for the navigator
-    assert!(!app.schema_shown);
+    assert!(!app.panes.schema_shown);
     assert_eq!(app.focus, Focus::Editor);
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
@@ -80,40 +80,40 @@ fn navigator_pages_reveals_expanded_columns_and_sorts() {
             details_loading: false,
         })
         .collect();
-    app.schema = Some(SchemaPanel { tables, selected: 1, ..SchemaPanel::default() });
+    app.connection.schema = Some(SchemaPanel { tables, selected: 1, ..SchemaPanel::default() });
     app.focus = Focus::Schema;
     let _ = render(&mut app, 120, 30);
-    let page = app.schema.as_ref().unwrap().page;
+    let page = app.connection.schema.as_ref().unwrap().page;
     assert!(page > 5 && page < 40);
     let press = |app: &mut App, code| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
     press(&mut app, KeyCode::PageDown);
-    assert_eq!(app.schema.as_ref().unwrap().selected, 1 + page);
+    assert_eq!(app.connection.schema.as_ref().unwrap().selected, 1 + page);
     press(&mut app, KeyCode::PageUp);
-    assert_eq!(app.schema.as_ref().unwrap().selected, 1);
+    assert_eq!(app.connection.schema.as_ref().unwrap().selected, 1);
     // The last table on screen, expanded: its columns scroll into view.
     let _ = render(&mut app, 120, 30);
     for _ in 2..page {
         press(&mut app, KeyCode::Down);
     }
     let _ = render(&mut app, 120, 30);
-    let selected = app.schema.as_ref().unwrap().selected;
+    let selected = app.connection.schema.as_ref().unwrap().selected;
     assert_eq!(app.hits.schema_offset, 0);
     press(&mut app, KeyCode::Enter);
     let screen = render(&mut app, 120, 30);
-    let panel = app.schema.as_ref().unwrap();
+    let panel = app.connection.schema.as_ref().unwrap();
     assert!(panel.scroll <= selected && selected + 8 < panel.scroll + panel.page, "columns shown:\n{screen}");
     assert!(screen.contains("c7"));
     // Ordered by rows (most first), then by size.
     press(&mut app, KeyCode::Char('o'));
-    let nodes = app.schema.as_ref().unwrap().nodes();
+    let nodes = app.connection.schema.as_ref().unwrap().nodes();
     assert_eq!(nodes[1], crate::app::SchemaNode::Table(39));
     assert!(render(&mut app, 120, 30).contains("by rows"));
     press(&mut app, KeyCode::Char('o'));
-    let nodes = app.schema.as_ref().unwrap().nodes();
+    let nodes = app.connection.schema.as_ref().unwrap().nodes();
     assert_eq!(nodes[1], crate::app::SchemaNode::Table(0));
     // The expanded table stays selected (and on screen), showing its size.
     let screen = render(&mut app, 120, 30);
-    let t = app.schema.as_ref().unwrap().nodes()[app.schema.as_ref().unwrap().selected];
+    let t = app.connection.schema.as_ref().unwrap().nodes()[app.connection.schema.as_ref().unwrap().selected];
     let crate::app::SchemaNode::Table(t) = t else { panic!("{t:?}") };
     assert!(screen.contains("by size") && screen.contains(&format!("{} B", 1000 - t)), "{screen}");
 }
@@ -134,10 +134,10 @@ fn clicking_a_table_while_filtering_the_navigator_gives_it_the_keys() {
         modifiers: KeyModifiers::NONE,
     };
     app.handle_mouse(click);
-    let panel = app.schema.as_ref().unwrap();
+    let panel = app.connection.schema.as_ref().unwrap();
     assert!(!panel.filter_editing, "the click ends typing the filter");
     assert_eq!(panel.filter.text(), "o", "the filter stays");
     // `d` is for the clicked table now, not the filter.
     app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
-    assert_eq!(app.schema.as_ref().unwrap().filter.text(), "o");
+    assert_eq!(app.connection.schema.as_ref().unwrap().filter.text(), "o");
 }

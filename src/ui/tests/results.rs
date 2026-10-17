@@ -90,7 +90,7 @@ fn the_filter_shows_only_with_its_grid() {
 #[test]
 fn hidden_columns_show_in_the_footer() {
     let (mut app, _dir) = query_app();
-    app.schema_visible = false;
+    app.panes.schema_visible = false;
     let columns: Vec<String> = (0..30).map(|i| format!("column_{i}")).collect();
     let row: Vec<Option<String>> = (0..30).map(|i| Some(format!("value {i}"))).collect();
     let outcome = QueryOutcome {
@@ -194,9 +194,9 @@ fn kept_results_and_the_statement_above_a_result() {
 #[test]
 fn a_runs_outcome_is_shown_in_the_results_pane() {
     let (mut app, _dir) = query_app();
-    app.status = "relation \"nope\" does not exist (line 1, col 15)".into();
-    app.status_is_error = true;
-    app.status_in_results = true;
+    app.notes.status = "relation \"nope\" does not exist (line 1, col 15)".into();
+    app.notes.status_is_error = true;
+    app.notes.status_in_results = true;
     let screen = render(&mut app, 100, 24);
     let lines: Vec<&str> = screen.lines().collect();
     let last = lines.last().unwrap();

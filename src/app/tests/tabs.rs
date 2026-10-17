@@ -49,7 +49,7 @@ async fn esc_stops_only_its_own_tabs_query_and_others_say_whose_runs() {
     app.handle_key(key(KeyCode::F(5)));
     assert!(app.run.executing);
     app.handle_key(alt('2'));
-    assert_eq!((app.active_tab, app.connect_form.name.as_str()), (1, "beta"));
+    assert_eq!((app.active_tab, app.connection.form.name.as_str()), (1, "beta"));
     // Esc here doesn't stop it: it says whose it is, and how to get there.
     app.focus = Focus::Editor;
     app.handle_key(key(KeyCode::Esc));
@@ -57,7 +57,7 @@ async fn esc_stops_only_its_own_tabs_query_and_others_say_whose_runs() {
     assert_eq!(said(&app), "Tab “Query 1” on alpha is running a query: Alt+1 goes to it, Esc there stops it");
     // A connection without a saved name (from a URL) is named by its address.
     app.handle_key(alt('1'));
-    app.connect_form.name.clear();
+    app.connection.form.name.clear();
     app.handle_key(alt('2'));
     app.focus = Focus::Editor;
     app.handle_key(key(KeyCode::Esc));
@@ -70,7 +70,7 @@ async fn esc_stops_only_its_own_tabs_query_and_others_say_whose_runs() {
     assert!(app.run.cancelling);
     tokio::time::timeout(std::time::Duration::from_secs(5), finish(&mut app)).await.expect("stopped");
     assert!(!app.run.executing && !app.run.cancel_failed);
-    assert!(!app.status.contains("Couldn't cancel"), "{}", app.status);
+    assert!(!app.notes.status.contains("Couldn't cancel"), "{}", app.notes.status);
 }
 
 #[tokio::test]
@@ -88,12 +88,12 @@ async fn runs_show_their_tab_at_once_and_f7_waits_for_a_running_query() {
     assert!(app.run.executing && app.tab.result_tab == ResultTab::Rows);
     // While it runs, F5 says why it does nothing, and F7 waits for it.
     app.handle_key(key(KeyCode::F(5)));
-    assert!(app.editor_note_is_error && said(&app).starts_with("A query is running"), "{}", said(&app));
+    assert!(app.notes.editor_note_is_error && said(&app).starts_with("A query is running"), "{}", said(&app));
     app.tab.editor.set_text("select id from t where id = 1");
     app.handle_key(key(KeyCode::F(7)));
     assert!(said(&app).starts_with("The plan follows"), "{}", said(&app));
     // In the editor's footer: the results pane still says it's running.
-    assert_eq!(app.status, "Running… (Esc to cancel)");
+    assert_eq!(app.notes.status, "Running… (Esc to cancel)");
     // Waits for the query, then the plan made after it.
     finish(&mut app).await;
     assert_eq!(app.tab.result_tab, ResultTab::Plan);
@@ -106,7 +106,11 @@ async fn runs_show_their_tab_at_once_and_f7_waits_for_a_running_query() {
     app.handle_key(key(KeyCode::F(5)));
     app.handle_key(key(KeyCode::F(7)));
     finish(&mut app).await;
-    assert!(app.status.contains("nope") && app.status.ends_with(" · the plan wasn't made"), "{}", app.status);
+    assert!(
+        app.notes.status.contains("nope") && app.notes.status.ends_with(" · the plan wasn't made"),
+        "{}",
+        app.notes.status
+    );
     assert!(app.queued_plan.is_none() && app.tab.result_tab != ResultTab::Plan);
     // Esc stops both the query and the plan waiting for it.
     app.tab.editor.set_text("select * from t");
@@ -130,7 +134,11 @@ async fn other_tabs_can_be_used_while_a_read_runs() {
     // A new tab opens meanwhile; there, the run is another tab's.
     app.new_tab(None, "select 2", None);
     assert_eq!(app.active_tab, 1);
-    assert!(app.status.starts_with("Tab “Query 1” on :memory: is running a query: Alt+1 goes to it"), "{}", app.status);
+    assert!(
+        app.notes.status.starts_with("Tab “Query 1” on :memory: is running a query: Alt+1 goes to it"),
+        "{}",
+        app.notes.status
+    );
     assert_eq!(app.running_label(), None, "this tab's results aren't running");
     app.handle_key(key(KeyCode::F(5)));
     assert!(said(&app).ends_with("wait for it, or Esc there stops it"), "{}", said(&app));
@@ -138,7 +146,7 @@ async fn other_tabs_can_be_used_while_a_read_runs() {
     // The outcome lands in its own tab, and the status bar says so here.
     finish(&mut app).await;
     assert!(app.tab.grid.results.is_none());
-    assert!(app.status.starts_with("Query 1: "), "{}", app.status);
+    assert!(app.notes.status.starts_with("Query 1: "), "{}", app.notes.status);
     // Its stream was closed while hidden: M runs it again for the rest.
     assert!(app.run.stream.is_none());
     app.switch_tab(0);
@@ -162,8 +170,8 @@ async fn result_tabs_messages_and_help() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
     run_sql(&mut app, "select 1").await;
     run_sql(&mut app, "select nope").await;
-    assert_eq!(app.messages.iter().filter(|m| m.is_error).count(), 1);
-    assert!(app.messages.iter().any(|m| m.text.starts_with("Connected to")));
+    assert_eq!(app.notes.log.iter().filter(|m| m.is_error).count(), 1);
+    assert!(app.notes.log.iter().any(|m| m.text.starts_with("Connected to")));
 
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Char(']')));

@@ -160,12 +160,12 @@ async fn rows_open_in_the_app_for_their_format() {
 async fn run_outcomes_are_for_the_results_pane() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
     run_sql(&mut app, "select 1").await;
-    assert!(app.status_in_results && app.status.contains("1 row"), "{}", app.status);
+    assert!(app.notes.status_in_results && app.notes.status.contains("1 row"), "{}", app.notes.status);
     run_sql(&mut app, "select * from nope").await;
-    assert!(app.status_in_results && app.status_is_error, "{}", app.status);
+    assert!(app.notes.status_in_results && app.notes.status_is_error, "{}", app.notes.status);
     // Other messages stay in the status bar.
     app.set_status_for_tests("Copied");
-    assert!(!app.status_in_results);
+    assert!(!app.notes.status_in_results);
 }
 
 #[test]
@@ -231,7 +231,7 @@ async fn results_filter_sort_view_and_load_more() {
     let five = "WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 5) \
                 SELECT n, '{\"k\":' || n || '}' AS j FROM s";
     run_sql(&mut app, five).await;
-    assert!(app.status.contains("more load as you scroll"), "{}", app.status);
+    assert!(app.notes.status.contains("more load as you scroll"), "{}", app.notes.status);
     app.focus = Focus::Results;
 
     // M fetches more rows from the open stream.
@@ -298,7 +298,7 @@ async fn export_all_rows_of_a_streamed_result() {
             break;
         }
     }
-    assert!(app.status.starts_with("Exported all 25000 rows to"), "{}", app.status);
+    assert!(app.notes.status.starts_with("Exported all 25000 rows to"), "{}", app.notes.status);
     let text = std::fs::read_to_string(&exports()[0]).unwrap();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!((lines.len(), lines[0], lines[1], lines[25000]), (25001, "n", "1", "25000"));
@@ -349,7 +349,7 @@ async fn a_script_shows_every_result_set() {
     let shown =
         |app: &App| app.tab.grid.results.as_ref().map(|r| (r.statement, r.columns.clone(), r.rows.len())).unwrap();
     assert_eq!(shown(&app), (4, vec!["n".to_string()], 1));
-    assert!(app.status.contains("3 result sets"), "{}", app.status);
+    assert!(app.notes.status.contains("3 result sets"), "{}", app.notes.status);
 
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Char('>')));
@@ -395,7 +395,7 @@ async fn copying_names_rows_as_csv_and_where_messages_show() {
     run_sql(&mut app, "select * from pets order by id").await;
     // The navigator: a table as written in SQL, with its schema.
     app.focus = Focus::Schema;
-    let panel = app.schema.as_mut().unwrap();
+    let panel = app.connection.schema.as_mut().unwrap();
     panel.selected = panel.nodes().iter().position(|n| matches!(n, SchemaNode::Table(_))).unwrap();
     app.handle_key(ctrl('c'));
     assert_eq!(app.take_clipboard().as_deref(), Some("main.pets"));
@@ -407,9 +407,9 @@ async fn copying_names_rows_as_csv_and_where_messages_show() {
     assert_eq!(app.take_clipboard().as_deref(), Some("id,name\r\n1,Rex\r\n2,Tom\r\n"));
     // A results key's message is in the results' footer, and in MESSAGES.
     app.handle_key(key(KeyCode::Char('Y')));
-    assert_eq!(app.results_note.as_ref().map(|(m, _)| m.as_str()), Some("Copied row (tab-separated)"));
+    assert_eq!(app.notes.results_note.as_ref().map(|(m, _)| m.as_str()), Some("Copied row (tab-separated)"));
     assert_eq!(
-        (app.status.as_str(), app.messages.last().map(|m| m.text.as_str())),
+        (app.notes.status.as_str(), app.notes.log.last().map(|m| m.text.as_str())),
         ("", Some("Copied row (tab-separated)"))
     );
     // A run shows how long it's been going.
@@ -432,7 +432,7 @@ async fn edit_a_cell_by_primary_key() {
     app.handle_key(key(KeyCode::Enter));
     finish(&mut app).await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[1][2].as_deref(), Some(r"it's \ fine?"));
-    assert!(app.status.contains("updated 1 row"), "{}", app.status);
+    assert!(app.notes.status.contains("updated 1 row"), "{}", app.notes.status);
 
     // The database really changed, and only that row.
     run_sql(&mut app, "select note from people order by id").await;
@@ -583,7 +583,7 @@ async fn add_mark_delete_and_copy_rows() {
     type_text(&mut app, "Žąsis");
     app.handle_key(key(KeyCode::Enter));
     finish(&mut app).await;
-    assert!(app.status.starts_with("Added 1 row(s) · 4 row(s)"), "{}", app.status);
+    assert!(app.notes.status.starts_with("Added 1 row(s) · 4 row(s)"), "{}", app.notes.status);
     let rows = &app.tab.grid.results.as_ref().unwrap().rows;
     assert_eq!(rows.len(), 4);
     assert_eq!(rows[3], vec![Some("4".to_string()), Some("Žąsis".to_string()), Some("cat".to_string())]);
@@ -662,7 +662,7 @@ fn ctrl_w_deletes_a_word_in_a_filter_instead_of_closing_the_tab() {
 #[test]
 fn a_tabular_plan_takes_the_results_keys() {
     let (mut app, _dir) = test_app();
-    app.connect_form.engine = Engine::MySql;
+    app.connection.form.engine = Engine::MySql;
     app.show_results_for_tests(outcome(&["id"], &[&[Some("1")], &[Some("2")]]));
     let plan = outcome(
         &["id", "select_type", "table", "type", "rows"],
@@ -682,7 +682,7 @@ fn a_tabular_plan_takes_the_results_keys() {
     assert_eq!(app.take_clipboard().as_deref(), Some("PRIMARY"));
     // Not the ones that change data.
     app.handle_results_key(key(KeyCode::Char('c')));
-    assert!(app.cell_edit.is_none() && app.status.contains("not the plan"));
+    assert!(app.cell_edit.is_none() && app.notes.status.contains("not the plan"));
     // RESULT is the query's grid again; QUERY PLAN the plan's.
     app.handle_results_key(key(KeyCode::Char('1')));
     assert!(!app.tab.plan_swapped);
@@ -707,7 +707,7 @@ fn a_tabular_plan_takes_the_results_keys() {
 #[test]
 fn a_results_filter_stays_with_its_grid() {
     let (mut app, _dir) = test_app();
-    app.connect_form.engine = Engine::MySql;
+    app.connection.form.engine = Engine::MySql;
     app.show_results_for_tests(outcome(&["id"], &[&[Some("1")], &[Some("74")]]));
     app.handle_results_key(key(KeyCode::Char('/')));
     for c in "74".chars() {

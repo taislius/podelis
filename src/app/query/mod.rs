@@ -40,7 +40,7 @@ impl App {
         // binding (Ctrl+W also closes the tab).
         let edit_key = key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('u' | 'w'));
         if edit_key && self.cell_view.is_none() {
-            let schema_filter = self.schema.as_ref().is_some_and(|s| s.filter_editing);
+            let schema_filter = self.connection.schema.as_ref().is_some_and(|s| s.filter_editing);
             if self.cell_edit.is_some() {
                 return self.handle_cell_edit_key(key);
             }
@@ -93,7 +93,7 @@ impl App {
             // Esc leaves the zoom, after a results filter (which it clears
             // first) and outside vim mode in the editor (where it's vim's).
             KeyCode::Esc
-                if self.zoomed
+                if self.panes.zoomed
                     && (self.focus != Focus::Results || self.tab.grid.filter.is_empty())
                     && (self.focus != Focus::Editor || self.vim_mode().is_none()) =>
             {
@@ -110,7 +110,7 @@ impl App {
             }
             // Esc leaves the statement's pop-over once it has nothing else
             // to do in the editor (a selection, vim's modes).
-            KeyCode::Esc if self.statement_zoom && self.focus == Focus::Editor && !self.esc_has_a_job() => {
+            KeyCode::Esc if self.panes.statement_zoom && self.focus == Focus::Editor && !self.esc_has_a_job() => {
                 return self.toggle_statement_zoom();
             }
             // A question being answered: Esc stops it once it has nothing
@@ -142,7 +142,7 @@ impl App {
     pub(in crate::app) fn esc_has_a_job(&self) -> bool {
         match self.focus {
             Focus::Results => !self.tab.grid.filter.is_empty(),
-            Focus::Schema => self.schema.as_ref().is_some_and(|s| !s.filter.is_empty()),
+            Focus::Schema => self.connection.schema.as_ref().is_some_and(|s| !s.filter.is_empty()),
             Focus::Editor => {
                 self.vim_mode().is_some_and(|m| m != VimMode::Normal) || self.tab.editor.selection().is_some()
             }
@@ -154,17 +154,17 @@ impl App {
     /// by word). True if handled.
     pub(in crate::app) fn resize_panes(&mut self, code: KeyCode) -> bool {
         const STEP: u16 = 5;
-        if self.zoomed {
+        if self.panes.zoomed {
             return false;
         }
         match code {
-            KeyCode::Up => self.editor_percent = self.editor_percent.saturating_sub(STEP).max(10),
-            KeyCode::Down => self.editor_percent = (self.editor_percent + STEP).min(90),
-            KeyCode::Left | KeyCode::Right if self.focus != Focus::Editor && self.schema_shown => {
+            KeyCode::Up => self.panes.editor_percent = self.panes.editor_percent.saturating_sub(STEP).max(10),
+            KeyCode::Down => self.panes.editor_percent = (self.panes.editor_percent + STEP).min(90),
+            KeyCode::Left | KeyCode::Right if self.focus != Focus::Editor && self.panes.schema_shown => {
                 // From the width drawn, border included (the limits it's
                 // drawn within depend on the screen).
                 let Some(area) = self.hits.schema else { return false };
-                self.schema_width = Some(match code {
+                self.panes.schema_width = Some(match code {
                     KeyCode::Left => area.width.saturating_sub(2),
                     _ => area.width + 2,
                 });
@@ -249,7 +249,7 @@ impl App {
                 }
             }
             Focus::Results if has_row => return self.copy_row(),
-            Focus::Results if self.tab.result_tab == ResultTab::Messages && !self.messages.is_empty() => {
+            Focus::Results if self.tab.result_tab == ResultTab::Messages && !self.notes.log.is_empty() => {
                 return self.copy_message();
             }
             Focus::Results if self.tab.result_tab == ResultTab::Plan && self.tab.plan.is_some() => {
@@ -268,7 +268,7 @@ impl App {
     /// The navigator's selection as it's written in SQL (a table with its
     /// schema), and what it is.
     pub(in crate::app) fn schema_name(&self) -> Option<(String, &'static str)> {
-        let panel = self.schema.as_ref()?;
+        let panel = self.connection.schema.as_ref()?;
         let engine = self.engine();
         let quote = |name: &str| engine.quote_ident(name);
         Some(match *panel.nodes().get(panel.selected)? {
@@ -309,7 +309,7 @@ impl App {
                 self.tab.grid.refresh_view();
             }
             Focus::Schema => {
-                if let Some(panel) = self.schema.as_mut().filter(|p| p.filter_editing) {
+                if let Some(panel) = self.connection.schema.as_mut().filter(|p| p.filter_editing) {
                     panel.filter.insert_str(text);
                     panel.selected = step_selectable(&panel.nodes(), 0, 1);
                 }
@@ -349,7 +349,7 @@ impl App {
         match action {
             // With the statement alone in sight, "everything" is it (or
             // the selection): not the rest of the script, out of sight.
-            Action::Run if self.statement_zoom => self.execute_current(),
+            Action::Run if self.panes.statement_zoom => self.execute_current(),
             Action::Run => self.execute_all(),
             Action::RunStatement => self.execute_current(),
             Action::Explain => self.explain_current(),
@@ -393,10 +393,10 @@ impl App {
 
     /// Shows the focused pane full-screen, or the normal layout again.
     pub(in crate::app) fn toggle_zoom(&mut self) {
-        self.zoomed = !self.zoomed;
-        self.statement_zoom = false;
+        self.panes.zoomed = !self.panes.zoomed;
+        self.panes.statement_zoom = false;
         self.completion = None;
-        let msg = if self.zoomed {
+        let msg = if self.panes.zoomed {
             format!("Zoomed: Tab moves between panes; {} or Esc returns", self.keymap.label(Action::Zoom))
         } else {
             String::new()
@@ -408,10 +408,10 @@ impl App {
     /// a pop-over over the query screen, or the whole text again. It's the
     /// tab's own editor, so what's typed there is in the tab at once.
     pub(in crate::app) fn toggle_statement_zoom(&mut self) {
-        self.statement_zoom = !self.statement_zoom;
-        self.zoomed = false;
+        self.panes.statement_zoom = !self.panes.statement_zoom;
+        self.panes.zoomed = false;
         self.completion = None;
-        if self.statement_zoom {
+        if self.panes.statement_zoom {
             self.focus = Focus::Editor;
             self.set_status(
                 format!("The statement alone: {} or Esc returns", self.keymap.label(Action::ZoomStatement)),
@@ -439,7 +439,7 @@ impl App {
 
     pub(in crate::app) fn cycle_focus(&mut self, forward: bool) {
         let mut order = vec![Focus::Editor, Focus::Results];
-        if self.schema_shown {
+        if self.panes.schema_shown {
             order.push(Focus::Schema);
         }
         let idx = order.iter().position(|f| *f == self.focus).unwrap_or(0);

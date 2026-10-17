@@ -44,7 +44,7 @@ impl App {
         if self.run.executing {
             return self.set_status(self.running_elsewhere("wait for it, or Esc there stops it"), true);
         }
-        if self.database.is_none() {
+        if self.connection.database.is_none() {
             return self.set_status(self.not_connected_message(), true);
         }
         if sql.trim().is_empty() {
@@ -76,7 +76,7 @@ impl App {
     ) {
         let infos = analyze::analyze(&parse(&sql, self.engine()));
         let writes: Vec<&StatementInfo> = infos.iter().filter(|i| i.modifies()).collect();
-        if self.active_mode == ConnectionMode::ReadOnly
+        if self.connection.mode == ConnectionMode::ReadOnly
             && let Some(first) = writes.first()
         {
             let msg = format!("Read-only connection: not running “{}” (it changes data)", first.summary);
@@ -86,7 +86,7 @@ impl App {
             return self.set_status(msg, true);
         }
         let risky: Vec<String> = infos.iter().filter_map(|i| i.risk.map(|r| format!("{r}: {}", i.summary))).collect();
-        let production = self.active_mode == ConnectionMode::Production && !writes.is_empty();
+        let production = self.connection.mode == ConnectionMode::Production && !writes.is_empty();
         if production || !risky.is_empty() {
             let message = if production {
                 format!("PRODUCTION: {} statement(s) will change data. Run?", writes.len())
@@ -100,8 +100,8 @@ impl App {
             details.truncate(6);
             // Writes can instead run in a transaction, to review first.
             let offer_transaction = !writes.is_empty()
-                && self.tx_mode == TxMode::AutoCommit
-                && self.txn == TxnState::Idle
+                && self.connection.tx_mode == TxMode::AutoCommit
+                && self.connection.txn == TxnState::Idle
                 && matches!(purpose, RunPurpose::Query | RunPurpose::RowChange(_));
             let action = ConfirmAction::Run { sql, offset, infos, purpose, filled };
             self.confirm = Some(Confirm { message, details, danger: true, action, offer_transaction });
@@ -109,12 +109,12 @@ impl App {
         }
         // A read on production that would read a whole big table asks
         // first: planned (not run) in the background, then run or asked.
-        let guarded = self.active_mode == ConnectionMode::Production
+        let guarded = self.connection.mode == ConnectionMode::Production
             && self.settings.guard_rows > 0
             && matches!(purpose, RunPurpose::Query)
             && !infos.is_empty()
             && infos.iter().all(|i| i.kind == Kind::Read);
-        if guarded && let Some(db) = self.database.clone() {
+        if guarded && let Some(db) = self.connection.database.clone() {
             self.set_result_status("Checking the plan before running on production…".to_string(), false);
             // Running, as far as the rest of the app goes: nothing else
             // starts, and Esc stops it.
@@ -204,7 +204,7 @@ impl App {
     /// alone: from then on plans aren't made on another connection.
     pub(in crate::app) fn note_session_changes(&mut self) {
         if self.run.infos.iter().any(|i| i.kind == Kind::Session)
-            && let Some(db) = &self.database
+            && let Some(db) = &self.connection.database
         {
             db.mark_session_changed();
         }
@@ -232,7 +232,7 @@ impl App {
                 _ => {}
             }
         }
-        let Some(db) = self.database.clone() else { return };
+        let Some(db) = self.connection.database.clone() else { return };
         // A still-open streamed result holds the session: close it (which
         // cancels it on the server) so this run can start; so does an export.
         self.stop_export();
@@ -273,7 +273,7 @@ impl App {
         self.run.extra.timed_out = None;
         self.run.extra.started = Some(Instant::now());
         self.run.extra.deadline =
-            self.connect_form.query_timeout().ok().flatten().map(|limit| (Instant::now() + limit, limit));
+            self.connection.form.query_timeout().ok().flatten().map(|limit| (Instant::now() + limit, limit));
         self.tab.error_marker = None;
         self.run.executing = true;
         self.run.db = Some(db.clone());
@@ -388,7 +388,7 @@ impl App {
             return;
         }
         // The run's own connection: another tab's may be shown now.
-        let Some(db) = self.run.db.clone().or_else(|| self.database.clone()) else { return };
+        let Some(db) = self.run.db.clone().or_else(|| self.connection.database.clone()) else { return };
         self.run.cancelling = true;
         self.queued_plan = None;
         self.set_result_status("Cancelling...".to_string(), false);
@@ -409,7 +409,7 @@ impl App {
         if let Some(task) = self.task.take() {
             task.abort();
         }
-        if let Some(db) = self.run.db.as_ref().or(self.database.as_ref()) {
+        if let Some(db) = self.run.db.as_ref().or(self.connection.database.as_ref()) {
             db.abandon_session();
         }
         self.on_query_failed(
@@ -426,7 +426,7 @@ impl App {
         if self.run.executing && !self.running_here() {
             return self.set_status(self.running_elsewhere("disconnect once it's done"), true);
         }
-        if self.txn == TxnState::Idle {
+        if self.connection.txn == TxnState::Idle {
             return self.disconnect();
         }
         self.confirm = Some(Confirm {

@@ -67,7 +67,7 @@ fn agent_activity_window() {
 #[test]
 fn asking_in_plain_language_and_sharing_a_schema() {
     let (mut app, _dir) = query_app();
-    app.connect_form.name = "prod".into();
+    app.connection.form.name = "prod".into();
     app.ask_prompt = Some(crate::app::LineInput::new("revenue per country last month"));
     let screen = render(&mut app, 110, 24);
     assert!(screen.contains("ASK ABOUT PROD"), "{screen}");

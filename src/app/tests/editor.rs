@@ -4,18 +4,18 @@ use super::*;
 fn ctrl_y_copies_the_focused_field_in_the_settings() {
     let (mut app, _dir) = test_app();
     app.screen = Screen::Connect;
-    app.connect_form.host = "db.example.com".into();
-    app.connect_form.password = "secret".into();
+    app.connection.form.host = "db.example.com".into();
+    app.connection.form.password = "secret".into();
     let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
-    app.connect_form.focus = ConnectField::Host;
+    app.connection.form.focus = ConnectField::Host;
     app.handle_key(ctrl('y'));
     assert_eq!(app.take_clipboard().as_deref(), Some("db.example.com"));
-    app.connect_form.focus = ConnectField::Password;
+    app.connection.form.focus = ConnectField::Password;
     app.handle_key(ctrl('y'));
     assert_eq!(app.take_clipboard(), None);
-    app.connect_form.focus = ConnectField::Mode;
+    app.connection.form.focus = ConnectField::Mode;
     app.handle_key(ctrl('y'));
-    assert_eq!(app.take_clipboard().as_deref(), Some(app.connect_form.mode.label()));
+    assert_eq!(app.take_clipboard().as_deref(), Some(app.connection.form.mode.label()));
     // Ctrl+C and Ctrl+Q quit.
     app.handle_key(ctrl('c'));
     assert!(app.should_quit);
@@ -31,8 +31,8 @@ fn truncated_status() {
     o.total_rows = 5000;
     o.statements = 2;
     app.show_results(o);
-    assert!(app.status.starts_with("Showing first 1 of 5000 rows"));
-    assert!(app.status.ends_with("· 2 statements"));
+    assert!(app.notes.status.starts_with("Showing first 1 of 5000 rows"));
+    assert!(app.notes.status.ends_with("· 2 statements"));
 }
 
 #[test]
@@ -97,17 +97,17 @@ fn messages_can_be_selected_copied_and_opened() {
     app.tab.result_tab = ResultTab::Messages;
     // From the newest; Ctrl+C or `y` copies it whole.
     app.handle_key(key(KeyCode::Up));
-    assert_eq!(app.message_selected, Some(1));
+    assert_eq!(app.notes.selected, Some(1));
     app.handle_key(key(KeyCode::Up));
     app.handle_key(key(KeyCode::Up));
-    assert_eq!(app.message_selected, Some(0));
+    assert_eq!(app.notes.selected, Some(0));
     app.handle_key(key(KeyCode::Down));
     app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert!(app.take_clipboard().is_some_and(|c| c.contains("LINE 1:")));
     app.handle_key(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT));
     assert!(
         app.take_clipboard()
-            .is_some_and(|c| c.starts_with(&format!("{}  Connected\n", app.messages[0].time)) && c.contains("LINE 1:"))
+            .is_some_and(|c| c.starts_with(&format!("{}  Connected\n", app.notes.log[0].time)) && c.contains("LINE 1:"))
     );
     app.handle_key(key(KeyCode::Enter));
     let view = app.cell_view.as_ref().unwrap();
@@ -127,7 +127,7 @@ async fn the_statement_at_the_cursor_is_selected_or_zoomed_alone() {
     // Zoomed, F5 runs the statement in sight, not the whole script.
     app.tab.editor.clear_selection();
     app.run_action(Action::ZoomStatement);
-    assert!(app.statement_zoom && !app.zoomed);
+    assert!(app.panes.statement_zoom && !app.panes.zoomed);
     app.handle_key(key(KeyCode::F(5)));
     finish(&mut app).await;
     let shown = app.tab.grid.results.as_ref().map(|r| r.rows.clone());
@@ -136,20 +136,20 @@ async fn the_statement_at_the_cursor_is_selected_or_zoomed_alone() {
     app.focus = Focus::Editor;
     app.tab.editor.select_offsets(0, 3);
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.statement_zoom && app.tab.editor.selection().is_none());
+    assert!(app.panes.statement_zoom && app.tab.editor.selection().is_none());
     app.handle_key(key(KeyCode::Esc));
-    assert!(!app.statement_zoom);
+    assert!(!app.panes.statement_zoom);
     // Another pane taking the keys (an Explain's plan) leaves it open.
     app.run_action(Action::ZoomStatement);
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Char(']')));
-    assert!(app.statement_zoom);
+    assert!(app.panes.statement_zoom);
     app.run_action(Action::ZoomStatement);
-    assert!(!app.statement_zoom);
+    assert!(!app.panes.statement_zoom);
     // The pane zoom and this one don't go together.
     app.run_action(Action::ZoomStatement);
     app.run_action(Action::Zoom);
-    assert!(app.zoomed && !app.statement_zoom);
+    assert!(app.panes.zoomed && !app.panes.statement_zoom);
 }
 
 #[tokio::test]
@@ -157,7 +157,7 @@ async fn autocomplete_from_catalog() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
     run_sql(&mut app, "create table users (id int, email text)").await;
     // DDL triggers a catalog reload; wait for it.
-    while app.schema.as_ref().is_none_or(|s| s.loading) {
+    while app.connection.schema.as_ref().is_none_or(|s| s.loading) {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
@@ -238,7 +238,7 @@ fn command_palette_finds_and_runs_commands() {
     app.tab.editor.set_text("select a,b from t");
     // Ctrl+K waits for a letter; its menu shows only after a pause.
     app.handle_key(ctrl('k'));
-    assert!(app.palette.as_ref().is_some_and(|p| !p.menu) && app.status == "^K…");
+    assert!(app.palette.as_ref().is_some_and(|p| !p.menu) && app.notes.status == "^K…");
     assert!(app.palette_menu_due().is_some_and(|due| due > Instant::now()));
     app.show_palette_menu();
     assert!(app.palette.as_ref().is_some_and(|p| p.menu) && app.palette_menu_due().is_none());
@@ -421,22 +421,22 @@ async fn tab_and_shift_tab_go_round_the_panes() {
     // Another project selected: Tab opens it, into its connections; then
     // back to the first one the same way.
     let other = app.store.projects[1].id.clone();
-    app.projects_selected = 1;
+    app.manager.project_selected = 1;
     app.handle_key(key(KeyCode::Tab));
     assert!(matches!(app.screen, Screen::Connections));
     assert_eq!(app.current_project.as_deref(), Some(other.as_str()));
     app.handle_key(key(KeyCode::BackTab));
-    app.projects_selected = 0;
+    app.manager.project_selected = 0;
     app.handle_key(key(KeyCode::Right));
     assert!(matches!(app.screen, Screen::Connections));
     assert_eq!(app.current_project.as_deref(), Some(project.as_str()));
-    app.connections_selected = 0;
+    app.manager.connection_selected = 0;
     app.handle_key(key(KeyCode::Tab));
     read_password(&mut app).await;
     assert!(matches!(app.screen, Screen::Connect));
     // In the settings ↑↓ move between fields, Tab goes round to the projects.
     app.handle_key(key(KeyCode::Down));
-    assert_eq!(app.connect_form.focus, ConnectField::Engine);
+    assert_eq!(app.connection.form.focus, ConnectField::Engine);
     app.handle_key(key(KeyCode::Tab));
     assert!(matches!(app.screen, Screen::Projects));
     // And back the other way.
@@ -456,11 +456,11 @@ fn no_completions_is_said_in_the_editor_footer() {
     type_text(&mut app, "select zzqx");
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
     assert!(app.completion.is_none());
-    assert_eq!(app.editor_note.as_deref(), Some("No completions"));
-    assert!(app.status.is_empty(), "not in the status bar: {}", app.status);
+    assert_eq!(app.notes.editor_note.as_deref(), Some("No completions"));
+    assert!(app.notes.status.is_empty(), "not in the status bar: {}", app.notes.status);
     // Gone with the next key.
     app.handle_key(key(KeyCode::Char('y')));
-    assert!(app.editor_note.is_none());
+    assert!(app.notes.editor_note.is_none());
 }
 
 #[test]

@@ -29,7 +29,7 @@ impl App {
         let original = filled.as_ref().map_or_else(|| sql.to_string(), |f| f.original.clone());
         let wrapped = Filled::prefixed(filled, &original, "BEGIN;\n");
         let infos = analyze::analyze(&parse(&wrapped.sql, self.engine()));
-        if self.tx_mode == TxMode::RollbackOnly {
+        if self.connection.tx_mode == TxMode::RollbackOnly {
             self.run.extra.dry_run = Some(DryRun::Running);
         } else {
             self.run.extra.reviewing = true;
@@ -47,8 +47,8 @@ impl App {
         purpose: RunPurpose,
         filled: Option<Filled>,
     ) {
-        let wrap = self.tx_mode != TxMode::AutoCommit
-            && self.txn == TxnState::Idle
+        let wrap = self.connection.tx_mode != TxMode::AutoCommit
+            && self.connection.txn == TxnState::Idle
             && infos.iter().any(StatementInfo::modifies)
             && matches!(purpose, RunPurpose::Query | RunPurpose::RowChange(_) | RunPurpose::CellEdit { .. });
         if wrap {
@@ -60,8 +60,11 @@ impl App {
 
     /// Why the write mode can't run `infos` (None: it can).
     pub(super) fn tx_mode_refusal(&self, infos: &[StatementInfo], purpose: &RunPurpose) -> Option<String> {
-        let mode = self.tx_mode;
-        if mode == TxMode::AutoCommit || self.txn != TxnState::Idle || !infos.iter().any(StatementInfo::modifies) {
+        let mode = self.connection.tx_mode;
+        if mode == TxMode::AutoCommit
+            || self.connection.txn != TxnState::Idle
+            || !infos.iter().any(StatementInfo::modifies)
+        {
             return None;
         }
         let switch = self.keymap.label(Action::TxMode);
@@ -89,9 +92,9 @@ impl App {
     fn tx_mode_changeable(&mut self) -> bool {
         let why = if !self.connected() {
             self.not_connected_message()
-        } else if self.active_mode == ConnectionMode::ReadOnly {
+        } else if self.connection.mode == ConnectionMode::ReadOnly {
             "Read-only connection: writes are refused anyway".to_string()
-        } else if self.txn != TxnState::Idle {
+        } else if self.connection.txn != TxnState::Idle {
             format!(
                 "Finish the open transaction first: {} commits, {} rolls back",
                 self.keymap.label(Action::Commit),
@@ -107,7 +110,7 @@ impl App {
     /// Ctrl+K x: pick auto-commit, manual commit or rollback-only.
     pub(super) fn open_tx_picker(&mut self) {
         if self.tx_mode_changeable() {
-            self.tx_picker = Some(self.tx_mode);
+            self.tx_picker = Some(self.connection.tx_mode);
         }
     }
 
@@ -115,7 +118,7 @@ impl App {
     /// rollback-only.
     pub(super) fn cycle_tx_mode(&mut self) {
         if self.tx_mode_changeable() {
-            self.set_tx_mode(self.tx_mode.next());
+            self.set_tx_mode(self.connection.tx_mode.next());
         }
     }
 
@@ -141,8 +144,8 @@ impl App {
     }
 
     fn set_tx_mode(&mut self, mode: TxMode) {
-        self.tx_mode = mode;
-        let msg = match self.tx_mode {
+        self.connection.tx_mode = mode;
+        let msg = match self.connection.tx_mode {
             TxMode::AutoCommit => "Auto-commit: each statement is committed as it runs".to_string(),
             TxMode::Manual => format!(
                 "Manual commit: changes wait for COMMIT ({}) or ROLLBACK ({})",
@@ -157,7 +160,7 @@ impl App {
     }
 
     pub(super) fn open_review(&mut self, rows_affected: u64) {
-        if self.txn == TxnState::Idle {
+        if self.connection.txn == TxnState::Idle {
             return;
         }
         self.review = Some(Review { rows_affected });
@@ -188,10 +191,10 @@ impl App {
 
     /// Commits or rolls back the open transaction, keeping the results.
     pub(super) fn end_transaction(&mut self, command: &'static str) {
-        if self.run.executing || self.database.is_none() {
+        if self.run.executing || self.connection.database.is_none() {
             return;
         }
-        if self.txn == TxnState::Idle {
+        if self.connection.txn == TxnState::Idle {
             return self.set_status("No transaction is open".to_string(), true);
         }
         let infos = analyze::analyze(&parse(command, self.engine()));
@@ -201,7 +204,7 @@ impl App {
     /// A dry run finished: roll it back.
     pub(super) fn end_dry_run(&mut self, outcome: DryRun) {
         self.run.extra.dry_run = Some(outcome);
-        if self.txn == TxnState::Idle {
+        if self.connection.txn == TxnState::Idle {
             // Nothing to roll back (e.g. the connection was reopened).
             self.run.extra.dry_run = None;
             return;

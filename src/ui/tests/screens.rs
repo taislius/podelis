@@ -11,8 +11,8 @@ fn projects_screen() {
 fn connections_screen_with_delete_confirmation() {
     let (mut app, _dir) = app();
     app.screen = Screen::Connections;
-    app.connections_selected = 1;
-    app.confirm_delete = true;
+    app.manager.connection_selected = 1;
+    app.manager.confirm_delete = true;
     assert_snapshot!(render(&mut app, 80, 14));
 }
 
@@ -20,24 +20,24 @@ fn connections_screen_with_delete_confirmation() {
 fn connect_form_server_and_sqlite() {
     let (mut app, _dir) = app();
     app.screen = Screen::Connect;
-    app.connect_form.engine = Engine::Postgres;
-    app.connect_form.mode = ConnectionMode::Production;
-    app.connect_form.ssh = "me@bastion".into();
-    app.connect_form.password = "secret".into();
+    app.connection.form.engine = Engine::Postgres;
+    app.connection.form.mode = ConnectionMode::Production;
+    app.connection.form.ssh = "me@bastion".into();
+    app.connection.form.password = "secret".into();
     let server = render(&mut app, 80, 22);
     assert!(!server.contains("secret"), "password must be masked");
     assert_snapshot!("connect_form_server", server);
 
-    app.connect_form.engine = crate::db::tests::file_engine();
-    app.connect_form.host = "./shop.db".into();
+    app.connection.form.engine = crate::db::tests::file_engine();
+    app.connection.form.host = "./shop.db".into();
     assert_snapshot!("connect_form_sqlite", render(&mut app, 80, 22));
 }
 
 #[test]
 fn production_confirmation_dialog_and_badges() {
     let (mut app, _dir) = query_app();
-    app.active_mode = ConnectionMode::Production;
-    app.txn = TxnState::Open;
+    app.connection.mode = ConnectionMode::Production;
+    app.connection.txn = TxnState::Open;
     app.confirm = Some(Confirm {
         message: "PRODUCTION: 1 statement(s) will change data. Run?".into(),
         details: vec!["DELETE without WHERE: delete from users".into()],
@@ -51,8 +51,8 @@ fn production_confirmation_dialog_and_badges() {
 #[test]
 fn a_long_file_path_gives_way_to_the_message_and_keeps_its_name() {
     let (mut app, _dir) = query_app();
-    app.connect_form.engine = crate::db::tests::file_engine();
-    app.connect_form.host = format!("/data/{}/projects/shop.db", "deep/".repeat(12));
+    app.connection.form.engine = crate::db::tests::file_engine();
+    app.connection.form.host = format!("/data/{}/projects/shop.db", "deep/".repeat(12));
     app.set_status_for_tests("Couldn't cancel: Esc again stops waiting · pool timed out");
     let screen = render(&mut app, 120, 24);
     let bar = screen.lines().last().unwrap();
@@ -64,7 +64,7 @@ fn a_long_file_path_gives_way_to_the_message_and_keeps_its_name() {
 fn status_bar_shows_the_connection_heartbeat_and_lost_connection() {
     let (mut app, _dir) = query_app();
     app.settings.keepalive = 30;
-    app.status.clear();
+    app.notes.status.clear();
     let status_bar = |app: &mut App| render(app, 120, 12).lines().last().unwrap().to_string();
     let bar = status_bar(&mut app);
     assert!(bar.contains("♥ prod") && bar.contains("MySQL"), "{bar}");
@@ -86,13 +86,13 @@ fn tx_mode_picker() {
     assert_snapshot!(screen);
     // Enter picks the highlighted mode.
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(app.tx_picker.is_none() && app.tx_mode == crate::app::TxMode::Manual);
+    assert!(app.tx_picker.is_none() && app.connection.tx_mode == crate::app::TxMode::Manual);
 }
 
 #[test]
 fn status_bar_names_only_vims_mode() {
     let (mut app, _dir) = query_app();
-    app.status.clear();
+    app.notes.status.clear();
     app.focus = Focus::Results;
     assert!(!render(&mut app, 120, 12).lines().last().unwrap().contains("RESULTS"));
     app.settings.editor_mode = crate::config::settings::EditorMode::Vim;

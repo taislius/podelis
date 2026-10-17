@@ -13,10 +13,10 @@ impl App {
     /// Shows who and where the open connection is: user, database,
     /// settings, TLS, latency.
     pub(super) fn show_connection_info(&mut self) {
-        let Some(db) = self.database.clone() else {
+        let Some(db) = self.connection.database.clone() else {
             return self.set_status("This tab isn't connected".to_string(), true);
         };
-        let form = &self.connect_form;
+        let form = &self.connection.form;
         let mut local = vec![
             ("Connection".to_string(), if form.name.is_empty() { "(unsaved)".to_string() } else { form.name.clone() }),
             ("Target".to_string(), form.summary()),
@@ -25,7 +25,7 @@ impl App {
         if let Ok(Some(t)) = form.query_timeout() {
             local.push(("Query timeout".to_string(), format!("{} s", t.as_secs())));
         }
-        if let Some(l) = self.connect_latency {
+        if let Some(l) = self.connection.latency {
             local.push(("Latency".to_string(), format!("{} ms", l.as_millis())));
         }
         let title = format!("CONNECTION · {}", local[0].1);
@@ -51,8 +51,8 @@ impl App {
     /// connection. No hosts, users, passwords or SQL.
     pub(super) fn diagnostics(&self) -> String {
         let mut rows = crate::cli::doctor::environment(&self.settings);
-        if let Some(db) = &self.database {
-            let form = &self.connect_form;
+        if let Some(db) = &self.connection.database {
+            let form = &self.connection.form;
             let ssh = if form.ssh.trim().is_empty() { "" } else { ", via SSH" };
             rows.push((
                 "Connection".to_string(),
@@ -78,9 +78,9 @@ impl App {
     pub fn wants_ticks(&self) -> bool {
         self.run.executing
             || self.activity.is_some()
-            || (self.settings.keepalive > 0 && self.database.is_some())
+            || (self.settings.keepalive > 0 && self.connection.database.is_some())
             // A lost connection, checked again until it's back.
-            || (self.connection_lost && self.database.is_some())
+            || (self.connection_lost && self.connection.database.is_some())
             // A plan's age, kept current.
             || (self.tab.result_tab == ResultTab::Plan && self.tab.plan_source.is_some())
             // What agents did, for the status bar's note.
@@ -119,7 +119,7 @@ impl App {
     /// query). No answer within `PING_WITHIN` is said as such; whether the
     /// session is given up for it is `pinged`'s to decide.
     fn ping(&mut self) {
-        let Some(db) = self.database.clone() else { return };
+        let Some(db) = self.connection.database.clone() else { return };
         self.pinging = true;
         self.last_activity = Instant::now();
         let send = self.sender();
@@ -166,21 +166,21 @@ impl App {
         if matches!(result, Err((_, Ping::NoAnswer)))
             && was_lost
             && !self.run.executing
-            && self.txn == TxnState::Idle
-            && let Some(db) = &self.database
+            && self.connection.txn == TxnState::Idle
+            && let Some(db) = &self.connection.database
         {
             db.abandon_session();
         }
         let result = result.map_err(|(e, _)| e);
         match result {
             Ok((latency, reconnected)) => {
-                self.connect_latency = Some(latency);
+                self.connection.latency = Some(latency);
                 if was_lost && !reconnected {
                     self.log("The connection is back".to_string(), false);
                     self.set_status("The connection is back".to_string(), false);
                 }
                 if reconnected {
-                    self.txn = TxnState::Idle;
+                    self.connection.txn = TxnState::Idle;
                     self.log("The connection had dropped: reconnected".to_string(), true);
                     self.set_status(
                         "The connection had dropped: reconnected (session settings were reset)".to_string(),

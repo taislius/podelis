@@ -14,7 +14,7 @@ impl App {
     }
 
     fn cell_edit_target(&self) -> Result<CellEdit, String> {
-        if self.active_mode == ConnectionMode::ReadOnly {
+        if self.connection.mode == ConnectionMode::ReadOnly {
             return Err("this connection is read-only".into());
         }
         let results = self.tab.grid.results.as_ref().ok_or("no results")?;
@@ -30,7 +30,7 @@ impl App {
             .ok_or("only results of a plain SELECT from one table (no joins or grouping) can be edited")?;
 
         // The table in the catalog: by schema if the query named one.
-        let catalog = self.schema.as_ref().ok_or("the schema hasn't loaded yet")?;
+        let catalog = self.connection.schema.as_ref().ok_or("the schema hasn't loaded yet")?;
         let mut matches = catalog
             .tables
             .iter()

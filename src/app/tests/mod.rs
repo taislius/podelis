@@ -56,10 +56,10 @@ pub(super) fn type_text(app: &mut App, text: &str) {
 /// An app connected to an in-memory file database (SQLite), on the query screen.
 pub(super) async fn connected_app(mode: ConnectionMode) -> (App, tempfile::TempDir) {
     let (mut app, dir) = test_app();
-    app.connect_form.engine = file_engine();
-    app.connect_form.host = ":memory:".into();
-    app.connect_form.mode = mode;
-    let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
+    app.connection.form.engine = file_engine();
+    app.connection.form.host = ":memory:".into();
+    app.connection.form.mode = mode;
+    let db = Database::connect(app.connection.form.params().unwrap()).await.unwrap();
     let generation = app.generation;
     app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
     assert!(matches!(app.screen, Screen::Query));
@@ -102,11 +102,11 @@ pub(super) async fn edit_cell(mode: ConnectionMode, select: &str, col: usize) ->
     let (mut app, dir) = connected_app(ConnectionMode::Normal).await;
     run_sql(&mut app, "create table people (id integer primary key, name text not null, note text)").await;
     run_sql(&mut app, "insert into people values (1, 'Ann', 'x'), (2, 'Ben', null)").await;
-    while app.schema.as_ref().is_none_or(|s| s.loading) {
+    while app.connection.schema.as_ref().is_none_or(|s| s.loading) {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
-    app.active_mode = mode;
+    app.connection.mode = mode;
     run_sql(&mut app, select).await;
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Down));
@@ -122,16 +122,16 @@ pub(super) fn alt(c: char) -> KeyEvent {
 /// The last message: in the editor's or the results' footer, else the
 /// status bar.
 pub(super) fn said(app: &App) -> &str {
-    let results = app.results_note.as_ref().map(|(m, _)| m.as_str());
-    app.editor_note.as_deref().or(results).unwrap_or(&app.status)
+    let results = app.notes.results_note.as_ref().map(|(m, _)| m.as_str());
+    app.notes.editor_note.as_deref().or(results).unwrap_or(&app.notes.status)
 }
 
 /// Whether that message is an error.
 pub(super) fn said_error(app: &App) -> bool {
-    match (&app.editor_note, &app.results_note) {
-        (Some(_), _) => app.editor_note_is_error,
+    match (&app.notes.editor_note, &app.notes.results_note) {
+        (Some(_), _) => app.notes.editor_note_is_error,
         (None, Some((_, is_error))) => *is_error,
-        (None, None) => app.status_is_error,
+        (None, None) => app.notes.status_is_error,
     }
 }
 
@@ -147,22 +147,22 @@ pub(super) fn show_projects(app: &mut App) {
 
 /// Connects the active tab to a saved SQLite connection, as picking it does.
 pub(super) async fn connect_profile(app: &mut App, profile: &ConnectionProfile) {
-    app.connect_form = ConnectForm::from_profile(profile, String::new());
-    let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
+    app.connection.form = ConnectForm::from_profile(profile, String::new());
+    let db = Database::connect(app.connection.form.params().unwrap()).await.unwrap();
     let generation = app.generation;
     app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
     finish_catalog(app).await;
 }
 
 pub(super) async fn finish_catalog(app: &mut App) {
-    while app.schema.as_ref().is_none_or(|s| s.loading) || app.run.executing {
+    while app.connection.schema.as_ref().is_none_or(|s| s.loading) || app.run.executing {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
 }
 
 pub(super) fn table_names(app: &App) -> Vec<String> {
-    app.schema.as_ref().map(|s| s.tables.iter().map(|t| t.info.name.clone()).collect()).unwrap_or_default()
+    app.connection.schema.as_ref().map(|s| s.tables.iter().map(|t| t.info.name.clone()).collect()).unwrap_or_default()
 }
 
 /// Waits for the next event of a kind and handles everything until then.
@@ -182,7 +182,7 @@ pub(super) async fn until_event(app: &mut App, done: fn(&DbEventKind) -> bool) {
 pub(super) async fn live_app(engine: Engine, name: &str) -> Option<(App, tempfile::TempDir)> {
     let (db, params) = crate::db::tests::own_live_db(engine, name).await?;
     let (mut app, dir) = test_app();
-    let form = &mut app.connect_form;
+    let form = &mut app.connection.form;
     form.engine = engine;
     form.host = params.host;
     form.port = if params.port == 0 { String::new() } else { params.port.to_string() };
@@ -196,7 +196,7 @@ pub(super) async fn live_app(engine: Engine, name: &str) -> Option<(App, tempfil
 
 /// Waits for a connection's password to come from the keychain.
 pub(super) async fn read_password(app: &mut App) {
-    while app.loading_profile {
+    while app.manager.loading_profile {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
@@ -211,13 +211,13 @@ pub(super) async fn asking_app(dir: &std::path::Path, config: &str) -> App {
     let mut app = App::new(store, None, Some(dir.to_path_buf()));
     let id = app.store.project_by_name("p").unwrap().id.clone();
     app.open_project(&id);
-    app.connect_form.engine = file_engine();
-    app.connect_form.host = dir.join("shop.db").to_string_lossy().into_owned();
-    app.connect_form.name = "shop".into();
-    let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
+    app.connection.form.engine = file_engine();
+    app.connection.form.host = dir.join("shop.db").to_string_lossy().into_owned();
+    app.connection.form.name = "shop".into();
+    let db = Database::connect(app.connection.form.params().unwrap()).await.unwrap();
     let generation = app.generation;
     app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
-    app.connect_form.name = "shop".into();
+    app.connection.form.name = "shop".into();
     app
 }
 

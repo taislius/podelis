@@ -8,7 +8,7 @@ impl App {
     /// without running it.
     /// While a query runs, it's made as soon as that finishes.
     pub(in crate::app) fn explain_current(&mut self) {
-        if self.database.is_none() {
+        if self.connection.database.is_none() {
             return;
         }
         let Some((stmt, line)) = self.statement_to_explain() else {
@@ -26,13 +26,13 @@ impl App {
     /// F7 while a query runs: made at once on a connection of its own where
     /// that sees the same as the session, else after the query.
     pub(in crate::app) fn explain_aside(&mut self, stmt: String, line: usize) {
-        let version = self.database.as_ref().map_or("", |db| db.version());
+        let version = self.connection.database.as_ref().map_or("", |db| db.version());
         let explain = self.engine().dialect().explain(&stmt, version);
         // (A file never: see `run_aside`.)
         let aside = !self.engine().is_file_based()
-            && self.txn == TxnState::Idle
+            && self.connection.txn == TxnState::Idle
             && crate::sql::params::find(&explain, self.engine()).is_empty();
-        match self.database.clone().filter(|_| aside) {
+        match self.connection.database.clone().filter(|_| aside) {
             Some(db) => {
                 let send = self.sender();
                 let limit = self.settings.row_limit;
@@ -84,12 +84,12 @@ impl App {
     /// After a failed run, the queued plan isn't made: the error stays in view.
     pub(in crate::app) fn drop_queued_plan(&mut self) {
         if self.queued_plan.take().is_some() {
-            self.status.push_str(" · the plan wasn't made");
+            self.notes.status.push_str(" · the plan wasn't made");
         }
     }
 
     pub(in crate::app) fn explain_statement(&mut self, stmt: String, line: usize) {
-        let version = self.database.as_ref().map_or("", |db| db.version());
+        let version = self.connection.database.as_ref().map_or("", |db| db.version());
         let explain = self.engine().dialect().explain(&stmt, version);
         self.plan_request = Some((stmt, false, line));
         if self.ask_for_params(&explain, 0, true) {

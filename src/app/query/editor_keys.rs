@@ -45,7 +45,7 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-        let page = self.editor_height.saturating_sub(1).max(1);
+        let page = self.panes.editor_height.saturating_sub(1).max(1);
         let ed = &mut self.tab.editor;
 
         // Movement; Shift extends the selection. macOS terminals send
@@ -123,6 +123,7 @@ impl App {
 
     pub(in crate::app) fn compute_completion(&self) -> Option<Completion> {
         let tables: Vec<TableRef> = self
+            .connection
             .schema
             .iter()
             .flat_map(|p| &p.tables)
@@ -162,10 +163,10 @@ impl App {
     pub(in crate::app) fn open_completion(&mut self) {
         self.completion = self.compute_completion();
         if self.completion.is_none() {
-            let loading = self.schema.as_ref().is_some_and(|s| s.loading);
+            let loading = self.connection.schema.as_ref().is_some_and(|s| s.loading);
             let msg = if loading { "No completions yet (schema still loading)" } else { "No completions" };
-            self.editor_note = Some(msg.to_string());
-            self.editor_note_is_error = false;
+            self.notes.editor_note = Some(msg.to_string());
+            self.notes.editor_note_is_error = false;
         }
     }
 

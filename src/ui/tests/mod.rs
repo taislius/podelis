@@ -42,11 +42,11 @@ pub(super) fn app() -> (App, tempfile::TempDir) {
     let mut app = App::new(store, None, None);
     app.open_project_by_name("shop").unwrap();
     for (name, engine, host) in [("local", Engine::Postgres, "localhost"), ("prod", Engine::MySql, "db.internal")] {
-        app.connect_form.name = name.into();
-        app.connect_form.engine = engine;
-        app.connect_form.host = host.into();
-        app.connect_form.port = engine.default_port().into();
-        let mut profile = app.connect_form.to_profile_for_tests();
+        app.connection.form.name = name.into();
+        app.connection.form.engine = engine;
+        app.connection.form.host = host.into();
+        app.connection.form.port = engine.default_port().into();
+        let mut profile = app.connection.form.to_profile_for_tests();
         profile.database = "shop".into();
         app.store.upsert(&shop, None, profile).unwrap();
     }
@@ -58,8 +58,8 @@ pub(super) fn query_app() -> (App, tempfile::TempDir) {
     let (mut app, dir) = app();
     app.screen = Screen::Query;
     app.pretend_connected();
-    app.schema_visible = true;
-    app.connection_summary = "[shop] PostgreSQL as me@localhost:5432/shop".into();
+    app.panes.schema_visible = true;
+    app.connection.summary = "[shop] PostgreSQL as me@localhost:5432/shop".into();
     app.tab.editor.set_text("select id, email, note\nfrom users\nwhere id < 4;");
     let outcome = QueryOutcome {
         columns: vec!["id".into(), "email".into(), "note".into()],
@@ -90,7 +90,7 @@ pub(super) fn query_app() -> (App, tempfile::TempDir) {
         details: None,
         details_loading: false,
     };
-    app.schema = Some(SchemaPanel {
+    app.connection.schema = Some(SchemaPanel {
         tables: vec![
             table("orders", Some(942_000), false, false, vec![]),
             table(

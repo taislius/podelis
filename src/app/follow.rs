@@ -34,7 +34,7 @@ impl App {
         if self.run.executing {
             return self.set_status("A query is running: follow the key once it's done".into(), true);
         }
-        let Some(db) = self.database.clone() else { return };
+        let Some(db) = self.connection.database.clone() else { return };
         // Rows still streaming hold the session: they stop here (as on
         // switching tabs), or the lookup would wait for the last of them.
         self.close_stream();
@@ -58,11 +58,12 @@ impl App {
         };
         // "Loading foreign keys…", "Looking up…": done.
         if self
+            .notes
             .results_note
             .as_ref()
             .is_some_and(|(m, _)| m.starts_with("Loading foreign keys") || m.starts_with("Looking up"))
         {
-            self.results_note = None;
+            self.notes.results_note = None;
         }
         self.set_status(String::new(), false);
         let name_w = outcome.columns.iter().map(|c| c.chars().count()).max().unwrap_or(0).min(30);
@@ -116,7 +117,7 @@ impl App {
         if sources.is_empty() {
             return Err("only results of a SELECT from tables can be followed".into());
         }
-        let panel = self.schema.as_ref().ok_or("the schema hasn't loaded yet")?;
+        let panel = self.connection.schema.as_ref().ok_or("the schema hasn't loaded yet")?;
         let lower = |s: &str| s.to_lowercase();
         let mut found: Vec<usize> = sources
             .iter()

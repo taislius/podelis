@@ -13,11 +13,11 @@ fn memory_changes_name_the_fact() {
         GatewayPurpose::MemoryChanged("Confirmed", project.clone(), shown),
         Ok(serde_json::json!({ "id": 8 })),
     );
-    assert_eq!(app.status, "Confirmed orders.total unit euro cents");
+    assert_eq!(app.notes.status, "Confirmed orders.total unit euro cents");
     // Added: the fact the gateway kept, worded the same way.
     let kept = serde_json::json!({ "id": 9, "subject": "customers.email", "relation": "means", "value": "unique, lower-case" });
     app.gateway_done(GatewayPurpose::MemoryChanged("Remembered", project, None), Ok(kept));
-    assert_eq!(app.status, "Remembered customers.email means unique, lower-case");
+    assert_eq!(app.notes.status, "Remembered customers.email means unique, lower-case");
 }
 
 /// The agent activity window: sessions, a session's calls, a call in full,
@@ -82,7 +82,7 @@ fn agent_activity_by_session() {
     assert!(app.agents.view.is_none());
     assert_eq!(app.tab.editor.text(), "delete from users");
     assert_eq!(app.tabs[app.active_tab].name, "claude-code");
-    assert!(app.status.contains("ran this on dev"), "{}", app.status);
+    assert!(app.notes.status.contains("ran this on dev"), "{}", app.notes.status);
 
     // Something new after looking brings the note back.
     append(&log, Entry { changed: Some(3), ..entry("a", "12:00", "update t set x = 1 where id = 1") }).unwrap();
@@ -148,7 +148,7 @@ fn agent_writes_wait_for_your_answer() {
     app.agents.asked = None;
     crate::agents::forget(&pending, "3");
     app.handle_key(key(KeyCode::Char('y')));
-    assert!(app.status.contains("stopped waiting"), "{}", app.status);
+    assert!(app.notes.status.contains("stopped waiting"), "{}", app.notes.status);
     assert!(!answer(&pending, "3", true));
 }
 
@@ -360,7 +360,7 @@ fn deleting_a_project_deletes_its_memory() {
     let memory = crate::gateway::memory::path(dir.path(), &id);
     std::fs::create_dir_all(memory.parent().unwrap()).unwrap();
     std::fs::write(&memory, "facts").unwrap();
-    app.projects_selected = app.store.projects.iter().position(|p| p.id == id).unwrap();
+    app.manager.project_selected = app.store.projects.iter().position(|p| p.id == id).unwrap();
     app.delete_selected_project();
     assert!(!memory.exists());
 }
@@ -376,7 +376,7 @@ async fn closing_another_tab_while_asking_keeps_the_question() {
     app.new_tab(None, "", None);
     app.new_tab(None, "", None);
     app.switch_tab(1);
-    app.connect_form.name = "shop".into();
+    app.connection.form.name = "shop".into();
     let _gateway = crate::gateway::tests::start(dir.path(), None);
     app.run_action(Action::Ask);
     type_text(&mut app, "customers");

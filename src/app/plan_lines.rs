@@ -52,7 +52,7 @@ impl App {
             Some((from, _)) if shift => Some((from, line)),
             _ => Some((line, line)),
         };
-        self.plan_dragging = true;
+        self.panes.plan_dragging = true;
     }
 
     /// Dragging over the plan: the selection follows; past its top or

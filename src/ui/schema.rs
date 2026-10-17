@@ -7,18 +7,18 @@ use crate::app::{SchemaPanel, SchemaSort};
 pub(super) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
     let focused = app.focus == Focus::Schema;
-    let count = app.schema.as_ref().map_or(0, |s| s.tables.len());
-    let info = if app.schema.as_ref().is_some_and(|s| s.loading) {
+    let count = app.connection.schema.as_ref().map_or(0, |s| s.tables.len());
+    let info = if app.connection.schema.as_ref().is_some_and(|s| s.loading) {
         "loading…".to_string()
     } else {
-        match app.schema.as_ref().map_or(SchemaSort::Name, |s| s.sort) {
+        match app.connection.schema.as_ref().map_or(SchemaSort::Name, |s| s.sort) {
             SchemaSort::Name => format!("{count} objects"),
             sort => format!("{count} · by {}", sort.label()),
         }
     };
     // " NAVIGATOR " plus the info must fit on the top border.
     let info = if area.width as usize >= 14 + info.chars().count() { info } else { String::new() };
-    let info = if app.zoomed { format!("ZOOMED · {info}") } else { info };
+    let info = if app.panes.zoomed { format!("ZOOMED · {info}") } else { info };
     let block = pane("Navigator", &info, focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -31,7 +31,7 @@ pub(super) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
     draw_database_line(f, app, database, focused);
 
     // Filter line.
-    let line = match &app.schema {
+    let line = match &app.connection.schema {
         Some(s) if s.filter_editing => {
             Line::from([vec![Span::raw(" / ")], input_spans(&s.filter, fg(t.text_bright))].concat())
         }
@@ -40,7 +40,7 @@ pub(super) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
     };
     f.render_widget(Paragraph::new(line).style(Style::default().bg(t.inset)), filter);
 
-    let Some(panel) = &app.schema else { return };
+    let Some(panel) = &app.connection.schema else { return };
     if let Some(e) = &panel.error {
         f.render_widget(Paragraph::new(e.as_str()).style(fg(t.error)).wrap(Wrap { trim: true }), tree);
         return;
@@ -57,7 +57,7 @@ pub(super) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
     // thousands of tables.
     let nodes = panel.nodes();
     let height = tree.height as usize;
-    let Some(panel) = &mut app.schema else { return };
+    let Some(panel) = &mut app.connection.schema else { return };
     let offset = panel.scroll_into_view(&nodes, height);
     let panel = &*panel;
     let items: Vec<ListItem> =
@@ -73,7 +73,7 @@ pub(super) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
 /// The database the tables belong to, like the design's tree root.
 fn draw_database_line(f: &mut Frame, app: &App, database: Rect, focused: bool) {
     let t = theme();
-    let form = &app.connect_form;
+    let form = &app.connection.form;
     let db_name = if form.engine.is_file_based() {
         std::path::Path::new(&form.host).file_name().map_or(form.host.clone(), |n| n.to_string_lossy().into_owned())
     } else if form.database.is_empty() {

@@ -57,7 +57,7 @@ impl App {
         if !self.connected() {
             return Some(self.not_connected_message());
         }
-        let saved = self.project().is_some_and(|p| p.connections.iter().any(|c| c.name == self.connect_form.name));
+        let saved = self.project().is_some_and(|p| p.connections.iter().any(|c| c.name == self.connection.form.name));
         if !saved {
             return Some("Asking works on saved connections (the gateway opens it itself): save this one first".into());
         }
@@ -71,7 +71,8 @@ impl App {
             InputResult::Submit => {
                 let Some(text) = self.ask_prompt.take().map(|q| q.text().trim().to_string()) else { return };
                 if !text.is_empty() {
-                    let question = Question { text, tab: self.active_tab, connection: self.connect_form.name.clone() };
+                    let question =
+                        Question { text, tab: self.active_tab, connection: self.connection.form.name.clone() };
                     self.start_ask(question, false);
                 }
             }
@@ -133,11 +134,11 @@ impl App {
     /// Progress goes to the status bar, not a pane's footer (which keeps a
     /// message until the next key, and would still say "Asking…" after).
     fn say_asking(&mut self, status: String) {
-        self.editor_note = None;
-        self.results_note = None;
-        self.status = status;
-        self.status_is_error = false;
-        self.status_in_results = false;
+        self.notes.editor_note = None;
+        self.notes.results_note = None;
+        self.notes.status = status;
+        self.notes.status_is_error = false;
+        self.notes.status_in_results = false;
     }
 
     /// Tab `closing` is about to close: a question asked from it stops,

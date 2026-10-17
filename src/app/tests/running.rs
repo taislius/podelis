@@ -113,7 +113,7 @@ fn next_warning_steps_through_lints_and_wraps() {
     app.tab.syntax_hint = None;
     app.run_action(Action::NextWarning);
     assert_eq!(app.tab.syntax_hint, None);
-    assert!(app.status.contains("No lint warnings"), "{}", app.status);
+    assert!(app.notes.status.contains("No lint warnings"), "{}", app.notes.status);
 }
 
 #[tokio::test]
@@ -146,7 +146,7 @@ async fn parameters_are_asked_for_and_remembered() {
     type_text(&mut app, "12345678");
     app.handle_key(key(KeyCode::Enter));
     finish(&mut app).await;
-    assert!(app.status_is_error);
+    assert!(app.notes.status_is_error);
 }
 
 /// Watch mode runs the query again, marks the rows that changed, and stops
@@ -159,14 +159,14 @@ async fn watch_mode_marks_what_changed() {
     run_sql(&mut app, "select * from jobs order by id").await;
     app.start_watch(2);
     finish(&mut app).await;
-    assert!(app.status.starts_with("Watching every 2 s · run 1"), "{}", app.status);
+    assert!(app.notes.status.starts_with("Watching every 2 s · run 1"), "{}", app.notes.status);
 
-    let db = app.database.clone().unwrap();
+    let db = app.connection.database.clone().unwrap();
     db.run("update jobs set state = 'done' where id = 1; insert into jobs values (2, 'queued')", 1).await.unwrap();
     app.watch.as_mut().unwrap().next = std::time::Instant::now();
     app.tick_running();
     finish(&mut app).await;
-    assert!(app.status.contains("run 2 · 2 changed"), "{}", app.status);
+    assert!(app.notes.status.contains("run 2 · 2 changed"), "{}", app.notes.status);
     assert_eq!(app.tab.grid.changed_rows, std::collections::HashSet::from([0, 1]));
 
     app.focus = Focus::Results;
@@ -181,7 +181,7 @@ async fn watch_mode_marks_what_changed() {
     assert!(app.watch.is_none());
     run_sql(&mut app, "update jobs set state = 'x' where id = 2").await;
     app.start_watch(2);
-    assert!(app.status_is_error && app.watch.is_none(), "{}", app.status);
+    assert!(app.notes.status_is_error && app.watch.is_none(), "{}", app.notes.status);
 
     // Esc clears a results filter first, and is vim's in the editor.
     run_sql(&mut app, "select * from jobs order by id").await;
@@ -199,12 +199,12 @@ async fn watch_mode_marks_what_changed() {
     app.start_watch(2);
     finish(&mut app).await;
     app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
-    assert!(app.watch.is_none(), "{}", app.status);
+    assert!(app.watch.is_none(), "{}", app.notes.status);
     run_sql(&mut app, "select 1").await;
     app.start_watch(2);
     finish(&mut app).await;
     app.tab.last_sql = Some(("delete from jobs where id = 1".into(), 0));
     app.watch.as_mut().unwrap().next = std::time::Instant::now();
     app.tick_running();
-    assert!(app.watch.is_none() && !app.run.executing, "{}", app.status);
+    assert!(app.watch.is_none() && !app.run.executing, "{}", app.notes.status);
 }

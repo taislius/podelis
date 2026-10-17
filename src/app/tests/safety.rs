@@ -6,10 +6,10 @@ fn delete_requires_confirmation() {
     let id = project_id(&app);
     app.store.upsert(&id, None, ConnectForm { name: "x".into(), ..ConnectForm::new() }.to_profile()).unwrap();
     app.handle_key(key(KeyCode::Char('d')));
-    assert!(app.confirm_delete);
+    assert!(app.manager.confirm_delete);
     app.handle_key(key(KeyCode::Char('n')));
     assert_eq!(app.profiles().len(), 1);
-    assert!(!app.confirm_delete);
+    assert!(!app.manager.confirm_delete);
 }
 
 #[tokio::test]
@@ -17,7 +17,7 @@ async fn read_only_mode_refuses_writes() {
     let (mut app, _dir) = connected_app(ConnectionMode::ReadOnly).await;
     run_sql(&mut app, "select 1; delete from t where id = 1").await;
     assert!(!app.run.executing && app.confirm.is_none());
-    assert!(app.editor_note_is_error && said(&app).contains("Read-only"), "{}", said(&app));
+    assert!(app.notes.editor_note_is_error && said(&app).contains("Read-only"), "{}", said(&app));
     run_sql(&mut app, "select 42").await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("42".to_string())]]);
 }
@@ -58,19 +58,19 @@ async fn tx_modes_auto_manual_and_rollback_only() {
         app.handle_key(key(KeyCode::Char(letter)));
     };
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
-    assert_eq!(app.tx_mode, TxMode::AutoCommit);
+    assert_eq!(app.connection.tx_mode, TxMode::AutoCommit);
     run_sql(&mut app, "create table t (id int); insert into t values (1), (2)").await;
-    assert_eq!(app.txn, TxnState::Idle);
+    assert_eq!(app.connection.txn, TxnState::Idle);
 
     // Manual commit: writes wait for COMMIT or ROLLBACK; reads run as usual.
     tx_mode(&mut app, 'm');
-    assert_eq!(app.tx_mode, TxMode::Manual);
+    assert_eq!(app.connection.tx_mode, TxMode::Manual);
     run_sql(&mut app, "insert into t values (3)").await;
-    assert!(app.review.is_some() && app.txn == TxnState::Open);
+    assert!(app.review.is_some() && app.connection.txn == TxnState::Open);
     // Can't change the mode with a transaction open.
     app.review = None;
     tx_mode(&mut app, 'r');
-    assert!(app.tx_picker.is_none() && app.tx_mode == TxMode::Manual);
+    assert!(app.tx_picker.is_none() && app.connection.tx_mode == TxMode::Manual);
     app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT));
     finish(&mut app).await;
     run_sql(&mut app, "select count(*) from t").await;
@@ -78,23 +78,27 @@ async fn tx_modes_auto_manual_and_rollback_only() {
     assert!(app.review.is_none(), "reads don't open a review");
     // Scripts with their own transaction control are refused.
     run_sql(&mut app, "begin; delete from t where id = 1; commit").await;
-    assert!(app.editor_note_is_error && said(&app).contains("BEGIN/COMMIT"), "{}", said(&app));
+    assert!(app.notes.editor_note_is_error && said(&app).contains("BEGIN/COMMIT"), "{}", said(&app));
 
     // Rollback-only: the write runs, its count is shown, and it is rolled back.
     tx_mode(&mut app, 'r');
-    assert_eq!(app.tx_mode, TxMode::RollbackOnly);
+    assert_eq!(app.connection.tx_mode, TxMode::RollbackOnly);
     run_sql(&mut app, "delete from t where id > 0").await;
     finish(&mut app).await;
-    assert_eq!(app.txn, TxnState::Idle);
-    assert!(app.status.contains("2 row(s) changed, then rolled back"), "{}", app.status);
+    assert_eq!(app.connection.txn, TxnState::Idle);
+    assert!(app.notes.status.contains("2 row(s) changed, then rolled back"), "{}", app.notes.status);
     // A failing rollback-only run is rolled back too, keeping its error.
     run_sql(&mut app, "insert into t values (9); insert into nope values (1)").await;
     finish(&mut app).await;
-    assert!(app.status_is_error && app.status.contains("rolled back (rollback-only)"), "{}", app.status);
-    assert_eq!(app.txn, TxnState::Idle);
+    assert!(
+        app.notes.status_is_error && app.notes.status.contains("rolled back (rollback-only)"),
+        "{}",
+        app.notes.status
+    );
+    assert_eq!(app.connection.txn, TxnState::Idle);
 
     tx_mode(&mut app, 'a');
-    assert_eq!(app.tx_mode, TxMode::AutoCommit);
+    assert_eq!(app.connection.tx_mode, TxMode::AutoCommit);
     run_sql(&mut app, "select count(*) from t").await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("2".to_string())]]);
 }
@@ -102,14 +106,14 @@ async fn tx_modes_auto_manual_and_rollback_only() {
 #[tokio::test]
 async fn production_connections_start_in_review() {
     let (app, _dir) = connected_app(ConnectionMode::Production).await;
-    assert_eq!(app.tx_mode, TxMode::Manual);
+    assert_eq!(app.connection.tx_mode, TxMode::Manual);
 }
 
 #[tokio::test]
 async fn transaction_tracking_and_disconnect_confirmation() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
     run_sql(&mut app, "begin; create table t (id int)").await;
-    assert_eq!(app.txn, TxnState::Open);
+    assert_eq!(app.connection.txn, TxnState::Open);
 
     let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
     app.handle_key(ctrl('d'));
@@ -123,7 +127,7 @@ async fn transaction_tracking_and_disconnect_confirmation() {
     assert!(!app.should_quit);
 
     run_sql(&mut app, "commit").await;
-    assert_eq!(app.txn, TxnState::Idle);
+    assert_eq!(app.connection.txn, TxnState::Idle);
     app.handle_key(ctrl('d'));
     assert!(app.confirm.is_none());
     assert!(matches!(app.screen, Screen::Connections));
@@ -133,7 +137,7 @@ async fn transaction_tracking_and_disconnect_confirmation() {
 async fn null_refused_on_not_null_column_and_production_confirms() {
     let (mut app, _dir) = Box::pin(edit_cell(ConnectionMode::Normal, "select * from people", 1)).await;
     app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
-    assert!(app.status.contains("doesn't allow NULL") && app.cell_edit.is_some());
+    assert!(app.notes.status.contains("doesn't allow NULL") && app.cell_edit.is_some());
     app.handle_key(key(KeyCode::Esc));
     assert!(app.cell_edit.is_none());
 
@@ -171,7 +175,7 @@ async fn heavy_reads_on_production_ask_first() {
 async fn writes_can_be_reviewed_in_a_transaction() {
     let (mut app, _dir) = connected_app(ConnectionMode::Production).await;
     // In save mode the confirmation offers `t` (review mode needs no asking).
-    app.tx_mode = TxMode::AutoCommit;
+    app.connection.tx_mode = TxMode::AutoCommit;
     let value = async |app: &mut App| {
         app.confirm = None;
         app.tab.editor.set_text("select x from t");
@@ -191,10 +195,10 @@ async fn writes_can_be_reviewed_in_a_transaction() {
     app.handle_key(key(KeyCode::Char('t')));
     finish(&mut app).await;
     assert_eq!(app.review.as_ref().map(|r| r.rows_affected), Some(1));
-    assert_eq!(app.txn, TxnState::Open);
+    assert_eq!(app.connection.txn, TxnState::Open);
     app.handle_key(key(KeyCode::Char('r')));
     finish(&mut app).await;
-    assert_eq!((app.txn, app.status.as_str()), (TxnState::Idle, "Rolled back"));
+    assert_eq!((app.connection.txn, app.notes.status.as_str()), (TxnState::Idle, "Rolled back"));
     assert_eq!(value(&mut app).await, "1");
     // History keeps the statement as typed, without the BEGIN.
     assert!(app.history.entries().iter().any(|h| h == "update t set x = 2 where x = 1"));
@@ -205,11 +209,11 @@ async fn writes_can_be_reviewed_in_a_transaction() {
     app.handle_key(key(KeyCode::Char('t')));
     finish(&mut app).await;
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.review.is_none() && app.txn == TxnState::Open);
+    assert!(app.review.is_none() && app.connection.txn == TxnState::Open);
     assert_eq!(value(&mut app).await, "3");
     app.handle_key(key(KeyCode::F(8)));
     finish(&mut app).await;
-    assert_eq!((app.txn, app.status.as_str()), (TxnState::Idle, "Committed"));
+    assert_eq!((app.connection.txn, app.notes.status.as_str()), (TxnState::Idle, "Committed"));
     assert_eq!(value(&mut app).await, "3");
 }
 
@@ -219,7 +223,7 @@ async fn explain_analyze_of_a_write_is_rolled_back() {
         let Some((mut app, _dir)) = live_app(engine, "podelis_analyze").await else { continue };
         // Where the engine runs this statement under EXPLAIN ANALYZE (not
         // MySQL: a one-table UPDATE it plans without running).
-        let version = app.database.as_ref().unwrap().version().to_string();
+        let version = app.connection.database.as_ref().unwrap().version().to_string();
         if engine.dialect().explain_analyze("update ea set x = 2", &version).is_none() {
             continue;
         }
@@ -230,8 +234,8 @@ async fn explain_analyze_of_a_write_is_rolled_back() {
         app.handle_key(key(KeyCode::Char('y')));
         finish(&mut app).await;
         let plan = app.tab.plan.clone().unwrap_or_default().text;
-        assert!(plan.contains("actual time"), "{engine:?}: {plan} / {}", app.status);
-        assert_eq!(app.txn, TxnState::Idle, "{engine:?}");
+        assert!(plan.contains("actual time"), "{engine:?}: {plan} / {}", app.notes.status);
+        assert_eq!(app.connection.txn, TxnState::Idle, "{engine:?}");
         run_sql(&mut app, "select x from ea").await;
         assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("1".to_string())]], "{engine:?}");
     }
@@ -243,7 +247,7 @@ async fn quitting_from_the_panes_asks_about_an_open_transaction() {
     let a = file_profile("alpha", &dir.path().join("a.db"));
     connect_profile(&mut app, &a).await;
     run_sql(&mut app, "begin").await;
-    assert_eq!(app.txn, TxnState::Open);
+    assert_eq!(app.connection.txn, TxnState::Open);
     show_projects(&mut app);
     for quit in [key(KeyCode::Char('q')), ctrl('c')] {
         app.handle_key(quit);
@@ -278,11 +282,11 @@ fn connect_form_sets_the_transaction_mode() {
 #[tokio::test]
 async fn a_connection_starts_in_its_transaction_mode() {
     let (mut app, _dir) = test_app();
-    app.connect_form.engine = file_engine();
-    app.connect_form.host = ":memory:".into();
-    app.connect_form.transaction = Some(TxMode::RollbackOnly);
-    let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
+    app.connection.form.engine = file_engine();
+    app.connection.form.host = ":memory:".into();
+    app.connection.form.transaction = Some(TxMode::RollbackOnly);
+    let db = Database::connect(app.connection.form.params().unwrap()).await.unwrap();
     let generation = app.generation;
     app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
-    assert_eq!(app.tx_mode, TxMode::RollbackOnly);
+    assert_eq!(app.connection.tx_mode, TxMode::RollbackOnly);
 }

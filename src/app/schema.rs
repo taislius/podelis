@@ -6,8 +6,8 @@ use super::*;
 impl App {
     /// Loads table `t`'s details unless they're loaded or on their way.
     pub(super) fn request_details(&mut self, t: usize) {
-        let Some(db) = self.database.clone() else { return };
-        let Some(table) = self.schema.as_mut().and_then(|p| p.tables.get_mut(t)) else { return };
+        let Some(db) = self.connection.database.clone() else { return };
+        let Some(table) = self.connection.schema.as_mut().and_then(|p| p.tables.get_mut(t)) else { return };
         if table.details.is_some() || table.details_loading {
             return;
         }
@@ -21,7 +21,7 @@ impl App {
     }
 
     pub(super) fn apply_details(&mut self, schema: &str, name: &str, result: Result<TableDetails, String>) {
-        let Some(panel) = &mut self.schema else { return };
+        let Some(panel) = &mut self.connection.schema else { return };
         let Some(t) = panel.tables.iter().position(|t| t.info.schema == schema && t.info.name == name) else {
             return;
         };
@@ -47,7 +47,7 @@ impl App {
     /// Opens table `t`'s definition, loading its details first if needed.
     pub(super) fn show_table_definition(&mut self, t: usize) {
         let engine = self.engine();
-        let Some(panel) = &mut self.schema else { return };
+        let Some(panel) = &mut self.connection.schema else { return };
         let Some(table) = panel.tables.get(t) else { return };
         let title = format!("{} {}", if table.info.is_view { "VIEW" } else { "TABLE" }, table.info.name);
         if table.details.is_none() {
@@ -64,8 +64,8 @@ impl App {
     /// `f` in the navigator: the table's neighbours through foreign keys,
     /// two steps each way.
     pub(super) fn show_related(&mut self, t: usize) {
-        let Some(db) = self.database.clone() else { return };
-        let Some(table) = self.schema.as_ref().and_then(|p| p.tables.get(t)) else { return };
+        let Some(db) = self.connection.database.clone() else { return };
+        let Some(table) = self.connection.schema.as_ref().and_then(|p| p.tables.get(t)) else { return };
         let (schema, name) = (table.info.schema.clone(), table.info.name.clone());
         let send = self.sender();
         tokio::spawn(async move {
@@ -81,7 +81,7 @@ impl App {
     /// ←/→ in a navigator definition: the previous or next table's, view's
     /// or function's, selecting it in the navigator too.
     pub(super) fn step_definition(&mut self, back: bool) {
-        let Some(panel) = &mut self.schema else { return };
+        let Some(panel) = &mut self.connection.schema else { return };
         let nodes = panel.nodes();
         let browsable = |n: &SchemaNode| matches!(n, SchemaNode::Table(_) | SchemaNode::Routine(_));
         let next = if back {
@@ -105,8 +105,8 @@ impl App {
     }
 
     pub(super) fn show_routine(&mut self, r: usize) {
-        let Some(db) = self.database.clone() else { return };
-        let Some(routine) = self.schema.as_ref().and_then(|p| p.routines.get(r)).cloned() else { return };
+        let Some(db) = self.connection.database.clone() else { return };
+        let Some(routine) = self.connection.schema.as_ref().and_then(|p| p.routines.get(r)).cloned() else { return };
         let send = self.sender();
         self.routine_definition_pending = true;
         tokio::spawn(async move {

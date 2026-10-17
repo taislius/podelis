@@ -18,8 +18,8 @@ pub(super) fn draw_app_bar(f: &mut Frame, app: &mut App, area: Rect) {
         Screen::Connections => vec![project.clone().unwrap_or_default(), "connections".into()],
         Screen::Connect => vec![
             project.clone().unwrap_or_default(),
-            if app.connect_form.original_name.is_some() {
-                app.connect_form.name.clone()
+            if app.connection.form.original_name.is_some() {
+                app.connection.form.name.clone()
             } else {
                 "new connection".into()
             },
@@ -52,7 +52,7 @@ pub(super) fn draw_app_bar(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Connecting from the form; on the query screen the status bar has
     // the connection.
-    let right = if app.connect_form.connecting && !matches!(app.screen, Screen::Query) {
+    let right = if app.connection.form.connecting && !matches!(app.screen, Screen::Query) {
         vec![Span::styled(" ◌ CONNECTING… ", bold(t.warn).bg(t.active)), Span::raw(" ")]
     } else {
         Vec::new()
@@ -100,28 +100,28 @@ fn connection_status(app: &App, room: usize) -> Vec<Span<'static>> {
     let (dot, name_style) = if app.connection_lost { (fg(t.error), bold(t.error)) } else { (fg(t.ok), bold(t.ok)) };
     let mut spans = vec![
         Span::styled(if app.settings.keepalive > 0 { "♥ " } else { "● " }, dot),
-        Span::styled(app.connect_form.short_name(), name_style),
+        Span::styled(app.connection.form.short_name(), name_style),
     ];
     if app.connection_lost {
         spans.push(Span::styled(" · connection lost", bold(t.error)));
     }
-    match app.active_mode {
+    match app.connection.mode {
         ConnectionMode::Production => spans.extend([Span::raw(" "), badge("PRODUCTION", t.on_accent, t.error)]),
         ConnectionMode::ReadOnly => spans.extend([Span::raw(" "), badge("READ-ONLY", t.on_accent, t.ok)]),
         ConnectionMode::Normal => {}
     }
-    let engine = app.connect_form.engine.label();
-    let version = app.database.as_ref().map(|d| d.version().to_string()).unwrap_or_default();
+    let engine = app.connection.form.engine.label();
+    let version = app.connection.database.as_ref().map(|d| d.version().to_string()).unwrap_or_default();
     let mut rest = format!(" · {engine} {version}");
-    if let Some(latency) = app.connect_latency {
+    if let Some(latency) = app.connection.latency {
         rest = format!("{} · {} ms", rest.trim_end(), latency.as_millis());
     }
     // Long paths and hosts give way to the messages in the middle: a
     // file's path from its end (the file's name stays), a host from its.
     let used: usize = spans.iter().map(Span::width).sum();
     let room = room.saturating_sub(used + 4);
-    let at = endpoint(&app.connect_form);
-    let details = if app.connect_form.engine.is_file_based() {
+    let at = endpoint(&app.connection.form);
+    let details = if app.connection.form.engine.is_file_based() {
         let fits = room.saturating_sub(rest.trim_end().chars().count()).max(12);
         format!("{}{}", truncate_start(&at, fits), rest.trim_end())
     } else {
@@ -150,7 +150,7 @@ pub(super) fn draw_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
         // Leave the middle for messages: up to half the bar for the
         // connection, down to a third while a long message needs the room.
         let width = area.width as usize;
-        let message = app.status.chars().count() + 6;
+        let message = app.notes.status.chars().count() + 6;
         let room = width.saturating_sub(message).clamp(width / 3, width / 2).max(24);
         left.extend(connection_status(app, room));
     }
@@ -180,13 +180,13 @@ pub(super) fn draw_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
 
     // A message takes the middle; otherwise key hints. A run's outcome is
     // in the results pane, unless that's hidden (another pane zoomed).
-    let in_results = app.status_in_results && app.hits.results.width > 0;
-    let middle = if app.status.is_empty() || in_results {
+    let in_results = app.notes.status_in_results && app.hits.results.width > 0;
+    let middle = if app.notes.status.is_empty() || in_results {
         Line::from(key_hints(app, mid.width)).alignment(Alignment::Center)
     } else {
         Line::from(Span::styled(
-            truncate(&one_line(&app.status), mid.width as usize),
-            if app.status_is_error { bold(t.error) } else { fg(t.text) },
+            truncate(&one_line(&app.notes.status), mid.width as usize),
+            if app.notes.status_is_error { bold(t.error) } else { fg(t.text) },
         ))
     };
     f.render_widget(Paragraph::new(middle), mid);
@@ -275,7 +275,7 @@ fn key_hints(app: &App, width: u16) -> Vec<Span<'static>> {
         },
     };
     let mut chips = Vec::new();
-    if matches!(app.screen, Screen::Query) && app.zoomed {
+    if matches!(app.screen, Screen::Query) && app.panes.zoomed {
         let back = if app.focus == Focus::Editor { keys.short_label(Action::Zoom) } else { "z".to_string() };
         chips.push(chip(&back, "unzoom", true));
     }

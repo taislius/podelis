@@ -1,36 +1,35 @@
 //! One connection per tab, and reopening the last session on startup.
 //!
-//! The active tab's connection lives in `App`'s usual fields (`database`,
-//! `schema`…), like the rest of the active tab's state; other tabs'
-//! connections are parked as [`ConnSlot`]s. Tabs opened with Ctrl+T share
+//! The active tab's connection is `App::connection`, as the active tab's
+//! state is `App::tab`; other tabs' connections are parked as
+//! [`Connection`]s, and switching swaps the two. Tabs opened with Ctrl+T share
 //! their tab's connection (and so its session and transaction).
 
 use serde::{Deserialize, Serialize};
 
 use super::*;
 
-/// A connection's state. Field names match the `App` fields they swap with.
+/// A connection and what goes with it: its form, modes, transaction,
+/// navigator, summary and connect time. The shown one is `App::connection`.
 #[derive(Default)]
-pub struct ConnSlot {
-    database: Option<Database>,
-    connect_form: ConnectForm,
-    active_mode: ConnectionMode,
-    tx_mode: TxMode,
-    txn: TxnState,
-    schema: Option<SchemaPanel>,
-    connection_summary: String,
-    connect_latency: Option<Duration>,
+pub struct Connection {
+    pub database: Option<Database>,
+    pub form: ConnectForm,
+    /// Its mode (normal, read-only, production).
+    pub mode: ConnectionMode,
+    /// What happens to writes on it (Ctrl+K w).
+    pub tx_mode: TxMode,
+    pub txn: TxnState,
+    /// The schema navigator's catalog and state.
+    pub schema: Option<SchemaPanel>,
+    /// Where it goes, for the status bar.
+    pub summary: String,
+    /// How long connecting took, for the application bar.
+    pub latency: Option<Duration>,
 }
 
-fn swap_conn(app: &mut App, slot: &mut ConnSlot) {
-    std::mem::swap(&mut app.database, &mut slot.database);
-    std::mem::swap(&mut app.connect_form, &mut slot.connect_form);
-    std::mem::swap(&mut app.active_mode, &mut slot.active_mode);
-    std::mem::swap(&mut app.tx_mode, &mut slot.tx_mode);
-    std::mem::swap(&mut app.txn, &mut slot.txn);
-    std::mem::swap(&mut app.schema, &mut slot.schema);
-    std::mem::swap(&mut app.connection_summary, &mut slot.connection_summary);
-    std::mem::swap(&mut app.connect_latency, &mut slot.connect_latency);
+fn swap_conn(app: &mut App, slot: &mut Connection) {
+    std::mem::swap(&mut app.connection, slot);
 }
 
 /// Which connection each tab uses, and the session being restored.
@@ -39,7 +38,7 @@ pub struct Conns {
     /// Id of the connection whose state is in `App`'s fields (the active
     /// tab's), and the other tabs' connections.
     pub active: Option<u64>,
-    parked: HashMap<u64, ConnSlot>,
+    parked: HashMap<u64, Connection>,
     next_id: u64,
     /// Each tab's saved connection name, from the tabs file.
     pub tab_connections: Vec<Option<String>>,
@@ -122,7 +121,7 @@ impl App {
 
     /// A transaction is open on any tab's connection.
     pub(super) fn any_open_transaction(&self) -> bool {
-        self.txn != TxnState::Idle || self.conns.parked.values().any(|s| s.txn != TxnState::Idle)
+        self.connection.txn != TxnState::Idle || self.conns.parked.values().any(|s| s.txn != TxnState::Idle)
     }
 
     /// Leaves the project for `target` (or, with `None`, the project list),
@@ -155,7 +154,7 @@ impl App {
             self.resume_project();
             if panes {
                 // Leaving it from here keeps where it was left.
-                self.manager_from_query = matches!(self.screen, Screen::Query);
+                self.manager.from_query = matches!(self.screen, Screen::Query);
                 self.screen = Screen::Connections;
             }
         }
@@ -169,14 +168,14 @@ impl App {
         self.memory_view = None;
         self.save_draft();
         if let Some(id) = &self.current_project {
-            self.projects_selected = self.store.projects.iter().position(|p| &p.id == id).unwrap_or(0);
+            self.manager.project_selected = self.store.projects.iter().position(|p| &p.id == id).unwrap_or(0);
         }
         self.close_all_connections();
         self.reset_agents();
         // Opening it again reloads its tabs and session from disk.
-        self.left_project = self.current_project.take();
+        self.manager.left_project = self.current_project.take();
         self.menu = None;
-        self.zoomed = false;
+        self.panes.zoomed = false;
         self.screen = Screen::Projects;
     }
 
@@ -191,7 +190,7 @@ impl App {
         if target == self.conns.active {
             return;
         }
-        let mut current = ConnSlot::default();
+        let mut current = Connection::default();
         swap_conn(self, &mut current);
         if let Some(id) = self.conns.active {
             self.conns.parked.insert(id, current);
@@ -214,10 +213,10 @@ impl App {
         self.pinging = false;
         self.generation += 1;
         self.tab.syntax_hint = None;
-        match &mut self.schema {
+        match &mut self.connection.schema {
             Some(panel) if panel.loading => self.load_catalog(),
             Some(panel) => panel.tables.iter_mut().for_each(|t| t.details_loading = false),
-            None if self.database.is_some() => self.load_catalog(),
+            None if self.connection.database.is_some() => self.load_catalog(),
             None => {}
         }
     }
@@ -226,9 +225,9 @@ impl App {
     /// its saved name, else its file's name or `host/database`.
     pub(super) fn conn_name(&self, id: u64) -> Option<String> {
         if self.conns.active == Some(id) {
-            return Some(self.connect_form.short_name());
+            return Some(self.connection.form.short_name());
         }
-        self.conns.parked.get(&id).map(|slot| slot.connect_form.short_name())
+        self.conns.parked.get(&id).map(|slot| slot.form.short_name())
     }
 
     /// The other tabs' connections: id, database and form.
@@ -237,7 +236,7 @@ impl App {
             .conns
             .parked
             .iter()
-            .filter_map(|(id, slot)| Some((*id, slot.database.as_ref()?, &slot.connect_form)))
+            .filter_map(|(id, slot)| Some((*id, slot.database.as_ref()?, &slot.form)))
             .collect();
         out.sort_by_key(|(id, ..)| *id);
         out
@@ -259,7 +258,7 @@ impl App {
         self.invalidate_tasks();
         self.run.stream = None;
         self.run.executing = false;
-        let mut current = ConnSlot::default();
+        let mut current = Connection::default();
         swap_conn(self, &mut current);
         let slots = std::iter::once(current).chain(self.conns.parked.drain().map(|(_, s)| s));
         for db in slots.filter_map(|s| s.database) {
@@ -283,7 +282,7 @@ impl App {
         self.conns.next_id += 1;
         self.tabs[self.active_tab].conn = Some(id);
         self.conns.active = Some(id);
-        self.database = Some(db);
+        self.connection.database = Some(db);
     }
 
     /// Ctrl+D: disconnects this tab. The connection stays open while other
@@ -308,8 +307,8 @@ impl App {
         self.release_unused_conns();
         self.save_draft();
         self.open_manager(Screen::Connections);
-        self.drop_blank_tab = true;
-        self.connections_message = Some(("Disconnected".to_string(), false));
+        self.manager.drop_blank_tab = true;
+        self.manager.connection_message = Some(("Disconnected".to_string(), false));
     }
 
     /// Ctrl+O: picks a connection for this tab, or for a new tab if this
@@ -320,17 +319,21 @@ impl App {
         }
         self.open_manager(Screen::Connections);
         self.free_tab_for_form();
-        self.connections_message = Some(("Pick a connection for this tab".to_string(), false));
+        self.manager.connection_message = Some(("Pick a connection for this tab".to_string(), false));
     }
 
     /// Esc on the projects and connections: back to the project's tabs,
     /// connected or not, dropping an empty tab opened for a connection.
     pub(super) fn leave_connections(&mut self) {
-        self.connections_message = None;
+        self.manager.connection_message = None;
         self.restore_active_form();
         self.screen = Screen::Query;
         let blank = self.tab.editor.is_empty() && self.tabs[self.active_tab].saved_id.is_none();
-        if std::mem::take(&mut self.drop_blank_tab) && self.conns.active.is_none() && blank && self.tabs.len() > 1 {
+        if std::mem::take(&mut self.manager.drop_blank_tab)
+            && self.conns.active.is_none()
+            && blank
+            && self.tabs.len() > 1
+        {
             self.close_tab();
         }
     }
@@ -339,7 +342,7 @@ impl App {
     /// them).
     pub fn open_connection_names(&self) -> Vec<&str> {
         let active = self.conns.active.map(|_| self.active_form().name.as_str());
-        let parked = self.conns.parked.values().filter(|s| s.database.is_some()).map(|s| s.connect_form.name.as_str());
+        let parked = self.conns.parked.values().filter(|s| s.database.is_some()).map(|s| s.form.name.as_str());
         active.into_iter().chain(parked).collect()
     }
 
@@ -356,7 +359,7 @@ impl App {
                     .filter(|n| self.conns.restoring.contains(n));
             }
             Some(id) if Some(id) == self.conns.active => &self.active_form().name,
-            Some(id) => &self.conns.parked.get(&id)?.connect_form.name,
+            Some(id) => &self.conns.parked.get(&id)?.form.name,
         };
         self.profiles().iter().any(|p| p.name == *name).then(|| name.clone())
     }
@@ -372,9 +375,9 @@ impl App {
                     .insert(form.name.clone(), open.map(|t| (t.info.schema.clone(), t.info.name.clone())).collect());
             }
         };
-        add(self.active_form(), &self.schema);
+        add(self.active_form(), &self.connection.schema);
         for slot in self.conns.parked.values() {
-            add(&slot.connect_form, &slot.schema);
+            add(&slot.form, &slot.schema);
         }
         expanded.retain(|_, tables| !tables.is_empty());
         let focus = match self.focus {
@@ -383,9 +386,9 @@ impl App {
             Focus::Schema => "schema",
         };
         SessionUi {
-            on_query: matches!(self.screen, Screen::Query) || self.manager_from_query,
+            on_query: matches!(self.screen, Screen::Query) || self.manager.from_query,
             focus: focus.into(),
-            schema_visible: self.schema_visible,
+            schema_visible: self.panes.schema_visible,
             expanded,
         }
     }
@@ -396,7 +399,7 @@ impl App {
         if let Some(name) = project
             && let Err(e) = self.open_project_by_name(name)
         {
-            self.projects_message = Some((e, true));
+            self.manager.project_message = Some((e, true));
             return;
         }
         let Some(connection) = connection else {
@@ -421,7 +424,7 @@ impl App {
             match id {
                 Ok(id) => self.open_project(&id),
                 Err(e) => {
-                    self.status =
+                    self.notes.status =
                         format!("Couldn't create the “{DEFAULT_PROJECT}” project ({e:#}): tabs won't be kept");
                 }
             }
@@ -435,19 +438,19 @@ impl App {
                 } else {
                     let msg = format!("No saved connection named '{name}' here");
                     if self.current_project.is_some() {
-                        self.connections_message = Some((msg, true));
+                        self.manager.connection_message = Some((msg, true));
                     } else {
-                        self.projects_message = Some((msg, true));
+                        self.manager.project_message = Some((msg, true));
                     }
                 }
             }
             address => match crate::cli::form_for_address(&address) {
                 Ok(form) => {
-                    self.connect_form = form;
+                    self.connection.form = form;
                     self.screen = Screen::Connect;
                     self.start_connect();
                 }
-                Err(e) => self.projects_message = Some((e, true)),
+                Err(e) => self.manager.project_message = Some((e, true)),
             },
         }
     }
@@ -488,7 +491,7 @@ impl App {
             return;
         }
         self.screen = Screen::Query;
-        self.schema_visible = session.schema_visible;
+        self.panes.schema_visible = session.schema_visible;
         self.focus = match session.focus.as_str() {
             "results" => Focus::Results,
             "schema" if session.schema_visible => Focus::Schema,
@@ -504,7 +507,10 @@ impl App {
     /// opening it again then failed (the server was down, the VPN off):
     /// a run there tries it again rather than saying "not connected".
     pub(super) fn tab_connection_to_retry(&self) -> Option<ConnectionProfile> {
-        if self.database.is_some() || !self.conns.restoring.is_empty() || self.tabs[self.active_tab].conn.is_some() {
+        if self.connection.database.is_some()
+            || !self.conns.restoring.is_empty()
+            || self.tabs[self.active_tab].conn.is_some()
+        {
             return None;
         }
         let name = self.conns.tab_connections.get(self.active_tab)?.as_ref()?;
@@ -581,23 +587,23 @@ impl App {
         }
         let project = self.project().map(|p| p.name.clone()).unwrap_or_default();
         self.log(format!("Reconnected to {}", form.summary()), false);
-        let slot = ConnSlot {
+        let slot = Connection {
             database: Some(db),
-            active_mode: form.mode,
+            mode: form.mode,
             tx_mode: form.tx_mode(),
-            connection_summary: format!("[{project}] {}", form.summary()),
-            connect_form: form,
-            ..ConnSlot::default()
+            summary: format!("[{project}] {}", form.summary()),
+            form,
+            ..Connection::default()
         };
         self.conns.parked.insert(id, slot);
         if self.tabs[self.active_tab].conn == Some(id) {
             self.switch_conn(Some(id));
         }
         // (A retry for a run: the run says how it went.)
-        if self.conns.restoring.is_empty() && !self.status_is_error && self.conns.after_reconnect.is_none() {
+        if self.conns.restoring.is_empty() && !self.notes.status_is_error && self.conns.after_reconnect.is_none() {
             self.set_status("Session restored".to_string(), false);
         }
-        if let Some(action) = self.conns.after_reconnect.take().filter(|_| self.database.is_some()) {
+        if let Some(action) = self.conns.after_reconnect.take().filter(|_| self.connection.database.is_some()) {
             self.run_action(action);
         }
     }
@@ -605,8 +611,8 @@ impl App {
     /// Re-expands the tables that were open last time, once the catalog of
     /// a restored connection is loaded.
     pub(super) fn restore_expanded_tables(&mut self) {
-        let Some(open) = self.conns.restore_expanded.remove(&self.connect_form.name) else { return };
-        let Some(panel) = &mut self.schema else { return };
+        let Some(open) = self.conns.restore_expanded.remove(&self.connection.form.name) else { return };
+        let Some(panel) = &mut self.connection.schema else { return };
         let wanted: Vec<usize> = (0..panel.tables.len())
             .filter(|&t| open.iter().any(|(s, n)| *s == panel.tables[t].info.schema && *n == panel.tables[t].info.name))
             .collect();

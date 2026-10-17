@@ -38,7 +38,7 @@ impl App {
 
     /// The connection to compare with: `id`, or the only other one.
     fn compare_target(&mut self, id: Option<u64>) -> Option<(Database, Other)> {
-        if self.database.is_none() {
+        if self.connection.database.is_none() {
             self.set_status(self.not_connected_message(), true);
             return None;
         }
@@ -65,7 +65,9 @@ impl App {
         if self.run.executing {
             return;
         }
-        let Some(db) = self.database.clone() else { return self.set_status(self.not_connected_message(), true) };
+        let Some(db) = self.connection.database.clone() else {
+            return self.set_status(self.not_connected_message(), true);
+        };
         let Some((there, other)) = self.compare_target(id) else { return };
         // An open stream holds this side's session.
         self.run.stream = None;
@@ -87,7 +89,7 @@ impl App {
             Ok(shapes) => shapes,
             Err(e) => return self.set_status(e, true),
         };
-        let this = self.connect_form.short_name();
+        let this = self.connection.form.short_name();
         let diff = diff::schema_diff(
             &here,
             &there,
@@ -119,10 +121,12 @@ impl App {
 
     /// Saves this connection's schema to a file, to compare with later.
     pub(super) fn snapshot_schema(&mut self) {
-        let Some(db) = self.database.clone() else { return self.set_status(self.not_connected_message(), true) };
+        let Some(db) = self.connection.database.clone() else {
+            return self.set_status(self.not_connected_message(), true);
+        };
         let (Some(dir), Some(id)) = (&self.data_dir, &self.current_project) else { return };
         let dir = crate::transfer::snapshots::dir(dir, id);
-        let connection = self.connect_form.short_name();
+        let connection = self.connection.form.short_name();
         self.run.stream = None;
         self.set_status(format!("Saving a snapshot of {connection}'s schema…"), false);
         let send = self.sender();
@@ -154,7 +158,9 @@ impl App {
     /// Compares this connection's schema now with snapshot `index` (in
     /// [`Self::snapshots`]): what changed since.
     pub(super) fn compare_snapshot(&mut self, index: usize) {
-        let Some(db) = self.database.clone() else { return self.set_status(self.not_connected_message(), true) };
+        let Some(db) = self.connection.database.clone() else {
+            return self.set_status(self.not_connected_message(), true);
+        };
         let Some(saved) = self.snapshots().into_iter().nth(index) else { return };
         self.run.stream = None;
         self.set_status(format!("Comparing with the snapshot of {} from {}…", saved.connection, saved.taken), false);
@@ -177,7 +183,7 @@ impl App {
             Ok(both) => both,
             Err(e) => return self.set_status(e, true),
         };
-        let this = format!("{} now", self.connect_form.short_name());
+        let this = format!("{} now", self.connection.form.short_name());
         let then = format!("the snapshot of {} from {}", snapshot.connection, snapshot.taken.replace('T', " "));
         let diff = diff::schema_diff(
             &now,
@@ -207,7 +213,9 @@ impl App {
         if self.run.executing {
             return;
         }
-        let Some(db) = self.database.clone() else { return self.set_status(self.not_connected_message(), true) };
+        let Some(db) = self.connection.database.clone() else {
+            return self.set_status(self.not_connected_message(), true);
+        };
         let text = self.tab.editor.text();
         let sql = match self.tab.editor.selection_offsets() {
             Some((a, b)) => text[a..b].trim().to_string(),

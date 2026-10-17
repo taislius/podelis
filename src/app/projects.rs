@@ -12,16 +12,51 @@ enum ManagerHit {
     Settings,
 }
 
+/// The projects and connections screen: what's selected, its messages and
+/// prompts, deleting and moving, the container picker, and how it was
+/// reached.
+#[derive(Default)]
+pub struct Manager {
+    pub project_selected: usize,
+    /// Message on the projects screen, and whether it's an error.
+    pub project_message: Option<(String, bool)>,
+    pub project_prompt: Option<Prompt>,
+    pub confirm_delete_project: bool,
+    /// While moving a connection: the selected index into `move_targets()`.
+    pub moving_to: Option<usize>,
+    pub connection_selected: usize,
+    /// Message on the connections screen, and whether it's an error.
+    pub connection_message: Option<(String, bool)>,
+    pub confirm_delete: bool,
+    pub loading_profile: bool,
+    /// Picking a running database container (`c` in the connections).
+    /// (Boxed: `App` is part of every async test's future.)
+    pub containers: Option<Box<ContainerPicker>>,
+    /// The number of the last container search started.
+    pub(super) containers_request: u64,
+    /// The projects and connections panes were opened over the work (so
+    /// leaving the project from them reopens it on its tabs next time).
+    pub(super) from_query: bool,
+    /// The active tab's connection form, set aside while the settings pane
+    /// edits another connection's (connecting takes a new tab instead).
+    pub(super) form_stash: Option<ConnectForm>,
+    /// The project last left for the project list; Esc there goes back to it.
+    pub(super) left_project: Option<String>,
+    /// The active tab was opened, or disconnected, to pick a connection:
+    /// leaving the panes drops it if it's still empty and unconnected.
+    pub(super) drop_blank_tab: bool,
+}
+
 impl App {
     pub(super) fn handle_projects_key(&mut self, key: KeyEvent) {
-        if self.project_prompt.is_some() {
+        if self.manager.project_prompt.is_some() {
             return self.handle_prompt_key(key);
         }
-        if std::mem::take(&mut self.confirm_delete_project) {
+        if std::mem::take(&mut self.manager.confirm_delete_project) {
             if matches!(key.code, KeyCode::Char('y' | 'Y')) {
                 self.delete_selected_project();
             } else {
-                self.projects_message = None;
+                self.manager.project_message = None;
             }
             return;
         }
@@ -29,12 +64,12 @@ impl App {
             return;
         }
         let len = self.store.projects.len();
-        let selected = self.store.projects.get(self.projects_selected).map(|p| p.id.clone());
+        let selected = self.store.projects.get(self.manager.project_selected).map(|p| p.id.clone());
         let is_current = selected.is_some() && selected == self.current_project;
-        self.projects_message = None;
+        self.manager.project_message = None;
         // The row after the projects is "new project".
-        if let Some(i) = list::step(self.projects_selected, len + 1, key, Nav::LIST) {
-            self.projects_selected = i;
+        if let Some(i) = list::step(self.manager.project_selected, len + 1, key, Nav::LIST) {
+            self.manager.project_selected = i;
             return;
         }
         match key.code {
@@ -58,10 +93,10 @@ impl App {
                 }
             }
             KeyCode::Char('d') if is_current => {
-                self.projects_message =
+                self.manager.project_message =
                     Some(("This project is open: switch to another one to delete it".to_string(), true));
             }
-            KeyCode::Char('d') if selected.is_some() => self.confirm_delete_project = true,
+            KeyCode::Char('d') if selected.is_some() => self.manager.confirm_delete_project = true,
             _ => {}
         }
     }
@@ -71,7 +106,7 @@ impl App {
     /// settings) take the keys. Another project is opened first, as Enter
     /// does; "+ New project" asks for a name.
     fn pane_from_projects(&mut self, forward: bool) {
-        let Some(selected) = self.store.projects.get(self.projects_selected).map(|p| p.id.clone()) else {
+        let Some(selected) = self.store.projects.get(self.manager.project_selected).map(|p| p.id.clone()) else {
             return self.start_prompt(PromptKind::NewProject, String::new());
         };
         if self.current_project.as_ref() != Some(&selected) {
@@ -104,7 +139,7 @@ impl App {
         if self.current_project.is_some() {
             return self.leave_connections();
         }
-        match self.left_project.clone().filter(|id| self.store.project(id).is_some()) {
+        match self.manager.left_project.clone().filter(|id| self.store.project(id).is_some()) {
             Some(id) => {
                 self.open_project(&id);
                 self.resume_project();
@@ -114,30 +149,30 @@ impl App {
     }
 
     pub(super) fn start_prompt(&mut self, kind: PromptKind, text: String) {
-        self.projects_message = None;
-        self.project_prompt = Some(Prompt { kind, text: LineInput::new(text) });
+        self.manager.project_message = None;
+        self.manager.project_prompt = Some(Prompt { kind, text: LineInput::new(text) });
     }
 
     pub(super) fn handle_prompt_key(&mut self, key: KeyEvent) {
-        let Some(prompt) = &mut self.project_prompt else { return };
+        let Some(prompt) = &mut self.manager.project_prompt else { return };
         match prompt.text.handle(key) {
-            InputResult::Cancel => self.project_prompt = None,
+            InputResult::Cancel => self.manager.project_prompt = None,
             InputResult::Submit => {
                 let text = prompt.text.text().to_string();
                 match prompt.kind.clone() {
                     // A new project opens straight away, ready for connections.
                     PromptKind::NewProject => match self.store.add_project(&text) {
                         Ok(id) => {
-                            self.project_prompt = None;
-                            self.projects_selected = self.store.projects.len() - 1;
+                            self.manager.project_prompt = None;
+                            self.manager.project_selected = self.store.projects.len() - 1;
                             self.enter_project(id, false);
                         }
                         // Keep the prompt open so the name can be fixed.
-                        Err(e) => self.projects_message = Some((format!("{e:#}"), true)),
+                        Err(e) => self.manager.project_message = Some((format!("{e:#}"), true)),
                     },
                     PromptKind::RenameProject(id) => match self.store.rename_project(&id, &text) {
-                        Ok(()) => self.project_prompt = None,
-                        Err(e) => self.projects_message = Some((format!("{e:#}"), true)),
+                        Ok(()) => self.manager.project_prompt = None,
+                        Err(e) => self.manager.project_message = Some((format!("{e:#}"), true)),
                     },
                 }
             }
@@ -146,13 +181,13 @@ impl App {
     }
 
     pub(super) fn delete_selected_project(&mut self) {
-        let Some(id) = self.store.projects.get(self.projects_selected).map(|p| p.id.clone()) else {
+        let Some(id) = self.store.projects.get(self.manager.project_selected).map(|p| p.id.clone()) else {
             return;
         };
         match self.store.delete_project(&id) {
             Ok(project) => {
                 let count = project.connections.len();
-                self.projects_message =
+                self.manager.project_message =
                     Some((format!("Deleted project '{}' and its {count} connection(s)", project.name), false));
                 // Its memory for models too (the gateway may keep it open: on
                 // Unix the file goes, and nothing asks for this project again).
@@ -169,15 +204,15 @@ impl App {
                         }
                     });
                 }
-                if self.left_project.as_deref() == Some(id.as_str()) {
-                    self.left_project = None;
+                if self.manager.left_project.as_deref() == Some(id.as_str()) {
+                    self.manager.left_project = None;
                 }
                 let len = self.store.projects.len();
-                if self.projects_selected > 0 && self.projects_selected >= len {
-                    self.projects_selected -= 1;
+                if self.manager.project_selected > 0 && self.manager.project_selected >= len {
+                    self.manager.project_selected -= 1;
                 }
             }
-            Err(e) => self.projects_message = Some((format!("Couldn't delete: {e:#}"), true)),
+            Err(e) => self.manager.project_message = Some((format!("Couldn't delete: {e:#}"), true)),
         }
     }
 
@@ -188,25 +223,25 @@ impl App {
         // Only looking at the projects from the work: leaving the project
         // from here reopens it on its tabs, as if left from them.
         if matches!(self.screen, Screen::Query) {
-            self.manager_from_query = screen == Screen::Projects;
-            self.drop_blank_tab = false;
+            self.manager.from_query = screen == Screen::Projects;
+            self.manager.drop_blank_tab = false;
         }
         // A password still being read was for a connection left behind.
-        if std::mem::take(&mut self.loading_profile) {
+        if std::mem::take(&mut self.manager.loading_profile) {
             self.invalidate_tasks();
         }
         self.conns.auto_connect = false;
         self.restore_active_form();
         self.completion = None;
         self.menu = None;
-        self.project_prompt = None;
-        self.confirm_delete_project = false;
-        self.confirm_delete = false;
-        self.moving_to = None;
-        self.containers = None;
-        self.projects_message = None;
+        self.manager.project_prompt = None;
+        self.manager.confirm_delete_project = false;
+        self.manager.confirm_delete = false;
+        self.manager.moving_to = None;
+        self.manager.containers = None;
+        self.manager.project_message = None;
         if let Some(i) = self.store.projects.iter().position(|p| self.current_project.as_ref() == Some(&p.id)) {
-            self.projects_selected = i;
+            self.manager.project_selected = i;
         }
         self.screen = screen;
     }
@@ -219,40 +254,40 @@ impl App {
             self.new_tab(None, "", None);
             self.tabs[self.active_tab].conn = None;
             self.switch_conn(None);
-            self.drop_blank_tab = true;
+            self.manager.drop_blank_tab = true;
         }
     }
 
     /// Before the settings pane edits a connection: the form belongs to the
     /// active tab's connection, so a connected tab's is set aside.
     pub(super) fn stash_active_form(&mut self) {
-        if self.conns.active.is_some() && self.form_stash.is_none() {
-            self.form_stash = Some(std::mem::take(&mut self.connect_form));
+        if self.conns.active.is_some() && self.manager.form_stash.is_none() {
+            self.manager.form_stash = Some(std::mem::take(&mut self.connection.form));
         }
     }
 
     /// Leaving the settings pane: the active tab's form comes back.
     pub(super) fn restore_active_form(&mut self) {
-        if let Some(form) = self.form_stash.take() {
-            self.connect_form = form;
+        if let Some(form) = self.manager.form_stash.take() {
+            self.connection.form = form;
         }
     }
 
     /// The active tab's connection form, even while the settings pane
     /// edits another.
     pub(super) fn active_form(&self) -> &ConnectForm {
-        self.form_stash.as_ref().unwrap_or(&self.connect_form)
+        self.manager.form_stash.as_ref().unwrap_or(&self.connection.form)
     }
 
     /// Whether a click may leave what's on screen now: not while a
     /// connection is being made or a question or popup waits.
     pub(super) fn busy_for_clicks(&self) -> bool {
         self.popup_open()
-            || self.connect_form.connecting
-            || self.loading_profile
-            || self.moving_to.is_some()
-            || self.containers.is_some()
-            || self.project_prompt.is_some()
+            || self.connection.form.connecting
+            || self.manager.loading_profile
+            || self.manager.moving_to.is_some()
+            || self.manager.containers.is_some()
+            || self.manager.project_prompt.is_some()
     }
 
     /// Clicks on the projects and connections panes: a click selects (and
@@ -266,21 +301,21 @@ impl App {
         if hit != ManagerHit::Settings {
             self.restore_active_form();
         }
-        self.confirm_delete = false;
-        self.confirm_delete_project = false;
+        self.manager.confirm_delete = false;
+        self.manager.confirm_delete_project = false;
         let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         match hit {
             ManagerHit::Project(row) => {
-                let again = row == self.projects_selected && matches!(self.screen, Screen::Projects);
-                self.projects_selected = row;
+                let again = row == self.manager.project_selected && matches!(self.screen, Screen::Projects);
+                self.manager.project_selected = row;
                 self.screen = Screen::Projects;
                 if again || double {
                     self.handle_projects_key(enter);
                 }
             }
             ManagerHit::Connection(row) => {
-                let again = row == self.connections_selected && matches!(self.screen, Screen::Connections);
-                self.connections_selected = row;
+                let again = row == self.manager.connection_selected && matches!(self.screen, Screen::Connections);
+                self.manager.connection_selected = row;
                 self.screen = Screen::Connections;
                 if again || double {
                     self.handle_connections_key(enter);
@@ -289,9 +324,9 @@ impl App {
             // The rows start below the pane's top border.
             ManagerHit::Settings if matches!(self.screen, Screen::Connect) => {
                 let top = self.hits.manager_settings.y + 1;
-                let field = y.checked_sub(top).and_then(|row| self.connect_form.visible_fields().get(row as usize));
+                let field = y.checked_sub(top).and_then(|row| self.connection.form.visible_fields().get(row as usize));
                 if let Some(&field) = field {
-                    self.connect_form.focus = field;
+                    self.connection.form.focus = field;
                 }
             }
             ManagerHit::Settings => self.edit_selected_connection(),
@@ -317,7 +352,7 @@ impl App {
     /// Whether the projects pane's selection is the open project (so the
     /// connections pane shows its connections, not a preview).
     pub fn viewing_open_project(&self) -> bool {
-        let selected = self.store.projects.get(self.projects_selected).map(|p| &p.id);
+        let selected = self.store.projects.get(self.manager.project_selected).map(|p| &p.id);
         self.current_project.is_some() && (selected == self.current_project.as_ref() || self.screen != Screen::Projects)
     }
 }

@@ -30,7 +30,7 @@ fn draw_welcome(f: &mut Frame, app: &App, body: Rect) {
         Line::default(),
         Line::from(Span::styled("? keys · q quits", dim())).alignment(Alignment::Center),
     ];
-    if let Some((msg, is_error)) = &app.projects_message {
+    if let Some((msg, is_error)) = &app.manager.project_message {
         lines.insert(lines.len() - 1, Line::from(Span::styled(format!("  {msg}"), message_style(*is_error))));
     }
     let width = fit(lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 6, 30, body.width);
@@ -79,7 +79,7 @@ pub(super) fn draw_manager(f: &mut Frame, app: &mut App, body: Rect) {
     app.hits.manager_projects = (Rect::default(), 0);
     app.hits.manager_connections = (Rect::default(), 0);
     app.hits.manager_settings = Rect::default();
-    if app.store.projects.is_empty() && app.project_prompt.is_none() && app.screen == Screen::Projects {
+    if app.store.projects.is_empty() && app.manager.project_prompt.is_none() && app.screen == Screen::Projects {
         return draw_welcome(f, app, body);
     }
     let panes = layout(app, body);
@@ -174,16 +174,16 @@ fn draw_projects(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let message = if app.confirm_delete_project {
-        let project = app.store.projects.get(app.projects_selected);
+    let message = if app.manager.confirm_delete_project {
+        let project = app.store.projects.get(app.manager.project_selected);
         let name = project.map(|p| p.name.as_str()).unwrap_or_default();
         let n = project.map_or(0, |p| p.connections.len());
         Some((format!("Delete project '{name}', its {n} connection(s) and their passwords? y/n"), bold(t.warn)))
     } else {
-        app.projects_message.as_ref().map(|(msg, is_error)| (msg.clone(), message_style(*is_error)))
+        app.manager.project_message.as_ref().map(|(msg, is_error)| (msg.clone(), message_style(*is_error)))
     };
     let [list_area, prompt_area, message_area] =
-        split_pane(inner, app.project_prompt.is_some(), message.as_ref().map(|(m, _)| m.as_str()));
+        split_pane(inner, app.manager.project_prompt.is_some(), message.as_ref().map(|(m, _)| m.as_str()));
 
     let mut items: Vec<ListItem> = app
         .store
@@ -193,15 +193,22 @@ fn draw_projects(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|(i, p)| {
             let open = app.current_project.as_ref() == Some(&p.id);
             let dot = open.then_some(t.ok);
-            row(&p.name, if open { "open" } else { "" }, dot, i == app.projects_selected, focused, list_area.width)
+            row(
+                &p.name,
+                if open { "open" } else { "" },
+                dot,
+                i == app.manager.project_selected,
+                focused,
+                list_area.width,
+            )
         })
         .collect();
-    items.push(new_row("+ New project", app.projects_selected >= n, focused));
-    let mut state = ListState::default().with_selected(Some(app.projects_selected));
+    items.push(new_row("+ New project", app.manager.project_selected >= n, focused));
+    let mut state = ListState::default().with_selected(Some(app.manager.project_selected));
     f.render_stateful_widget(List::new(items), list_area, &mut state);
     app.hits.manager_projects = (list_area, state.offset());
 
-    if let Some(prompt) = &app.project_prompt {
+    if let Some(prompt) = &app.manager.project_prompt {
         let label = match prompt.kind {
             PromptKind::NewProject => "Name",
             PromptKind::RenameProject(_) => "Rename to",
@@ -242,7 +249,7 @@ fn draw_connections(f: &mut Frame, app: &mut App, area: Rect) {
     let live = app.viewing_open_project();
     // Another project selected in the projects pane: its connections, to
     // look at (Enter there opens it).
-    let project = if live { app.project() } else { app.store.projects.get(app.projects_selected) };
+    let project = if live { app.project() } else { app.store.projects.get(app.manager.project_selected) };
     let Some(project) = project else {
         let block = pane("Connections", "", false);
         let inner = block.inner(area);
@@ -256,7 +263,7 @@ fn draw_connections(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    if let Some(picker) = &app.containers {
+    if let Some(picker) = &app.manager.containers {
         let title = Line::from(Span::styled(" Database containers:", bold(t.accent)));
         let (text, style) = if picker.loading {
             ("Looking for running containers…".to_string(), muted())
@@ -288,8 +295,8 @@ fn draw_connections(f: &mut Frame, app: &mut App, area: Rect) {
         draw_message(f, message_area, message);
         return;
     }
-    if let Some(target) = app.moving_to {
-        let name = profiles.get(app.connections_selected).map(|p| p.name.as_str()).unwrap_or_default();
+    if let Some(target) = app.manager.moving_to {
+        let name = profiles.get(app.manager.connection_selected).map(|p| p.name.as_str()).unwrap_or_default();
         let items: Vec<ListItem> = app
             .move_targets()
             .iter()
@@ -304,13 +311,13 @@ fn draw_connections(f: &mut Frame, app: &mut App, area: Rect) {
 
     let message = if !live {
         Some((format!("→ or ↵ opens '{}'", project.name), dim()))
-    } else if app.loading_profile {
+    } else if app.manager.loading_profile {
         Some(("Reading the password from the keychain… (Esc to cancel)".to_string(), muted()))
-    } else if app.confirm_delete {
-        let name = profiles.get(app.connections_selected).map(|p| p.name.as_str()).unwrap_or_default();
+    } else if app.manager.confirm_delete {
+        let name = profiles.get(app.manager.connection_selected).map(|p| p.name.as_str()).unwrap_or_default();
         Some((format!("Delete '{name}' and its saved password? y/n"), bold(t.warn)))
     } else {
-        app.connections_message.as_ref().map(|(msg, is_error)| (msg.clone(), message_style(*is_error)))
+        app.manager.connection_message.as_ref().map(|(msg, is_error)| (msg.clone(), message_style(*is_error)))
     };
     let [list_area, _, message_area] = split_pane(inner, false, message.as_ref().map(|(m, _)| m.as_str()));
 
@@ -325,16 +332,16 @@ fn draw_connections(f: &mut Frame, app: &mut App, area: Rect) {
                 ConnectionMode::Normal => "",
             };
             let dot = (live && in_use.contains(&p.name.as_str())).then_some(t.ok);
-            let selected = live && i == app.connections_selected;
+            let selected = live && i == app.manager.connection_selected;
             row(&p.name, &format!("{}{mode}", where_to(p)), dot, selected, focused, list_area.width)
         })
         .collect();
     if live {
-        items.push(new_row("+ New connection", app.connections_selected >= profiles.len(), focused));
+        items.push(new_row("+ New connection", app.manager.connection_selected >= profiles.len(), focused));
     } else if profiles.is_empty() {
         items.push(ListItem::new(Span::styled("  no connections yet", dim())));
     }
-    let selected = live.then_some(app.connections_selected);
+    let selected = live.then_some(app.manager.connection_selected);
     let mut state = ListState::default().with_selected(selected);
     f.render_stateful_widget(List::new(items), list_area, &mut state);
     app.hits.manager_connections = (list_area, state.offset());
@@ -344,7 +351,7 @@ fn draw_connections(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let editing = app.screen == Screen::Connect;
     if editing {
-        let form = &app.connect_form;
+        let form = &app.connection.form;
         let title = if form.original_name.is_some() { "Edit connection" } else { "New connection" };
         let block = pane(title, form.engine.label(), true);
         let inner = block.inner(area);
@@ -364,7 +371,7 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
     // The container being picked: what its connection would be.
-    if let Some(c) = app.containers.as_ref().and_then(|p| p.found.get(p.selected)) {
+    if let Some(c) = app.manager.containers.as_ref().and_then(|p| p.found.get(p.selected)) {
         let block = pane("Container", &c.image, false);
         let inner = block.inner(area);
         f.render_widget(block, area);
@@ -388,12 +395,12 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
         return;
     }
-    let profile = app.viewing_open_project().then(|| app.profiles().get(app.connections_selected)).flatten();
+    let profile = app.viewing_open_project().then(|| app.profiles().get(app.manager.connection_selected)).flatten();
     let Some(profile) = profile else {
         let block = pane("Settings", "", false);
         let inner = block.inner(area);
         f.render_widget(block, area);
-        if app.viewing_open_project() && app.moving_to.is_none() {
+        if app.viewing_open_project() && app.manager.moving_to.is_none() {
             let lines = vec![
                 Line::from(Span::styled(" ↵ adds a connection", dim())),
                 Line::from(Span::styled(" (paste a connection URL into its form)", dim())),

@@ -4,16 +4,40 @@
 
 use super::*;
 
+/// What's said to the user: the status line, the editor's and the
+/// results' footer notes, and the MESSAGES list.
+#[derive(Default)]
+pub struct Notes {
+    /// The status line's message, and whether it's an error.
+    pub status: String,
+    pub status_is_error: bool,
+    /// The status is about a run (its outcome or progress): the results
+    /// pane shows it, not the status bar.
+    pub status_in_results: bool,
+    /// A note about typing (e.g. "No completions") in the editor's footer,
+    /// next to where you type; gone with the next key.
+    pub editor_note: Option<String>,
+    pub editor_note_is_error: bool,
+    /// The same for the results pane, with whether it's an error.
+    pub results_note: Option<(String, bool)>,
+    /// Outcomes and errors of recent runs, oldest first.
+    pub log: Vec<Message>,
+    /// The message selected in MESSAGES (`messages.rs`), and whether the
+    /// next drawing scrolls it into view.
+    pub selected: Option<usize>,
+    pub reveal: bool,
+}
+
 impl App {
     /// A key in MESSAGES; false leaves it to scrolling (←/→ across).
     pub(super) fn handle_messages_key(&mut self, key: KeyEvent) -> bool {
-        let n = self.messages.len();
+        let n = self.notes.log.len();
         if n == 0 {
             return false;
         }
         let page = usize::from(self.hits.messages.height.max(2) - 1);
         // From the newest, where the list starts.
-        let at = self.message_selected.unwrap_or(n);
+        let at = self.notes.selected.unwrap_or(n);
         let select = match key.code {
             KeyCode::Up | KeyCode::Char('k') => at.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => (at + 1).min(n - 1),
@@ -30,24 +54,24 @@ impl App {
                 return true;
             }
             KeyCode::Char('Y') => {
-                let all: Vec<String> = self.messages.iter().map(|m| format!("{}  {}", m.time, m.text)).collect();
+                let all: Vec<String> = self.notes.log.iter().map(|m| format!("{}  {}", m.time, m.text)).collect();
                 self.copy_text(all.join("\n"), &format!("Copied {n} messages"));
                 return true;
             }
-            KeyCode::Esc if self.message_selected.is_some() => {
-                self.message_selected = None;
+            KeyCode::Esc if self.notes.selected.is_some() => {
+                self.notes.selected = None;
                 return true;
             }
             _ => return false,
         };
-        self.message_selected = Some(select);
-        self.reveal_message = true;
+        self.notes.selected = Some(select);
+        self.notes.reveal = true;
         true
     }
 
     /// The selected message (else the newest), whole.
     fn chosen_message(&self) -> Option<&Message> {
-        self.message_selected.and_then(|i| self.messages.get(i)).or(self.messages.last())
+        self.notes.selected.and_then(|i| self.notes.log.get(i)).or(self.notes.log.last())
     }
 
     pub(super) fn copy_message(&mut self) {
@@ -66,10 +90,10 @@ impl App {
     /// A click on MESSAGES line `y`: selects its message; twice opens it.
     pub(super) fn click_message(&mut self, y: u16, double: bool) {
         let i = self.hits.messages_offset + usize::from(y - self.hits.messages.y);
-        if i >= self.messages.len() {
+        if i >= self.notes.log.len() {
             return;
         }
-        self.message_selected = Some(i);
+        self.notes.selected = Some(i);
         if double {
             self.open_message();
         }

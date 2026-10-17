@@ -28,7 +28,7 @@ fn a_hint_says_its_line_and_a_click_goes_there() {
 #[test]
 fn the_active_tabs_line_joins_the_panes_border() {
     let (mut app, _dir) = query_app();
-    app.schema_visible = false;
+    app.panes.schema_visible = false;
     app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
     let screen = render(&mut app, 70, 16);
     let lines: Vec<&str> = screen.lines().collect();
@@ -179,7 +179,7 @@ fn the_statement_zoom_shows_the_statement_alone() {
     let (mut app, _dir) = query_app();
     app.tab.editor.set_text("select 1;\n\nselect id,\n  name\nfrom t;\n\nselect 3;");
     app.tab.editor.set_cursor((3, 2));
-    app.statement_zoom = true;
+    app.panes.statement_zoom = true;
     let screen = render(&mut app, 110, 30);
     assert!(screen.contains("THE STATEMENT ALONE"), "{screen}");
     assert!(screen.contains("3  select id,") && screen.contains("5  from t;"), "{screen}");
@@ -190,9 +190,9 @@ fn the_statement_zoom_shows_the_statement_alone() {
 #[test]
 fn ctrl_k_menu_shows_letters_and_the_panes_keys() {
     let (mut app, _dir) = query_app();
-    app.schema_visible = true;
+    app.panes.schema_visible = true;
     app.focus = Focus::Schema;
-    app.status.clear();
+    app.notes.status.clear();
     let screen = render(&mut app, 90, 30);
     assert!(screen.contains("^K  keys") && !screen.contains("REFRESH"), "minimal hints, no pane footer:\n{screen}");
     // `?` outside the editor opens the same menu as Ctrl+K.
@@ -210,7 +210,7 @@ fn ctrl_k_menu_shows_letters_and_the_panes_keys() {
     assert_snapshot!(screen);
     // A letter runs its action.
     app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
-    assert!(app.zoomed && app.palette.is_none());
+    assert!(app.panes.zoomed && app.palette.is_none());
     // Anything else (or `/`) searches every command.
     app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     for c in "/export".chars() {
@@ -220,7 +220,7 @@ fn ctrl_k_menu_shows_letters_and_the_panes_keys() {
     assert!(screen.contains("COMMANDS") && screen.contains("Export rows as CSV"), "{screen}");
     // From the editor, its own keys are there.
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    app.zoomed = false;
+    app.panes.zoomed = false;
     app.focus = Focus::Editor;
     app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     if let Some(palette) = &mut app.palette {
@@ -236,7 +236,7 @@ fn ctrl_k_menu_shows_letters_and_the_panes_keys() {
     );
     // Commit and roll back only with a transaction open.
     assert!(!screen.contains("commit") && !screen.contains("roll back"), "{screen}");
-    app.txn = TxnState::Open;
+    app.connection.txn = TxnState::Open;
     let screen = render(&mut app, 90, 30);
     assert!(screen.contains("c commit") && screen.contains("r roll back"), "{screen}");
 }
@@ -246,7 +246,7 @@ fn run_buttons_sit_right_of_the_tabs_and_click() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let (mut app, _dir) = query_app();
     app.focus = Focus::Results;
-    app.status.clear();
+    app.notes.status.clear();
     let screen = render(&mut app, 120, 20);
     assert!(screen.contains("▶ F5 Run") && screen.contains("F7 Explain"), "{screen}");
     let &(x, _, action) = app.hits.run_buttons.first().unwrap();
@@ -259,7 +259,7 @@ fn run_buttons_sit_right_of_the_tabs_and_click() {
     });
     // It ran (here: there's no database behind the test connection).
     assert_eq!(app.focus, Focus::Editor);
-    let note = app.editor_note.as_deref().unwrap_or_default();
+    let note = app.notes.editor_note.as_deref().unwrap_or_default();
     assert!(note.contains("connect"), "in the editor's footer: {note}");
 }
 

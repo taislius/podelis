@@ -204,7 +204,7 @@ impl App {
 
     pub(in crate::app) fn handle_cell_view_key(&mut self, key: KeyEvent) {
         let Some(view) = &mut self.cell_view else { return };
-        let page = self.editor_height.max(5) as u16;
+        let page = self.panes.editor_height.max(5) as u16;
         // A row (`x`): past its end ↓ goes on to the next row, and ↑ above
         // its start to the previous one.
         let down = matches!(key.code, KeyCode::Down | KeyCode::Char('j'));
@@ -289,7 +289,7 @@ impl App {
     /// scrolls down from its top; messages scroll up from the newest line.
     /// ←/→ scroll across (drawing stops at the widest line).
     pub(in crate::app) fn handle_tab_scroll_key(&mut self, key: KeyEvent) {
-        let page = self.editor_height.max(5) as u16;
+        let page = self.panes.editor_height.max(5) as u16;
         match key.code {
             KeyCode::Left | KeyCode::Char('h') => return self.scroll_tab_across(-1),
             KeyCode::Right | KeyCode::Char('l') => return self.scroll_tab_across(1),

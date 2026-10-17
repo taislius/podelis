@@ -392,8 +392,8 @@ impl App {
         if self.running_here() {
             self.set_result_status("Running… (Esc to cancel)".to_string(), false);
         } else if self.run.executing {
-            self.status = self.running_elsewhere("its outcome is said here when it's done");
-            (self.status_is_error, self.status_in_results) = (false, false);
+            self.notes.status = self.running_elsewhere("its outcome is said here when it's done");
+            (self.notes.status_is_error, self.notes.status_in_results) = (false, false);
         }
     }
 

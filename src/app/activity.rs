@@ -19,7 +19,7 @@ pub struct ActivityView {
 
 impl App {
     pub(super) fn open_activity(&mut self) {
-        if self.database.is_none() {
+        if self.connection.database.is_none() {
             return self.set_status("This tab isn't connected".to_string(), true);
         }
         if !self.engine().capabilities().activity {
@@ -37,7 +37,7 @@ impl App {
     }
 
     fn refresh_activity(&mut self) {
-        let Some(db) = self.database.clone() else { return };
+        let Some(db) = self.connection.database.clone() else { return };
         let Some(view) = &mut self.activity else { return };
         if view.loading {
             return;
@@ -101,7 +101,7 @@ impl App {
                 }
             }
             KeyCode::Char(c @ ('c' | 'x')) => {
-                if self.active_mode == ConnectionMode::ReadOnly {
+                if self.connection.mode == ConnectionMode::ReadOnly {
                     return self.set_status("Read-only connection: not stopping other sessions".to_string(), true);
                 }
                 let Some(view) = &mut self.activity else { return };
@@ -114,7 +114,7 @@ impl App {
     }
 
     fn stop_session(&mut self, id: String, kill: bool) {
-        let Some(db) = self.database.clone() else { return };
+        let Some(db) = self.connection.database.clone() else { return };
         let what = if kill { "Ended session" } else { "Cancelled the query of session" };
         let send = self.sender();
         tokio::spawn(async move {
@@ -141,14 +141,14 @@ impl App {
     /// times and rows. Writes run in a transaction (or savepoint) that's
     /// rolled back, after a confirmation.
     pub(super) fn explain_analyze_current(&mut self) {
-        if self.run.executing || self.database.is_none() {
+        if self.run.executing || self.connection.database.is_none() {
             return;
         }
         let engine = self.engine();
         let Some((stmt, line)) = self.statement_to_explain() else {
             return self.set_status("No statement at cursor".to_string(), true);
         };
-        let version = self.database.as_ref().map_or("", |db| db.version());
+        let version = self.connection.database.as_ref().map_or("", |db| db.version());
         let Some(explain) = engine.dialect().explain_analyze(&stmt, version) else {
             let server = if engine.is_file_based() { engine.label() } else { "This server" };
             self.set_status(format!("{server} can't EXPLAIN ANALYZE this statement; showing the plan instead"), false);
@@ -162,7 +162,7 @@ impl App {
         if !writes {
             return self.run_now(explain, 0, infos, RunPurpose::Explain, None);
         }
-        let sql = if self.txn == TxnState::Idle {
+        let sql = if self.connection.txn == TxnState::Idle {
             format!("BEGIN;\n{explain};\nROLLBACK")
         } else {
             format!("SAVEPOINT podelis_explain;\n{explain};\nROLLBACK TO SAVEPOINT podelis_explain")
@@ -171,7 +171,7 @@ impl App {
         self.confirm = Some(Confirm {
             message: "EXPLAIN ANALYZE runs the statement. Its changes are rolled back afterwards. Run it?".into(),
             details: vec![stmt.lines().next().unwrap_or_default().to_string()],
-            danger: self.active_mode == ConnectionMode::Production,
+            danger: self.connection.mode == ConnectionMode::Production,
             action,
             offer_transaction: false,
         });

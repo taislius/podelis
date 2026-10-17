@@ -28,8 +28,8 @@ impl App {
         if !matches!(self.screen, Screen::Query) {
             if click {
                 let double =
-                    self.last_click.is_some_and(|(t, cx, cy)| t.elapsed() < DOUBLE_CLICK && cx == x && cy == y);
-                self.last_click = Some((Instant::now(), x, y));
+                    self.panes.last_click.is_some_and(|(t, cx, cy)| t.elapsed() < DOUBLE_CLICK && cx == x && cy == y);
+                self.panes.last_click = Some((Instant::now(), x, y));
                 self.click_manager(x, y, double);
             }
             return;
@@ -62,20 +62,20 @@ impl App {
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 let double =
-                    self.last_click.is_some_and(|(t, cx, cy)| t.elapsed() < DOUBLE_CLICK && cx == x && cy == y);
-                self.last_click = Some((Instant::now(), x, y));
+                    self.panes.last_click.is_some_and(|(t, cx, cy)| t.elapsed() < DOUBLE_CLICK && cx == x && cy == y);
+                self.panes.last_click = Some((Instant::now(), x, y));
                 self.click(x, y, double);
             }
-            MouseEventKind::Drag(MouseButton::Left) if self.plan_dragging => self.drag_plan(y),
-            MouseEventKind::Drag(MouseButton::Left) if self.dragging => {
+            MouseEventKind::Drag(MouseButton::Left) if self.panes.plan_dragging => self.drag_plan(y),
+            MouseEventKind::Drag(MouseButton::Left) if self.panes.dragging => {
                 let pos = self.editor_pos_at(x, y);
                 let anchor = self.tab.editor.anchor().unwrap_or_else(|| self.tab.editor.cursor());
                 self.tab.editor.set_cursor(pos);
                 self.tab.editor.set_anchor((anchor != pos).then_some(anchor));
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                self.dragging = false;
-                self.plan_dragging = false;
+                self.panes.dragging = false;
+                self.panes.plan_dragging = false;
             }
             // Right-click: select what's under the pointer, then its menu.
             MouseEventKind::Down(MouseButton::Right) => {
@@ -89,7 +89,7 @@ impl App {
                 } else {
                     self.click(x, y, false);
                 }
-                self.dragging = false;
+                self.panes.dragging = false;
                 let on_pane = [self.hits.editor, self.hits.results].iter().any(|r| inside(*r, x, y))
                     || self.hits.schema.is_some_and(|r| inside(r, x, y));
                 if on_pane {
@@ -183,7 +183,7 @@ impl App {
             self.tab.editor.clear_selection();
             self.tab.editor.set_cursor(pos);
             self.tab.editor.set_anchor(Some(pos));
-            self.dragging = true;
+            self.panes.dragging = true;
             return;
         }
         if inside(hits.editor, x, y) {
@@ -262,14 +262,14 @@ impl App {
         let hits = &self.hits;
         self.focus = Focus::Schema;
         if inside(hits.schema_filter, x, y) {
-            if let Some(panel) = &mut self.schema {
+            if let Some(panel) = &mut self.connection.schema {
                 panel.filter_editing = true;
             }
             return;
         }
         let on_list = inside(hits.schema_list, x, y);
         let index = hits.schema_offset + y.saturating_sub(hits.schema_list.y) as usize;
-        let Some(panel) = &mut self.schema else { return };
+        let Some(panel) = &mut self.connection.schema else { return };
         // Clicking past the filter line ends its typing (the filter stays):
         // keys then go to the tree, to what was clicked.
         panel.filter_editing = false;
@@ -316,7 +316,7 @@ impl App {
         // The view moves, not the cursor: a selection stays whole.
         if inside(hits.editor, x, y) {
             let rows = if down { WHEEL_LINES as isize } else { -(WHEEL_LINES as isize) };
-            self.tab.editor.scroll_view(rows, self.editor_height);
+            self.tab.editor.scroll_view(rows, self.panes.editor_height);
         } else if inside(hits.results, x, y) {
             if !self.grid_shown() {
                 let delta = if down { WHEEL_LINES as i16 } else { -(WHEEL_LINES as i16) };
@@ -333,7 +333,7 @@ impl App {
             self.tab.grid.table_state.select(Some(next));
             self.maybe_fetch_more();
         } else if hits.schema.is_some_and(|r| inside(r, x, y))
-            && let Some(panel) = &mut self.schema
+            && let Some(panel) = &mut self.connection.schema
         {
             let nodes = panel.nodes();
             let mut at = panel.selected;

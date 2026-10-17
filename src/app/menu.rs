@@ -65,7 +65,7 @@ impl App {
                 self.action_item("Run the statement at the cursor", Action::RunStatement),
                 self.action_item("Select the statement", Action::SelectStatement),
                 self.action_item(
-                    if self.statement_zoom { "Show the whole text again" } else { "Zoom the statement (alone)" },
+                    if self.panes.statement_zoom { "Show the whole text again" } else { "Zoom the statement (alone)" },
                     Action::ZoomStatement,
                 ),
                 self.action_item("Explain (plan only)", Action::Explain),
@@ -223,7 +223,7 @@ impl App {
             {
                 self.grid_menu()
             }
-            Focus::Schema if self.schema.is_some() => {
+            Focus::Schema if self.connection.schema.is_some() => {
                 use KeyCode::Char;
                 (
                     "NAVIGATOR",
@@ -244,7 +244,7 @@ impl App {
             // Messages, a plan's text, or nothing run yet: no rows to act on.
             Focus::Results => {
                 use KeyCode::Char;
-                let messages = self.tab.result_tab == ResultTab::Messages && !self.messages.is_empty();
+                let messages = self.tab.result_tab == ResultTab::Messages && !self.notes.log.is_empty();
                 (
                     "RESULTS",
                     [

@@ -29,8 +29,8 @@ pub(super) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Option<(u
     let t = theme();
     let focused = app.focus == Focus::Editor;
     let info = [
-        app.zoomed.then_some("ZOOMED"),
-        app.statement_zoom.then_some("THE STATEMENT ALONE"),
+        app.panes.zoomed.then_some("ZOOMED"),
+        app.panes.statement_zoom.then_some("THE STATEMENT ALONE"),
         app.vim_mode().map(crate::app::VimMode::label),
     ]
     .into_iter()
@@ -39,7 +39,7 @@ pub(super) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Option<(u
     .join(" · ");
     // No line/column readout: the gutter already marks the current line.
     let mut block = pane("Query", &info, focused);
-    if app.active_mode == ConnectionMode::Production {
+    if app.connection.mode == ConnectionMode::Production {
         block = block.border_style(fg(t.error));
     }
     let inner = block.inner(area);
@@ -76,7 +76,7 @@ pub(super) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Option<(u
 
     app.hits.editor_text = text_area;
     app.tab.editor.scroll_to_cursor(text_area.height as usize, text_area.width as usize);
-    app.editor_height = text_area.height as usize;
+    app.panes.editor_height = text_area.height as usize;
     // Zoomed to a statement: only its rows, from its first.
     let rows = statement_rows(app);
     if let Some((first, last)) = rows {
@@ -147,7 +147,7 @@ pub(super) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Option<(u
 /// else the statement at the cursor's, and the cursor's row in any case
 /// (it may sit in the blank between two statements).
 fn statement_rows(app: &App) -> Option<(usize, usize)> {
-    if !app.statement_zoom {
+    if !app.panes.statement_zoom {
         return None;
     }
     let ed = &app.tab.editor;
@@ -387,7 +387,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Option<(u16, u16
     let t = theme();
     f.render_widget(Block::default().style(Style::default().bg(t.inset)), area);
     let tab_count = app.tabs.len();
-    let bar = if app.active_mode == ConnectionMode::Production {
+    let bar = if app.connection.mode == ConnectionMode::Production {
         t.error
     } else if app.focus == Focus::Editor {
         t.accent
@@ -559,7 +559,7 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
     }
     let mut right = Line::from(tx_status(app, area.width));
     // A message (until the next key) has the room before the write modes.
-    let note_w = app.editor_note.as_deref().map_or(0, |n| Span::raw(one_line(n)).width() as u16 + 3);
+    let note_w = app.notes.editor_note.as_deref().map_or(0, |n| Span::raw(one_line(n)).width() as u16 + 3);
     if note_w > 0 && note_w + right.width() as u16 > area.width {
         right = Line::default();
     }
@@ -579,8 +579,8 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
         .areas(area);
     f.render_widget(Paragraph::new(Span::styled(position, muted())), middle);
     // The editor's own messages first: what was done here, or why not.
-    let left = if let Some(note) = &app.editor_note {
-        let style = if app.editor_note_is_error { bold(t.error) } else { fg(t.text) };
+    let left = if let Some(note) = &app.notes.editor_note {
+        let style = if app.notes.editor_note_is_error { bold(t.error) } else { fg(t.text) };
         Line::from(Span::styled(format!(" {}", truncate(&one_line(note), l.width as usize)), style))
     } else if let Some(hint) = &app.tab.syntax_hint {
         let (label, color, rule) = match hint.source {
@@ -616,11 +616,11 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Paragraph::new(left), l);
     f.render_widget(Paragraph::new(right).alignment(Alignment::Right), r);
     // Clicking a hint goes to where it points.
-    if app.editor_note.is_none() && app.tab.syntax_hint.as_ref().is_some_and(|h| h.offset.is_some()) {
+    if app.notes.editor_note.is_none() && app.tab.syntax_hint.as_ref().is_some_and(|h| h.offset.is_some()) {
         app.hits.syntax_hint = l;
     }
     // Clicking the write modes cycles them.
-    if app.txn == TxnState::Idle {
+    if app.connection.txn == TxnState::Idle {
         app.hits.tx_mode = r;
     }
 }
@@ -657,7 +657,7 @@ fn statement_position(app: &App) -> Option<(usize, usize)> {
 fn tx_status(app: &App, width: u16) -> Vec<Span<'static>> {
     let t = theme();
     let key = |a: Action| app.keymap.short_label(a);
-    let mut spans = match app.txn {
+    let mut spans = match app.connection.txn {
         TxnState::Open => vec![Span::styled(
             format!("● uncommitted · {} commit · {} undo", key(Action::Commit), key(Action::Rollback)),
             bold(t.warn),
@@ -665,7 +665,7 @@ fn tx_status(app: &App, width: u16) -> Vec<Span<'static>> {
         TxnState::Aborted => {
             vec![Span::styled(format!("✕ transaction failed · {} roll back", key(Action::Rollback)), bold(t.error))]
         }
-        TxnState::Idle if app.active_mode == ConnectionMode::ReadOnly => {
+        TxnState::Idle if app.connection.mode == ConnectionMode::ReadOnly => {
             vec![Span::styled("Transaction:", muted()), Span::styled(" read-only", dim())]
         }
         // All three modes when there's room next to the run key, else the current one.
@@ -673,7 +673,7 @@ fn tx_status(app: &App, width: u16) -> Vec<Span<'static>> {
             let mut spans = vec![Span::styled("Transaction:", muted())];
             let all = width >= 72;
             for mode in [TxMode::AutoCommit, TxMode::Manual, TxMode::RollbackOnly] {
-                if mode == app.tx_mode {
+                if mode == app.connection.tx_mode {
                     spans.push(Span::raw(" "));
                     // The current mode in bold orange, without a filled background.
                     spans.push(Span::styled(format!(" {} ", mode.short()), bold(t.warn)));

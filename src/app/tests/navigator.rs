@@ -10,23 +10,23 @@ async fn schema_details_load_on_expand_and_definitions_open() {
          create index child_parent on child (parent_id);",
     )
     .await;
-    while app.schema.as_ref().is_none_or(|s| s.loading) {
+    while app.connection.schema.as_ref().is_none_or(|s| s.loading) {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
     let wait_details = async |app: &mut App| {
-        while app.schema.as_ref().unwrap().tables.iter().any(|t| t.details_loading) {
+        while app.connection.schema.as_ref().unwrap().tables.iter().any(|t| t.details_loading) {
             let event = app.poll_db_event().await.unwrap();
             app.handle_db_event(event);
         }
     };
     app.focus = Focus::Schema;
-    let panel = app.schema.as_mut().unwrap();
+    let panel = app.connection.schema.as_mut().unwrap();
     let child = panel.tables.iter().position(|t| t.info.name == "child").unwrap();
     panel.selected = panel.nodes().iter().position(|n| *n == SchemaNode::Table(child)).unwrap();
     app.handle_key(key(KeyCode::Enter));
     wait_details(&mut app).await;
-    let panel = app.schema.as_ref().unwrap();
+    let panel = app.connection.schema.as_ref().unwrap();
     assert!(panel.nodes().contains(&SchemaNode::Index(child, 0)));
     assert_eq!(panel.tables[child].foreign_key("parent_id"), Some("parent.id"));
 
@@ -37,7 +37,7 @@ async fn schema_details_load_on_expand_and_definitions_open() {
     app.handle_key(key(KeyCode::Esc));
 
     // On a table whose details aren't loaded yet, `d` opens it once they arrive.
-    let panel = app.schema.as_mut().unwrap();
+    let panel = app.connection.schema.as_mut().unwrap();
     let parent = panel.tables.iter().position(|t| t.info.name == "parent").unwrap();
     panel.selected = panel.nodes().iter().position(|n| *n == SchemaNode::Table(parent)).unwrap();
     app.handle_key(key(KeyCode::Char('d')));
@@ -52,7 +52,7 @@ async fn system_tables_toggle_in_their_own_section() {
     run_sql(&mut app, "create table t (id integer primary key autoincrement); insert into t default values;").await;
     finish_catalog(&mut app).await;
     let sections = |app: &App| -> Vec<SchemaSection> {
-        let nodes = app.schema.as_ref().unwrap().nodes();
+        let nodes = app.connection.schema.as_ref().unwrap().nodes();
         nodes.into_iter().filter_map(|n| if let SchemaNode::Section(s) = n { Some(s) } else { None }).collect()
     };
     assert_eq!(sections(&app), [SchemaSection::Tables]);
@@ -79,7 +79,7 @@ async fn schema_snapshots_show_what_changed_since() {
     run_sql(&mut app, "create table people (id integer primary key, name text)").await;
     app.snapshot_schema();
     until_event(&mut app, |k| matches!(k, DbEventKind::SnapshotSaved(_))).await;
-    assert!(app.status.starts_with("Saved a schema snapshot (1 tables)"), "{}", app.status);
+    assert!(app.notes.status.starts_with("Saved a schema snapshot (1 tables)"), "{}", app.notes.status);
     assert_eq!(app.snapshots().len(), 1);
     app.open_palette(false);
     let entry = app.palette_command_text(crate::app::palette::Command::CompareSnapshot(0));
@@ -89,7 +89,7 @@ async fn schema_snapshots_show_what_changed_since() {
     run_sql(&mut app, "alter table people add column email text; create table orders (id integer primary key)").await;
     app.compare_snapshot(0);
     until_event(&mut app, |k| matches!(k, DbEventKind::SnapshotCompared(_))).await;
-    assert!(app.status.starts_with("2 change(s) since the snapshot"), "{}", app.status);
+    assert!(app.notes.status.starts_with("2 change(s) since the snapshot"), "{}", app.notes.status);
     let text = &app.cell_view.as_ref().unwrap().text;
     assert!(text.contains("ONLY HERE\n  table orders") && text.contains("column email TEXT: only here"), "{text}");
     assert!(text.contains("people ADD COLUMN email TEXT;"), "{text}");
@@ -106,7 +106,7 @@ fn space_in_the_schema_opens_the_command_menu() {
     assert!(app.palette.as_ref().unwrap().searching);
     app.handle_key(key(KeyCode::Esc));
 
-    app.schema = Some(SchemaPanel::default());
+    app.connection.schema = Some(SchemaPanel::default());
     app.focus = Focus::Schema;
     app.handle_key(key(KeyCode::Char(' ')));
     assert!(app.palette.is_some());
@@ -115,7 +115,7 @@ fn space_in_the_schema_opens_the_command_menu() {
 #[test]
 fn s_in_the_navigator_adds_the_select_after_everything() {
     let (mut app, _dir) = test_app();
-    app.schema = Some(SchemaPanel {
+    app.connection.schema = Some(SchemaPanel {
         tables: vec![SchemaTable {
             info: crate::db::TableInfo {
                 schema: "public".into(),
@@ -158,13 +158,14 @@ fn arrows_in_a_definition_go_to_the_next_table() {
         details: Some(crate::db::TableDetails::default()),
         details_loading: false,
     };
-    app.schema = Some(SchemaPanel { tables: vec![table("a"), table("b")], selected: 1, ..SchemaPanel::default() });
+    app.connection.schema =
+        Some(SchemaPanel { tables: vec![table("a"), table("b")], selected: 1, ..SchemaPanel::default() });
     app.focus = Focus::Schema;
     app.handle_schema_key(key(KeyCode::Char('d')));
     assert_eq!(app.cell_view.as_ref().unwrap().title, "TABLE a");
     app.handle_cell_view_key(key(KeyCode::Right));
     assert_eq!(app.cell_view.as_ref().unwrap().title, "TABLE b");
-    assert_eq!(app.schema.as_ref().unwrap().selected, 2, "the navigator follows");
+    assert_eq!(app.connection.schema.as_ref().unwrap().selected, 2, "the navigator follows");
     app.handle_cell_view_key(key(KeyCode::Right));
     assert_eq!(app.cell_view.as_ref().unwrap().title, "TABLE b", "stays on the last");
     app.handle_cell_view_key(key(KeyCode::Left));
@@ -178,14 +179,14 @@ async fn s_in_the_navigator_runs_only_its_select() {
     let (mut app, _dir) = Box::pin(connected_app(ConnectionMode::Normal)).await;
     run_sql(&mut app, "create table people (id integer primary key, name text)").await;
     run_sql(&mut app, "insert into people values (1, 'Ann')").await;
-    while app.schema.as_ref().is_none_or(|s| s.loading || s.tables.is_empty()) {
+    while app.connection.schema.as_ref().is_none_or(|s| s.loading || s.tables.is_empty()) {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
     // Other statements in the editor, one of them broken: they're not run.
     app.tab.editor.set_text("select nope from nowhere;\ndelete from people;");
     app.tab.editor.set_cursor((0, 3));
-    let panel = app.schema.as_mut().unwrap();
+    let panel = app.connection.schema.as_mut().unwrap();
     panel.selected = panel.nodes().iter().position(|n| matches!(n, SchemaNode::Table(_))).unwrap();
     app.focus = Focus::Schema;
     app.handle_key(key(KeyCode::Char('s')));
