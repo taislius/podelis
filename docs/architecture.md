@@ -112,7 +112,10 @@ db/
                   other sessions, locks, other servers), each with why;
                   tested on statements in its own syntax (`agents.rs`
                   tests the rules every engine shares, over Engine::ALL)
-    db_tests.rs   its own Database tests
+    db_tests.rs   its own Database tests, and what the shared ones need
+                  of it: its test server (`live_params`), a database of a
+                  test's own (`own_live_db`), and its SQL for them
+                  (`TEST_SQL`: a slow query, ANALYZE, binary values…)
 ```
 
 Three concerns are kept apart:
@@ -150,9 +153,13 @@ Outside `db/`, code doesn't name an engine except in tests.
    `Session`; the compiler points at each function the new folder still
    lacks. Capabilities decide what the app offers, so unsupported features
    simply don't show.
-3. Its live tests in its `db_tests.rs`, calling the shared helpers in
-   `db/tests.rs` (and a `PODELIS_TEST_*` server in CI). The shared tests
-   (`Engine::ALL`, as in `agents.rs`) take it in on their own; its own
+3. Its tests: in its `db_tests.rs`, `live_params`, `own_live_db` and
+   `TEST_SQL` (the compiler asks for them), then its own tests calling the
+   shared helpers in `db/tests.rs` (and a `PODELIS_TEST_*` server in CI).
+   The shared tests run over `Engine::ALL` (in `db/tests.rs`, `agents.rs`,
+   `import.rs`, `diff.rs`, `mcp.rs` and the app's), so they take it in on
+   their own; tests that need a database always there use the file
+   engine (`file_engine()`, by the `file_based` capability). Its own
    statements for agents are tested in its `agent_constraints.rs`.
 
 ## The gateway
