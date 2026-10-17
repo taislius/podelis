@@ -4,12 +4,35 @@
 use crate::db::tests::*;
 use crate::db::*;
 
+/// No server: a file is its database.
+pub(in crate::db) fn live_params() -> Option<ConnectParams> {
+    None
+}
+
+/// A new file, `name.db`.
+pub(in crate::db) async fn own_live_db(name: &str) -> Option<(Database, ConnectParams)> {
+    let params = file_params(&scratch_file(name), false);
+    Some((Database::connect(params.clone()).await.expect("open"), params))
+}
+
+pub(crate) static TEST_SQL: TestSql = TestSql {
+    sleep: None,
+    count_to_2500: "WITH RECURSIVE s(g) AS (SELECT 1 UNION ALL SELECT g + 1 FROM s WHERE g < 2500) SELECT g FROM s",
+    plan_shows: &["SCAN t"],
+    analyze: "ANALYZE {table}",
+    binary: ["CREATE TEMP TABLE bin_t (b blob)", "X'00FF275C'", "X'00FF275C'"],
+    comments: None,
+    sequence: None,
+    read_only_off: None,
+    without_rollback: None,
+};
+
 #[tokio::test]
 async fn a_sqlite_path_keeps_its_brackets() {
     // Brackets are stripped from IPv6 hosts, not from file names.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("[data].db");
-    let params = sqlite_params(&path, false);
+    let params = file_params(&path, false);
     assert_eq!(params.file_to_create(), Some(path.to_string_lossy().as_ref()));
     let db = Database::connect(params).await.unwrap();
     db.close().await;
@@ -21,11 +44,15 @@ async fn a_sqlite_path_keeps_its_brackets() {
 async fn live_sqlite() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("t.db");
-    let db = Database::connect(sqlite_params(&path, false)).await.unwrap();
+    let db = Database::connect(file_params(&path, false)).await.unwrap();
     live_common(&db).await;
     // A query that never ends stops when cancelled; a cancel with nothing
     // running doesn't stop the next one.
-    live_cancel(&db, "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n").await;
+    live_cancel(&db, "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n", |r| {
+        let err = r.unwrap_err();
+        assert!(format!("{err:#}").contains("interrupted"), "{err:#}");
+    })
+    .await;
     db.cancel().await.unwrap();
     assert_eq!(cells(&db.run("SELECT 8", DEFAULT_ROW_LIMIT).await.unwrap()), vec![vec![Some("8")]]);
     let o = db.run("SELECT 1, 2.5, 'žąsis', X'00FF', NULL", DEFAULT_ROW_LIMIT).await.unwrap();
@@ -55,7 +82,7 @@ async fn live_sqlite() {
     db.close().await;
 
     // Read-only mode is enforced by SQLite itself.
-    let ro = Database::connect(sqlite_params(&path, true)).await.unwrap();
+    let ro = Database::connect(file_params(&path, true)).await.unwrap();
     assert!(ro.run("SELECT count(*) FROM people", DEFAULT_ROW_LIMIT).await.is_ok());
     assert!(ro.run("INSERT INTO people VALUES (1, 'x')", DEFAULT_ROW_LIMIT).await.is_err());
 }
@@ -63,7 +90,7 @@ async fn live_sqlite() {
 #[tokio::test]
 async fn live_check_statement_sqlite() {
     let dir = tempfile::tempdir().unwrap();
-    let db = Database::connect(sqlite_params(&dir.path().join("c.db"), false)).await.unwrap();
+    let db = Database::connect(file_params(&dir.path().join("c.db"), false)).await.unwrap();
     live_check(&db).await;
     let CheckOutcome::Problem { position, .. } = db.check_statement("SELECT * FRO t").await.unwrap() else { panic!() };
     assert_eq!(position, Some(ErrorPos::Token("FRO".into())));
@@ -72,7 +99,8 @@ async fn live_check_statement_sqlite() {
 #[tokio::test]
 async fn live_details_sqlite() {
     let dir = tempfile::tempdir().unwrap();
-    let db = Database::connect(sqlite_params(&dir.path().join("d.db"), false)).await.unwrap();
-    live_details(&db, "main", DETAILS_TABLES).await;
+    let db = Database::connect(file_params(&dir.path().join("d.db"), false)).await.unwrap();
+    // Its INTEGER PRIMARY KEY is the rowid itself: no index.
+    live_details(&db, "main", DETAILS_TABLES, false).await;
     assert!(db.routines().await.unwrap().is_empty());
 }

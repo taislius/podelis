@@ -813,10 +813,15 @@ pub(crate) mod tests {
         }
     }
 
-    fn sqlite(name: &str, path: &std::path::Path, agents: AgentAccess, mode: ConnectionMode) -> ConnectionProfile {
+    fn file_connection(
+        name: &str,
+        path: &std::path::Path,
+        agents: AgentAccess,
+        mode: ConnectionMode,
+    ) -> ConnectionProfile {
         ConnectionProfile {
             name: name.into(),
-            engine: Engine::Sqlite,
+            engine: crate::db::tests::file_engine(),
             host: path.to_string_lossy().into_owned(),
             port: String::new(),
             user: String::new(),
@@ -860,8 +865,9 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_relative_sqlite_file_is_the_agents() {
         let dir = tempfile::tempdir().unwrap();
-        make_sqlite(&dir.path().join("shop.db"), "CREATE TABLE here (id INT); INSERT INTO here VALUES (7)");
-        let mut shop = sqlite("shop", std::path::Path::new("shop.db"), AgentAccess::Read, ConnectionMode::Normal);
+        make_file_db(&dir.path().join("shop.db"), "CREATE TABLE here (id INT); INSERT INTO here VALUES (7)");
+        let mut shop =
+            file_connection("shop", std::path::Path::new("shop.db"), AgentAccess::Read, ConnectionMode::Normal);
         shop.host = "shop.db".into();
         let server = Server::new("p1".into(), "shop".into(), vec![shop], dir.path().join("agents.jsonl"))
             .in_dir(Some(dir.path().display().to_string()));
@@ -876,7 +882,7 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = |name: &str| {
             let path = dir.path().join(name);
-            make_sqlite(
+            make_file_db(
                 &path,
                 "CREATE TABLE t (id INTEGER PRIMARY KEY, x INT); INSERT INTO t (x) VALUES (1), (2), (3)",
             );
@@ -888,10 +894,10 @@ pub(crate) mod tests {
             "p1".into(),
             "shop".into(),
             vec![
-                sqlite("reads", &reads, AgentAccess::Read, ConnectionMode::Normal),
-                sqlite("writes", &writes, AgentAccess::Write, ConnectionMode::Normal),
-                sqlite("prod", &prod, AgentAccess::Write, ConnectionMode::Production),
-                sqlite("hidden", &hidden, AgentAccess::None, ConnectionMode::Normal),
+                file_connection("reads", &reads, AgentAccess::Read, ConnectionMode::Normal),
+                file_connection("writes", &writes, AgentAccess::Write, ConnectionMode::Normal),
+                file_connection("prod", &prod, AgentAccess::Write, ConnectionMode::Production),
+                file_connection("hidden", &hidden, AgentAccess::None, ConnectionMode::Normal),
             ],
             log.clone(),
         )
@@ -979,7 +985,7 @@ pub(crate) mod tests {
     async fn sharing_changes_apply_at_once() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("s.db");
-        make_sqlite(&db, "CREATE TABLE t (x INT)");
+        make_file_db(&db, "CREATE TABLE t (x INT)");
         let store = dir.path().join("connections.toml");
         let save = |agents: &str| {
             let toml = format!(
@@ -1007,12 +1013,12 @@ pub(crate) mod tests {
     async fn approved_writes_wait_for_the_user() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.db");
-        make_sqlite(&path, "CREATE TABLE t (id INTEGER PRIMARY KEY, x INT); INSERT INTO t (x) VALUES (1), (2)");
+        make_file_db(&path, "CREATE TABLE t (id INTEGER PRIMARY KEY, x INT); INSERT INTO t (x) VALUES (1), (2)");
         let log = dir.path().join("agents").join("p1.jsonl");
         let server = Server::new(
             "p1".into(),
             "shop".into(),
-            vec![sqlite("prod", &path, AgentAccess::Approve, ConnectionMode::Production)],
+            vec![file_connection("prod", &path, AgentAccess::Approve, ConnectionMode::Production)],
             log.clone(),
         )
         .waiting(Duration::from_secs(2));
@@ -1074,37 +1080,25 @@ pub(crate) mod tests {
     /// dry run changes nothing.
     #[tokio::test]
     async fn live_agents_on_servers() {
-        for engine in [Engine::Postgres, Engine::MySql] {
-            let prefix = if engine == Engine::Postgres { "PODELIS_TEST_PG" } else { "PODELIS_TEST_MYSQL" };
-            let Ok(port) = std::env::var(format!("{prefix}_PORT")) else { continue };
-            let host = std::env::var(format!("{prefix}_HOST")).unwrap_or_else(|_| "127.0.0.1".into());
-            let Some(setup) = crate::db::tests::live_db(engine).await else { continue };
-            let database = if engine == Engine::MySql {
-                setup.run("CREATE DATABASE IF NOT EXISTS podelis_agents", 1).await.unwrap();
-                setup.run("USE podelis_agents", 1).await.unwrap();
-                "podelis_agents"
-            } else {
-                ""
-            };
+        for engine in Engine::ALL {
+            let Some((setup, params)) = crate::db::tests::own_live_db(engine, "podelis_agents").await else { continue };
+            let sql = crate::db::tests::test_sql(engine);
             setup.run("DROP TABLE IF EXISTS agent_t", 1).await.unwrap();
             setup.run("CREATE TABLE agent_t (id int PRIMARY KEY, x int)", 1).await.unwrap();
             setup.run("INSERT INTO agent_t VALUES (1, 1), (2, 2), (3, 3)", 1).await.unwrap();
-            setup
-                .run(if engine == Engine::Postgres { "ANALYZE agent_t" } else { "ANALYZE TABLE agent_t" }, 1)
-                .await
-                .unwrap();
-            if engine == Engine::Postgres {
-                setup.run("DROP SEQUENCE IF EXISTS agent_seq; CREATE SEQUENCE agent_seq", 1).await.unwrap();
+            setup.run(&sql.analyze.replace("{table}", "agent_t"), 1).await.unwrap();
+            if let Some([create, _, _]) = sql.sequence {
+                setup.run(create, 1).await.unwrap();
             }
             let profile = |name: &str, agents, mode| ConnectionProfile {
                 name: name.into(),
                 engine,
-                host: host.clone(),
-                port: port.clone(),
-                user: if engine == Engine::Postgres { "postgres".into() } else { "root".into() },
-                database: database.into(),
-                password_command: vec!["printenv".into(), format!("{prefix}_PASSWORD")],
-                ..sqlite(name, std::path::Path::new(""), agents, mode)
+                host: params.host.clone(),
+                port: if params.port == 0 { String::new() } else { params.port.to_string() },
+                user: params.user.clone(),
+                database: params.database.clone(),
+                password_command: vec!["printf".into(), "%s".into(), params.password.clone()],
+                ..file_connection(name, std::path::Path::new(""), agents, mode)
             };
             let dir = tempfile::tempdir().unwrap();
             let server = Server::new(
@@ -1127,35 +1121,41 @@ pub(crate) mod tests {
             refused(call(&client, "query", q("prod", "UPDATE agent_t SET x = 0 WHERE id = 1; COMMIT")).await);
             // A statement riding along after the one to plan.
             refused(call(&client, "explain", q("writes", "SELECT 1; DELETE FROM agent_t WHERE id = 1")).await);
-            if engine == Engine::Postgres {
-                // Switching the session's read-only setting from inside a
-                // query doesn't help: each call is its own read-only
-                // transaction, and the change goes back with it.
-                let switched = "SELECT set_config('default_transaction_read_only', 'off', false)";
+            // Switching the session's read-only setting from inside a query
+            // doesn't help: each call is its own read-only transaction, and
+            // the change goes back with it.
+            if let Some(switched) = sql.read_only_off {
                 assert!(!call(&client, "query", q("reads", switched)).await.starts_with("ERROR"));
-                let sneaky = call(&client, "query", q("reads", "SELECT nextval('agent_seq')")).await;
-                assert!(sneaky.starts_with("ERROR") && sneaky.contains("read-only"), "{sneaky}");
-                // On production a read is rolled back too.
-                refused(call(&client, "query", q("prod", "SELECT nextval('agent_seq')")).await);
-                let seq = setup.run("SELECT is_called FROM agent_seq", 1).await.unwrap();
-                assert_eq!(seq.rows[0][0].as_deref(), Some("false"), "the sequence moved");
             }
-            // A whole "big" table (2 rows is big here) on production: refused;
-            // elsewhere it runs.
+            if let Some([_, moves, moved]) = sql.sequence {
+                let sneaky = call(&client, "query", q("reads", moves)).await;
+                assert!(sneaky.starts_with("ERROR") && sneaky.contains("read-only"), "{engine:?}: {sneaky}");
+                // On production a read is rolled back too.
+                refused(call(&client, "query", q("prod", moves)).await);
+                let seq = setup.run(moved, 1).await.unwrap();
+                assert_eq!(seq.rows[0][0].as_deref(), Some("false"), "{engine:?}: the sequence moved");
+            }
+            // A whole "big" table (2 rows is big here) on production: refused
+            // where the engine can tell how big (not SQLite); elsewhere it runs.
             let heavy = call(&client, "query", q("prod", "SELECT * FROM agent_t WHERE x = 2")).await;
-            assert!(
-                heavy.starts_with("ERROR") && heavy.contains("read all of") && heavy.contains("agent_t"),
-                "{engine:?}: {heavy}"
-            );
+            let tables = setup.tables(false).await.unwrap();
+            if tables.iter().find(|t| t.name == "agent_t").is_some_and(|t| t.rows.is_some()) {
+                assert!(
+                    heavy.starts_with("ERROR") && heavy.contains("read all of") && heavy.contains("agent_t"),
+                    "{engine:?}: {heavy}"
+                );
+            } else {
+                assert!(!heavy.starts_with("ERROR"), "{engine:?}: {heavy}");
+            }
             assert!(
                 !call(&client, "query", q("reads", "SELECT * FROM agent_t WHERE x = 2")).await.starts_with("ERROR")
             );
             let all = setup.run("SELECT count(*) FROM agent_t", 1).await.unwrap();
             assert_eq!(all.rows[0][0].as_deref(), Some("3"), "{engine:?}: a row went");
-            if engine == Engine::MySql {
+            if let Some(create) = sql.without_rollback {
                 // A table a rollback can't undo: no dry runs in this database.
                 setup.run("DROP TABLE IF EXISTS agent_m", 1).await.unwrap();
-                setup.run("CREATE TABLE agent_m (x int) ENGINE=MyISAM", 1).await.unwrap();
+                setup.run(create, 1).await.unwrap();
                 let dry = call(&client, "query", q("prod", "UPDATE agent_t SET x = 0 WHERE x > 1")).await;
                 assert!(dry.starts_with("ERROR") && dry.contains("agent_m"), "{dry}");
                 setup.run("DROP TABLE agent_m", 1).await.unwrap();
@@ -1169,26 +1169,15 @@ pub(crate) mod tests {
         }
     }
 
-    /// Makes a SQLite file with `sql` in it, through Podėlis's own driver
+    /// Makes a file database with `sql` in it, through Podėlis's own driver
     /// (on its own runtime: the test's is busy with the protocol).
-    fn make_sqlite(path: &std::path::Path, sql: &str) {
+    fn make_file_db(path: &std::path::Path, sql: &str) {
         let target = path.to_path_buf();
         let sql = sql.to_string();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(async {
-                let params = crate::db::ConnectParams {
-                    engine: Engine::Sqlite,
-                    host: target.to_string_lossy().into_owned(),
-                    port: 0,
-                    user: String::new(),
-                    password: String::new(),
-                    database: String::new(),
-                    ssl_mode: crate::db::SslMode::Disable,
-                    read_only: false,
-                    ssh: None,
-                    password_command: Vec::new(),
-                };
+                let params = crate::db::tests::file_params(&target, false);
                 let db = Database::connect(params).await.unwrap();
                 db.run(&sql, 1).await.unwrap();
                 db.close().await;

@@ -151,7 +151,7 @@ impl App {
         let version = self.database.as_ref().map_or("", |db| db.version());
         let Some(explain) = engine.dialect().explain_analyze(&stmt, version) else {
             let server = if engine.is_file_based() { engine.label() } else { "This server" };
-            self.set_status(format!("{server} can't EXPLAIN ANALYZE; showing the plan instead"), false);
+            self.set_status(format!("{server} can't EXPLAIN ANALYZE this statement; showing the plan instead"), false);
             return self.explain_current();
         };
         // Tracking uses the EXPLAIN alone, so the wrapper doesn't look

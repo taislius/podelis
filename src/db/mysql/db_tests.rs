@@ -4,6 +4,37 @@
 use crate::db::tests::*;
 use crate::db::*;
 
+/// Its test server: `PODELIS_TEST_MYSQL_PORT` (and `_HOST`, `_USER`…).
+pub(in crate::db) fn live_params() -> Option<ConnectParams> {
+    server_params(Engine::MySql, "PODELIS_TEST_MYSQL", "root")
+}
+
+/// A database `name` of the test's own on the test server: tests run at
+/// once, and `live_mysql` drops `podelis_test` when it's done.
+pub(in crate::db) async fn own_live_db(name: &str) -> Option<(Database, ConnectParams)> {
+    let mut params = live_params()?;
+    let server = Database::connect(params.clone()).await.expect("connect");
+    server.run(&format!("CREATE DATABASE IF NOT EXISTS {name}"), 1).await.unwrap();
+    server.close().await;
+    params.database = name.to_string();
+    Some((Database::connect(params.clone()).await.expect("connect"), params))
+}
+
+pub(crate) static TEST_SQL: TestSql = TestSql {
+    sleep: Some("SELECT SLEEP({s})"),
+    count_to_2500: "SET SESSION cte_max_recursion_depth = 5000; \
+        WITH RECURSIVE s(g) AS (SELECT 1 UNION ALL SELECT g + 1 FROM s WHERE g < 2500) SELECT g FROM s",
+    // The classic table before 8.0.16 and on MariaDB; the tree after.
+    plan_shows: &["select_type", "-> "],
+    analyze: "ANALYZE TABLE {table}",
+    binary: ["CREATE TEMPORARY TABLE bin_t (b blob)", "X'00FF275C'", "0x00FF275C"],
+    comments: Some(&["CREATE TABLE noted (id INT PRIMARY KEY, total DECIMAL(10,2) COMMENT 'VAT included', plain INT) \
+         COMMENT 'One row per checkout'"]),
+    sequence: None,
+    read_only_off: None,
+    without_rollback: Some("CREATE TABLE agent_m (x int) ENGINE=MyISAM"),
+};
+
 #[tokio::test]
 async fn live_mysql() {
     let Some(db) = live_db(Engine::MySql).await else { return };
@@ -54,13 +85,19 @@ async fn live_mysql() {
     db.refresh_sql_mode().await;
     assert!(db.sql_mode().contains("PIPES_AS_CONCAT"), "{}", db.sql_mode());
     db.run("SET SESSION sql_mode = DEFAULT", DEFAULT_ROW_LIMIT).await.unwrap();
-    live_cancel(&db, "SELECT SLEEP(10)").await;
+    // SLEEP() returns 1 when interrupted rather than failing.
+    live_cancel(&db, "SELECT SLEEP(10)", |r| {
+        if let Ok(o) = r {
+            assert_eq!(cells(&o), vec![vec![Some("1")]]);
+        }
+    })
+    .await;
     db.run("DROP DATABASE podelis_test", DEFAULT_ROW_LIMIT).await.unwrap();
 }
 
 #[tokio::test]
 async fn live_mysql_error_line_and_read_only() {
-    let Some(mut params) = live_params(Engine::MySql) else { return };
+    let Some(mut params) = live_params() else { return };
     let db = Database::connect(params.clone()).await.unwrap();
     // The check before a run is a ping, not a statement: what the last
     // statement left (its warnings, its row count) is still there after it.
@@ -99,7 +136,7 @@ async fn live_details_mysql() {
          {DETAILS_TABLES}
          CREATE FUNCTION det_fn(x INT) RETURNS INT DETERMINISTIC RETURN x + 1;"
     );
-    live_details(&db, "podelis_det", &setup).await;
+    live_details(&db, "podelis_det", &setup, true).await;
     let routines = db.routines().await.unwrap();
     let f = routines.iter().find(|r| r.name == "det_fn").expect("det_fn listed");
     assert_eq!(f.kind, "function");
@@ -124,7 +161,8 @@ async fn live_reconnect_mysql() {
 
 #[tokio::test]
 async fn live_activity_mysql() {
-    live_activity(Engine::MySql, "SELECT SLEEP(10) AS podelis_activity_test").await;
+    // KILL QUERY ends SLEEP early, with a result rather than an error.
+    live_activity(Engine::MySql, "SELECT SLEEP(10) AS podelis_activity_test", false).await;
 }
 
 #[tokio::test]
@@ -138,4 +176,22 @@ async fn a_mysql_server_that_is_down_says_why_at_once() {
     assert!(started.elapsed() < std::time::Duration::from_secs(1), "not the pool's 10 s");
     assert_eq!(err.to_string(), format!("can't reach 127.0.0.1:{port}: connection refused"));
     assert!(crate::db::is_unreachable(&err));
+}
+
+/// How MySQL's types took the sample file (`import::tests`): booleans are
+/// TINYINT(1), timestamps keep their microseconds, a time with a zone is
+/// kept as written; a bad value puts nothing in.
+#[tokio::test]
+async fn live_import_types() {
+    use crate::import::tests::{import_failing, import_sample};
+    let Some((db, _)) = own_live_db("podelis_import_types").await else { return };
+    let o = import_sample(&db, "pets_types").await;
+    assert_eq!(o.rows[1][2].as_deref(), Some("0"), "BOOLEAN is TINYINT(1)");
+    assert_eq!(o.rows[0][4].as_deref(), Some("2026-10-13 10:00:00.123456"));
+    assert_eq!(o.rows[1][4].as_deref(), Some("2026-10-13 11:30:00.000000"));
+    assert_eq!(o.rows[0][6].as_deref(), Some("2026-10-13T10:00:00Z"), "kept as written");
+    import_failing(&db, "id,born\n4,2020-01-01\n5,not a date\n", "pets_types").await;
+    let count = db.run("SELECT count(*) FROM pets_types", 1).await.unwrap();
+    assert_eq!(count.rows[0][0].as_deref(), Some("3"));
+    db.run("DROP TABLE pets_types", 1).await.unwrap();
 }

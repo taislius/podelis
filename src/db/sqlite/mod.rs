@@ -6,7 +6,7 @@ mod agent_constraints;
 pub(super) mod cells;
 pub(super) mod connect;
 #[cfg(test)]
-mod db_tests;
+pub(in crate::db) mod db_tests;
 pub(super) mod passwords;
 pub(super) mod queries;
 
@@ -197,6 +197,31 @@ fn plan_notes(details: impl Iterator<Item = String>) -> Vec<PlanNote> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explain_statements() {
+        let d = crate::db::Engine::Sqlite.dialect();
+        assert!(d.explain_analyze("select 1", "").is_none());
+        assert_eq!(d.explain("select 1", ""), "EXPLAIN QUERY PLAN select 1");
+    }
+
+    #[test]
+    fn binary_literals() {
+        use crate::db::{Engine, value_literal};
+        assert_eq!(value_literal("X'00FF'", "BLOB", Engine::Sqlite), "X'00FF'");
+        assert_eq!(value_literal("X'0FF'", "BLOB", Engine::Sqlite), "'X''0FF'''", "odd digits");
+    }
+
+    #[test]
+    fn full_scans_in_plans() {
+        use crate::db::dialect::Scan;
+        let sqlite = vec![
+            vec![Some("2".into()), Some("0".into()), Some("0".into()), Some("SCAN t".into())],
+            vec![Some("3".into()), Some("0".into()), Some("0".into()), Some("SEARCH u USING INDEX i (x=?)".into())],
+            vec![Some("4".into()), Some("0".into()), Some("0".into()), Some("SCAN v USING COVERING INDEX j".into())],
+        ];
+        assert_eq!(crate::db::Engine::Sqlite.dialect().full_scans(&[], &sqlite), [Scan::new("t", None)]);
+    }
 
     #[test]
     fn sqlite_plan_nests_by_parent() {

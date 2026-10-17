@@ -371,18 +371,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("d.db");
-        let params = ConnectParams {
-            engine: Engine::Sqlite,
-            host: file.to_string_lossy().into_owned(),
-            port: 0,
-            user: String::new(),
-            password: String::new(),
-            database: String::new(),
-            ssl_mode: SslMode::Disable,
-            read_only: false,
-            ssh: None,
-            password_command: Vec::new(),
-        };
+        let params = crate::db::tests::file_params(&file, false);
         // A missing file: said so, and not created by the test.
         let steps = diagnose(params.clone()).await;
         let names: Vec<_> = steps.iter().map(|s| (s.name, s.state)).collect();

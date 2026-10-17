@@ -455,7 +455,7 @@ async fn insert(db: &Database, table: &str, cols: &[String], batch: &mut Vec<Str
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     async fn import_quietly(db: &Database, path: &Path, table: &str) -> Result<Imported> {
@@ -512,20 +512,7 @@ mod tests {
             std::fs::write(&path, bytes).unwrap();
             path
         };
-        let db = Database::connect(crate::db::ConnectParams {
-            engine: Engine::Sqlite,
-            host: dir.path().join("f.db").to_string_lossy().into_owned(),
-            port: 0,
-            user: String::new(),
-            password: String::new(),
-            database: String::new(),
-            ssl_mode: crate::db::SslMode::Disable,
-            read_only: false,
-            ssh: None,
-            password_command: Vec::new(),
-        })
-        .await
-        .unwrap();
+        let db = Database::connect(crate::db::tests::file_params(&dir.path().join("f.db"), false)).await.unwrap();
         let rows = |sql: &str| {
             let db = db.clone();
             let sql = sql.to_string();
@@ -580,52 +567,47 @@ mod tests {
         assert_eq!(String::from_utf8(out).unwrap(), "a\\\\b\ttab\\there\t\\N\t\\N\tline\\nbreak\\r\t\\N\n");
     }
 
-    /// A file with every guessed type, into PostgreSQL (`COPY`) and MySQL
-    /// (`INSERT`s), then a bad value: nothing changes, and the error names
-    /// its line.
-    #[tokio::test]
-    async fn live_imports_guess_types_on_servers() {
+    /// A file with every guessed type: text with a tab, a backslash and
+    /// non-ASCII letters, booleans, dates, timestamps, a decimal, a time
+    /// zone; a row of empty fields.
+    const SAMPLE: &str = "id,name,active,born,seen,score,at\n\
+         1,\"Rex\tthe \\ dog\",true,2020-01-02,2026-10-13 10:00:00.123456,1.5,2026-10-13T10:00:00Z\n\
+         2,Žąsis,FALSE,2019-12-31,2026-10-13T11:30,2,2026-10-13 12:00:00+02:00\n3,,,,,,\n";
+
+    /// [`SAMPLE`] imported into a new table, and read back: its rows by
+    /// `id`. For each engine's own tests of how its types took it.
+    pub(crate) async fn import_sample(db: &Database, table: &str) -> crate::db::QueryOutcome {
         let dir = tempfile::tempdir().unwrap();
         let csv = dir.path().join("pets.csv");
-        std::fs::write(
-            &csv,
-            "id,name,active,born,seen,score,at\n\
-             1,\"Rex\tthe \\ dog\",true,2020-01-02,2026-10-13 10:00:00.123456,1.5,2026-10-13T10:00:00Z\n\
-             2,Žąsis,FALSE,2019-12-31,2026-10-13T11:30,2,2026-10-13 12:00:00+02:00\n3,,,,,,\n",
-        )
-        .unwrap();
-        let bad = dir.path().join("bad.csv");
-        std::fs::write(&bad, "id,born\n4,2020-01-01\n5,not a date\n").unwrap();
-        for engine in [Engine::Postgres, Engine::MySql] {
-            let Some(db) = crate::db::tests::live_db(engine).await else { continue };
-            if engine == Engine::MySql {
-                db.run("CREATE DATABASE IF NOT EXISTS podelis_import; USE podelis_import", 1).await.unwrap();
-            }
-            db.run("DROP TABLE IF EXISTS pets_import", 1).await.unwrap();
-            assert_eq!(import_quietly(&db, &csv, "pets_import").await.unwrap(), Imported { rows: 3, created: true });
-            let o = db.run("SELECT * FROM pets_import ORDER BY id", 10).await.unwrap();
-            let types: Vec<String> = o.column_types.iter().map(|t| t.to_lowercase()).collect();
+        std::fs::write(&csv, SAMPLE).unwrap();
+        db.run(&format!("DROP TABLE IF EXISTS {table}"), 1).await.unwrap();
+        assert_eq!(import_quietly(db, &csv, table).await.unwrap(), Imported { rows: 3, created: true });
+        db.run(&format!("SELECT * FROM {table} ORDER BY id"), 10).await.unwrap()
+    }
+
+    /// `csv` (its text) into `table`: what went wrong.
+    pub(crate) async fn import_failing(db: &Database, csv: &str, table: &str) -> anyhow::Error {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.csv");
+        std::fs::write(&path, csv).unwrap();
+        import_quietly(db, &path, table).await.unwrap_err()
+    }
+
+    /// On every engine (`COPY` where it has one, `INSERT`s elsewhere): the
+    /// text comes back as it was, empty fields are NULL, and a file that
+    /// goes wrong part way changes nothing. How each engine's types took
+    /// the values is tested in its folder (`import_sample`).
+    #[tokio::test]
+    async fn imports_on_every_engine() {
+        for engine in Engine::ALL {
+            let Some((db, _)) = crate::db::tests::own_live_db(engine, "podelis_import").await else { continue };
+            let o = import_sample(&db, "pets_import").await;
             assert_eq!(o.rows[0][1].as_deref(), Some("Rex\tthe \\ dog"), "{engine:?}");
             assert_eq!(o.rows[1][1].as_deref(), Some("Žąsis"), "{engine:?}");
             assert_eq!(o.rows[2][1..], [None, None, None, None, None, None], "{engine:?}");
-            if engine == Engine::Postgres {
-                assert_eq!(types[1..], ["text", "bool", "date", "timestamp", "float8", "timestamptz"]);
-                db.run("SET TIME ZONE 'UTC'", 1).await.unwrap();
-                let at = db.run("SELECT at FROM pets_import ORDER BY id", 10).await.unwrap();
-                assert_eq!(at.rows[0][0], at.rows[1][0], "the same moment: {:?}", at.rows);
-                assert_eq!(o.rows[1][2].as_deref(), Some("false"));
-                assert_eq!(o.rows[0][4].as_deref(), Some("2026-10-13 10:00:00.123456"));
-            } else {
-                assert_eq!(o.rows[1][2].as_deref(), Some("0"), "BOOLEAN is TINYINT(1)");
-                assert_eq!(o.rows[0][4].as_deref(), Some("2026-10-13 10:00:00.123456"));
-                assert_eq!(o.rows[1][4].as_deref(), Some("2026-10-13 11:30:00.000000"));
-                assert_eq!(o.rows[0][6].as_deref(), Some("2026-10-13T10:00:00Z"), "kept as written");
-            }
-            // A bad value in an existing table: nothing goes in.
-            let err = import_quietly(&db, &bad, "pets_import").await.unwrap_err();
-            if engine == Engine::Postgres {
-                assert!(format!("{err:#}").starts_with("line 3: "), "{err:#}");
-            }
+            // A line with a field too many, after a good one: nothing goes in.
+            let err = import_failing(&db, "id,name\n4,a\n5,b,extra\n", "pets_import").await;
+            assert!(format!("{err:#}").contains("line 3"), "{engine:?}: {err:#}");
             let count = db.run("SELECT count(*) FROM pets_import", 1).await.unwrap();
             assert_eq!(count.rows[0][0].as_deref(), Some("3"), "{engine:?}");
             db.run("DROP TABLE pets_import", 1).await.unwrap();
@@ -637,18 +619,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let csv = dir.path().join("pets.csv");
         std::fs::write(&csv, "id,name,weight\n1,Rex,12.5\n2,\"Žąsis, the goose\",\n3,Kit,3\n").unwrap();
-        let params = crate::db::ConnectParams {
-            engine: Engine::Sqlite,
-            host: dir.path().join("i.db").to_string_lossy().into_owned(),
-            port: 0,
-            user: String::new(),
-            password: String::new(),
-            database: String::new(),
-            ssl_mode: crate::db::SslMode::Disable,
-            read_only: false,
-            ssh: None,
-            password_command: Vec::new(),
-        };
+        let params = crate::db::tests::file_params(&dir.path().join("i.db"), false);
         let db = Database::connect(params).await.unwrap();
         assert_eq!(import_quietly(&db, &csv, "pets").await.unwrap(), Imported { rows: 3, created: true });
         assert_eq!(import_quietly(&db, &csv, "pets").await.unwrap(), Imported { rows: 3, created: false });

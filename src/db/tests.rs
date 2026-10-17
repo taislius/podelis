@@ -1,32 +1,16 @@
 use super::*;
 
-#[test]
-fn quote_ident() {
-    assert_eq!(Engine::Postgres.quote_ident("users"), "users");
-    assert_eq!(Engine::Postgres.quote_ident("Users"), "\"Users\"");
-    assert_eq!(Engine::Postgres.quote_ident("a\"b"), "\"a\"\"b\"");
-    assert_eq!(Engine::MySql.quote_ident("order items"), "`order items`");
-    assert_eq!(Engine::MySql.quote_ident("1abc"), "`1abc`");
-}
-
-/// Live-database tests. Skipped unless e.g. `PODELIS_TEST_MYSQL_PORT` is
-/// set; also reads `_HOST`, `_USER`, `_PASSWORD` and `_DB` (defaults:
-/// 127.0.0.1, root/postgres, empty, empty).
-pub(in crate::db) fn live_params(engine: Engine) -> Option<ConnectParams> {
-    let prefix = match engine {
-        Engine::Postgres => "PODELIS_TEST_PG",
-        Engine::MySql => "PODELIS_TEST_MYSQL",
-        Engine::Sqlite => return None,
-    };
+/// Live-database tests run where an engine's test server is set, by its
+/// own variables (each engine's `db_tests::live_params`): e.g.
+/// `PODELIS_TEST_MYSQL_PORT`, with `_HOST`, `_USER`, `_PASSWORD` and `_DB`
+/// (defaults: 127.0.0.1, the engine's usual user, empty, empty).
+pub(in crate::db) fn server_params(engine: Engine, prefix: &str, user: &str) -> Option<ConnectParams> {
     let var = |name: &str| std::env::var(format!("{prefix}_{name}")).ok();
     Some(ConnectParams {
         engine,
         port: var("PORT")?.parse().ok()?,
         host: var("HOST").unwrap_or_else(|| "127.0.0.1".into()),
-        user: var("USER").unwrap_or_else(|| match engine {
-            Engine::Postgres => "postgres".into(),
-            _ => "root".into(),
-        }),
+        user: var("USER").unwrap_or_else(|| user.into()),
         password: var("PASSWORD").unwrap_or_default(),
         database: var("DB").unwrap_or_default(),
         ssl_mode: SslMode::Prefer,
@@ -36,9 +20,63 @@ pub(in crate::db) fn live_params(engine: Engine) -> Option<ConnectParams> {
     })
 }
 
+/// The engine's test server, if one is set (none for a file database).
+pub(in crate::db) fn live_params(engine: Engine) -> Option<ConnectParams> {
+    on_engine!(engine, engine::db_tests::live_params())
+}
+
 pub(crate) async fn live_db(engine: Engine) -> Option<Database> {
     let params = live_params(engine)?;
     Some(Database::connect(params).await.expect("connect"))
+}
+
+/// A database of the test's own, `name`, on `engine`, and how to reach it
+/// again: on its test server (none set: `None`), or a new file. For the
+/// tests every engine shares, so each runs on each engine there is.
+pub(crate) async fn own_live_db(engine: Engine, name: &str) -> Option<(Database, ConnectParams)> {
+    on_engine!(engine, engine::db_tests::own_live_db(name).await)
+}
+
+/// A new SQLite file named after the test (each test its own name), in
+/// one folder that later runs reuse.
+pub(in crate::db) fn scratch_file(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("podelis-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{name}.db"));
+    let _ = std::fs::remove_file(&path);
+    path
+}
+
+/// What the tests every engine shares need said in the engine's own SQL
+/// (each engine's `db_tests::TEST_SQL`).
+pub(crate) struct TestSql {
+    /// A query that waits `{s}` seconds; `None` where a query can't wait.
+    pub sleep: Option<&'static str>,
+    /// Statements giving the numbers 1 to 2500, one per row (the last one
+    /// a query on its own).
+    pub count_to_2500: &'static str,
+    /// What the plan of `SELECT id FROM t WHERE id = 1` shows (any of).
+    pub plan_shows: &'static [&'static str],
+    /// Updates the planner's numbers for table `{table}`.
+    pub analyze: &'static str,
+    /// Makes table `bin_t` with a binary column `b`; a value with a NUL,
+    /// 0xFF, a quote and a backslash, as a literal; and as it's shown.
+    pub binary: [&'static str; 3],
+    /// Makes table `noted` (`id`, `total`, `plain`) with the comments "One
+    /// row per checkout" on it and "VAT included" on `total`; `None` where
+    /// there are no comments (then it's made without).
+    pub comments: Option<&'static [&'static str]>,
+    /// Makes sequence `agent_seq`; a read that moves it; and a query that
+    /// says whether it moved (`false`: not yet). `None` without sequences.
+    pub sequence: Option<[&'static str; 3]>,
+    /// A read that switches the session's read-only setting off.
+    pub read_only_off: Option<&'static str>,
+    /// Makes table `agent_m`, whose changes a rollback can't undo.
+    pub without_rollback: Option<&'static str>,
+}
+
+pub(crate) fn test_sql(engine: Engine) -> &'static TestSql {
+    on_engine!(engine, &engine::db_tests::TEST_SQL)
 }
 
 #[test]
@@ -87,14 +125,7 @@ pub(in crate::db) async fn live_common(db: &Database) {
         .await
         .unwrap();
     let plan = db.engine().dialect().format_plan(&o.columns, &o.rows).unwrap().text;
-    let expected = match db.engine() {
-        Engine::Postgres => "Scan on t",
-        // The classic table on MySQL before 8.0.16 and MariaDB.
-        Engine::MySql if db.engine().dialect().explain("", db.version()) == "EXPLAIN " => "select_type",
-        Engine::MySql => "-> ",
-        Engine::Sqlite => "SCAN t",
-    };
-    assert!(plan.contains(expected), "{plan}");
+    assert!(test_sql(db.engine()).plan_shows.iter().any(|s| plan.contains(s)), "{plan}");
 
     // Zero-row result still has column headers.
     let o = db.run("SELECT id, name FROM t WHERE id > 100", DEFAULT_ROW_LIMIT).await.unwrap();
@@ -112,15 +143,7 @@ pub(in crate::db) async fn live_common(db: &Database) {
     assert_eq!(o.statements, 2);
 
     // Row cap: everything is counted, only the row limit kept.
-    let big = match db.engine() {
-        Engine::Postgres => "SELECT g FROM generate_series(1, 2500) g",
-        Engine::Sqlite => {
-            "WITH RECURSIVE s(g) AS (SELECT 1 UNION ALL SELECT g + 1 FROM s WHERE g < 2500) SELECT g FROM s"
-        }
-        Engine::MySql => {
-            "SET SESSION cte_max_recursion_depth = 5000; WITH RECURSIVE s(g) AS (SELECT 1 UNION ALL SELECT g + 1 FROM s WHERE g < 2500) SELECT g FROM s"
-        }
-    };
+    let big = test_sql(db.engine()).count_to_2500;
     let o = db.run(big, DEFAULT_ROW_LIMIT).await.unwrap();
     assert_eq!((o.rows.len(), o.total_rows), (DEFAULT_ROW_LIMIT, 2500));
     // Streaming: first page now, the rest on demand.
@@ -157,32 +180,29 @@ pub(in crate::db) async fn live_common_rest(db: &Database) {
     assert_eq!(cells(&db.run("SELECT 1", DEFAULT_ROW_LIMIT).await.unwrap()), vec![vec![Some("1")]]);
 }
 
-pub(in crate::db) async fn live_cancel(db: &Database, slow: &str) {
+/// `slow` cancelled part way; `stopped` checks what its run returned (each
+/// engine stops a query its own way).
+pub(in crate::db) async fn live_cancel(db: &Database, slow: &str, stopped: impl FnOnce(Result<QueryOutcome>)) {
     let runner = db.clone();
     let slow = slow.to_string();
     let handle = tokio::spawn(async move { runner.run(&slow, DEFAULT_ROW_LIMIT).await });
     tokio::time::sleep(Duration::from_millis(500)).await;
     db.cancel().await.unwrap();
     let result = tokio::time::timeout(Duration::from_secs(5), handle).await.expect("cancel took too long");
-    match db.engine() {
-        Engine::Postgres => assert!(result.unwrap().is_err()),
-        // MySQL's SLEEP() returns 1 when interrupted rather than erroring.
-        Engine::MySql => {
-            if let Ok(o) = result.unwrap() {
-                assert_eq!(cells(&o), vec![vec![Some("1")]]);
-            }
-        }
-        Engine::Sqlite => {
-            let err = result.unwrap().unwrap_err();
-            assert!(format!("{err:#}").contains("interrupted"), "{err:#}");
-        }
-    }
+    stopped(result.unwrap());
     assert_eq!(cells(&db.run("SELECT 7", DEFAULT_ROW_LIMIT).await.unwrap()), vec![vec![Some("7")]]);
 }
 
-pub(in crate::db) fn sqlite_params(path: &std::path::Path, read_only: bool) -> ConnectParams {
+/// The engine whose database is a file, needing no server: for tests that
+/// need a database that's always there.
+pub(crate) fn file_engine() -> Engine {
+    Engine::ALL.into_iter().find(|e| e.is_file_based()).expect("an engine with file databases")
+}
+
+/// A file database at `path`.
+pub(crate) fn file_params(path: &std::path::Path, read_only: bool) -> ConnectParams {
     ConnectParams {
-        engine: Engine::Sqlite,
+        engine: file_engine(),
         host: path.to_string_lossy().into_owned(),
         port: 0,
         user: String::new(),
@@ -195,14 +215,32 @@ pub(in crate::db) fn sqlite_params(path: &std::path::Path, read_only: bool) -> C
     }
 }
 
+/// A saved connection `name` to the file database at `path`.
+pub(crate) fn file_profile(name: &str, path: &std::path::Path) -> crate::store::ConnectionProfile {
+    crate::store::ConnectionProfile {
+        name: name.into(),
+        engine: file_engine(),
+        host: path.to_string_lossy().into_owned(),
+        port: String::new(),
+        user: String::new(),
+        database: String::new(),
+        ssl_mode: SslMode::Disable,
+        mode: ConnectionMode::Normal,
+        transaction: None,
+        ssh: String::new(),
+        timeout: String::new(),
+        password_command: Vec::new(),
+        agents: AgentAccess::None,
+        legacy_keychain: false,
+    }
+}
+
 /// Opt-in: `PODELIS_TEST_SSH_DEST` names an ssh destination that can
 /// reach the test database (by the same host/port as the direct test).
 #[tokio::test]
 async fn live_ssh_tunnel() {
     let Ok(dest) = std::env::var("PODELIS_TEST_SSH_DEST") else { return };
-    let Some(mut params) = live_params(Engine::MySql).or_else(|| live_params(Engine::Postgres)) else {
-        return;
-    };
+    let Some(mut params) = Engine::ALL.into_iter().find_map(live_params) else { return };
     params.ssh = Some(dest);
     let db = Database::connect(params.clone()).await.expect("connect through tunnel");
     assert_eq!(cells(&db.run("SELECT 1", DEFAULT_ROW_LIMIT).await.unwrap()), vec![vec![Some("1")]]);
@@ -247,15 +285,16 @@ fn ssl_mode_cycles() {
     assert_eq!(SslMode::VerifyFull.cycle(true), SslMode::Disable);
 }
 
-/// Indexes, foreign keys and definitions, after `setup` created the tables.
-pub(in crate::db) async fn live_details(db: &Database, schema: &str, setup: &str) {
+/// Indexes, foreign keys and definitions, after `setup` created the tables;
+/// `key_index`: the primary key has an index of its own (not SQLite's
+/// INTEGER PRIMARY KEY, the rowid itself).
+pub(in crate::db) async fn live_details(db: &Database, schema: &str, setup: &str, key_index: bool) {
     db.run(setup, DEFAULT_ROW_LIMIT).await.unwrap();
     let child = db.table_details(schema, "det_child").await.unwrap();
     let mut indexes: Vec<(bool, bool, &str)> =
         child.indexes.iter().map(|i| (i.primary, i.unique, i.columns.as_str())).collect();
     indexes.sort_unstable();
-    // SQLite's INTEGER PRIMARY KEY is the rowid itself: no index.
-    if db.engine() != Engine::Sqlite {
+    if key_index {
         assert!(indexes.contains(&(true, true, "id")), "{indexes:?}");
     }
     assert!(indexes.contains(&(false, true, "email")), "{indexes:?}");
@@ -283,8 +322,9 @@ pub(in crate::db) async fn live_begin_in_script(db: &Database, table: &str) {
         .unwrap();
     let o = db.run(&format!("BEGIN;\nUPDATE {table} SET x = 2 WHERE x = 1"), 10).await.unwrap();
     assert_eq!(o.rows_affected, Some(1));
-    if db.engine() == Engine::Postgres {
-        assert_eq!(db.transaction_state().await, Some(TxnState::Open));
+    // Where the engine can tell (PostgreSQL), it's open.
+    if let Some(state) = db.transaction_state().await {
+        assert_eq!(state, TxnState::Open);
     }
     db.run("ROLLBACK", 10).await.unwrap();
     let o = db.run(&format!("SELECT x FROM {table}"), 10).await.unwrap();
@@ -313,7 +353,7 @@ pub(in crate::db) async fn live_reconnect(db: &Database, other: &Database, pid_s
 
 /// The activity view sees another session's running query, and can cancel
 /// it; EXPLAIN ANALYZE shows actual numbers.
-pub(in crate::db) async fn live_activity(engine: Engine, slow: &str) {
+pub(in crate::db) async fn live_activity(engine: Engine, slow: &str, cancelled_is_an_error: bool) {
     let Some(db) = live_db(engine).await else { return };
     let other = live_db(engine).await.unwrap();
     let runner = other.clone();
@@ -326,7 +366,7 @@ pub(in crate::db) async fn live_activity(engine: Engine, slow: &str) {
     assert!(!busy.own);
     db.stop_session(&busy.id, false).await.unwrap();
     let result = tokio::time::timeout(Duration::from_secs(5), handle).await.expect("cancelled quickly").unwrap();
-    if engine == Engine::Postgres {
+    if cancelled_is_an_error {
         assert!(result.is_err());
     }
     // MySQL before 8.0.18 has none.
@@ -342,23 +382,9 @@ pub(in crate::db) async fn live_activity(engine: Engine, slow: &str) {
 /// and `INSERT` exports).
 #[tokio::test]
 async fn binary_values_show_in_hex_and_go_back_as_literals() {
-    let dir = tempfile::tempdir().unwrap();
-    for engine in [Engine::Postgres, Engine::MySql, Engine::Sqlite] {
-        let db = if engine == Engine::Sqlite {
-            Database::connect(sqlite_params(&dir.path().join("b.db"), false)).await.unwrap()
-        } else {
-            let Some(db) = live_db(engine).await else { continue };
-            db
-        };
-        // A NUL, 0xFF, a quote and a backslash.
-        let (create, insert, shown) = match engine {
-            Engine::Postgres => ("CREATE TEMP TABLE bin_t (b bytea)", r"'\x00ff275c'", r"\x00ff275c"),
-            Engine::MySql => ("CREATE TEMPORARY TABLE bin_t (b blob)", "X'00FF275C'", "0x00FF275C"),
-            Engine::Sqlite => ("CREATE TEMP TABLE bin_t (b blob)", "X'00FF275C'", "X'00FF275C'"),
-        };
-        if engine == Engine::MySql {
-            db.run("CREATE DATABASE IF NOT EXISTS podelis_bin; USE podelis_bin", 1).await.unwrap();
-        }
+    for engine in Engine::ALL {
+        let Some((db, _)) = own_live_db(engine, "podelis_bin").await else { continue };
+        let [create, insert, shown] = test_sql(engine).binary;
         db.run(&format!("{create}; INSERT INTO bin_t VALUES ({insert}), ({insert})"), 1).await.unwrap();
         let o = db.run("SELECT b FROM bin_t", DEFAULT_ROW_LIMIT).await.unwrap();
         assert_eq!(o.rows[0][0].as_deref(), Some(shown), "{engine:?}");
@@ -369,32 +395,12 @@ async fn binary_values_show_in_hex_and_go_back_as_literals() {
     }
 }
 
-#[test]
-fn binary_literals_only_for_binary_columns_in_hex() {
-    assert_eq!(value_literal("0xDEADBEEF", "BLOB", Engine::MySql), "0xDEADBEEF");
-    assert_eq!(value_literal("0x", "VARBINARY", Engine::MySql), "X''");
-    assert_eq!(value_literal("0xDEADBEEF", "TEXT", Engine::MySql), "'0xDEADBEEF'", "text that looks like hex");
-    assert_eq!(value_literal("hello", "BLOB", Engine::MySql), "'hello'", "typed in by hand");
-    assert_eq!(value_literal("X'00FF'", "BLOB", Engine::Sqlite), "X'00FF'");
-    assert_eq!(value_literal("X'0FF'", "BLOB", Engine::Sqlite), "'X''0FF'''", "odd digits");
-    assert_eq!(value_literal(r"\x00ff", "BYTEA", Engine::Postgres), r"'\x00ff'");
-}
-
 /// Every foreign key of the database, on each engine: what related tables
 /// are made from.
 #[tokio::test]
 async fn links_on_each_engine() {
-    let dir = tempfile::tempdir().unwrap();
-    for engine in [Engine::Sqlite, Engine::Postgres, Engine::MySql] {
-        let db = if engine == Engine::Sqlite {
-            Database::connect(sqlite_params(&dir.path().join("l.db"), false)).await.unwrap()
-        } else {
-            let Some(db) = live_db(engine).await else { continue };
-            db
-        };
-        if engine == Engine::MySql {
-            db.run("CREATE DATABASE IF NOT EXISTS podelis_links; USE podelis_links", 1).await.unwrap();
-        }
+    for engine in Engine::ALL {
+        let Some((db, _)) = own_live_db(engine, "podelis_links").await else { continue };
         db.run("DROP TABLE IF EXISTS link_child", 1).await.unwrap();
         db.run("DROP TABLE IF EXISTS link_parent", 1).await.unwrap();
         db.run("CREATE TABLE link_parent (id INT PRIMARY KEY)", 1).await.unwrap();
@@ -417,33 +423,17 @@ async fn links_on_each_engine() {
     }
 }
 
-/// Comments on tables and columns, which the gateway shows models: none
-/// on SQLite, `COMMENT ON` on Postgres, `COMMENT '…'` on MySQL.
+/// Comments on tables and columns, which the gateway shows models, on
+/// each engine that has them (each says how: `TestSql::comments`).
 #[tokio::test]
 async fn comments_on_each_engine() {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Database::connect(sqlite_params(&dir.path().join("c.db"), false)).await.unwrap();
-    db.run("CREATE TABLE noted (id INT PRIMARY KEY)", 1).await.unwrap();
-    assert!(db.comments().await.unwrap().is_empty());
-    for engine in [Engine::Postgres, Engine::MySql] {
-        let Some(db) = live_db(engine).await else { continue };
-        if engine == Engine::MySql {
-            db.run("CREATE DATABASE IF NOT EXISTS podelis_comments; USE podelis_comments", 1).await.unwrap();
-        }
-        db.run("DROP TABLE IF EXISTS noted", 1).await.unwrap();
+    for engine in Engine::ALL {
+        let Some((db, _)) = own_live_db(engine, "podelis_comments").await else { continue };
         db.run("DROP VIEW IF EXISTS noted_view", 1).await.unwrap();
-        if engine == Engine::Postgres {
-            db.run("CREATE TABLE noted (id INT PRIMARY KEY, total NUMERIC, plain INT)", 1).await.unwrap();
-            db.run("COMMENT ON TABLE noted IS 'One row per checkout'", 1).await.unwrap();
-            db.run("COMMENT ON COLUMN noted.total IS 'VAT included'", 1).await.unwrap();
-        } else {
-            db.run(
-                "CREATE TABLE noted (id INT PRIMARY KEY, total DECIMAL(10,2) COMMENT 'VAT included', plain INT) \
-                 COMMENT 'One row per checkout'",
-                1,
-            )
-            .await
-            .unwrap();
+        db.run("DROP TABLE IF EXISTS noted", 1).await.unwrap();
+        let commented = test_sql(engine).comments;
+        for sql in commented.unwrap_or(&["CREATE TABLE noted (id INT PRIMARY KEY, total NUMERIC, plain INT)"]) {
+            db.run(sql, 1).await.unwrap();
         }
         db.run("CREATE VIEW noted_view AS SELECT id FROM noted", 1).await.unwrap();
         let comments = db.comments().await.unwrap();
@@ -452,32 +442,32 @@ async fn comments_on_each_engine() {
             .filter(|c| c.table.starts_with("noted"))
             .map(|c| (c.column.as_deref(), c.text.as_str()))
             .collect();
-        assert_eq!(mine, [(None, "One row per checkout"), (Some("total"), "VAT included")], "{engine:?}");
+        let expected: &[(Option<&str>, &str)] =
+            if commented.is_some() { &[(None, "One row per checkout"), (Some("total"), "VAT included")] } else { &[] };
+        assert_eq!(mine, expected, "{engine:?}");
         db.run("DROP VIEW noted_view", 1).await.unwrap();
         db.run("DROP TABLE noted", 1).await.unwrap();
-        if engine == Engine::MySql {
-            db.run("DROP DATABASE podelis_comments", 1).await.unwrap();
-        }
     }
 }
 
 /// What a heavy-query guard asks about: the tables a read would read in
-/// full, with about how many rows (the plan's estimate, else the catalog's).
+/// full, with about how many rows (the plan's estimate, else the catalog's;
+/// with neither, as SQLite, it can't tell, and says none).
 #[tokio::test]
 async fn full_scans_on_live_servers() {
-    for engine in [Engine::Postgres, Engine::MySql] {
-        let Some(db) = live_db(engine).await else { continue };
-        if engine == Engine::MySql {
-            db.run("CREATE DATABASE IF NOT EXISTS podelis_scans; USE podelis_scans", 1).await.unwrap();
-        }
+    for engine in Engine::ALL {
+        let Some((db, _)) = own_live_db(engine, "podelis_scans").await else { continue };
         db.run("DROP TABLE IF EXISTS scan_big", 1).await.unwrap();
         db.run("CREATE TABLE scan_big (id INT PRIMARY KEY, note VARCHAR(20))", 1).await.unwrap();
         let rows: Vec<String> = (1..=2000).map(|i| format!("({i}, 'n{i}')")).collect();
         db.run(&format!("INSERT INTO scan_big VALUES {}", rows.join(", ")), 1).await.unwrap();
-        db.run(if engine == Engine::Postgres { "ANALYZE scan_big" } else { "ANALYZE TABLE scan_big" }, 1)
-            .await
-            .unwrap();
+        db.run(&test_sql(engine).analyze.replace("{table}", "scan_big"), 1).await.unwrap();
         let scans = db.full_scans("SELECT * FROM scan_big WHERE note = 'x'").await.unwrap();
+        let tables = db.tables(false).await.unwrap();
+        if tables.iter().find(|t| t.name == "scan_big").is_some_and(|t| t.rows.is_none()) {
+            assert!(scans.is_empty(), "{engine:?}: {scans:?}");
+            continue;
+        }
         let (table, rows) = scans.first().unwrap_or_else(|| panic!("{engine:?}: no full scan found"));
         assert!(table == "scan_big" || table == "public.scan_big", "{engine:?}: {table}");
         assert!(*rows > 1000.0, "{engine:?}: {rows}");
@@ -489,62 +479,22 @@ async fn full_scans_on_live_servers() {
     }
 }
 
-#[test]
-fn full_scans_in_plans() {
-    use crate::db::dialect::Scan;
-    let rows = |text: &str| vec![vec![Some(text.to_string())]];
-    let pg = |plan: &str| Engine::Postgres.dialect().full_scans(&["QUERY PLAN".into()], &rows(plan));
-    let scan =
-        |schema: Option<&str>, table: &str, rows| Scan { schema: schema.map(str::to_string), ..Scan::new(table, rows) };
-    let join = r#"[{"Plan": {"Node Type": "Hash Join", "Plans": [
-        {"Node Type": "Seq Scan", "Relation Name": "orders", "Schema": "shop", "Plan Rows": 5000},
-        {"Node Type": "Index Scan", "Relation Name": "customers"}]}}]"#;
-    assert_eq!(pg(join), [scan(Some("shop"), "orders", Some(5000.0))]);
-    // A LIMIT stops a plain scan early; not one with a filter, nor one
-    // under a sort, nor the inner side of a nested loop.
-    let limited = r#"[{"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Seq Scan", "Relation Name": "t", "Plan Rows": 9}]}}]"#;
-    assert!(pg(limited).is_empty());
-    let filtered = r#"[{"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Seq Scan", "Relation Name": "t", "Filter": "(x = 1)", "Plan Rows": 9}]}}]"#;
-    assert_eq!(pg(filtered), [scan(None, "t", None)], "rows to be looked up: the filter's aren't the table's");
-    let sorted = r#"[{"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Sort", "Plans": [{"Node Type": "Seq Scan", "Relation Name": "t", "Plan Rows": 9}]}]}}]"#;
-    assert_eq!(pg(sorted), [scan(None, "t", Some(9.0))]);
-    let nested = r#"[{"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Nested Loop", "Plans": [
-        {"Node Type": "Seq Scan", "Relation Name": "a", "Plan Rows": 9},
-        {"Node Type": "Seq Scan", "Relation Name": "b", "Plan Rows": 9}]}]}}]"#;
-    assert_eq!(pg(nested), [scan(None, "b", Some(9.0))]);
-
-    let my = |plan: &str| Engine::MySql.dialect().full_scans(&["EXPLAIN".into()], &rows(plan));
-    let tree = "-> Filter: (t.x = 1)  (cost=10.5 rows=2)\n    -> Table scan on t  (cost=10.5 rows=5200)";
-    assert_eq!(my(tree), [scan(None, "t", Some(5200.0))]);
-    assert!(my("-> Limit: 5 row(s)  (cost=1 rows=5)\n    -> Table scan on t  (cost=1 rows=5200)").is_empty());
-    let limited_filter = "-> Limit: 5 row(s)\n    -> Filter: (t.x = 1)\n        -> Table scan on t  (cost=1 rows=5200)";
-    assert_eq!(my(limited_filter), [scan(None, "t", Some(5200.0))]);
-    let limited_sort = "-> Limit: 5 row(s)\n    -> Sort: t.x, limit input to 5 row(s) per chunk\n        -> Table scan on t  (cost=1 rows=5200)";
-    assert_eq!(my(limited_sort), [scan(None, "t", Some(5200.0))]);
-    let cols: Vec<String> = ["id", "select_type", "table", "type", "rows"].map(String::from).to_vec();
-    let classic =
-        vec![vec![Some("1".into()), Some("SIMPLE".into()), Some("t".into()), Some("ALL".into()), Some("99".into())]];
-    assert_eq!(Engine::MySql.dialect().full_scans(&cols, &classic), [scan(None, "t", Some(99.0))]);
-    let sqlite = vec![
-        vec![Some("2".into()), Some("0".into()), Some("0".into()), Some("SCAN t".into())],
-        vec![Some("3".into()), Some("0".into()), Some("0".into()), Some("SEARCH u USING INDEX i (x=?)".into())],
-        vec![Some("4".into()), Some("0".into()), Some("0".into()), Some("SCAN v USING COVERING INDEX j".into())],
-    ];
-    assert_eq!(Engine::Sqlite.dialect().full_scans(&[], &sqlite), [scan(None, "t", None)]);
-}
-
 /// A plan while the session is busy: on a connection of its own, until the
 /// session's settings change (or for SQLite, never).
 #[tokio::test]
 async fn live_plans_aside_while_the_session_is_busy() {
-    for engine in [Engine::Postgres, Engine::MySql] {
-        let Some(db) = live_db(engine).await else { continue };
+    for engine in Engine::ALL {
+        let Some((db, _)) = own_live_db(engine, "podelis_aside").await else { continue };
         let explain = engine.dialect().explain("SELECT 1", db.version());
+        // Where a query can't wait, there's nothing to plan around.
+        let Some(sleep) = test_sql(engine).sleep.map(|s| s.replace("{s}", "1")) else {
+            assert!(db.run_aside(&explain, DEFAULT_ROW_LIMIT).await.unwrap().is_none(), "{engine:?}");
+            continue;
+        };
         // The session busy with a slow query meanwhile.
-        let sleep = if engine == Engine::Postgres { "SELECT pg_sleep(1)" } else { "SELECT SLEEP(1)" };
         let busy = {
             let db = db.clone();
-            tokio::spawn(async move { db.run(sleep, DEFAULT_ROW_LIMIT).await })
+            tokio::spawn(async move { db.run(&sleep, DEFAULT_ROW_LIMIT).await })
         };
         tokio::time::sleep(Duration::from_millis(100)).await;
         let started = Instant::now();
@@ -561,7 +511,7 @@ async fn live_plans_aside_while_the_session_is_busy() {
 async fn a_session_given_up_on_is_opened_again() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("t.db");
-    let db = Database::connect(sqlite_params(&path, false)).await.unwrap();
+    let db = Database::connect(file_params(&path, false)).await.unwrap();
     db.run("create temp table only_here (x int)", 10).await.unwrap();
     db.answers_within(std::time::Duration::from_secs(1)).await.unwrap();
     // Given up on mid-call: the next run has a session of its own (the

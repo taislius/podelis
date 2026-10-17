@@ -1,6 +1,7 @@
 use super::*;
 use std::time::Instant;
 
+use crate::db::tests::{file_engine, file_profile};
 use crate::db::{ConnectionMode, TxnState};
 use crate::keys::Action;
 
@@ -682,10 +683,10 @@ fn messages_can_be_selected_copied_and_opened() {
     assert!(app.take_clipboard().is_some_and(|c| c.starts_with("relation")));
 }
 
-/// An app connected to an in-memory SQLite database, on the query screen.
+/// An app connected to an in-memory file database (SQLite), on the query screen.
 async fn connected_app(mode: ConnectionMode) -> (App, tempfile::TempDir) {
     let (mut app, dir) = test_app();
-    app.connect_form.engine = Engine::Sqlite;
+    app.connect_form.engine = file_engine();
     app.connect_form.host = ":memory:".into();
     app.connect_form.mode = mode;
     let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
@@ -835,7 +836,7 @@ async fn esc_stops_only_its_own_tabs_query_and_others_say_whose_runs() {
     let (mut app, dir) = test_app();
     app.data_dir = Some(dir.path().to_path_buf());
     let project = project_id(&app);
-    let (a, b) = (sqlite_profile("alpha", &dir.path().join("a.db")), sqlite_profile("beta", &dir.path().join("b.db")));
+    let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
     app.store.upsert(&project, None, a.clone()).unwrap();
     app.store.upsert(&project, None, b.clone()).unwrap();
     app.load_tabs(&project);
@@ -2237,7 +2238,7 @@ async fn system_tables_toggle_in_their_own_section() {
 async fn a_missing_sqlite_file_is_created_only_when_asked_again() {
     let (mut app, dir) = test_app();
     let path = dir.path().join("typo.db");
-    app.connect_form = ConnectForm::from_profile(&sqlite_profile("t", &path), String::new());
+    app.connect_form = ConnectForm::from_profile(&file_profile("t", &path), String::new());
     app.screen = Screen::Connect;
     app.handle_key(key(KeyCode::Enter));
     assert!(!app.connect_form.connecting && !path.exists());
@@ -2258,25 +2259,6 @@ async fn a_missing_sqlite_file_is_created_only_when_asked_again() {
         app.handle_db_event(event);
     }
     assert!(other.exists() && app.database.is_some());
-}
-
-fn sqlite_profile(name: &str, path: &std::path::Path) -> ConnectionProfile {
-    ConnectionProfile {
-        name: name.into(),
-        engine: Engine::Sqlite,
-        host: path.to_string_lossy().into_owned(),
-        port: String::new(),
-        user: String::new(),
-        database: String::new(),
-        ssl_mode: SslMode::Disable,
-        mode: ConnectionMode::Normal,
-        transaction: None,
-        ssh: String::new(),
-        timeout: String::new(),
-        password_command: Vec::new(),
-        agents: crate::db::AgentAccess::None,
-        legacy_keychain: false,
-    }
 }
 
 /// Connects the active tab to a saved SQLite connection, as picking it does.
@@ -2303,7 +2285,7 @@ fn table_names(app: &App) -> Vec<String> {
 async fn each_tab_keeps_its_own_connection() {
     let (mut app, dir) = test_app();
     let project = project_id(&app);
-    let (a, b) = (sqlite_profile("alpha", &dir.path().join("a.db")), sqlite_profile("beta", &dir.path().join("b.db")));
+    let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
     app.store.upsert(&project, None, a.clone()).unwrap();
     app.store.upsert(&project, None, b.clone()).unwrap();
     connect_profile(&mut app, &a).await;
@@ -2477,7 +2459,7 @@ async fn schema_snapshots_show_what_changed_since() {
 async fn a_read_finishes_in_its_tab_while_one_on_another_connection_is_shown() {
     let (mut app, dir) = test_app();
     let project = project_id(&app);
-    let (a, b) = (sqlite_profile("alpha", &dir.path().join("a.db")), sqlite_profile("beta", &dir.path().join("b.db")));
+    let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
     app.store.upsert(&project, None, a.clone()).unwrap();
     app.store.upsert(&project, None, b.clone()).unwrap();
     connect_profile(&mut app, &a).await;
@@ -2509,8 +2491,7 @@ async fn a_read_finishes_in_its_tab_while_one_on_another_connection_is_shown() {
 async fn compare_schemas_and_rows_with_another_tabs_connection() {
     let (mut app, dir) = test_app();
     let project = project_id(&app);
-    let (a, b) =
-        (sqlite_profile("staging", &dir.path().join("a.db")), sqlite_profile("prod", &dir.path().join("b.db")));
+    let (a, b) = (file_profile("staging", &dir.path().join("a.db")), file_profile("prod", &dir.path().join("b.db")));
     app.store.upsert(&project, None, a.clone()).unwrap();
     app.store.upsert(&project, None, b.clone()).unwrap();
     connect_profile(&mut app, &a).await;
@@ -2567,7 +2548,7 @@ async fn session_is_restored_on_startup() {
     app.data_dir = Some(dir.path().to_path_buf());
     let project = project_id(&app);
     app.store.set_last_project(&project).unwrap();
-    let (a, b) = (sqlite_profile("alpha", &dir.path().join("a.db")), sqlite_profile("beta", &dir.path().join("b.db")));
+    let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
     app.store.upsert(&project, None, a.clone()).unwrap();
     app.store.upsert(&project, None, b.clone()).unwrap();
     app.load_tabs(&project);
@@ -2663,67 +2644,66 @@ async fn rebound_keys_take_effect() {
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("7".to_string())]]);
 }
 
-/// The live PostgreSQL test server as a URL, from the same
-/// `PODELIS_TEST_PG_*` variables as the database tests (CI sets a password).
-fn live_pg_url() -> Option<String> {
-    let var = |name: &str| std::env::var(format!("PODELIS_TEST_PG_{name}")).ok();
-    let port = var("PORT")?;
-    let host = var("HOST").unwrap_or_else(|| "127.0.0.1".into());
-    let user = var("USER").unwrap_or_else(|| "postgres".into());
-    let mut url = url::Url::parse(&format!("postgres://{host}:{port}/postgres")).ok()?;
-    url.set_username(&user).ok()?;
-    if let Some(password) = var("PASSWORD").filter(|p| !p.is_empty()) {
-        url.set_password(Some(&password)).ok()?;
-    }
-    Some(url.to_string())
+/// An app connected to a database of the test's own, `name`, on `engine`
+/// (`db::tests::own_live_db`): `None` where it has no test server set.
+async fn live_app(engine: Engine, name: &str) -> Option<(App, tempfile::TempDir)> {
+    let (db, params) = crate::db::tests::own_live_db(engine, name).await?;
+    let (mut app, dir) = test_app();
+    let form = &mut app.connect_form;
+    form.engine = engine;
+    form.host = params.host;
+    form.port = if params.port == 0 { String::new() } else { params.port.to_string() };
+    form.user = params.user;
+    form.password = params.password;
+    form.database = params.database;
+    let generation = app.generation;
+    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
+    Some((app, dir))
 }
 
 #[tokio::test]
 async fn f7_during_a_slow_query_shows_the_plan_at_once() {
-    let Some(url) = live_pg_url() else { return };
-    let (mut app, _dir) = test_app();
-    app.connect_form.apply_url(&url).unwrap();
-    let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
-    let generation = app.generation;
-    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
-    finish_catalog(&mut app).await;
-    app.tab.editor.set_text("select pg_sleep(2)");
-    app.handle_key(key(KeyCode::F(5)));
-    app.tab.editor.set_text("select 1");
-    app.handle_key(key(KeyCode::F(7)));
-    // The plan arrives while the query still runs.
-    while app.tab.plan.is_none() {
-        let event = app.poll_db_event().await.unwrap();
-        app.handle_db_event(event);
+    for engine in Engine::ALL {
+        let Some(sleep) = crate::db::tests::test_sql(engine).sleep else { continue };
+        let Some((mut app, _dir)) = live_app(engine, "podelis_f7").await else { continue };
+        finish_catalog(&mut app).await;
+        app.tab.editor.set_text(&sleep.replace("{s}", "2"));
+        app.handle_key(key(KeyCode::F(5)));
+        app.tab.editor.set_text("select 1");
+        app.handle_key(key(KeyCode::F(7)));
+        // The plan arrives while the query still runs.
+        while app.tab.plan.is_none() {
+            let event = app.poll_db_event().await.unwrap();
+            app.handle_db_event(event);
+        }
+        assert!(app.executing && app.tab.result_tab == ResultTab::Plan, "{engine:?}");
+        assert!(app.queued_plan.is_none(), "{engine:?}");
+        // The query's result doesn't take the plan out of view.
+        finish(&mut app).await;
+        assert_eq!(app.tab.result_tab, ResultTab::Plan, "{engine:?}");
+        assert_eq!(app.tab.grid.results.as_ref().unwrap().rows.len(), 1, "{engine:?}: the query's own result");
     }
-    assert!(app.executing && app.tab.result_tab == ResultTab::Plan);
-    assert!(app.queued_plan.is_none());
-    // The query's result doesn't take the plan out of view.
-    finish(&mut app).await;
-    assert_eq!(app.tab.result_tab, ResultTab::Plan);
-    assert_eq!(app.tab.grid.results.as_ref().unwrap().columns, ["pg_sleep"]);
 }
 
 #[tokio::test]
 async fn queries_are_cancelled_at_the_connection_timeout() {
-    let Some(url) = live_pg_url() else { return };
-    let (mut app, _dir) = test_app();
-    app.connect_form.apply_url(&url).unwrap();
-    app.connect_form.timeout = "1".into();
-    let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
-    let generation = app.generation;
-    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
-    app.tab.editor.set_text("select pg_sleep(10)");
-    app.handle_key(key(KeyCode::F(5)));
-    let started = Instant::now();
-    while app.executing {
-        tokio::select! {
-            event = app.poll_db_event() => app.handle_db_event(event.unwrap()),
-            () = tokio::time::sleep(std::time::Duration::from_millis(200)) => app.tick_running(),
+    for engine in Engine::ALL {
+        let Some(sleep) = crate::db::tests::test_sql(engine).sleep else { continue };
+        let Some((mut app, _dir)) = live_app(engine, "podelis_timeout").await else { continue };
+        app.connect_form.timeout = "1".into();
+        app.tab.editor.set_text(&sleep.replace("{s}", "10"));
+        app.handle_key(key(KeyCode::F(5)));
+        let started = Instant::now();
+        while app.executing {
+            tokio::select! {
+                event = app.poll_db_event() => app.handle_db_event(event.unwrap()),
+                () = tokio::time::sleep(std::time::Duration::from_millis(200)) => app.tick_running(),
+            }
         }
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "{engine:?}");
+        // Stopped with an error, or early with a result (MySQL's SLEEP).
+        assert!(app.status.starts_with("Timed out after 1 s"), "{engine:?}: {}", app.status);
     }
-    assert!(started.elapsed() < std::time::Duration::from_secs(5));
-    assert!(app.status.starts_with("Timed out after 1 s"), "{}", app.status);
 }
 
 #[tokio::test]
@@ -2990,41 +2970,32 @@ async fn connection_info_keepalive_and_diagnostics() {
     assert!(app.connect_latency.is_some());
 
     let report = app.diagnostics();
-    assert!(report.contains(env!("CARGO_PKG_VERSION")) && report.contains("SQLite"), "{report}");
+    assert!(report.contains(env!("CARGO_PKG_VERSION")) && report.contains(file_engine().label()), "{report}");
     assert!(!report.contains(":memory:"), "no file names or hosts: {report}");
-}
-
-#[test]
-fn explain_statements_per_engine() {
-    assert!(Engine::Sqlite.dialect().explain_analyze("select 1", "").is_none());
-    assert_eq!(
-        Engine::Postgres.dialect().explain_analyze("select 1", "").unwrap(),
-        "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) select 1"
-    );
-    assert_eq!(Engine::Postgres.dialect().explain("select 1", ""), "EXPLAIN (FORMAT JSON) select 1");
-    assert_eq!(Engine::MySql.dialect().explain("select 1", ""), "EXPLAIN FORMAT=TREE select 1");
-    assert_eq!(Engine::Sqlite.dialect().explain("select 1", ""), "EXPLAIN QUERY PLAN select 1");
 }
 
 #[tokio::test]
 async fn explain_analyze_of_a_write_is_rolled_back() {
-    let Some(url) = live_pg_url() else { return };
-    let (mut app, _dir) = test_app();
-    app.connect_form.apply_url(&url).unwrap();
-    let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
-    let generation = app.generation;
-    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
-    run_sql(&mut app, "create temporary table ea (x int); insert into ea values (1)").await;
-    app.tab.editor.set_text("update ea set x = 2");
-    app.handle_key(KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT));
-    assert!(app.confirm.is_some(), "a write asks first");
-    app.handle_key(key(KeyCode::Char('y')));
-    finish(&mut app).await;
-    let plan = app.tab.plan.clone().unwrap_or_default().text;
-    assert!(plan.contains("actual time"), "{plan} / {}", app.status);
-    assert_eq!(app.txn, TxnState::Idle);
-    run_sql(&mut app, "select x from ea").await;
-    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("1".to_string())]]);
+    for engine in Engine::ALL {
+        let Some((mut app, _dir)) = live_app(engine, "podelis_analyze").await else { continue };
+        // Where the engine runs this statement under EXPLAIN ANALYZE (not
+        // MySQL: a one-table UPDATE it plans without running).
+        let version = app.database.as_ref().unwrap().version().to_string();
+        if engine.dialect().explain_analyze("update ea set x = 2", &version).is_none() {
+            continue;
+        }
+        run_sql(&mut app, "create temporary table ea (x int); insert into ea values (1)").await;
+        app.tab.editor.set_text("update ea set x = 2");
+        app.handle_key(KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT));
+        assert!(app.confirm.is_some(), "{engine:?}: a write asks first");
+        app.handle_key(key(KeyCode::Char('y')));
+        finish(&mut app).await;
+        let plan = app.tab.plan.clone().unwrap_or_default().text;
+        assert!(plan.contains("actual time"), "{engine:?}: {plan} / {}", app.status);
+        assert_eq!(app.txn, TxnState::Idle, "{engine:?}");
+        run_sql(&mut app, "select x from ea").await;
+        assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("1".to_string())]], "{engine:?}");
+    }
 }
 
 #[tokio::test]
@@ -3197,7 +3168,7 @@ async fn the_projects_pane_switches_adds_renames_and_deletes_over_the_work() {
     app.data_dir = Some(dir.path().to_path_buf());
     let first = project_id(&app);
     let second = app.store.add_project("second").unwrap();
-    let a = sqlite_profile("alpha", &dir.path().join("a.db"));
+    let a = file_profile("alpha", &dir.path().join("a.db"));
     app.store.upsert(&first, None, a.clone()).unwrap();
     app.load_tabs(&first);
     connect_profile(&mut app, &a).await;
@@ -3263,7 +3234,7 @@ async fn the_projects_pane_switches_adds_renames_and_deletes_over_the_work() {
 async fn the_connections_pane_connects_edits_and_goes_back() {
     let (mut app, dir) = test_app();
     let project = project_id(&app);
-    let (a, b) = (sqlite_profile("alpha", &dir.path().join("a.db")), sqlite_profile("beta", &dir.path().join("b.db")));
+    let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
     for path in [&a.host, &b.host] {
         std::fs::write(path, b"").unwrap();
     }
@@ -3356,7 +3327,7 @@ async fn tab_and_shift_tab_go_round_the_panes() {
     let (mut app, dir) = test_app();
     let project = project_id(&app);
     app.store.add_project("other").unwrap();
-    app.store.upsert(&project, None, sqlite_profile("alpha", &dir.path().join("a.db"))).unwrap();
+    app.store.upsert(&project, None, file_profile("alpha", &dir.path().join("a.db"))).unwrap();
     app.screen = Screen::Query;
     show_projects(&mut app);
     // Another project selected: Tab opens it, into its connections; then
@@ -3393,7 +3364,7 @@ async fn tab_and_shift_tab_go_round_the_panes() {
 #[tokio::test]
 async fn quitting_from_the_panes_asks_about_an_open_transaction() {
     let (mut app, dir) = test_app();
-    let a = sqlite_profile("alpha", &dir.path().join("a.db"));
+    let a = file_profile("alpha", &dir.path().join("a.db"));
     connect_profile(&mut app, &a).await;
     run_sql(&mut app, "begin").await;
     assert_eq!(app.txn, TxnState::Open);
@@ -3413,7 +3384,7 @@ async fn quitting_from_the_panes_asks_about_an_open_transaction() {
 async fn leaving_the_panes_drops_a_password_still_being_read() {
     let (mut app, dir) = test_app();
     let project = project_id(&app);
-    let a = sqlite_profile("alpha", &dir.path().join("a.db"));
+    let a = file_profile("alpha", &dir.path().join("a.db"));
     app.store.upsert(&project, None, a).unwrap();
     app.handle_key(key(KeyCode::Enter));
     assert!(app.loading_profile);
@@ -3492,7 +3463,7 @@ fn connect_form_sets_the_transaction_mode() {
 #[tokio::test]
 async fn a_connection_starts_in_its_transaction_mode() {
     let (mut app, _dir) = test_app();
-    app.connect_form.engine = Engine::Sqlite;
+    app.connect_form.engine = file_engine();
     app.connect_form.host = ":memory:".into();
     app.connect_form.transaction = Some(TxMode::RollbackOnly);
     let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
@@ -3507,7 +3478,7 @@ async fn a_new_connection_is_kept_once_it_works() {
     let file = dir.path().join("shop.db");
     let connect = async |app: &mut App, name: &str| {
         app.connect_form = ConnectForm::new();
-        app.connect_form.engine = Engine::Sqlite;
+        app.connect_form.engine = file_engine();
         app.connect_form.host = file.to_string_lossy().into_owned();
         app.connect_form.name = name.into();
         let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();
@@ -3835,7 +3806,7 @@ async fn asking_app(dir: &std::path::Path, config: &str) -> App {
     let mut app = App::new(store, None, Some(dir.to_path_buf()));
     let id = app.store.project_by_name("p").unwrap().id.clone();
     app.open_project(&id);
-    app.connect_form.engine = Engine::Sqlite;
+    app.connect_form.engine = file_engine();
     app.connect_form.host = dir.join("shop.db").to_string_lossy().into_owned();
     app.connect_form.name = "shop".into();
     let db = Database::connect(app.connect_form.params().unwrap()).await.unwrap();

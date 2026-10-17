@@ -324,8 +324,15 @@ impl App {
             self.end_dry_run(review::DryRun::Done(rows_affected));
         }
         // MySQL reports some interrupted statements (e.g. SLEEP) as
-        // ordinary results.
-        if std::mem::take(&mut self.cancelling) {
+        // ordinary results: stopped by the connection's limit, it's said so.
+        if let Some(limit) = self.run_extra.timed_out.take() {
+            self.cancelling = false;
+            self.status = format!(
+                "Timed out after {} s (the connection's limit), stopped early: {}",
+                limit.as_secs(),
+                self.status
+            );
+        } else if std::mem::take(&mut self.cancelling) {
             self.status.push_str(" · cancel requested");
         }
         // The outcome is shown with the results.

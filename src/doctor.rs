@@ -279,7 +279,7 @@ mod tests {
         let path = dir.path().join("gone.db");
         let profile = crate::store::ConnectionProfile {
             name: "gone".into(),
-            engine: crate::db::Engine::Sqlite,
+            engine: crate::db::tests::file_engine(),
             host: path.to_string_lossy().into_owned(),
             port: String::new(),
             user: String::new(),

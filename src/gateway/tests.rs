@@ -308,22 +308,11 @@ async fn complete_says_why_a_model_cant_answer() {
     assert!(matches!(&err, CallError::Rpc(e) if e.code == code::INVALID_PARAMS), "{err}");
 }
 
-/// A saved SQLite connection `shop` in project `p`, in `dir`'s config.
+/// A saved file connection (SQLite) `shop` in project `p`, in `dir`'s config.
 pub(crate) async fn saved_shop(dir: &Path) {
-    use crate::db::{AgentAccess, ConnectionMode, Engine};
+    use crate::db::{AgentAccess, ConnectionMode};
     let file = dir.join("shop.db");
-    let params = crate::db::ConnectParams {
-        engine: Engine::Sqlite,
-        host: file.to_string_lossy().into_owned(),
-        port: 0,
-        user: String::new(),
-        password: String::new(),
-        database: String::new(),
-        ssl_mode: crate::db::SslMode::Disable,
-        read_only: false,
-        ssh: None,
-        password_command: Vec::new(),
-    };
+    let params = crate::db::tests::file_params(&file, false);
     let db = crate::db::Database::connect(params).await.unwrap();
     let sql = "create table customers (id integer primary key, email text, country text);
                create table orders (id integer primary key, customer_id integer references customers(id), total numeric);
@@ -338,7 +327,7 @@ pub(crate) async fn saved_shop(dir: &Path) {
     let project = store.add_project("p").unwrap();
     let profile = crate::store::ConnectionProfile {
         name: "shop".into(),
-        engine: Engine::Sqlite,
+        engine: crate::db::tests::file_engine(),
         host: file.to_string_lossy().into_owned(),
         port: String::new(),
         user: String::new(),

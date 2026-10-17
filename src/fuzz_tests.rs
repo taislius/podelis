@@ -40,7 +40,7 @@ fn sqlish() -> impl Strategy<Value = String> {
 }
 
 fn engine() -> impl Strategy<Value = Engine> {
-    prop_oneof![Just(Engine::Postgres), Just(Engine::MySql), Just(Engine::Sqlite)]
+    proptest::sample::select(Engine::ALL.to_vec())
 }
 
 proptest! {

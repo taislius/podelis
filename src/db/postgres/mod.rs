@@ -6,7 +6,7 @@ mod plan;
 pub(super) mod cells;
 pub(super) mod connect;
 #[cfg(test)]
-mod db_tests;
+pub(in crate::db) mod db_tests;
 mod copy;
 pub(super) mod passwords;
 pub(super) mod pgpass;
@@ -198,5 +198,56 @@ impl Dialect for Postgres {
     fn modify_column(&self, table: &str, column: &str, data_type: &str, nullable: bool) -> Option<String> {
         let null = if nullable { "DROP NOT NULL" } else { "SET NOT NULL" };
         Some(format!("ALTER TABLE {table} ALTER COLUMN {column} TYPE {data_type}, ALTER COLUMN {column} {null}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::db::Engine;
+    use crate::db::dialect::Scan;
+
+    fn scan(schema: Option<&str>, table: &str, rows: Option<f64>) -> Scan {
+        Scan { schema: schema.map(str::to_string), ..Scan::new(table, rows) }
+    }
+
+    #[test]
+    fn quote_ident() {
+        assert_eq!(Engine::Postgres.quote_ident("users"), "users");
+        assert_eq!(Engine::Postgres.quote_ident("Users"), "\"Users\"");
+        assert_eq!(Engine::Postgres.quote_ident("a\"b"), "\"a\"\"b\"");
+    }
+
+    #[test]
+    fn explain_statements() {
+        let d = Engine::Postgres.dialect();
+        assert_eq!(d.explain_analyze("select 1", "").unwrap(), "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) select 1");
+        assert_eq!(d.explain("select 1", ""), "EXPLAIN (FORMAT JSON) select 1");
+    }
+
+    #[test]
+    fn binary_literals() {
+        assert_eq!(crate::db::value_literal(r"\x00ff", "BYTEA", Engine::Postgres), r"'\x00ff'");
+    }
+
+    #[test]
+    fn full_scans_in_plans() {
+        let rows = |text: &str| vec![vec![Some(text.to_string())]];
+        let pg = |plan: &str| Engine::Postgres.dialect().full_scans(&["QUERY PLAN".into()], &rows(plan));
+        let join = r#"[{"Plan": {"Node Type": "Hash Join", "Plans": [
+            {"Node Type": "Seq Scan", "Relation Name": "orders", "Schema": "shop", "Plan Rows": 5000},
+            {"Node Type": "Index Scan", "Relation Name": "customers"}]}}]"#;
+        assert_eq!(pg(join), [scan(Some("shop"), "orders", Some(5000.0))]);
+        // A LIMIT stops a plain scan early; not one with a filter, nor one
+        // under a sort, nor the inner side of a nested loop.
+        let limited = r#"[{"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Seq Scan", "Relation Name": "t", "Plan Rows": 9}]}}]"#;
+        assert!(pg(limited).is_empty());
+        let filtered = r#"[{"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Seq Scan", "Relation Name": "t", "Filter": "(x = 1)", "Plan Rows": 9}]}}]"#;
+        assert_eq!(pg(filtered), [scan(None, "t", None)], "rows to be looked up: the filter's aren't the table's");
+        let sorted = r#"[{"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Sort", "Plans": [{"Node Type": "Seq Scan", "Relation Name": "t", "Plan Rows": 9}]}]}}]"#;
+        assert_eq!(pg(sorted), [scan(None, "t", Some(9.0))]);
+        let nested = r#"[{"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Nested Loop", "Plans": [
+            {"Node Type": "Seq Scan", "Relation Name": "a", "Plan Rows": 9},
+            {"Node Type": "Seq Scan", "Relation Name": "b", "Plan Rows": 9}]}]}}]"#;
+        assert_eq!(pg(nested), [scan(None, "b", Some(9.0))]);
     }
 }

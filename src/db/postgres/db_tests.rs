@@ -4,6 +4,37 @@
 use crate::db::tests::*;
 use crate::db::*;
 
+/// Its test server: `PODELIS_TEST_PG_PORT` (and `_HOST`, `_USER`…).
+pub(in crate::db) fn live_params() -> Option<ConnectParams> {
+    server_params(Engine::Postgres, "PODELIS_TEST_PG", "postgres")
+}
+
+/// The test server's database: tests keep apart by their tables' names.
+pub(in crate::db) async fn own_live_db(_name: &str) -> Option<(Database, ConnectParams)> {
+    let params = live_params()?;
+    Some((Database::connect(params.clone()).await.expect("connect"), params))
+}
+
+pub(crate) static TEST_SQL: TestSql = TestSql {
+    sleep: Some("SELECT pg_sleep({s})"),
+    count_to_2500: "SELECT g FROM generate_series(1, 2500) g",
+    plan_shows: &["Scan on t"],
+    analyze: "ANALYZE {table}",
+    binary: ["CREATE TEMP TABLE bin_t (b bytea)", r"'\x00ff275c'", r"\x00ff275c"],
+    comments: Some(&[
+        "CREATE TABLE noted (id INT PRIMARY KEY, total NUMERIC, plain INT)",
+        "COMMENT ON TABLE noted IS 'One row per checkout'",
+        "COMMENT ON COLUMN noted.total IS 'VAT included'",
+    ]),
+    sequence: Some([
+        "DROP SEQUENCE IF EXISTS agent_seq; CREATE SEQUENCE agent_seq",
+        "SELECT nextval('agent_seq')",
+        "SELECT is_called FROM agent_seq",
+    ]),
+    read_only_off: Some("SELECT set_config('default_transaction_read_only', 'off', false)"),
+    without_rollback: None,
+};
+
 #[tokio::test]
 async fn live_postgres() {
     let Some(db) = live_db(Engine::Postgres).await else { return };
@@ -32,12 +63,12 @@ async fn live_postgres() {
     let o = db.run("BEGIN; SET LOCAL search_path TO pg_catalog; SHOW search_path", DEFAULT_ROW_LIMIT).await.unwrap();
     assert_eq!(cells(&o), vec![vec![Some("pg_catalog")]]);
     db.run("ROLLBACK", DEFAULT_ROW_LIMIT).await.unwrap();
-    live_cancel(&db, "SELECT pg_sleep(10)").await;
+    live_cancel(&db, "SELECT pg_sleep(10)", |r| assert!(r.is_err())).await;
 }
 
 #[tokio::test]
 async fn live_postgres_transaction_state_and_read_only() {
-    let Some(mut params) = live_params(Engine::Postgres) else { return };
+    let Some(mut params) = live_params() else { return };
     let db = Database::connect(params.clone()).await.unwrap();
     assert_eq!(db.transaction_state().await, Some(TxnState::Idle));
     db.run("BEGIN", DEFAULT_ROW_LIMIT).await.unwrap();
@@ -80,7 +111,7 @@ async fn live_details_postgres() {
          {DETAILS_TABLES}
          CREATE FUNCTION det_fn(x integer) RETURNS integer LANGUAGE sql AS 'SELECT x + 1';"
     );
-    live_details(&db, "podelis_det", &setup).await;
+    live_details(&db, "podelis_det", &setup, true).await;
     let routines = db.routines().await.unwrap();
     let f = routines.iter().find(|r| r.schema == "podelis_det").expect("det_fn listed");
     assert_eq!((f.name.as_str(), f.kind.as_str()), ("det_fn(x integer)", "function"));
@@ -103,7 +134,7 @@ async fn live_reconnect_postgres() {
 
 #[tokio::test]
 async fn live_activity_postgres() {
-    live_activity(Engine::Postgres, "SELECT pg_sleep(10) AS podelis_activity_test").await;
+    live_activity(Engine::Postgres, "SELECT pg_sleep(10) AS podelis_activity_test", true).await;
 }
 
 #[tokio::test]
@@ -122,4 +153,24 @@ async fn an_address_nothing_answers_at_says_why_at_once() {
     // Something listening: fine.
     let open = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     crate::db::reach("127.0.0.1", open.local_addr().unwrap().port()).await.unwrap();
+}
+
+/// How PostgreSQL's types took the sample file (`import::tests`): each
+/// guessed one, the same moment from two time zones, and a bad value
+/// named by its line.
+#[tokio::test]
+async fn live_import_types() {
+    use crate::import::tests::{import_failing, import_sample};
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    let o = import_sample(&db, "pets_types").await;
+    let types: Vec<String> = o.column_types.iter().map(|t| t.to_lowercase()).collect();
+    assert_eq!(types[1..], ["text", "bool", "date", "timestamp", "float8", "timestamptz"]);
+    assert_eq!(o.rows[1][2].as_deref(), Some("false"));
+    assert_eq!(o.rows[0][4].as_deref(), Some("2026-10-13 10:00:00.123456"));
+    db.run("SET TIME ZONE 'UTC'", 1).await.unwrap();
+    let at = db.run("SELECT at FROM pets_types ORDER BY id", 10).await.unwrap();
+    assert_eq!(at.rows[0][0], at.rows[1][0], "the same moment: {:?}", at.rows);
+    let err = import_failing(&db, "id,born\n4,2020-01-01\n5,not a date\n", "pets_types").await;
+    assert!(format!("{err:#}").starts_with("line 3: "), "{err:#}");
+    db.run("DROP TABLE pets_types", 1).await.unwrap();
 }

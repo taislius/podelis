@@ -128,7 +128,7 @@ fn connect_form_server_and_sqlite() {
     assert!(!server.contains("secret"), "password must be masked");
     assert_snapshot!("connect_form_server", server);
 
-    app.connect_form.engine = Engine::Sqlite;
+    app.connect_form.engine = crate::db::tests::file_engine();
     app.connect_form.host = "./shop.db".into();
     assert_snapshot!("connect_form_sqlite", render(&mut app, 80, 22));
 }
@@ -987,7 +987,7 @@ fn the_active_tab_shows_its_whole_name_and_stays_in_sight() {
 #[test]
 fn a_long_file_path_gives_way_to_the_message_and_keeps_its_name() {
     let (mut app, _dir) = query_app();
-    app.connect_form.engine = crate::db::Engine::Sqlite;
+    app.connect_form.engine = crate::db::tests::file_engine();
     app.connect_form.host = format!("/data/{}/projects/shop.db", "deep/".repeat(12));
     app.set_status_for_tests("Couldn't cancel: Esc again stops waiting · pool timed out");
     let screen = render(&mut app, 120, 24);

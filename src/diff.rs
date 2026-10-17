@@ -579,41 +579,45 @@ mod tests {
         assert!(!diff.sql.contains("USING btree"), "PostgreSQL's own index SQL: {}", diff.sql);
     }
 
-    /// The same CREATE TABLE on live PostgreSQL and MySQL compares as equal,
-    /// and a different length doesn't.
+    /// The same CREATE TABLE compares as equal across every engine there
+    /// is to test on, and a column's length changed is seen on each.
     #[tokio::test]
     async fn live_schemas_across_engines() {
-        let ddl = "CREATE TABLE same_t (id int PRIMARY KEY, big bigint, small smallint, name varchar(120), \
+        let ddl = "CREATE TABLE same_t (id int NOT NULL PRIMARY KEY, big bigint, small smallint, name varchar(120), \
                    code char(3), note text, price numeric(10,2), ratio double precision, ok boolean, \
                    day date, at time, seen DECIMAL(5,0))";
         let mut shapes = Vec::new();
-        for engine in [Engine::Postgres, Engine::MySql] {
-            let Some(db) = crate::db::tests::live_db(engine).await else { return };
-            if engine == Engine::MySql {
-                // Its own database: live_mysql drops podelis_test when it's done.
-                db.run("CREATE DATABASE IF NOT EXISTS podelis_diff; USE podelis_diff", 1).await.unwrap();
-            }
-            db.run("DROP TABLE IF EXISTS same_t", 1).await.unwrap();
-            db.run(ddl, 1).await.unwrap();
-            let catalog = db.catalog(false).await.unwrap();
-            let (info, columns) = catalog.into_iter().find(|(t, _)| t.name == "same_t").unwrap();
-            shapes.push(vec![TableShape { info, columns, details: None }]);
-            // Postgres's catalog gives lengths too, so it sees them change.
-            db.run("ALTER TABLE same_t ADD COLUMN later varchar(10)", 1).await.unwrap();
-            if engine == Engine::Postgres {
-                db.run("ALTER TABLE same_t ALTER COLUMN later TYPE varchar(20)", 1).await.unwrap();
-            }
-            let catalog = db.catalog(false).await.unwrap();
-            let (info, columns) = catalog.into_iter().find(|(t, _)| t.name == "same_t").unwrap();
-            shapes.push(vec![TableShape { info, columns, details: None }]);
+        for engine in Engine::ALL {
+            let Some((db, _)) = crate::db::tests::own_live_db(engine, "podelis_diff").await else { continue };
+            let shape = async |later: &str| {
+                db.run("DROP TABLE IF EXISTS same_t", 1).await.unwrap();
+                // `later` goes in before the closing parenthesis.
+                db.run(&format!("{}{later})", &ddl[..ddl.len() - 1]), 1).await.unwrap();
+                let catalog = db.catalog(false).await.unwrap();
+                let (info, columns) = catalog.into_iter().find(|(t, _)| t.name == "same_t").unwrap();
+                vec![TableShape { info, columns, details: None }]
+            };
+            let side = |name| Side { name, engine };
+            let plain = shape("").await;
+            let narrow = shape(", later varchar(10)").await;
+            let wide = shape(", later varchar(20)").await;
             db.run("DROP TABLE same_t", 1).await.unwrap();
+            let diff = schema_diff(&wide, &narrow, side("here"), side("there"));
+            assert!(
+                diff.report.contains("column later: varchar(20) here, varchar(10) there"),
+                "{engine:?}: {}",
+                diff.report
+            );
+            assert_eq!(diff.differences, 1, "{engine:?}: {}", diff.report);
+            shapes.push((engine, plain));
         }
-        let my = Side { name: "mysql", engine: Engine::MySql };
-        let diff = schema_diff(&shapes[0], &shapes[2], PG, my);
-        assert_eq!(diff.differences, 0, "{}", diff.report);
-        let diff = schema_diff(&shapes[1], &shapes[3], PG, my);
-        assert!(diff.report.contains("column later: varchar(20) here, varchar(10) there"), "{}", diff.report);
-        assert_eq!(diff.differences, 1, "{}", diff.report);
+        for (i, (engine, here)) in shapes.iter().enumerate() {
+            for (other, there) in &shapes[i + 1..] {
+                let diff =
+                    schema_diff(here, there, Side { name: "a", engine: *engine }, Side { name: "b", engine: *other });
+                assert_eq!(diff.differences, 0, "{engine:?} and {other:?}: {}", diff.report);
+            }
+        }
     }
 
     fn result(columns: &[&str], rows: &[&[&str]]) -> QueryOutcome {

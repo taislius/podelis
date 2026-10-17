@@ -4,12 +4,13 @@ mod agent_constraints;
 pub(super) mod cells;
 pub(super) mod connect;
 #[cfg(test)]
-mod db_tests;
+pub(in crate::db) mod db_tests;
 pub(super) mod passwords;
 mod plan;
 pub(super) mod queries;
 
 use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan, hex_digits};
+use crate::sql::TokenKind;
 
 pub struct MySql;
 
@@ -224,13 +225,14 @@ impl Dialect for MySql {
             Server::MySql(_) => format!("EXPLAIN FORMAT=TREE {stmt}"),
         }
     }
-    /// MySQL 8.0.18+ has EXPLAIN ANALYZE; MariaDB's is ANALYZE (a table
-    /// with the actual rows next to the estimates).
+    /// MySQL 8.0.18+ has EXPLAIN ANALYZE, for the statements it can run
+    /// that way; MariaDB's is ANALYZE (a table with the actual rows next to
+    /// the estimates).
     fn explain_analyze(&self, stmt: &str, version: &str) -> Option<String> {
         match Server::of(version) {
             Server::MySql(v) if v < (8, 0, 18) => None,
             Server::MariaDb => Some(format!("ANALYZE {stmt}")),
-            Server::MySql(_) => Some(format!("EXPLAIN ANALYZE {stmt}")),
+            Server::MySql(_) => runs_under_explain_analyze(stmt).then(|| format!("EXPLAIN ANALYZE {stmt}")),
         }
     }
     /// FORMAT=TREE is already a readable tree; the classic table is lined
@@ -285,8 +287,91 @@ impl Server {
     }
 }
 
+/// Whether MySQL's EXPLAIN ANALYZE runs `stmt`: reads, and UPDATE and
+/// DELETE of several tables (a JOIN, a comma, `DELETE t FROM`, `USING`).
+/// Of one table, and INSERT or REPLACE, it shows the plan without running
+/// them ("not executable by iterator executor").
+fn runs_under_explain_analyze(stmt: &str) -> bool {
+    let tokens: Vec<(TokenKind, String)> = crate::sql::tokenize(stmt, crate::db::Engine::MySql)
+        .into_iter()
+        .filter(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Comment))
+        .map(|t| (t.kind, stmt[t.range].to_ascii_lowercase()))
+        .collect();
+    let word = |i: usize| tokens.get(i).filter(|(k, _)| *k == TokenKind::Word).map(|(_, w)| w.as_str());
+    match word(0) {
+        Some("insert" | "replace") => false,
+        Some("update") => tokens[1..]
+            .iter()
+            .take_while(|(k, w)| !(*k == TokenKind::Word && w == "set"))
+            .any(|(k, w)| (*k == TokenKind::Word && w == "join") || (*k == TokenKind::Punct && w == ",")),
+        Some("delete") => word(1) != Some("from") || tokens.iter().any(|(k, w)| *k == TokenKind::Word && w == "using"),
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::db::Engine;
+    use crate::db::dialect::Scan;
+
+    #[test]
+    fn quote_ident() {
+        assert_eq!(Engine::MySql.quote_ident("order items"), "`order items`");
+        assert_eq!(Engine::MySql.quote_ident("1abc"), "`1abc`");
+    }
+
+    #[test]
+    fn explain_statements() {
+        assert_eq!(Engine::MySql.dialect().explain("select 1", ""), "EXPLAIN FORMAT=TREE select 1");
+    }
+
+    #[test]
+    fn binary_literals_only_for_binary_columns_in_hex() {
+        use crate::db::value_literal;
+        assert_eq!(value_literal("0xDEADBEEF", "BLOB", Engine::MySql), "0xDEADBEEF");
+        assert_eq!(value_literal("0x", "VARBINARY", Engine::MySql), "X''");
+        assert_eq!(value_literal("0xDEADBEEF", "TEXT", Engine::MySql), "'0xDEADBEEF'", "text that looks like hex");
+        assert_eq!(value_literal("hello", "BLOB", Engine::MySql), "'hello'", "typed in by hand");
+    }
+
+    #[test]
+    fn full_scans_in_plans() {
+        let scan = |table: &str, rows| Scan::new(table, rows);
+        let rows = |text: &str| vec![vec![Some(text.to_string())]];
+        let my = |plan: &str| Engine::MySql.dialect().full_scans(&["EXPLAIN".into()], &rows(plan));
+        let tree = "-> Filter: (t.x = 1)  (cost=10.5 rows=2)\n    -> Table scan on t  (cost=10.5 rows=5200)";
+        assert_eq!(my(tree), [scan("t", Some(5200.0))]);
+        assert!(my("-> Limit: 5 row(s)  (cost=1 rows=5)\n    -> Table scan on t  (cost=1 rows=5200)").is_empty());
+        let limited_filter = "-> Limit: 5 row(s)\n    -> Filter: (t.x = 1)\n        -> Table scan on t  (cost=1 rows=5200)";
+        assert_eq!(my(limited_filter), [scan("t", Some(5200.0))]);
+        let limited_sort = "-> Limit: 5 row(s)\n    -> Sort: t.x, limit input to 5 row(s) per chunk\n        -> Table scan on t  (cost=1 rows=5200)";
+        assert_eq!(my(limited_sort), [scan("t", Some(5200.0))]);
+        let cols: Vec<String> = ["id", "select_type", "table", "type", "rows"].map(String::from).to_vec();
+        let classic =
+            vec![vec![Some("1".into()), Some("SIMPLE".into()), Some("t".into()), Some("ALL".into()), Some("99".into())]];
+        assert_eq!(Engine::MySql.dialect().full_scans(&cols, &classic), [scan("t", Some(99.0))]);
+    }
+
+    #[test]
+    fn explain_analyze_only_what_it_runs() {
+        let runs = |sql| super::runs_under_explain_analyze(sql);
+        for sql in [
+            "select * from a",
+            "with c as (select 1) select * from c",
+            "table a",
+            "update a join b on a.id = b.id set a.x = 3",
+            "update a, b set a.x = 4 where a.id = b.id",
+            "delete a from a join b on a.id = b.id",
+            "delete from a using a join b on a.id = b.id",
+        ] {
+            assert!(runs(sql), "{sql}");
+        }
+        for sql in ["update a set x = 2 where id = 1", "delete from a where id = 9", "insert into a values (1)", "replace into a values (1)"] {
+            assert!(!runs(sql), "{sql}");
+        }
+        // A comma after SET is the next column, not another table.
+        assert!(!runs("update a set x = 1, y = 2"));
+    }
     use super::*;
 
     #[test]
