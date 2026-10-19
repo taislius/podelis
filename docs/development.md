@@ -81,6 +81,12 @@ GitHub Actions, kept small to save minutes:
   is a formula template for a Homebrew tap. Pushing a moved tag runs it
   again and replaces the release's files, which breaks the tap's
   checksums: cancel that run (`gh run cancel <id>`) unless that's wanted.
+  The release itself is made first, once; each build then uploads to it,
+  trying again a few times when GitHub's API times out.
+- `retry.yml` — when a Release or Platforms run fails, runs its failed
+  jobs once more (a macOS runner never picked up, an API timeout: GitHub's
+  own trouble). A second failure stays failed for a person to look at:
+  `gh run rerun <id> --failed --repo taislius/podelis`.
 
 What the automated tests can't cover (real terminals, remote servers, big
 tables) is in [manual-testing.md](manual-testing.md): data sets
