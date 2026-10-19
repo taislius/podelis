@@ -180,6 +180,13 @@ source, with Rust 1.94 or newer (distro packages are often older; get it with
 cargo install --locked --git https://github.com/taislius/podelis
 ```
 
+Every engine is built in by default. To build only the ones you use (a
+smaller program with fewer dependencies), pick them by feature:
+
+```sh
+cargo install --locked --git https://github.com/taislius/podelis --no-default-features --features postgres,sqlite
+```
+
 ## Run
 
 ```sh

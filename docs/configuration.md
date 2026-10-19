@@ -2,11 +2,16 @@
 
 [← Podėlis](../README.md)
 
-Optional settings go in `config.toml` in the config folder (below):
+Optional settings go in `config.toml` in the config folder (below). The
+general ones can be changed in the app too, with `Ctrl+K ,`: each change
+applies at once and is written into `config.toml`, the rest of the file
+(your comments, its layout, the other settings) kept as it was. Key
+bindings, viewers and models are set in the file itself.
 
 ```toml
 row_limit = 1000            # rows kept in memory per result
 theme = "dark"              # or "light" for light terminal backgrounds
+language = "auto"           # the app's words: "en", "lt", or "auto" (the system's, from LC_ALL, LC_MESSAGES or LANG)
 server_syntax_check = true  # check SQL with the server while typing
 lint = true                 # warn about likely mistakes: = NULL, UPDATE without WHERE…
 system_tables = false       # list pg_catalog, information_schema, sqlite_schema… in the navigator (`.` toggles)

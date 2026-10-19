@@ -34,6 +34,19 @@ built `podelis` from outside (its path is in `CARGO_BIN_EXE_podelis`), like
 a user or a script would: `-e`, `--format`, exit codes, `--help`
 (`tests/cli.rs`).
 
+**Translations.** The app's words are in `src/lang/`, a TOML file per
+language (`en.toml`, `lt.toml`), built into the program. Code says
+`t!("section.key")` (a `&'static str`) or `t!("section.key", name =
+value)` for `{name}` in the text; a counted word is `tn!("section.key", n)`
+with forms `one`, `few` and `other` (`plural` in `src/lang/mod.rs` has each
+language's rule: Lithuanian uses all three). English is complete; a key
+another language lacks shows in English. Tests check that every key the
+code uses is in English, that English has none unused, and that each
+translation has English's `{values}`. To add a language: copy `en.toml`
+to `<code>.toml`, translate it, add it to `LANGUAGES` and its plural rule.
+Tests run in English. The command line (`-e`, `doctor`, `gateway`), what
+agents and models are told, and the bug-report diagnostics stay English.
+
 The gateway's tests (`src/gateway/`) need no API keys and spend nothing:
 they run the gateway in the test and answer as a model from a small fake
 server on localhost (`fake_model`, Anthropic's streamed format), and

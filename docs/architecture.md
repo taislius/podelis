@@ -167,19 +167,28 @@ Outside `db/`, code doesn't name an engine except in tests.
 
 ### Adding an engine
 
-1. A folder `db/<engine>/` with an `engine.toml` (`name`, `order`),
+1. A folder `db/<engine>/` with an `engine.toml` (`name`, `order`,
+   `feature`) and that feature in `Cargo.toml` (on by default, turning on
+   its sqlx driver),
    `mod.rs` (a `Dialect` impl, `DriverPool`, `DriverConnection`,
    `DIALECT`, `cell`), `connect.rs`, `queries.rs`, `cells.rs`,
    `passwords.rs`, `agent_constraints.rs` and `db_tests.rs`, modelled on
    an existing one.
 2. Build: `build.rs` adds it to `Engine`, `Engine::ALL`, `Pool` and
    `Session`; the compiler points at each function the new folder still
-   lacks. Capabilities decide what the app offers, so unsupported features
+   lacks. Its driver code (`connect.rs`, `queries.rs`, `cells.rs`,
+   `passwords.rs`, `db_tests.rs`, the driver types and the dialect's
+   methods that read the driver's errors) is behind its feature: built
+   without it, the engine keeps its dialect (`Engine::ALL`: SQL rules,
+   lexing, plans) but leaves `Engine::BUILT`, `Pool`, `Session` and
+   `on_driver!`, and connecting to it says the build lacks it. Shared code
+   reaches drivers through `on_driver!`, dialects through `on_engine!`. Capabilities decide what the app offers, so unsupported features
    simply don't show.
 3. Its tests: in its `db_tests.rs`, `live_params`, `own_live_db` and
    `TEST_SQL` (the compiler asks for them), then its own tests calling the
    shared helpers in `db/tests.rs` (and a `PODELIS_TEST_*` server in CI).
-   The shared tests run over `Engine::ALL` (in `db/tests.rs`, `agents/`,
+   The shared tests run over `Engine::BUILT` where they connect, and
+   `Engine::ALL` for SQL rules (in `db/tests.rs`, `agents/`,
    `transfer/import.rs`, `transfer/diff.rs`, `agents/mcp.rs` and the app's), so they take it in on
    their own; tests that need a database always there use the file
    engine (`file_engine()`, by the `file_based` capability). Its own

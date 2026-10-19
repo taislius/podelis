@@ -65,6 +65,8 @@ From any pane:
 | `Ctrl+S` | Save the tab to the library; the first time asks for `group/name` (e.g. `reports/churn by month`), later saves update it |
 | `Ctrl+K t` | Rename the tab and its saved query; a different `group/` moves it |
 | `Ctrl+K l` | Search saved queries (name, group and SQL) and history; `Enter` opens, `F4` renames/moves, `Ctrl+D` deletes |
+| `Ctrl+K ,` | Settings: language, theme, editor keys (vim), key hints, mouse, the checks, row limit, timeouts and the rest of `config.toml`'s general ones. `←`/`→` change one, `Enter` changes it or types a number; each change applies at once and is saved (see [Configuration](configuration.md)) |
+| `Ctrl+K g` | Every open tab in a list (the tab row only has room for so many): type to find one by its name, its connection or the SQL in it; `↑`/`↓` and `Enter` go there |
 
 A tab's `SQL` label is orange while the tab isn't saved to the library
 (its text is still kept as a draft), and a `●` on a saved query's tab means
@@ -119,7 +121,7 @@ When focused:
 | `Ctrl+/` | Comment / uncomment the selected lines (`Ctrl+7` in terminals that send that) |
 | `Ctrl+K i` / `Ctrl+E` | Insert a snippet or saved query at the cursor (the library window, starting at the `snippets` group) |
 | `Ctrl+K m` / right-click | Menu of what you can do in the editor: copy, cut and paste first (right-clicking the selection keeps it) |
-| `Ctrl+K f` | Format the selection, or everything. Strings, quoted names and block comments stay exactly as written; if formatting would change anything but spacing, it's refused |
+| `Ctrl+K f` | Format the selection, or the statement at the cursor. Strings, quoted names and block comments stay exactly as written; if formatting would change anything but spacing, it's refused |
 | `↑`/`↓`, `Tab`/`Enter`, `Esc` | In the completion list: choose, accept, close |
 
 Pasting is supported, including multi-line SQL: the terminal's own paste
