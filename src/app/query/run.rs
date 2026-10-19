@@ -169,7 +169,11 @@ impl App {
             return self.set_status(self.running_elsewhere(t!("run.load_more_after")), true);
         }
         if self.run.stream.is_some() {
-            return self.fetch_more(self.settings.row_limit * 10);
+            if self.run.fetching_more {
+                self.run.more_wanted = true;
+                return self.set_status(t!("run.page_coming").to_string(), false);
+            }
+            return self.fetch_more(self.settings.row_limit * 10, true);
         }
         let Some(results) = &self.tab.grid.results else { return };
         if !results.truncated() && !self.tab.grid.cut_short {
@@ -324,7 +328,8 @@ impl App {
     }
 
     /// Asks the open stream for `rows` more rows (once at a time).
-    pub(in crate::app) fn fetch_more(&mut self, rows: usize) {
+    /// `shown`: asked for with `M` (see [`DbEventKind::MoreRows`]).
+    pub(in crate::app) fn fetch_more(&mut self, rows: usize, shown: bool) {
         let Some(stream) = self.run.stream.clone() else { return };
         if self.run.fetching_more {
             return;
@@ -333,33 +338,49 @@ impl App {
         let send = self.sender();
         tokio::spawn(async move {
             match stream.next_page(rows).await {
-                Ok(page) => send(DbEventKind::MoreRows(page)),
+                Ok(page) => send(DbEventKind::MoreRows(page, shown)),
                 Err(e) => send(DbEventKind::MoreFailed(e)),
             }
         });
     }
 
     /// Adds a fetched page to the results, keeping the selection.
-    pub(in crate::app) fn append_rows(&mut self, page: Page) {
+    /// `show`: asked for with `M`, so the first new row is selected.
+    pub(in crate::app) fn append_rows(&mut self, page: Page, show: bool) {
         self.run.fetching_more = false;
+        // `M` pressed while this page came: before the stream may end with
+        // it (then these were the last rows, and they're what it shows).
+        let wanted = std::mem::take(&mut self.run.more_wanted);
+        let show = show || (wanted && page.done);
         let Some(results) = &mut self.tab.grid.results else { return };
         let start = results.rows.len();
         results.total_rows += page.rows.len() as u64;
         self.tab.grid.col_widths = widen_columns(std::mem::take(&mut self.tab.grid.col_widths), &page.rows);
         results.rows.extend(page.rows);
         if page.done {
-            self.run.stream = None;
+            self.run.set_stream(None);
         }
         let loaded = results.rows.len();
         if self.tab.grid.sort.is_some() || !self.tab.grid.filter.is_empty() {
             let selected = self.tab.grid.table_state.selected();
             self.tab.grid.view = compute_view(results, self.tab.grid.filter.text(), self.tab.grid.sort);
-            self.tab.grid.table_state.select(selected.map(|s| s.min(self.tab.grid.view.len().saturating_sub(1))));
+            // Sorted or filtered, the new rows are among the others: to
+            // the first place one of them is (none may pass the filter).
+            let first_new = show.then(|| self.tab.grid.view.iter().position(|&r| r >= start)).flatten();
+            let kept = selected.map(|s| s.min(self.tab.grid.view.len().saturating_sub(1)));
+            self.tab.grid.table_state.select(first_new.or(kept));
         } else {
             self.tab.grid.view.extend(start..loaded);
+            if show && start < loaded {
+                self.tab.grid.table_state.select(Some(start));
+            }
         }
         let more = if self.run.stream.is_some() { t!("run.more_as_you_scroll") } else { t!("run.all_rows_loaded") };
         self.set_status(format!("{} · {more}", t!("run.rows_loaded", n = loaded)), false);
+        // `M`'s own rows, now that this page is in.
+        if wanted && !page.done {
+            self.fetch_more(self.settings.row_limit * 10, true);
+        }
     }
 
     /// Near the end of the loaded rows of a streamed result, fetch more.
@@ -371,7 +392,7 @@ impl App {
         }
         let near_end = self.tab.grid.table_state.selected().is_some_and(|s| s + LOOKAHEAD >= self.tab.grid.view.len());
         if near_end {
-            self.fetch_more(self.settings.row_limit);
+            self.fetch_more(self.settings.row_limit, false);
         }
     }
 
@@ -417,19 +438,29 @@ impl App {
         );
     }
 
-    /// Disconnects, asking first if a transaction would be rolled back.
+    /// Disconnects, always asking first while connected (`d` is also the
+    /// navigator's "definition"): that a transaction would be rolled back,
+    /// when one is open.
     pub(in crate::app) fn request_disconnect(&mut self) {
         // (In its own tab, disconnecting stops it.)
         if self.run.executing && !self.running_here() {
             return self.set_status(self.running_elsewhere(t!("run.disconnect_after")), true);
         }
-        if self.connection.txn == TxnState::Idle {
+        if !self.connected() {
             return self.disconnect();
         }
+        // Always asked: Ctrl+K d is easily pressed for the navigator's own
+        // `d` (a table's definition), and it drops the session.
+        let idle = self.connection.txn == TxnState::Idle;
+        let running = self.running_here();
         self.confirm = Some(Confirm {
-            message: t!("run.disconnect_rollback").to_string(),
-            details: vec![],
-            danger: true,
+            message: if idle {
+                t!("run.disconnect_ask", name = self.connection.form.short_name())
+            } else {
+                t!("run.disconnect_rollback").to_string()
+            },
+            details: if running { vec![t!("run.disconnect_cancels").to_string()] } else { vec![] },
+            danger: !idle || running,
             action: ConfirmAction::Disconnect,
             offer_transaction: false,
         });

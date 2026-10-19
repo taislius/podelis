@@ -145,7 +145,7 @@ async fn rows_open_in_the_app_for_their_format() {
     assert_eq!(app.viewer_for(OpenFormat::Csv), Viewer::Command("libreoffice --calc".into()));
     app.open_viewer_menu();
     let keys: Vec<String> = app.menu.as_ref().unwrap().items.iter().map(|i| i.keys.clone()).collect();
-    assert_eq!(keys, ["libreoffice", "its app", "its app", "here: less", "its app"]);
+    assert_eq!(keys, ["libreoffice", "its app", "its app", "here: less", "its app", "its app"]);
     // One in the terminal: the main loop runs it, on a file of the user's alone.
     app.open_rows_as(OpenFormat::Tsv);
     let external = app.take_external().expect("run in the terminal");
@@ -290,7 +290,7 @@ async fn export_all_rows_of_a_streamed_result() {
         std::fs::remove_file(file).unwrap();
     }
 
-    app.export_all(ExportFormat::Csv);
+    app.export_all(PagedFormat::Csv);
     loop {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
@@ -310,7 +310,7 @@ async fn export_all_rows_of_a_streamed_result() {
     std::fs::remove_file(&exports()[0]).unwrap();
     run_sql(&mut app, many).await;
     app.focus = Focus::Results;
-    app.export_all(ExportFormat::Json);
+    app.export_all(PagedFormat::Json);
     assert!(app.export_task.is_some());
     app.handle_key(key(KeyCode::Esc));
     assert!(app.export_task.is_none() && said(&app).contains("Export stopped"), "{}", said(&app));
@@ -465,6 +465,58 @@ async fn editing_is_refused_when_rows_cant_be_identified() {
 }
 
 #[tokio::test]
+async fn m_while_a_page_comes_follows_it_and_finds_new_rows_when_sorted() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    app.settings.row_limit = 10;
+    let rows = "WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 500) SELECT n FROM s";
+    run_sql(&mut app, rows).await;
+    app.focus = Focus::Results;
+    // A page is coming (from scrolling); M then waits for it, then fetches.
+    app.handle_key(key(KeyCode::End));
+    assert!(app.run.fetching_more);
+    app.handle_key(key(KeyCode::Char('M')));
+    let note = app.notes.results_note.as_ref().map(|(n, _)| n.as_str());
+    assert!(note.is_some_and(|n| n.contains("on its way")), "{note:?}");
+    let event = app.poll_db_event().await.unwrap();
+    app.handle_db_event(event);
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows.len(), 20);
+    assert!(app.run.fetching_more, "M's rows asked for");
+    let event = app.poll_db_event().await.unwrap();
+    app.handle_db_event(event);
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows.len(), 120);
+    assert_eq!(app.tab.grid.table_state.selected(), Some(20));
+    // Sorted biggest first: the new rows go to the top, and are selected.
+    app.handle_key(key(KeyCode::Char('s')));
+    app.handle_key(key(KeyCode::Char('s')));
+    app.handle_key(key(KeyCode::Char('M')));
+    let event = app.poll_db_event().await.unwrap();
+    app.handle_db_event(event);
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows.len(), 220);
+    assert_eq!(app.tab.grid.table_state.selected(), Some(0), "the first new row in the sorted view");
+}
+
+#[tokio::test]
+async fn m_waiting_on_the_last_page_shows_its_rows() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    app.settings.row_limit = 10;
+    let rows = "WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 15) SELECT n FROM s";
+    run_sql(&mut app, rows).await;
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::End));
+    assert!(app.run.fetching_more);
+    app.handle_key(key(KeyCode::Home));
+    app.handle_key(key(KeyCode::Char('M')));
+    let event = app.poll_db_event().await.unwrap();
+    app.handle_db_event(event);
+    // The stream ended with that page: nothing more to fetch, and M's rows
+    // are those, selected.
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows.len(), 15);
+    assert!(app.run.stream.is_none() && !app.run.fetching_more);
+    assert_eq!(app.tab.grid.table_state.selected(), Some(10));
+}
+
+#[tokio::test]
 async fn large_results_stream_in_as_you_scroll() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
     app.settings.row_limit = 10;
@@ -486,6 +538,7 @@ async fn large_results_stream_in_as_you_scroll() {
     let event = app.poll_db_event().await.unwrap();
     app.handle_db_event(event);
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows.len(), 120);
+    assert_eq!(app.tab.grid.table_state.selected(), Some(20), "the first of the new rows, in sight");
     app.handle_key(key(KeyCode::Char('M')));
     let event = app.poll_db_event().await.unwrap();
     app.handle_db_event(event);

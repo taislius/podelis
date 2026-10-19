@@ -128,8 +128,14 @@ async fn transaction_tracking_and_disconnect_confirmation() {
 
     run_sql(&mut app, "commit").await;
     assert_eq!(app.connection.txn, TxnState::Idle);
+    // With no transaction it's still asked, without the warning colour.
     app.handle_key(ctrl('d'));
-    assert!(app.confirm.is_none());
+    let confirm = app.confirm.as_ref().expect("asked");
+    assert!(!confirm.danger && confirm.message.starts_with("Disconnect this tab from"), "{}", confirm.message);
+    app.handle_key(key(KeyCode::Char('n')));
+    assert!(app.confirm.is_none() && app.connected(), "no: still connected");
+    app.handle_key(ctrl('d'));
+    app.handle_key(key(KeyCode::Char('y')));
     assert!(matches!(app.screen, Screen::Connections));
 }
 

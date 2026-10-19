@@ -5,11 +5,7 @@ use super::super::*;
 impl App {
     /// `podelis-export-<timestamp>.<ext>` in `export_dir` (or the current folder).
     pub(in crate::app) fn export_path(&self, format: ExportFormat) -> PathBuf {
-        let ext = match format {
-            ExportFormat::Csv => "csv",
-            ExportFormat::Json => "json",
-            ExportFormat::Sql => "sql",
-        };
+        let ext = super::super::pipes::OpenFormat::from(format).ext();
         let dir = match self.settings.export_dir.as_deref() {
             Some(d) if d.starts_with("~/") => crate::config::settings::expand_home(d),
             Some(d) => PathBuf::from(d),
@@ -42,6 +38,7 @@ impl App {
             ExportFormat::Csv => crate::transfer::export::csv(results, &self.tab.grid.view),
             ExportFormat::Json => crate::transfer::export::json(results, &self.tab.grid.view),
             ExportFormat::Sql => crate::transfer::export::sql_inserts(results, &self.tab.grid.view, &table, engine),
+            ExportFormat::Ascii => crate::transfer::export::ascii_table(results, &self.tab.grid.view),
         };
         match std::fs::write(&path, text) {
             Ok(()) => {
@@ -78,7 +75,8 @@ impl App {
     /// Writes every row of the result to a file: those loaded, then the
     /// rest of the stream page by page, straight to the file rather than
     /// into the grid. Esc stops it.
-    pub(in crate::app) fn export_all(&mut self, format: ExportFormat) {
+    pub(in crate::app) fn export_all(&mut self, paged: PagedFormat) {
+        let format = ExportFormat::from(paged);
         const PAGE: usize = 10_000;
         if self.export_task.is_some() {
             return self.set_status(t!("export.already_running").to_string(), true);
@@ -95,10 +93,10 @@ impl App {
         }
         let Some(stream) = self.run.stream.take() else { return };
         let path = self.export_path(format);
-        let paged = match format {
-            ExportFormat::Csv => crate::transfer::export::Paged::Csv,
-            ExportFormat::Json => crate::transfer::export::Paged::Json,
-            ExportFormat::Sql => {
+        let paged = match paged {
+            PagedFormat::Csv => crate::transfer::export::Paged::Csv,
+            PagedFormat::Json => crate::transfer::export::Paged::Json,
+            PagedFormat::Sql => {
                 crate::transfer::export::Paged::Inserts { table: self.insert_table(), engine: self.engine() }
             }
         };

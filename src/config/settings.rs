@@ -145,8 +145,8 @@ pub enum Viewer {
 }
 
 /// The formats result rows open in (`o`), by their key in `[viewers]`
-/// (and their files' extension).
-pub const VIEWER_FORMATS: [&str; 5] = ["csv", "json", "sql", "tsv", "txt"];
+/// (and their files' extension, but an ASCII table's file is a `.txt`).
+pub const VIEWER_FORMATS: [&str; 6] = ["csv", "json", "sql", "tsv", "txt", "ascii"];
 
 /// The system's command that opens a file in the app for its type.
 pub const SYSTEM_OPENER: &str = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
@@ -176,6 +176,10 @@ impl Settings {
         let given = |v: &&String| !v.trim().is_empty();
         if let Some(viewer) = self.viewers.get(format).filter(|v| !v.command().trim().is_empty()) {
             return viewer.clone();
+        }
+        // An ASCII table is text: without a viewer of its own, text's.
+        if format == "ascii" {
+            return self.viewer_with("txt", desktop, pager);
         }
         if let Some(old) = self.viewer.as_ref().filter(given).filter(|_| format == "tsv") {
             return Viewer::Full { command: old.clone(), terminal: true };
@@ -293,6 +297,11 @@ mod tests {
         s.viewer = Some("vd".into());
         assert_eq!(s.viewer_with("tsv", true, None), Viewer::Full { command: "vd".into(), terminal: true });
         assert_eq!(s.viewer_with("csv", true, None), Viewer::Command(SYSTEM_OPENER.into()));
+        // An ASCII table: its own viewer, else text's.
+        s.viewers.insert("txt".into(), Viewer::Command("gedit".into()));
+        assert_eq!(s.viewer_with("ascii", true, None), Viewer::Command("gedit".into()));
+        s.viewers.insert("ascii".into(), Viewer::Command("kate".into()));
+        assert_eq!(s.viewer_with("ascii", true, None), Viewer::Command("kate".into()));
         s.viewers.insert("tsv".into(), Viewer::Command("libreoffice --calc".into()));
         assert_eq!(s.viewer_with("tsv", false, None), Viewer::Command("libreoffice --calc".into()));
     }

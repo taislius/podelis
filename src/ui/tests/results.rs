@@ -208,3 +208,54 @@ fn a_runs_outcome_is_shown_in_the_results_pane() {
         "the time is in the footer, not the title: {screen}"
     );
 }
+
+#[test]
+fn a_scripts_result_set_shows_the_statement_that_made_it() {
+    let (mut app, _dir) = query_app();
+    let script = "select 1 as a;\nselect 2 as b;\nselect 3 as c;";
+    app.tab.editor.set_text(script);
+    app.open_run_for_tests(0..script.len());
+    let set = |statement: usize, column: &str| QueryOutcome {
+        columns: vec![column.into()],
+        column_types: vec!["INT4".into()],
+        rows: vec![vec![Some(statement.to_string())]],
+        total_rows: 1,
+        statements: 3,
+        statement,
+        ..QueryOutcome::default()
+    };
+    app.show_results_for_tests(QueryOutcome { earlier: vec![set(1, "a"), set(2, "b")], ..set(3, "c") });
+    app.focus = Focus::Results;
+    let header = |app: &mut App| {
+        let screen = render(app, 110, 24);
+        // Below the results pane's title, not the editor's lines.
+        screen
+            .lines()
+            .skip_while(|l| !l.contains("QUERY RESULT"))
+            .find(|l| l.contains("select "))
+            .unwrap_or_default()
+            .to_string()
+    };
+    let shown = header(&mut app);
+    assert!(shown.contains("select 3 as c ") && shown.contains("line 3") && !shown.contains("select 1"), "{shown}");
+    app.handle_key(KeyEvent::new(KeyCode::Char('<'), KeyModifiers::NONE));
+    let shown = header(&mut app);
+    assert!(shown.contains("select 2 as b ") && shown.contains("line 2"), "{shown}");
+    // A click on it selects that statement in the editor, not the script.
+    let source = app.hits.run_source;
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: source.x + source.width - 3,
+        row: source.y,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(click);
+    assert_eq!((app.focus, app.tab.editor.selected_text().as_deref()), (Focus::Editor, Some("select 2 as b")));
+    // Run as more result sets than it splits into (a CALL's status): the
+    // numbers can't be trusted, so the whole script is shown.
+    app.focus = Focus::Results;
+    app.show_results_for_tests(QueryOutcome { statements: 4, ..set(3, "c") });
+    let shown = header(&mut app);
+    assert!(shown.contains("select 1 as a") && shown.contains("lines 1–3"), "{shown}");
+}

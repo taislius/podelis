@@ -429,7 +429,8 @@ fn draw_run_source(f: &mut Frame, app: &mut App, area: Rect) -> Rect {
         spans.push(Span::styled(" ", Style::default()));
     }
     let run = &app.tab.runs[app.tab.run_at];
-    match &run.source {
+    // A script's result set: exactly the statement that made it, where it is.
+    match app.shown_source() {
         Some(source) => {
             let (place, place_style, found) = source_place(app, source);
             let when = format!("  {} · {}", source.at.format("%H:%M:%S"), age(chrono::Local::now() - source.at));
@@ -811,7 +812,8 @@ fn draw_rows_footer(f: &mut Frame, app: &App, footer: Rect, offset: usize, count
     }
     right.push(Span::raw(" "));
     let right = Line::from(right);
-    let right_w = right.width() as u16;
+    // Two columns between them, so the two never run together.
+    let right_w = right.width() as u16 + 2;
     let [l, r] = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(right_w.min(footer.width))])

@@ -27,6 +27,9 @@ pub struct Panes {
     /// whether a drag in the editor is selecting.
     pub(super) last_click: Option<(Instant, u16, u16)>,
     pub(super) dragging: bool,
+    /// That drag held past the editor's top or bottom: where (column,
+    /// row), and when it scrolls on again with the pointer kept still.
+    pub(super) drag_out: Option<(u16, u16, Instant)>,
     /// A drag selecting the plan's lines.
     pub plan_dragging: bool,
 }

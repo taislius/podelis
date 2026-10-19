@@ -376,3 +376,42 @@ async fn random_keys_never_crash_the_app() {
         }
     }
 }
+
+#[test]
+fn dragging_past_the_editors_top_scrolls_it_and_selects_on() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let (mut app, _dir) = query_app();
+    let text: Vec<String> = (1..=100).map(|i| format!("select {i};")).collect();
+    app.tab.editor.set_text(&text.join("\n"));
+    app.tab.editor.restore_cursor((60, 0), 50);
+    let _ = render(&mut app, 100, 30);
+    let area = app.hits.editor_text;
+    let at = |kind, row| MouseEvent { kind, column: area.x + 2, row, modifiers: KeyModifiers::NONE };
+    app.handle_mouse(at(MouseEventKind::Down(MouseButton::Left), area.y + 5));
+    let (from, scroll) = (app.tab.editor.cursor_row, app.tab.editor.scroll_row);
+    // Above the text, three times: it scrolls up and the selection follows.
+    for _ in 0..3 {
+        app.handle_mouse(at(MouseEventKind::Drag(MouseButton::Left), area.y - 1));
+        let _ = render(&mut app, 100, 30);
+    }
+    assert_eq!(app.tab.editor.scroll_row, scroll - 3, "scrolled up a row each time");
+    assert_eq!(app.tab.editor.cursor_row, app.tab.editor.scroll_row, "the cursor at the top of what's shown");
+    let (start, end) = app.tab.editor.selection().unwrap();
+    assert_eq!((start.0, end.0), (app.tab.editor.scroll_row, from), "selected from the top up to where it began");
+    // Held there, the pointer still: it scrolls on by itself, selecting.
+    assert!(app.drag_scroll_due().is_some());
+    app.drag_scroll();
+    assert_eq!(app.tab.editor.scroll_row, scroll - 4);
+    assert_eq!(app.tab.editor.selection().unwrap().0.0, scroll - 4);
+    // A dialog over the editor stops it.
+    // (Opened by something else than a key, which would stop it anyway.)
+    app.help_visible = true;
+    app.drag_scroll();
+    assert_eq!(app.tab.editor.scroll_row, scroll - 4, "not under a dialog");
+    assert!(app.drag_scroll_due().is_none());
+    app.help_visible = false;
+    app.handle_mouse(at(MouseEventKind::Drag(MouseButton::Left), area.y - 1));
+    // Let go: no more.
+    app.handle_mouse(at(MouseEventKind::Up(MouseButton::Left), area.y - 1));
+    assert!(app.drag_scroll_due().is_none());
+}

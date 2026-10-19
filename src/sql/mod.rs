@@ -279,7 +279,12 @@ pub fn statement_bounds(text: &str, offset: usize, engine: Engine) -> (usize, us
 
 /// The non-empty statements in `text`, without their trailing semicolons.
 pub fn split_statements(text: &str, engine: Engine) -> Vec<&str> {
-    statement_segments(text, engine).into_iter().filter_map(|(_, code)| code.map(|c| &text[c])).collect()
+    statement_ranges(text, engine).into_iter().map(|r| &text[r]).collect()
+}
+
+/// Where in `text` each of [`split_statements`]' statements is: byte ranges.
+pub fn statement_ranges(text: &str, engine: Engine) -> Vec<Range<usize>> {
+    statement_segments(text, engine).into_iter().filter_map(|(_, code)| code).collect()
 }
 
 /// The statement the cursor (a byte offset) is in. A cursor sitting right

@@ -122,15 +122,24 @@ impl<'a> SortKey<'a> {
 /// even in UTF-8 text: its bytes can't match inside another character.
 /// Then the standard library's fast search does the rest.
 pub(super) fn contains_ignoring_case(haystack: &str, needle: &str, buf: &mut String) -> bool {
+    lowered_for(haystack, needle, buf).is_some_and(|h| h.contains(needle))
+}
+
+/// `haystack` lowercased (in `buf`) as far as finding `needle` in it needs;
+/// `None` when it can't hold it. What [`contains_ignoring_case`] searches.
+pub(super) fn lowered_for<'b>(haystack: &str, needle: &str, buf: &'b mut String) -> Option<&'b str> {
+    buf.clear();
     if needle.is_ascii() {
-        buf.clear();
         buf.push_str(haystack);
         buf.make_ascii_lowercase();
-        buf.contains(needle)
-    } else {
+    } else if haystack.is_ascii() {
         // A non-ASCII letter only comes from lowercasing a non-ASCII one.
-        !haystack.is_ascii() && haystack.to_lowercase().contains(needle)
+        return None;
+    } else {
+        // As the needle was lowercased (a final sigma is `ς`, not `σ`).
+        buf.push_str(&haystack.to_lowercase());
     }
+    Some(buf)
 }
 
 /// The full value of a cell for the detail view: JSON is pretty-printed.

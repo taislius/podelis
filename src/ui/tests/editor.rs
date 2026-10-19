@@ -146,17 +146,18 @@ fn the_active_tab_shows_its_whole_name_and_stays_in_sight() {
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(app.active_tab, 10);
-    // "‹N": the tab just before those shown.
+    // "‹N": every tab, in the list to search and pick from.
     let _ = render(&mut app, 110, 24);
-    let (start, _, before) = app.hits.tabs[0];
+    let (start, _) = app.hits.tab_more[0];
     app.handle_mouse(crossterm::event::MouseEvent {
         kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
         column: start,
         row: app.hits.tabs_y,
         modifiers: KeyModifiers::NONE,
     });
-    assert_eq!(app.active_tab, before);
-    assert!(before < 10);
+    assert!(app.palette.as_ref().is_some_and(|p| p.tabs_only), "the tab list");
+    assert_eq!(app.active_tab, 10, "no tab picked yet");
+    app.palette = None;
     // Whatever is beside the name (a saved query's " ●", wide characters,
     // the left line after "‹N"), a narrow row keeps the active tab and `+`.
     let active = app.active_tab;

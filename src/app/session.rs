@@ -256,7 +256,7 @@ impl App {
     /// Closes every connection (when the project's tabs are replaced).
     pub(super) fn close_all_connections(&mut self) {
         self.invalidate_tasks();
-        self.run.stream = None;
+        self.run.set_stream(None);
         self.run.executing = false;
         let mut current = Connection::default();
         swap_conn(self, &mut current);
@@ -290,7 +290,7 @@ impl App {
     pub(super) fn disconnect(&mut self) {
         self.invalidate_tasks();
         // Closing the stream first lets close() take the session.
-        self.run.stream = None;
+        self.run.set_stream(None);
         self.run.fetching_more = false;
         self.run.executing = false;
         self.run.cancelling = false;

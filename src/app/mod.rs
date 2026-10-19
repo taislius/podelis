@@ -243,18 +243,22 @@ impl SchemaPanel {
         let needle = self.filter.text().to_lowercase();
         let mut nodes = Vec::new();
         let mut buf = String::new();
-        let mut shown = |name: &str| needle.is_empty() || results::contains_ignoring_case(name, &needle, &mut buf);
+        // Each name lowercased once, to filter and rank it.
+        let mut rank = |name: &str| match_rank(name, &needle, &mut buf);
         for section in [SchemaSection::Tables, SchemaSection::Views, SchemaSection::System] {
-            let mut matching: Vec<usize> = (0..self.tables.len())
-                .filter(|&t| section.holds(&self.tables[t].info) && shown(&self.tables[t].info.name))
+            let mut ranked: Vec<(u8, usize)> = (0..self.tables.len())
+                .filter(|&t| section.holds(&self.tables[t].info))
+                .filter_map(|t| Some((rank(&self.tables[t].info.name)?, t)))
                 .collect();
             // Biggest first; unknown sizes last. The sort is stable, so
-            // ties stay by name.
+            // ties stay by name. By name while filtering, the best matches
+            // first: `products` before `alternative_prod` for "produc".
             match self.sort {
-                SchemaSort::Name => {}
-                SchemaSort::Rows => matching.sort_by_key(|&t| std::cmp::Reverse(self.tables[t].info.rows)),
-                SchemaSort::Size => matching.sort_by_key(|&t| std::cmp::Reverse(self.tables[t].info.bytes)),
+                SchemaSort::Name => ranked.sort_by_key(|&(rank, _)| rank),
+                SchemaSort::Rows => ranked.sort_by_key(|&(_, t)| std::cmp::Reverse(self.tables[t].info.rows)),
+                SchemaSort::Size => ranked.sort_by_key(|&(_, t)| std::cmp::Reverse(self.tables[t].info.bytes)),
             }
+            let matching: Vec<usize> = ranked.into_iter().map(|(_, t)| t).collect();
             if matching.is_empty() {
                 continue;
             }
@@ -269,13 +273,37 @@ impl SchemaPanel {
                 }
             }
         }
-        let routines: Vec<usize> = (0..self.routines.len()).filter(|&r| shown(&self.routines[r].name)).collect();
+        let mut routines: Vec<(u8, usize)> =
+            (0..self.routines.len()).filter_map(|r| Some((rank(&self.routines[r].name)?, r))).collect();
+        routines.sort_by_key(|&(rank, _)| rank);
         if !routines.is_empty() {
             nodes.push(SchemaNode::Section(SchemaSection::Routines));
-            nodes.extend(routines.into_iter().map(SchemaNode::Routine));
+            nodes.extend(routines.into_iter().map(|(_, r)| SchemaNode::Routine(r)));
         }
         nodes
     }
+}
+
+/// How well `name` matches the filter `needle` (lowercase), best first: the
+/// name itself, a name starting with it, a word in it starting with it
+/// (after `_`, `.`, `-` or a space), anywhere else; `None` when it isn't in
+/// it at all. Case is folded as the results' filter folds it, in `buf`. No
+/// filter: all alike.
+fn match_rank(name: &str, needle: &str, buf: &mut String) -> Option<u8> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let name = results::lowered_for(name, needle, buf).filter(|n| n.contains(needle))?;
+    Some(if name == needle {
+        0
+    } else if name.starts_with(needle) {
+        1
+    } else if name.match_indices(needle).any(|(i, _)| name[..i].ends_with(['_', '.', '-', ' '])) {
+        // (A match right after a separator: `order_p` in `big_order_products` too.)
+        2
+    } else {
+        3
+    })
 }
 
 /// The database containers found by `c` in the connections, to pick one.
@@ -317,8 +345,9 @@ enum DbEventKind {
     ConnectFailed(String),
     /// A finished run, with a stream of further rows if it was streamed.
     QueryDone(QueryOutcome, Option<TxnState>, Option<RowStream>),
-    /// Another page of a streamed result.
-    MoreRows(Page),
+    /// Another page of a streamed result; true when `M` asked for it (the
+    /// first of its rows gets selected, so they're seen arriving).
+    MoreRows(Page, bool),
     /// Rows written so far by "export all rows".
     ExportProgress(u64),
     /// "Export all rows" finished: the file, and how many rows (or why not).
@@ -448,6 +477,47 @@ pub enum ExportFormat {
     Json,
     /// `INSERT` statements.
     Sql,
+    /// A table with `+--+` borders.
+    Ascii,
+}
+
+/// What every row of a result can be exported as, page by page as they
+/// arrive (an ASCII table can't: its widths need every row first).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PagedFormat {
+    Csv,
+    Json,
+    Sql,
+}
+
+impl From<ExportFormat> for pipes::OpenFormat {
+    fn from(format: ExportFormat) -> Self {
+        match format {
+            ExportFormat::Csv => pipes::OpenFormat::Csv,
+            ExportFormat::Json => pipes::OpenFormat::Json,
+            ExportFormat::Sql => pipes::OpenFormat::Sql,
+            ExportFormat::Ascii => pipes::OpenFormat::Ascii,
+        }
+    }
+}
+
+impl From<PagedFormat> for ExportFormat {
+    fn from(format: PagedFormat) -> Self {
+        match format {
+            PagedFormat::Csv => ExportFormat::Csv,
+            PagedFormat::Json => ExportFormat::Json,
+            PagedFormat::Sql => ExportFormat::Sql,
+        }
+    }
+}
+
+impl Run {
+    /// A new stream of rows, or none: an `M` waiting for the old one's
+    /// page is forgotten with it.
+    fn set_stream(&mut self, stream: Option<RowStream>) {
+        self.stream = stream;
+        self.more_wanted = false;
+    }
 }
 
 /// The query running, one at a time across the tabs: whose it is, on
@@ -477,6 +547,9 @@ pub struct Run {
     pub stream: Option<RowStream>,
     /// More rows of the stream are on their way.
     pub fetching_more: bool,
+    /// `M` was pressed while they were: its rows are fetched once they've
+    /// come (for this stream only; [`Run::set_stream`] forgets it).
+    more_wanted: bool,
     /// What the statements of the running query do (for transaction tracking).
     infos: Vec<StatementInfo>,
     /// Parameter substitutions in the last run, for mapping error positions.
@@ -1369,6 +1442,7 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
+        self.panes.drag_out = None;
         self.on_input(|app| app.key(key));
     }
 
@@ -1433,5 +1507,25 @@ impl App {
             Screen::Connect => self.handle_connect_key(key),
             Screen::Query => self.handle_query_key(key),
         }
+    }
+}
+
+#[cfg(test)]
+mod match_tests {
+    #[test]
+    fn the_best_matches_come_first() {
+        let mut names = vec!["alternative_prod", "order_products", "products", "productsx", "prod", "reproduce"];
+        let mut buf = String::new();
+        names.sort_by_key(|n| super::match_rank(n, "prod", &mut buf));
+        assert_eq!(names, ["prod", "products", "productsx", "alternative_prod", "order_products", "reproduce"]);
+        assert_eq!(super::match_rank("cats", "prod", &mut buf), None, "not in it");
+        // A filter with a separator in it still starts a word.
+        assert_eq!(super::match_rank("big_order_products", "order_p", &mut buf), Some(2));
+        assert_eq!(super::match_rank("xorder_px", "order_p", &mut buf), Some(3));
+        // Folded as the filter folds it: a Lithuanian name ranks as itself.
+        assert_eq!(super::match_rank("Žąsys", "žąsys", &mut buf), Some(0));
+        assert_eq!(super::match_rank("ŽĄSYS_seni", "žąs", &mut buf), Some(1));
+        // Greek's final sigma, as the filter's text lowercases it.
+        assert_eq!(super::match_rank("ΟΔΟΣ", &"ΟΔΟΣ".to_lowercase(), &mut buf), Some(0));
     }
 }

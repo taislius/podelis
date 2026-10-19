@@ -113,7 +113,7 @@ impl App {
         // Where it is in the editor (a run from elsewhere isn't).
         let source = ran.filter(|(sql, _)| !sql.trim().is_empty()).and_then(|(sql, offset)| {
             let before = text.get(..offset).filter(|_| text[offset..].starts_with(sql))?;
-            Some(PlanSource::new(sql.to_string(), false, before.matches('\n').count()))
+            Some(PlanSource::new(sql.to_string(), false, before.matches('\n').count()).on(self.engine()))
         });
         self.tab.open_run(source);
         self.close_cell_popups();
@@ -181,10 +181,20 @@ impl App {
         self.run_now(sql, offset, infos, RunPurpose::Query, filled);
     }
 
+    /// What made the shown result: the run's source, or for a script's
+    /// result set, the statement of it that did.
+    pub(crate) fn shown_source(&self) -> Option<&PlanSource> {
+        let source = self.tab.shown_run()?.source.as_ref()?;
+        // A plan swapped into the grid isn't the run's result: its counts
+        // say nothing about the script's statements.
+        let results = self.tab.grid.results.as_ref().filter(|_| !self.tab.plan_swapped);
+        Some(results.and_then(|r| source.statement(r.statement, r.statements)).unwrap_or(source))
+    }
+
     /// Selects the shown result's statement in the editor, if it's still
     /// there as it ran.
     pub(super) fn go_to_run_statement(&mut self) {
-        let Some(source) = self.tab.shown_run().and_then(|r| r.source.clone()) else { return };
+        let Some(source) = self.shown_source().cloned() else { return };
         self.go_to_source(&source, t!("runs.its_statement"), t!("runs.f6_again"));
     }
 }

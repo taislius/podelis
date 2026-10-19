@@ -89,17 +89,24 @@ impl App {
         }
         match key.code {
             KeyCode::Esc if self.export_task.is_some() => return self.stop_export(),
-            // (In another tab, Esc is that tab's.)
-            KeyCode::Esc if self.running_here() => return self.cancel_query(),
-            // Esc leaves the zoom, after a results filter (which it clears
-            // first) and outside vim mode in the editor (where it's vim's).
+            // Esc leaves the zoom first (before cancelling a query), after a
+            // results filter (which it clears first) and outside vim mode in
+            // the editor (where it's vim's).
             KeyCode::Esc
                 if self.panes.zoomed
                     && (self.focus != Focus::Results || self.tab.grid.filter.is_empty())
                     && (self.focus != Focus::Editor || self.vim_mode().is_none()) =>
             {
-                return self.toggle_zoom();
+                return self.leave_zoom_on_esc(false);
             }
+            // Esc leaves the statement's pop-over once it has nothing else
+            // to do in the editor (a selection, vim's modes).
+            KeyCode::Esc if self.panes.statement_zoom && self.focus == Focus::Editor && !self.esc_has_a_job() => {
+                return self.leave_zoom_on_esc(true);
+            }
+            // Then a query running here: the zooms come first, so a second
+            // Esc cancels it. (In another tab, Esc is that tab's.)
+            KeyCode::Esc if self.running_here() => return self.cancel_query(),
             // Esc stops watching, unless it has a job here: clearing a
             // results filter, or vim's in the editor.
             KeyCode::Esc
@@ -109,13 +116,8 @@ impl App {
             {
                 return self.stop_watch("");
             }
-            // Esc leaves the statement's pop-over once it has nothing else
-            // to do in the editor (a selection, vim's modes).
-            KeyCode::Esc if self.panes.statement_zoom && self.focus == Focus::Editor && !self.esc_has_a_job() => {
-                return self.toggle_statement_zoom();
-            }
             // A question being answered: Esc stops it once it has nothing
-            // else to do here (cancelling a query, the zooms, watch mode,
+            // else to do here (the zooms, cancelling a query, watch mode,
             // a filter, vim's modes, a selection come first).
             KeyCode::Esc if self.asking.is_some() && !self.esc_has_a_job() => return self.stop_asking(),
             // Another tab's query isn't stopped from here: Esc says whose it
@@ -408,6 +410,21 @@ impl App {
         let msg =
             if self.panes.zoomed { t!("zoom.pane", key = self.keymap.label(Action::Zoom)) } else { String::new() };
         self.set_status(msg, false);
+    }
+
+    /// `Esc` leaves the pane's zoom (or the statement's pop-over): a query
+    /// running here doesn't stop, and the status says the next `Esc` does
+    /// ("Esc to cancel" said so before).
+    fn leave_zoom_on_esc(&mut self, statement: bool) {
+        if statement {
+            self.toggle_statement_zoom();
+        } else {
+            self.toggle_zoom();
+        }
+        // Said only when the next `Esc` is the cancel: no zoom left.
+        if self.running_here() && !self.panes.zoomed && !self.panes.statement_zoom {
+            self.set_result_status(t!("run.zoom_left_still_running").to_string(), false);
+        }
     }
 
     /// Shows the statement at the cursor (or the selected lines) alone, in

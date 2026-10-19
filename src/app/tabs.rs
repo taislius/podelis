@@ -66,6 +66,10 @@ pub struct PlanSource {
     pub at: chrono::DateTime<chrono::Local>,
     /// `find_in` for an editor version, drawn every frame.
     found: std::cell::Cell<Option<(u64, Found)>>,
+    /// A script's statements, each a source of its own: split once.
+    parts: std::cell::OnceCell<Vec<PlanSource>>,
+    /// The engine it ran on, which says how it splits (`None`: unknown).
+    engine: Option<Engine>,
 }
 
 /// Where a statement is in the text: a byte offset and a line.
@@ -74,7 +78,44 @@ type Found = Option<(usize, usize)>;
 impl PlanSource {
     /// For `sql`, on editor line `line`, made now.
     pub fn new(sql: String, analyzed: bool, line: usize) -> Self {
-        PlanSource { sql, analyzed, line, at: chrono::Local::now(), found: std::cell::Cell::default() }
+        PlanSource {
+            sql,
+            analyzed,
+            line,
+            at: chrono::Local::now(),
+            found: std::cell::Cell::default(),
+            parts: std::cell::OnceCell::new(),
+            engine: None,
+        }
+    }
+
+    /// Written for `engine`: its statements can be told apart (see
+    /// [`Self::statement`]).
+    pub fn on(self, engine: Engine) -> Self {
+        PlanSource { engine: Some(engine), ..self }
+    }
+
+    /// Statement `n` (from 1) of this script, which ran as `of` statements:
+    /// what a script's result set was made by. `None` for one statement, or
+    /// when the script splits otherwise than it ran (a `CALL`'s extra
+    /// result), so `n` can't be trusted to point into it.
+    pub fn statement(&self, n: usize, of: usize) -> Option<&PlanSource> {
+        let engine = self.engine?;
+        let parts = self.parts.get_or_init(|| {
+            // Where each is in the script, not a search (a repeat would fool it).
+            crate::sql::statement_ranges(&self.sql, engine)
+                .into_iter()
+                .map(|range| {
+                    let line = self.line + self.sql[..range.start].matches('\n').count();
+                    let sql = self.sql[range].to_string();
+                    PlanSource { at: self.at, ..PlanSource::new(sql, self.analyzed, line).on(engine) }
+                })
+                .collect()
+        });
+        if parts.len() < 2 || parts.len() != of || n == 0 {
+            return None;
+        }
+        parts.get(n - 1)
     }
 
     /// `find_in` the editor's text, worked out again only once it changed.
@@ -363,9 +404,10 @@ impl App {
     /// Closes an open stream (which holds the session) as its tab is
     /// hidden; the rows left can be loaded again with `M`.
     pub(super) fn close_stream(&mut self) {
-        if self.run.stream.take().is_some() {
+        if self.run.stream.is_some() {
             self.tab.grid.cut_short = true;
         }
+        self.run.set_stream(None);
         self.run.fetching_more = false;
     }
 
@@ -461,7 +503,7 @@ impl App {
             self.tabs[0] = TabMeta { name: default_tab_name(1), saved_id: None, conn: self.tabs[0].conn };
             let mut fresh = TabState::default();
             swap_tab(self, &mut fresh);
-            self.run.stream = None;
+            self.run.set_stream(None);
             return;
         }
         let next = if closing + 1 < self.tabs.len() { closing + 1 } else { closing - 1 };

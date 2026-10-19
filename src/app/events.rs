@@ -140,12 +140,13 @@ impl App {
                 self.drop_queued_plan();
             }
             DbEventKind::PlanAside { stmt, line, plan, .. } => self.plan_aside(stmt, line, plan),
-            DbEventKind::MoreRows(page) => self.append_rows(page),
+            DbEventKind::MoreRows(page, show) => self.append_rows(page, show),
             DbEventKind::ExportProgress(rows) => self.export_progress(rows),
             DbEventKind::ExportDone(path, result) => self.export_done(&path, result),
             DbEventKind::MoreFailed(err) => {
                 self.run.fetching_more = false;
-                self.run.stream = None;
+                // (set_stream below forgets a waiting `M`.)
+                self.run.set_stream(None);
                 let status = t!("run.load_more_failed", err = one_line(&err));
                 self.log(status.clone(), true);
                 self.set_status(status, true);
@@ -310,7 +311,7 @@ impl App {
                 if stream.is_some() {
                     let _ = write!(self.notes.status, " · {}", t!("run.more_as_you_scroll"));
                 }
-                self.run.stream = stream;
+                self.run.set_stream(stream);
                 let status = self.notes.status.clone();
                 self.log(status, false);
             }
@@ -465,7 +466,7 @@ impl App {
         if let Some(message) = crate::system::crash::take_background() {
             self.run.executing = false;
             self.task = None;
-            self.run.stream = None;
+            self.run.set_stream(None);
             let log = crate::system::crash::log_path();
             self.set_status(t!("run.internal_error", message = message, log = log.display()), true);
         }

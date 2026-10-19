@@ -525,6 +525,9 @@ async fn each_tab_keeps_its_own_connection() {
     // Ctrl+D disconnects only this tab; the others keep theirs.
     app.handle_key(alt('3'));
     app.handle_key(ctrl('d'));
+    // Asked first (Ctrl+K d is easily pressed for the navigator's `d`).
+    assert!(matches!(app.confirm.as_ref().unwrap().action, ConfirmAction::Disconnect));
+    app.handle_key(key(KeyCode::Char('y')));
     assert!(matches!(app.screen, Screen::Connections));
     assert!(app.tabs[2].conn.is_none() && app.tabs[0].conn.is_some());
     // Esc goes back to the tabs, dropping the empty unconnected one.

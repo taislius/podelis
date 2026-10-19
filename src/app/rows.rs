@@ -256,11 +256,7 @@ impl App {
 impl App {
     /// The marked rows, or else all those shown, as CSV, JSON or INSERTs.
     pub(super) fn copy_rows_as(&mut self, format: ExportFormat) {
-        let format = match format {
-            ExportFormat::Csv => OpenFormat::Csv,
-            ExportFormat::Json => OpenFormat::Json,
-            ExportFormat::Sql => OpenFormat::Sql,
-        };
+        let format = OpenFormat::from(format);
         let Some((rows, text)) = self.rows_as(format) else {
             return self.set_status(t!("rows.none_to_copy").to_string(), true);
         };
@@ -281,6 +277,7 @@ impl App {
             OpenFormat::Tsv => crate::transfer::export::tsv(results, &rows),
             OpenFormat::Json => crate::transfer::export::json(results, &rows),
             OpenFormat::Text => crate::transfer::export::render(results, &rows, crate::transfer::export::Format::Table),
+            OpenFormat::Ascii => crate::transfer::export::ascii_table(results, &rows),
             OpenFormat::Sql => {
                 crate::transfer::export::sql_inserts(results, &rows, &self.insert_table(), self.engine())
             }

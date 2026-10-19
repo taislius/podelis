@@ -56,9 +56,10 @@ pub(super) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Option<(u
         .constraints([Constraint::Min(0), Constraint::Length(buttons_w)])
         .areas(tabs);
     app.hits.run_buttons = draw_run_buttons(f, &buttons, run);
-    let (tab_hits, new_tab) = draw_tabs(f, app, tabs);
+    let (tab_hits, tab_more, new_tab) = draw_tabs(f, app, tabs);
     app.hits.editor = area;
     app.hits.tabs = tab_hits;
+    app.hits.tab_more = tab_more;
     app.hits.tabs_y = tabs.y;
     app.hits.new_tab = new_tab;
 
@@ -377,9 +378,11 @@ fn draw_find_bar(f: &mut Frame, app: &App, bar: &crate::app::FindBar, area: Rect
 /// highlighted; names shrink when many tabs are open.
 /// Each tab's x range and index, for clicks.
 type TabHits = Vec<(u16, u16, usize)>;
+/// An x range in the tab row.
+type Cols = (u16, u16);
 
 /// Returns where each tab, and the `+`, ended up.
-fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Option<(u16, u16)>) {
+fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Vec<Cols>, Option<Cols>) {
     let t = theme();
     f.render_widget(Block::default().style(Style::default().bg(t.inset)), area);
     let tab_count = app.tabs.len();
@@ -429,7 +432,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Option<(u16, u16
     };
     if tab_count == 0 {
         f.render_widget(Paragraph::new(Span::styled(" + ", dim())), area);
-        return (Vec::new(), Some((area.x, area.x + 3)));
+        return (Vec::new(), Vec::new(), Some((area.x, area.x + 3)));
     }
     let active = app.active_tab.min(tab_count - 1);
     let row = usize::from(area.width);
@@ -463,11 +466,11 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Option<(u16, u16
     // Screen columns, for positions in the row.
     let cols = |spans: &[Span]| u16::try_from(width(spans)).unwrap_or(u16::MAX);
     let mut spans = Vec::new();
-    let mut hits = Vec::new();
+    // The tabs, and "‹N" / "›N" (a click on one lists every tab).
+    let (mut hits, mut more) = (Vec::new(), Vec::new());
     if first > 0 {
-        // A click on it goes to the tab just before those shown.
         spans.push(Span::styled(format!("‹{first} "), dim()));
-        hits.push((area.x, area.x + cols(&spans), first - 1));
+        more.push((area.x, area.x + cols(&spans)));
         // The active tab first in sight: its left line, drawn thick.
         if first == active {
             mark_line(f, area.x + cols(&spans), false);
@@ -495,14 +498,14 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Option<(u16, u16
     if last + 1 < tab_count {
         let start = area.x + cols(&spans);
         spans.push(Span::styled(format!("›{} ", tab_count - 1 - last), dim()));
-        hits.push((start, area.x + cols(&spans), last + 1));
+        more.push((start, area.x + cols(&spans)));
     }
     let plus = area.x + cols(&spans);
     spans.push(Span::styled(" + ", dim()));
     let new_tab = Some((plus, plus + 3)).filter(|(x0, _)| *x0 < area.right());
     // Key hints are in the status bar, not here.
     f.render_widget(Paragraph::new(Line::from(spans)), area);
-    (hits, new_tab)
+    (hits, more, new_tab)
 }
 
 /// The run buttons that fit next to the tabs (`width`: the whole row),

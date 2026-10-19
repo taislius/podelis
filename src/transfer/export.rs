@@ -247,6 +247,60 @@ fn table(outcome: &QueryOutcome, view: &[usize]) -> String {
     out
 }
 
+/// The widest an [`ascii_table`] column gets: a longer value (a JSON
+/// document, a log) is cut there with `…`, not padded into every row.
+const ASCII_COLUMN_MAX: usize = 120;
+
+/// An ASCII table, drawn with `+`, `-` and `|`: each column as wide as
+/// its widest value (up to [`ASCII_COLUMN_MAX`]; its name whole), `NULL` for a null, line
+/// breaks (`\r\n` too), tabs and other control characters shown as a space
+/// so a row stays one line.
+pub fn ascii_table(outcome: &QueryOutcome, view: &[usize]) -> String {
+    use unicode_width::UnicodeWidthChar;
+    let width = |s: &str| unicode_width::UnicodeWidthStr::width(s);
+    // Line breaks, tabs and other control characters (a log's colours) as
+    // a space: they'd break the lines or the widths.
+    let flat = |v: &str| v.replace("\r\n", " ").replace(char::is_control, " ");
+    let clean = |v: &str| {
+        let flat = flat(v);
+        if width(&flat) <= ASCII_COLUMN_MAX {
+            return flat;
+        }
+        let mut used = 0;
+        let mut cut: String = flat
+            .chars()
+            .take_while(|c| {
+                used += c.width().unwrap_or(0);
+                used < ASCII_COLUMN_MAX
+            })
+            .collect();
+        cut.push('…');
+        cut
+    };
+    let cells: Vec<Vec<String>> = view
+        .iter()
+        .map(|&i| outcome.rows[i].iter().map(|c| c.as_deref().map_or_else(|| "NULL".to_string(), clean)).collect())
+        .collect();
+    // Names whole, however long: the header says which column it is.
+    let header: Vec<String> = outcome.columns.iter().map(|c| flat(c)).collect();
+    let widths: Vec<usize> = (0..header.len())
+        .map(|i| cells.iter().map(|r| width(&r[i])).chain([width(&header[i])]).max().unwrap_or(0))
+        .collect();
+    let rule = format!("+{}+\n", widths.iter().map(|w| "-".repeat(*w)).collect::<Vec<_>>().join("+"));
+    let line = |row: &[String]| {
+        let parts: Vec<String> =
+            row.iter().zip(&widths).map(|(c, w)| format!("{c}{}", " ".repeat(w - width(c)))).collect();
+        format!("|{}|\n", parts.join("|"))
+    };
+    let mut out = rule.clone();
+    out += &line(&header);
+    out += &rule;
+    for row in &cells {
+        out += &line(row);
+    }
+    out + &rule
+}
+
 /// Lines up tab-separated output into columns (the text view doesn't
 /// show tabs).
 pub fn align_tabs(text: &str) -> String {
@@ -298,6 +352,36 @@ mod tests {
     fn csv_escaping() {
         let o = outcome(&["a", "b,c"], &[&[Some("x\"y"), None], &[Some("1\n2"), Some("plain")]]);
         assert_eq!(csv(&o, &[0, 1]), "a,\"b,c\"\r\n\"x\"\"y\",\r\n\"1\n2\",plain\r\n");
+    }
+
+    #[test]
+    fn ascii_table_draws_borders() {
+        let o = outcome(&["id", "name"], &[&[Some("1"), Some("Žąsis\nthe goose")], &[Some("22"), None]]);
+        let want = "+--+---------------+\n\
+                    |id|name           |\n\
+                    +--+---------------+\n\
+                    |1 |Žąsis the goose|\n\
+                    |22|NULL           |\n\
+                    +--+---------------+\n";
+        assert_eq!(ascii_table(&o, &[0, 1]), want);
+        // A header with a line break stays one line too.
+        let o = outcome(&["a\nb"], &[&[Some("1")]]);
+        assert_eq!(ascii_table(&o, &[0]).lines().nth(1), Some("|a b|"));
+        let o = outcome(&["id", "name"], &[&[Some("1"), Some("x")], &[Some("22"), None]]);
+        // CRLF is one space; a huge value is cut, not padded into every row.
+        let long = "x".repeat(500);
+        let wide = outcome(&["v"], &[&[Some("a\r\nb")], &[Some(&long)]]);
+        let table = ascii_table(&wide, &[0, 1]);
+        assert!(table.contains("|a b"), "{table}");
+        let coloured = outcome(&["v"], &[&[Some("\x1b[31mred")]]);
+        assert_eq!(ascii_table(&coloured, &[0]).lines().nth(3), Some("| [31mred|"));
+        let widest = table.lines().map(|l| l.chars().count()).max();
+        assert_eq!(widest, Some(ASCII_COLUMN_MAX + 2), "{table}");
+        assert!(table.contains("x…|"), "{table}");
+        let named = outcome(&[&long], &[&[Some("1")]]);
+        assert!(ascii_table(&named, &[0]).contains(&format!("|{long}|")), "a long name stays whole");
+        // Only the rows shown, in their order.
+        assert!(ascii_table(&o, &[1]).contains("|22|NULL|\n"), "{}", ascii_table(&o, &[1]));
     }
 
     #[test]

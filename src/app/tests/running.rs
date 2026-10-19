@@ -208,3 +208,35 @@ async fn watch_mode_marks_what_changed() {
     app.tick_running();
     assert!(app.watch.is_none() && !app.run.executing, "{}", app.notes.status);
 }
+
+#[tokio::test]
+async fn esc_leaves_a_zoom_before_it_cancels_the_query() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    app.tab.editor.set_text("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n");
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(app.run.executing);
+    app.focus = Focus::Editor;
+    for zoom in [Action::Zoom, Action::ZoomStatement] {
+        app.run_action(zoom);
+        assert!(app.panes.zoomed || app.panes.statement_zoom, "{zoom:?}");
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.panes.zoomed && !app.panes.statement_zoom, "{zoom:?}: the zoom left");
+        assert!(app.run.executing && !app.run.cancelling, "{zoom:?}: the query still runs");
+        assert!(app.notes.status.contains("Esc again"), "{zoom:?}: says so: {}", app.notes.status);
+    }
+    // Then Esc cancels it.
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.run.cancelling || !app.run.executing);
+}
+
+#[tokio::test]
+async fn disconnecting_while_a_query_runs_says_it_is_cancelled() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    app.tab.editor.set_text("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n");
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(app.run.executing);
+    app.request_disconnect();
+    let confirm = app.confirm.as_ref().expect("asks first");
+    assert!(confirm.danger && confirm.details.iter().any(|d| d.contains("cancelled")), "{:?}", confirm.details);
+    app.cancel_query();
+}

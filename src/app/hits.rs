@@ -43,6 +43,8 @@ pub struct Hits {
     /// Editor tab strip: (row, then each tab's x range and index).
     pub tabs: Vec<(u16, u16, usize)>,
     pub tabs_y: u16,
+    /// "‹N" / "›N" (tabs out of sight): a click lists them all.
+    pub tab_more: Vec<(u16, u16)>,
     /// The `+` after the tabs.
     pub new_tab: Option<(u16, u16)>,
     /// The run buttons right of the tabs: x ranges and actions.

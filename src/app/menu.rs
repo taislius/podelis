@@ -93,13 +93,15 @@ impl App {
             results_item(t!("menu.export_csv"), Char('e'), "e"),
             results_item(t!("menu.export_json"), Char('J'), "J"),
             results_item(t!("menu.export_sql"), Char('i'), "i"),
-            command(t!("menu.export_all_csv_full"), Command::ExportAll(ExportFormat::Csv)),
-            command(t!("menu.export_all_json"), Command::ExportAll(ExportFormat::Json)),
-            command(t!("menu.export_all_sql"), Command::ExportAll(ExportFormat::Sql)),
+            command(t!("menu.export_ascii"), Command::ExportAscii),
+            command(t!("menu.export_all_csv_full"), Command::ExportAll(PagedFormat::Csv)),
+            command(t!("menu.export_all_json"), Command::ExportAll(PagedFormat::Json)),
+            command(t!("menu.export_all_sql"), Command::ExportAll(PagedFormat::Sql)),
             results_item(t!("menu.copy_markdown"), Char('C'), "C"),
             command(t!("menu.copy_csv"), Command::CopyRows(ExportFormat::Csv)),
             command(t!("menu.copy_json"), Command::CopyRows(ExportFormat::Json)),
             command(t!("menu.copy_sql"), Command::CopyRows(ExportFormat::Sql)),
+            command(t!("menu.copy_ascii"), Command::CopyRows(ExportFormat::Ascii)),
             results_item(t!("menu.pipe"), Char('|'), "|"),
             results_item(t!("menu.open_rows"), Char('o'), "o"),
         ];
@@ -132,6 +134,7 @@ impl App {
                     OpenFormat::Sql => t!("menu.as_sql"),
                     OpenFormat::Tsv => t!("menu.as_tsv"),
                     OpenFormat::Text => t!("menu.as_text"),
+                    OpenFormat::Ascii => t!("menu.as_ascii"),
                 };
                 MenuItem { label, keys, action: MenuAction::Command(super::palette::Command::OpenRowsAs(format)) }
             })
@@ -200,7 +203,7 @@ impl App {
                 MenuItem {
                     label: t!("menu.export_all_csv"),
                     keys: String::new(),
-                    action: MenuAction::Command(super::palette::Command::ExportAll(ExportFormat::Csv)),
+                    action: MenuAction::Command(super::palette::Command::ExportAll(PagedFormat::Csv)),
                 },
                 results_item(t!("menu.load_more"), Char('M'), "M"),
                 results_item(t!("menu.zoom"), Char('z'), "z"),

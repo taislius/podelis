@@ -266,7 +266,7 @@ mod tests {
         settings.viewer = Some("no-such-viewer-xyz".into());
         let viewers = |s: &Settings| environment_checks(s).into_iter().find(|s| s.name == "Viewers").unwrap();
         let step = viewers(&settings);
-        assert!(step.detail.starts_with("csv, json, sql, tsv, txt: true"), "{}", step.detail);
+        assert!(step.detail.starts_with("csv, json, sql, tsv, txt, ascii: true"), "{}", step.detail);
         // One format left to a program that isn't there: said.
         settings.viewers.insert("txt".into(), Viewer::Command("no-such-viewer-xyz".into()));
         assert_eq!(viewers(&settings).detail, "no-such-viewer-xyz isn't installed");

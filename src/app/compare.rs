@@ -70,7 +70,7 @@ impl App {
         };
         let Some((there, other)) = self.compare_target(id) else { return };
         // An open stream holds this side's session.
-        self.run.stream = None;
+        self.run.set_stream(None);
         self.set_status(t!("compare.comparing_schema", name = other.name), false);
         let send = self.sender();
         tokio::spawn(async move {
@@ -130,7 +130,7 @@ impl App {
         let (Some(dir), Some(id)) = (&self.data_dir, &self.current_project) else { return };
         let dir = crate::transfer::snapshots::dir(dir, id);
         let connection = self.connection.form.short_name();
-        self.run.stream = None;
+        self.run.set_stream(None);
         self.set_status(t!("compare.saving_snapshot", connection = connection), false);
         let send = self.sender();
         tokio::spawn(async move {
@@ -165,7 +165,7 @@ impl App {
             return self.set_status(self.not_connected_message(), true);
         };
         let Some(saved) = self.snapshots().into_iter().nth(index) else { return };
-        self.run.stream = None;
+        self.run.set_stream(None);
         self.set_status(t!("compare.comparing_snapshot", connection = saved.connection, taken = saved.taken), false);
         let send = self.sender();
         tokio::spawn(async move {
@@ -233,7 +233,7 @@ impl App {
             return self.set_status(t!("compare.reads_only").into(), true);
         }
         let Some((there, other)) = self.compare_target(id) else { return };
-        self.run.stream = None;
+        self.run.set_stream(None);
         self.run.executing = true;
         self.run.since = Some(Instant::now());
         self.run.owner = None;

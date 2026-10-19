@@ -8,6 +8,8 @@ use super::*;
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const WHEEL_LINES: usize = 3;
+/// How often a drag held past the editor's edge scrolls it on.
+const DRAG_REPEAT: Duration = Duration::from_millis(60);
 
 pub(super) fn inside(r: Rect, x: u16, y: u16) -> bool {
     x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
@@ -20,6 +22,10 @@ impl App {
 
     fn mouse(&mut self, ev: MouseEvent) {
         let (x, y) = (ev.column, ev.row);
+        // Only a drag goes on scrolling (a lost button-up mustn't).
+        if !matches!(ev.kind, MouseEventKind::Drag(_)) {
+            self.panes.drag_out = None;
+        }
         let click = matches!(ev.kind, MouseEventKind::Down(MouseButton::Left));
         // The project's name in the top bar opens the projects pane.
         if click && inside(self.hits.project, x, y) && self.screen != Screen::Projects && !self.busy_for_clicks() {
@@ -67,12 +73,7 @@ impl App {
                 self.click(x, y, double);
             }
             MouseEventKind::Drag(MouseButton::Left) if self.panes.plan_dragging => self.drag_plan(y),
-            MouseEventKind::Drag(MouseButton::Left) if self.panes.dragging => {
-                let pos = self.editor_pos_at(x, y);
-                let anchor = self.tab.editor.anchor().unwrap_or_else(|| self.tab.editor.cursor());
-                self.tab.editor.set_cursor(pos);
-                self.tab.editor.set_anchor((anchor != pos).then_some(anchor));
-            }
+            MouseEventKind::Drag(MouseButton::Left) if self.panes.dragging => self.drag_editor(x, y),
             MouseEventKind::Up(MouseButton::Left) => {
                 self.panes.dragging = false;
                 self.panes.plan_dragging = false;
@@ -107,6 +108,49 @@ impl App {
         }
     }
 
+    /// A drag selecting in the editor, at (`x`, `y`). Past the top or the
+    /// bottom of the text it scrolls that way, faster the further out, and
+    /// the selection goes on; held there, it keeps scrolling
+    /// ([`Self::drag_scroll`]), as editors do.
+    fn drag_editor(&mut self, x: u16, y: u16) {
+        let area = self.hits.editor_text;
+        let height = usize::from(area.height);
+        let before = self.tab.editor.scroll_row;
+        let out = if y < area.y {
+            self.tab.editor.scroll_view(-isize::from(i16::try_from(area.y - y).unwrap_or(i16::MAX)), height);
+            true
+        } else if y >= area.bottom() && area.height > 0 {
+            self.tab.editor.scroll_view(isize::from(i16::try_from(y + 1 - area.bottom()).unwrap_or(i16::MAX)), height);
+            true
+        } else {
+            false
+        };
+        // Until there's no further to go.
+        let moved = self.tab.editor.scroll_row != before;
+        self.panes.drag_out = (out && moved).then(|| (x, y, Instant::now() + DRAG_REPEAT));
+        let y = y.clamp(area.y, area.bottom().saturating_sub(1).max(area.y));
+        let pos = self.editor_pos_at(x, y);
+        let anchor = self.tab.editor.anchor().unwrap_or_else(|| self.tab.editor.cursor());
+        self.tab.editor.set_cursor(pos);
+        self.tab.editor.set_anchor((anchor != pos).then_some(anchor));
+    }
+
+    /// When a drag held past the editor's edge scrolls on.
+    pub fn drag_scroll_due(&self) -> Option<Instant> {
+        self.panes.drag_out.filter(|_| self.panes.dragging).map(|(_, _, due)| due)
+    }
+
+    /// The pointer kept still past the editor's edge: scroll on a step,
+    /// while the editor is what's there (a dialog over it, or another
+    /// screen, stops it).
+    pub fn drag_scroll(&mut self) {
+        let editor_there = self.screen == Screen::Query && !self.popup_open();
+        match self.panes.drag_out.filter(|_| self.panes.dragging && editor_there) {
+            Some((x, y, _)) => self.on_input(|app| app.drag_editor(x, y)),
+            None => self.panes.drag_out = None,
+        }
+    }
+
     pub(super) fn popup_open(&self) -> bool {
         self.top_overlay().is_some() || self.help_visible
     }
@@ -116,6 +160,8 @@ impl App {
         let at = |x0: u16, x1: u16| (x0..x1).contains(&x);
         if let Some(&(_, _, tab)) = hits.tabs.iter().find(|(x0, x1, _)| at(*x0, *x1)) {
             self.switch_tab(tab);
+        } else if hits.tab_more.iter().any(|&(x0, x1)| at(x0, x1)) {
+            self.open_tab_list();
         } else if hits.new_tab.is_some_and(|(x0, x1)| at(x0, x1)) {
             self.new_tab(None, "", None);
         } else if let Some(&(_, _, action)) = hits.run_buttons.iter().find(|(x0, x1, _)| at(*x0, *x1)) {

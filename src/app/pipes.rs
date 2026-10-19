@@ -178,20 +178,30 @@ pub enum OpenFormat {
     Sql,
     /// Aligned columns, as `-e` prints them.
     Text,
+    /// A table with `+--+` borders.
+    Ascii,
 }
 
 impl OpenFormat {
-    pub const ALL: [OpenFormat; 5] =
-        [OpenFormat::Csv, OpenFormat::Json, OpenFormat::Sql, OpenFormat::Tsv, OpenFormat::Text];
+    pub const ALL: [OpenFormat; 6] =
+        [OpenFormat::Csv, OpenFormat::Json, OpenFormat::Sql, OpenFormat::Tsv, OpenFormat::Text, OpenFormat::Ascii];
 
-    /// Its key in `[viewers]`, and its file's extension.
+    /// Its key in `[viewers]`.
     pub fn key(self) -> &'static str {
+        match self {
+            OpenFormat::Ascii => "ascii",
+            other => other.ext(),
+        }
+    }
+
+    /// Its file's extension.
+    pub fn ext(self) -> &'static str {
         match self {
             OpenFormat::Csv => "csv",
             OpenFormat::Tsv => "tsv",
             OpenFormat::Json => "json",
             OpenFormat::Sql => "sql",
-            OpenFormat::Text => "txt",
+            OpenFormat::Text | OpenFormat::Ascii => "txt",
         }
     }
 
@@ -202,6 +212,7 @@ impl OpenFormat {
             OpenFormat::Json => "JSON",
             OpenFormat::Sql => t!("pipes.format_sql"),
             OpenFormat::Text => t!("pipes.format_text"),
+            OpenFormat::Ascii => t!("pipes.format_ascii"),
         }
     }
 }
@@ -229,7 +240,7 @@ fn write_opened(dir: &std::path::Path, format: OpenFormat, text: &str) -> Result
         }
     }
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S%.3f");
-    let file = dir.join(format!("rows-{stamp}.{}", format.key()));
+    let file = dir.join(format!("rows-{stamp}.{}", format.ext()));
     store::write_atomic(&file, text).map_err(|e| format!("{e:#}"))?;
     let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
     Ok(file)
