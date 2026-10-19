@@ -74,7 +74,7 @@ pub(super) fn fk_target(own_schema: &str, schema: &str, table: &str, column: &st
 
 impl Database {
     pub async fn table_details(&self, schema: &str, table: &str) -> Result<TableDetails> {
-        on_engine!(self.0.engine, engine::queries::table_details(self, schema, table).await)
+        on_driver!(self.0.engine, engine::queries::table_details(self, schema, table).await)
     }
 
     /// The tables `sql`'s reads would read in full, with about how many
@@ -97,13 +97,13 @@ impl Database {
             {
                 continue;
             }
-            let found = on_engine!(engine, engine::queries::full_scans_of(self, statement).await);
+            let found = on_driver!(engine, engine::queries::full_scans_of(self, statement).await);
             scans.extend(found.unwrap_or_default());
         }
         if scans.iter().all(|s| s.rows.is_some()) {
             return Ok(scans.into_iter().filter_map(|s| Some((s.name(), s.rows?))).collect());
         }
-        Ok(on_engine!(engine, engine::queries::estimated_rows(self, scans).await))
+        Ok(on_driver!(engine, engine::queries::estimated_rows(self, scans).await))
     }
 
     /// A statement's full scans from its EXPLAIN on the session (for
@@ -142,7 +142,7 @@ impl Database {
     /// one query: what points where, both ways.
     pub async fn links(&self) -> Result<Vec<Link>> {
         let rows: Vec<(String, String, String, String, String, Option<String>)> =
-            on_engine!(self.0.engine, engine::queries::link_rows(self).await?);
+            on_driver!(self.0.engine, engine::queries::link_rows(self).await?);
         Ok(rows
             .into_iter()
             .map(|(schema, table, column, target_schema, target_table, target_column)| Link {
@@ -159,7 +159,7 @@ impl Database {
     /// Every table, view and column comment (the system catalogs left
     /// out); SQLite has none.
     pub async fn comments(&self) -> Result<Vec<Comment>> {
-        let rows = on_engine!(self.0.engine, engine::queries::comment_rows(self).await?);
+        let rows = on_driver!(self.0.engine, engine::queries::comment_rows(self).await?);
         Ok(rows
             .into_iter()
             .filter(|(_, _, _, text)| !text.trim().is_empty())
@@ -171,12 +171,12 @@ impl Database {
     /// leaves out those that belong to extensions.
     pub async fn routines(&self) -> Result<Vec<RoutineInfo>> {
         let rows: Vec<(String, String, String, String)> =
-            on_engine!(self.0.engine, engine::queries::routine_rows(self).await?);
+            on_driver!(self.0.engine, engine::queries::routine_rows(self).await?);
         Ok(rows.into_iter().map(|(schema, name, kind, id)| RoutineInfo { schema, name, kind, id }).collect())
     }
 
     /// The CREATE statement of a function or procedure.
     pub async fn routine_definition(&self, routine: &RoutineInfo) -> Result<String> {
-        on_engine!(self.0.engine, engine::queries::routine_definition(self, routine).await)
+        on_driver!(self.0.engine, engine::queries::routine_definition(self, routine).await)
     }
 }

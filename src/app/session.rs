@@ -129,11 +129,11 @@ impl App {
     /// `target`'s connections take the keys rather than its tabs.
     pub(super) fn switch_project(&mut self, target: Option<String>, panes: bool) {
         if self.run.executing {
-            return self.set_status("Wait for the query to finish (or press Esc) first".to_string(), true);
+            return self.set_status(t!("session.wait").to_string(), true);
         }
         if self.any_open_transaction() {
             self.confirm = Some(Confirm {
-                message: "A transaction is open. Leave the project and roll it back?".to_string(),
+                message: t!("session.leave_rollback").to_string(),
                 details: vec![],
                 danger: true,
                 action: ConfirmAction::LeaveProject(target, panes),
@@ -315,11 +315,11 @@ impl App {
     /// one is connected.
     pub(super) fn open_connection(&mut self) {
         if self.run.executing {
-            return self.set_status("Wait for the query to finish (or press Esc) first".into(), true);
+            return self.set_status(t!("session.wait").into(), true);
         }
         self.open_manager(Screen::Connections);
         self.free_tab_for_form();
-        self.manager.connection_message = Some(("Pick a connection for this tab".to_string(), false));
+        self.manager.connection_message = Some((t!("session.pick").to_string(), false));
     }
 
     /// Esc on the projects and connections: back to the project's tabs,
@@ -436,7 +436,7 @@ impl App {
                     self.conns.auto_connect = true;
                     self.load_profile(profile);
                 } else {
-                    let msg = format!("No saved connection named '{name}' here");
+                    let msg = t!("session.no_saved", name = name);
                     if self.current_project.is_some() {
                         self.manager.connection_message = Some((msg, true));
                     } else {
@@ -529,7 +529,7 @@ impl App {
     fn connect_saved(&mut self, profiles: Vec<ConnectionProfile>) {
         let Some(project_id) = self.current_project.clone() else { return };
         self.conns.restoring = profiles.iter().map(|p| p.name.clone()).collect();
-        self.set_status(format!("Reconnecting to {}…", self.conns.restoring.join(", ")), false);
+        self.set_status(t!("session.reconnecting", names = self.conns.restoring.join(", ")), false);
         for profile in profiles {
             let send = self.sender();
             let project_id = project_id.clone();
@@ -541,9 +541,7 @@ impl App {
                 form.keychain_note = note;
                 let result = match form.params() {
                     // Don't recreate a database file that was moved or deleted.
-                    Ok(params) if params.file_to_create().is_some() => {
-                        Err(format!("{} doesn't exist (moved or deleted?)", params.host))
-                    }
+                    Ok(params) if params.file_to_create().is_some() => Err(t!("session.file_gone", path = params.host)),
                     Ok(params) => Database::connect(params).await.map_err(|e| crate::db::error_message(&e)),
                     Err(e) => Err(e),
                 };
@@ -572,8 +570,8 @@ impl App {
             Ok(db) => db,
             Err(e) => {
                 self.conns.after_reconnect = None;
-                let again = "a run tries again, Ctrl+O picks another";
-                let msg = format!("Couldn't reconnect '{}': {} ({again})", form.name, form.connect_failure(&e));
+                let again = t!("session.again");
+                let msg = t!("session.reconnect_failed", name = form.name, e = form.connect_failure(&e), again = again);
                 self.log(msg.clone(), true);
                 return self.set_status(msg, true);
             }
@@ -586,7 +584,7 @@ impl App {
             }
         }
         let project = self.project().map(|p| p.name.clone()).unwrap_or_default();
-        self.log(format!("Reconnected to {}", form.summary()), false);
+        self.log(t!("session.reconnected", summary = form.summary()), false);
         let slot = Connection {
             database: Some(db),
             mode: form.mode,
@@ -601,7 +599,7 @@ impl App {
         }
         // (A retry for a run: the run says how it went.)
         if self.conns.restoring.is_empty() && !self.notes.status_is_error && self.conns.after_reconnect.is_none() {
-            self.set_status("Session restored".to_string(), false);
+            self.set_status(t!("session.restored").to_string(), false);
         }
         if let Some(action) = self.conns.after_reconnect.take().filter(|_| self.connection.database.is_some()) {
             self.run_action(action);

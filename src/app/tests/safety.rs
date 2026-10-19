@@ -86,7 +86,7 @@ async fn tx_modes_auto_manual_and_rollback_only() {
     run_sql(&mut app, "delete from t where id > 0").await;
     finish(&mut app).await;
     assert_eq!(app.connection.txn, TxnState::Idle);
-    assert!(app.notes.status.contains("2 row(s) changed, then rolled back"), "{}", app.notes.status);
+    assert!(app.notes.status.contains("2 rows changed, then rolled back"), "{}", app.notes.status);
     // A failing rollback-only run is rolled back too, keeping its error.
     run_sql(&mut app, "insert into t values (9); insert into nope values (1)").await;
     finish(&mut app).await;
@@ -219,7 +219,7 @@ async fn writes_can_be_reviewed_in_a_transaction() {
 
 #[tokio::test]
 async fn explain_analyze_of_a_write_is_rolled_back() {
-    for engine in Engine::ALL {
+    for engine in Engine::BUILT {
         let Some((mut app, _dir)) = live_app(engine, "podelis_analyze").await else { continue };
         // Where the engine runs this statement under EXPLAIN ANALYZE (not
         // MySQL: a one-table UPDATE it plans without running).

@@ -28,14 +28,26 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sqlformat = "0.5.0"
 sqlparser = { version = "0.63", features = ["visitor"] }
-sqlx = { version = "0.9.0", features = ["postgres", "mysql", "sqlite", "runtime-tokio", "tls-rustls-aws-lc-rs", "chrono", "rust_decimal", "uuid", "json"] }
+# SQLite is always built: the gateway keeps each project's memory in it.
+# The other drivers come with their engines' features.
+sqlx = { version = "0.9.0", features = ["sqlite", "runtime-tokio", "tls-rustls-aws-lc-rs", "chrono", "rust_decimal", "uuid", "json"] }
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "time", "sync", "net", "process", "io-util", "signal"] }
 toml = "1.1.6"
+# Changing a setting in config.toml keeps the file's comments and layout.
+toml_edit = "0.25.15"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "env-filter", "std"] }
 unicode-width = "0.2.2"
 url = "2.5"
 uuid = { version = "1.27.0", features = ["v4"] }
+
+[features]
+# The database engines built in (each an `src/db/<engine>/` folder): build
+# fewer with `--no-default-features --features postgres`, say.
+default = ["postgres", "mysql", "sqlite"]
+postgres = ["sqlx/postgres"]
+mysql = ["sqlx/mysql"]
+sqlite = []
 
 [dev-dependencies]
 insta = "1"

@@ -69,50 +69,55 @@ impl Command {
     pub fn describe(self) -> &'static str {
         match self {
             Command::Action(a) => a.describe(),
-            Command::RecordView => "Show the selected row vertically",
-            Command::ExportCsv => "Export rows as CSV",
-            Command::ExportJson => "Export rows as JSON",
-            Command::ExportInserts => "Export rows as SQL INSERT statements",
-            Command::ExportAll(ExportFormat::Csv) => "Export all rows as CSV (not just those loaded)",
-            Command::ExportAll(ExportFormat::Json) => "Export all rows as JSON (not just those loaded)",
-            Command::ExportAll(ExportFormat::Sql) => "Export all rows as SQL INSERT statements",
-            Command::CopyRows(ExportFormat::Csv) => "Copy rows as CSV (the marked ones, or all shown)",
-            Command::CopyRows(ExportFormat::Json) => "Copy rows as JSON (the marked ones, or all shown)",
-            Command::CopyRows(ExportFormat::Sql) => "Copy rows as SQL INSERT statements",
-            Command::AgentActivity => "Agent activity: what AI agents ran (podelis mcp)",
-            Command::LoadMore => "Load more rows",
-            Command::PipeRows => "Pipe rows through a command (grep, sort, jq…)",
-            Command::OpenRows => "Open rows in an app: CSV, JSON, SQL… (or a viewer in this terminal)",
-            Command::OpenRowsAs(_) => "Open rows in an app",
-            Command::RefreshSchema => "Refresh the navigator",
-            Command::CopyDiagnostics => "Copy diagnostics for a bug report",
-            Command::Help => "Show all keys",
-            Command::Quit => "Quit",
-            Command::SwitchTab(_) => "Switch to tab",
-            Command::CompareSchema(_) => "Compare the schema with another connection",
-            Command::SnapshotSchema => "Save a schema snapshot, to compare with later",
-            Command::Watch(_) => "Watch: run the query again every few seconds",
-            Command::CompareSnapshot(_) => "Compare the schema with a saved snapshot",
-            Command::CompareRows(_) => "Compare the query's rows with another connection",
+            Command::RecordView => t!("palette.record"),
+            Command::ExportCsv => t!("palette.export_csv"),
+            Command::ExportJson => t!("palette.export_json"),
+            Command::ExportInserts => t!("palette.export_sql"),
+            Command::ExportAll(ExportFormat::Csv) => t!("menu.export_all_csv_full"),
+            Command::ExportAll(ExportFormat::Json) => t!("palette.export_all_json"),
+            Command::ExportAll(ExportFormat::Sql) => t!("palette.export_all_sql"),
+            Command::CopyRows(ExportFormat::Csv) => t!("palette.copy_csv"),
+            Command::CopyRows(ExportFormat::Json) => t!("palette.copy_json"),
+            Command::CopyRows(ExportFormat::Sql) => t!("palette.copy_sql"),
+            Command::AgentActivity => t!("palette.agents"),
+            Command::LoadMore => t!("menu.load_more"),
+            Command::PipeRows => t!("palette.pipe"),
+            Command::OpenRows => t!("palette.open_rows"),
+            Command::OpenRowsAs(_) => t!("palette.open_rows_as"),
+            Command::RefreshSchema => t!("palette.refresh"),
+            Command::CopyDiagnostics => t!("palette.diagnostics"),
+            Command::Help => t!("palette.help"),
+            Command::Quit => t!("palette.quit"),
+            Command::SwitchTab(_) => t!("palette.switch_tab"),
+            Command::CompareSchema(_) => t!("palette.compare_schema"),
+            Command::SnapshotSchema => t!("palette.snapshot"),
+            Command::Watch(_) => t!("palette.watch"),
+            Command::CompareSnapshot(_) => t!("palette.compare_snapshot"),
+            Command::CompareRows(_) => t!("palette.compare_rows"),
         }
     }
 
     /// What the palette lists: the description, with the tab's name.
     pub fn text(self, app: &App) -> String {
         match self {
+            Command::SwitchTab(i) if app.palette.as_ref().is_some_and(|p| p.tabs_only) => app.tab_entry(i),
             Command::SwitchTab(i) => {
-                format!("Switch to tab: {}", app.tabs.get(i).map_or("", |t| t.name.as_str()))
+                format!("{}: {}", t!("palette.switch_tab"), app.tabs.get(i).map_or("", |t| t.name.as_str()))
             }
-            Command::Watch(0) => "Stop watching the query".to_string(),
-            Command::Watch(s) => format!("Watch: run the query again every {s} s, marking what changed"),
+            Command::Watch(0) => t!("palette.stop_watch").to_string(),
+            Command::Watch(s) => t!("palette.watch_every", s = s),
             Command::CompareSnapshot(i) => match app.palette.as_ref().and_then(|p| p.snapshots.get(i)) {
-                Some(s) => format!("Compare the schema with the snapshot: {} · {}", s.connection, s.taken),
+                Some(s) => t!("palette.compare_with_snapshot", connection = s.connection, taken = s.taken),
                 None => self.describe().to_string(),
             },
             Command::CompareSchema(Some(id)) | Command::CompareRows(Some(id)) => {
                 let name = app.other_connections().into_iter().find(|(i, _)| *i == id).map(|(_, n)| n);
-                let what = if matches!(self, Command::CompareSchema(_)) { "schema" } else { "query's rows" };
-                format!("Compare the {what} with {}", name.unwrap_or_default())
+                let name = name.unwrap_or_default();
+                if matches!(self, Command::CompareSchema(_)) {
+                    t!("palette.compare_schema_with", name = name)
+                } else {
+                    t!("palette.compare_rows_with", name = name)
+                }
             }
             _ => self.describe().to_string(),
         }
@@ -122,14 +127,14 @@ impl Command {
     pub fn keys(self, app: &App) -> String {
         match self {
             Command::Action(a) => app.keymap.label(a).to_string(),
-            Command::RecordView => "x (results)".into(),
-            Command::ExportCsv => "e (results)".into(),
-            Command::ExportJson => "J (results)".into(),
-            Command::ExportInserts => "i (results)".into(),
-            Command::LoadMore => "M (results)".into(),
-            Command::PipeRows => "| (results)".into(),
-            Command::OpenRows => "o (results)".into(),
-            Command::RefreshSchema => "r (navigator)".into(),
+            Command::RecordView => format!("x ({})", t!("palette.in_results")),
+            Command::ExportCsv => format!("e ({})", t!("palette.in_results")),
+            Command::ExportJson => format!("J ({})", t!("palette.in_results")),
+            Command::ExportInserts => format!("i ({})", t!("palette.in_results")),
+            Command::LoadMore => format!("M ({})", t!("palette.in_results")),
+            Command::PipeRows => format!("| ({})", t!("palette.in_results")),
+            Command::OpenRows => format!("o ({})", t!("palette.in_results")),
+            Command::RefreshSchema => format!("r ({})", t!("palette.in_navigator")),
             Command::Help => "F1".into(),
             Command::Quit => "Ctrl+Q".into(),
             Command::SwitchTab(i) if i < 9 => format!("Ctrl+K {}", i + 1),
@@ -163,6 +168,12 @@ pub struct Palette {
     /// The saved schema snapshots, read once when it opens (it's searched
     /// on every key).
     snapshots: Vec<crate::transfer::snapshots::Saved>,
+    /// Only the tabs, all of them (Ctrl+K g): found by name, connection or
+    /// the SQL in them.
+    pub tabs_only: bool,
+    /// Each tab's text to search, lowercased, read once when the list
+    /// opens (it's searched on every key and drawn every frame).
+    tab_texts: Vec<String>,
 }
 
 impl App {
@@ -175,11 +186,41 @@ impl App {
             menu: menu_now,
             opened: Instant::now(),
             snapshots: self.snapshots(),
+            tabs_only: false,
+            tab_texts: Vec::new(),
         });
         if !menu_now {
             let key = self.keymap.short_label(Action::Palette);
             self.set_status(format!("{key}…"), false);
         }
+    }
+
+    /// A tab as the tab list shows it: its name, ● if its saved query has
+    /// changed, … while its query runs, its connection, and which is shown.
+    pub fn tab_entry(&self, i: usize) -> String {
+        let Some(tab) = self.tabs.get(i) else { return String::new() };
+        let dirty = if tab.saved_id.is_some() && self.tab_dirty(i) { " ●" } else { "" };
+        let running = if self.run.executing && self.run_owner() == Some(i) { " …" } else { "" };
+        let on = tab.conn.and_then(|id| self.conn_name(id)).map(|n| format!("  · {n}")).unwrap_or_default();
+        let here = if i == self.active_tab { format!("  ({})", t!("menu.this_one")) } else { String::new() };
+        format!("{}{dirty}{running}{on}{here}", tab.name)
+    }
+
+    /// Ctrl+K g: every tab in a list to search and pick from, the shown
+    /// one selected (the tab row only has room for so many).
+    pub(super) fn open_tab_list(&mut self) {
+        self.palette = Some(Palette {
+            query: LineInput::default(),
+            selected: self.active_tab,
+            searching: true,
+            menu: false,
+            opened: Instant::now(),
+            snapshots: Vec::new(),
+            tabs_only: true,
+            tab_texts: (0..self.tabs.len())
+                .map(|i| format!("{}\n{}", self.tab_entry(i), self.tab_text(i)).to_lowercase())
+                .collect(),
+        });
     }
 
     /// When the waiting Ctrl+K should show its menu.
@@ -198,6 +239,13 @@ impl App {
     /// Commands whose description contains every word typed.
     pub fn palette_items(&self) -> Vec<Command> {
         let query = self.palette.as_ref().map(|p| p.query.text().to_lowercase()).unwrap_or_default();
+        if let Some(palette) = self.palette.as_ref().filter(|p| p.tabs_only) {
+            // A tab by its name, its connection, or the SQL in it.
+            return (palette.tab_texts.iter().enumerate())
+                .filter(|(_, text)| query.split_whitespace().all(|w| text.contains(w)))
+                .map(|(i, _)| Command::SwitchTab(i))
+                .collect();
+        }
         // The other open tabs, by name, after the commands.
         let tabs = (0..self.tabs.len()).filter(|i| *i != self.active_tab).map(Command::SwitchTab);
         // Comparing: with each other connection, or (with none open) a hint.
@@ -239,7 +287,8 @@ impl App {
         match key.code {
             KeyCode::Esc => self.palette = None,
             // Back to the letters.
-            KeyCode::Backspace if palette.query.is_empty() => palette.searching = false,
+            // (Not from the tab list: it has no letters to go back to.)
+            KeyCode::Backspace if palette.query.is_empty() && !palette.tabs_only => palette.searching = false,
             KeyCode::Enter => {
                 let selected = palette.selected;
                 let chosen = self.palette_items().get(selected).copied();
@@ -311,7 +360,7 @@ impl App {
             Command::RefreshSchema => self.load_catalog(),
             Command::CopyDiagnostics => {
                 let text = self.diagnostics();
-                self.copy_text(text, "Copied diagnostics (no hosts, users or SQL)");
+                self.copy_text(text, t!("palette.copied_diagnostics"));
             }
             Command::Help => self.help_visible = true,
             Command::Quit => self.request_quit(),

@@ -69,6 +69,28 @@ impl<'a> From<&'a ConnectionProfile> for Settings<'a> {
 /// them read-only); `password` is how to show the password.
 pub(super) fn form_lines(form: &Settings, focus: Option<ConnectField>, password: &str) -> Vec<Line<'static>> {
     let t = theme();
+    // The labels line up on the right, as wide as the language's longest.
+    let label_w = [
+        t!("form.name"),
+        t!("form.engine"),
+        t!("form.file"),
+        t!("form.host"),
+        t!("form.port"),
+        t!("form.user"),
+        t!("form.password"),
+        t!("form.password_command"),
+        t!("form.database"),
+        t!("form.ssl"),
+        t!("form.mode"),
+        t!("form.transaction"),
+        t!("form.ssh"),
+        t!("form.timeout"),
+        t!("form.agents"),
+    ]
+    .iter()
+    .map(|l| l.chars().count())
+    .max()
+    .unwrap_or(11);
     let file_based = form.engine.is_file_based();
     fields_for(form.engine)
         .iter()
@@ -78,27 +100,29 @@ pub(super) fn form_lines(form: &Settings, focus: Option<ConnectField>, password:
         })
         .map(|&field| {
             let (label, value) = match field {
-                ConnectField::Name => ("Name", form.name),
-                ConnectField::Engine => ("Engine", form.engine.label()),
-                ConnectField::Host if file_based => ("File", form.host),
-                ConnectField::Host => ("Host", form.host),
-                ConnectField::Port => ("Port", form.port),
-                ConnectField::User => ("User", form.user),
+                ConnectField::Name => (t!("form.name"), form.name),
+                ConnectField::Engine => (t!("form.engine"), form.engine.label()),
+                ConnectField::Host if file_based => (t!("form.file"), form.host),
+                ConnectField::Host => (t!("form.host"), form.host),
+                ConnectField::Port => (t!("form.port"), form.port),
+                ConnectField::User => (t!("form.user"), form.user),
                 // The command supplies it: whatever is typed there isn't used.
-                ConnectField::Password if !form.password_command.trim().is_empty() => ("Password", "from Passwd cmd"),
-                ConnectField::Password => ("Password", password),
-                ConnectField::PasswordCommand => ("Passwd cmd", &*form.password_command),
-                ConnectField::Database => ("Database", form.database),
-                ConnectField::Ssl => ("SSL mode", form.ssl_mode.label()),
-                ConnectField::Mode => ("Mode", form.mode.label()),
+                ConnectField::Password if !form.password_command.trim().is_empty() => {
+                    (t!("form.password"), t!("form.from_command"))
+                }
+                ConnectField::Password => (t!("form.password"), password),
+                ConnectField::PasswordCommand => (t!("form.password_command"), &*form.password_command),
+                ConnectField::Database => (t!("form.database"), form.database),
+                ConnectField::Ssl => (t!("form.ssl"), form.ssl_mode.label()),
+                ConnectField::Mode => (t!("form.mode"), form.mode.label()),
                 // Read-only connections don't write, so there's nothing to commit.
                 ConnectField::Transaction if form.mode == ConnectionMode::ReadOnly => {
-                    ("Transaction", "none: read-only")
+                    (t!("form.transaction"), t!("form.no_transaction"))
                 }
-                ConnectField::Transaction => ("Transaction", form.tx_mode.label()),
-                ConnectField::Ssh => ("SSH via", form.ssh),
-                ConnectField::Timeout => ("Timeout", form.timeout),
-                ConnectField::Agents => ("AI agents", form.agents.label()),
+                ConnectField::Transaction => (t!("form.transaction"), form.tx_mode.label()),
+                ConnectField::Ssh => (t!("form.ssh"), form.ssh),
+                ConnectField::Timeout => (t!("form.timeout"), form.timeout),
+                ConnectField::Agents => (t!("form.agents"), form.agents.label()),
             };
             let toggle =
                 matches!(field, ConnectField::Engine | ConnectField::Ssl | ConnectField::Mode | ConnectField::Agents)
@@ -114,7 +138,7 @@ pub(super) fn form_lines(form: &Settings, focus: Option<ConnectField>, password:
             let value = if toggle && focused { format!("‹ {value} ›") } else { value.to_string() };
             let line = Line::from(vec![
                 Span::styled(if focused { "▸" } else { " " }, bold(t.accent)),
-                Span::styled(format!("{label:>11}  "), if focused { bold(t.accent) } else { muted() }),
+                Span::styled(format!("{label:>label_w$}  "), if focused { bold(t.accent) } else { muted() }),
                 Span::styled(value, value_style),
             ]);
             if focused { line.style(Style::default().bg(t.active)) } else { line }
@@ -127,43 +151,43 @@ pub(super) fn form_lines(form: &Settings, focus: Option<ConnectField>, password:
 pub(super) fn form_message(form: &ConnectForm) -> (String, Style) {
     let t = theme();
     let field_help = match form.focus {
-        ConnectField::Host if form.engine.is_file_based() => "Path to the database file, or :memory:",
-        ConnectField::Host => "Hostname, IP address, or a Unix socket path starting with /",
+        ConnectField::Host if form.engine.is_file_based() => t!("form.help_file"),
+        ConnectField::Host => t!("form.help_host"),
         ConnectField::Mode => match form.mode {
-            ConnectionMode::Normal => "Asks before UPDATE/DELETE without WHERE, DROP and TRUNCATE",
-            ConnectionMode::Production => "Shown in red; asks before running anything that changes data",
-            ConnectionMode::ReadOnly => "Refuses statements that change data; the server enforces it too",
+            ConnectionMode::Normal => t!("form.help_normal"),
+            ConnectionMode::Production => t!("form.help_production"),
+            ConnectionMode::ReadOnly => t!("form.help_read_only"),
         },
         ConnectField::Transaction if form.mode == ConnectionMode::ReadOnly => {
-            "Read-only connections don't change data, so there's nothing to commit"
+            t!("form.help_no_transaction")
         }
         ConnectField::Agents => match form.agents {
-            AgentAccess::None => "Not shared with AI agents (podelis mcp); ←/→ to share it",
-            AgentAccess::Read => "AI agents can read, in a session the server keeps read-only",
-            AgentAccess::Write => "AI agents can write too: never DROP or TRUNCATE, and on production only a dry run",
+            AgentAccess::None => t!("form.help_agents_none"),
+            AgentAccess::Read => t!("form.help_agents_read"),
+            AgentAccess::Write => t!("form.help_agents_write"),
             AgentAccess::Approve => {
-                "AI agents can write once you approve each write here (with its dry run): never DROP or TRUNCATE"
+                t!("form.help_agents_approve")
             }
         },
         ConnectField::Transaction => match form.tx_mode() {
-            TxMode::AutoCommit => "Each statement is committed as it runs (switch any time: Ctrl+K x)",
-            TxMode::Manual => "Changes wait for COMMIT (F8) or ROLLBACK (Shift+F8) (switch any time: Ctrl+K x)",
-            TxMode::RollbackOnly => "Statements run, then are always rolled back (switch any time: Ctrl+K x)",
+            TxMode::AutoCommit => t!("form.help_autocommit"),
+            TxMode::Manual => t!("form.help_manual"),
+            TxMode::RollbackOnly => t!("form.help_rollback_only"),
         },
         ConnectField::Password if !form.password_command.trim().is_empty() => {
-            "Not used: the password command supplies the password (clear Passwd cmd to type one)"
+            t!("form.help_password_unused")
         }
         ConnectField::PasswordCommand => {
-            "Optional: a command that prints the password, e.g. pass show db/prod or op read op://vault/db/password. Runs without a shell"
+            t!("form.help_password_command")
         }
-        ConnectField::Timeout => "Optional: seconds a query may run before it's cancelled, e.g. 30",
+        ConnectField::Timeout => t!("form.help_timeout"),
         ConnectField::Ssh => {
-            "Optional: user@host[:port] or an ~/.ssh/config alias. Uses your ssh keys/agent; no password prompts"
+            t!("form.help_ssh")
         }
-        _ => "Tip: paste a connection URL to fill the form · Ctrl+T tests the connection step by step",
+        _ => t!("form.help_tip"),
     };
     if form.connecting {
-        ("Connecting… (Esc to cancel)".to_string(), bold(t.warn))
+        (t!("form.connecting").to_string(), bold(t.warn))
     } else if let Some(err) = &form.error {
         (err.clone(), fg(t.error))
     } else if let Some(info) = &form.info {

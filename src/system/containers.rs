@@ -120,7 +120,7 @@ impl Ps {
         let repo = repo.split([':', '@']).next().unwrap_or_default().to_lowercase();
         // The engines in their order: PostgreSQL before MySQL, as a
         // container listening on both is more likely PostgreSQL's.
-        Engine::ALL.into_iter().filter(|e| !e.is_file_based()).find(|e| {
+        Engine::BUILT.into_iter().filter(|e| !e.is_file_based()).find(|e| {
             let port = e.default_port().parse().unwrap_or(0);
             listens(port) || e.dialect().container_images().contains(&repo.as_str())
         })

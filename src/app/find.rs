@@ -118,7 +118,7 @@ impl App {
     fn find_step(&mut self, forward: bool) {
         let (matches, current) = self.find_matches();
         if matches.is_empty() {
-            return self.set_status("No matches".to_string(), true);
+            return self.set_status(t!("find.no_matches_status").to_string(), true);
         }
         let n = matches.len();
         let at = self.tab.editor.cursor_offset();
@@ -150,7 +150,7 @@ impl App {
         let (matches, _) = self.find_matches();
         let Some(bar) = &self.find else { return };
         if matches.is_empty() {
-            return self.set_status("No matches".to_string(), true);
+            return self.set_status(t!("find.no_matches_status").to_string(), true);
         }
         let text = self.tab.editor.text();
         let mut out = String::with_capacity(text.len());
@@ -165,10 +165,7 @@ impl App {
         let cursor = (0..=cursor).rev().find(|&i| out.is_char_boundary(i)).unwrap_or(0);
         self.tab.editor.replace_text(&out, cursor);
         self.edited();
-        self.set_status(
-            format!("Replaced {} match{}", matches.len(), if matches.len() == 1 { "" } else { "es" }),
-            false,
-        );
+        self.set_status(tn!("find.replaced", matches.len()), false);
     }
 
     pub(super) fn toggle_comment(&mut self) {
@@ -180,12 +177,22 @@ impl App {
     /// Formats the selection, or the whole text.
     pub(super) fn format_sql(&mut self) {
         let text = self.tab.editor.text();
-        let (start, end) = self.tab.editor.selection_offsets().unwrap_or((0, text.len()));
+        // The selection, else the statement at the cursor (not the rest of
+        // the script).
+        let range = self
+            .tab
+            .editor
+            .selection_offsets()
+            .map(|(a, b)| a..b)
+            .or_else(|| crate::sql::statement_range(&text, self.tab.editor.cursor_offset(), self.engine()));
+        let Some(std::ops::Range { start, end }) = range else {
+            return self.set_status(t!("editor.no_statement_here").to_string(), true);
+        };
         let Some(formatted) = crate::sql::format(&text[start..end], self.engine()) else {
-            return self.set_status("Can't format this safely: it would change more than spacing".to_string(), true);
+            return self.set_status(t!("format.unsafe").to_string(), true);
         };
         if formatted.trim() == text[start..end].trim() {
-            return self.set_status("Already formatted".to_string(), false);
+            return self.set_status(t!("format.already").to_string(), false);
         }
         let new = format!("{}{}{}", &text[..start], formatted, &text[end..]);
         self.tab.editor.replace_text(&new, start + formatted.len());

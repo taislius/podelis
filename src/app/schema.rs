@@ -39,7 +39,7 @@ impl App {
             }
             Err(e) => {
                 panel.show_definition_of = None;
-                self.set_status(format!("Couldn't load details of {name}: {e}"), true);
+                self.set_status(t!("schema.details_failed", name = name, e = e), true);
             }
         }
     }
@@ -73,8 +73,8 @@ impl App {
                 .links()
                 .await
                 .map(|links| crate::related::describe(&links, &schema, &name))
-                .map_err(|e| format!("Couldn't read the foreign keys: {}", crate::db::error_message(&e)));
-            send(DbEventKind::Definition(format!("RELATED · {name}"), text));
+                .map_err(|e| t!("schema.links_failed", e = crate::db::error_message(&e)));
+            send(DbEventKind::Definition(format!("{} · {name}", t!("schema.related")), text));
         });
     }
 
@@ -147,7 +147,7 @@ fn table_definition(engine: Engine, table: &SchemaTable) -> String {
         out.push('\n');
     }
     if !details.indexes.is_empty() {
-        out.push_str("\n-- indexes\n");
+        let _ = write!(out, "\n-- {}\n", t!("schema.indexes"));
         for ix in &details.indexes {
             let line = ix.definition.clone().unwrap_or_else(|| {
                 let unique = if ix.unique { "UNIQUE " } else { "" };

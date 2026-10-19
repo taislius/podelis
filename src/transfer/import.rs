@@ -599,7 +599,7 @@ pub(crate) mod tests {
     /// the values is tested in its folder (`import_sample`).
     #[tokio::test]
     async fn imports_on_every_engine() {
-        for engine in Engine::ALL {
+        for engine in Engine::BUILT {
             let Some((db, _)) = crate::db::tests::own_live_db(engine, "podelis_import").await else { continue };
             let o = import_sample(&db, "pets_import").await;
             assert_eq!(o.rows[0][1].as_deref(), Some("Rex\tthe \\ dog"), "{engine:?}");

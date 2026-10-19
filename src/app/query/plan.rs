@@ -12,10 +12,10 @@ impl App {
             return;
         }
         let Some((stmt, line)) = self.statement_to_explain() else {
-            return self.set_status("No statement at cursor".to_string(), true);
+            return self.set_status(t!("editor.no_statement").to_string(), true);
         };
         if stmt.to_ascii_uppercase().starts_with("EXPLAIN") {
-            return self.set_status("That's already an EXPLAIN; run it with F6".to_string(), true);
+            return self.set_status(t!("plan.already_explain").to_string(), true);
         }
         if self.run.executing {
             return self.explain_aside(stmt, line);
@@ -49,10 +49,10 @@ impl App {
     /// Only in the tab whose query runs: it's made there after it.
     pub(in crate::app) fn queue_plan(&mut self, stmt: String, line: usize) {
         if !self.running_here() {
-            return self.set_status(self.running_elsewhere("F7 again once it's done"), true);
+            return self.set_status(self.running_elsewhere(t!("plan.f7_after")), true);
         }
         self.queued_plan = Some((stmt, line));
-        self.set_status("The plan follows when the running query finishes (Esc stops both)".into(), false);
+        self.set_status(t!("plan.queued").into(), false);
     }
 
     /// The plan made beside the running query, or (where it couldn't be)
@@ -84,7 +84,7 @@ impl App {
     /// After a failed run, the queued plan isn't made: the error stays in view.
     pub(in crate::app) fn drop_queued_plan(&mut self) {
         if self.queued_plan.take().is_some() {
-            self.notes.status.push_str(" · the plan wasn't made");
+            let _ = write!(self.notes.status, " · {}", t!("plan.not_made"));
         }
     }
 
@@ -141,7 +141,7 @@ impl App {
     /// scrolled to from its first line, if it's still there.
     pub(in crate::app) fn go_to_plan_statement(&mut self) {
         let Some(source) = self.tab.plan_source.clone() else { return };
-        self.go_to_source(&source, "The plan's statement", "F7 explains it again");
+        self.go_to_source(&source, t!("plan.its_statement"), t!("plan.f7_again"));
     }
 
     /// Selects `source`'s statement in the editor and scrolls to it, if
@@ -149,7 +149,7 @@ impl App {
     pub(in crate::app) fn go_to_source(&mut self, source: &PlanSource, what: &str, again: &str) {
         let text = self.tab.editor.text();
         let Some((offset, line)) = source.find_in(&text) else {
-            return self.set_status(format!("{what} isn't in the editor any more"), true);
+            return self.set_status(t!("plan.gone", what = what), true);
         };
         let ed = &mut self.tab.editor;
         let start = ed.pos_of_offset(offset);
@@ -162,8 +162,11 @@ impl App {
         // Zoomed, the editor is what's shown now.
         self.focus = Focus::Editor;
         let last = line + source.sql.matches('\n').count();
-        let lines =
-            if last > line { format!("lines {}–{}", line + 1, last + 1) } else { format!("line {}", line + 1) };
+        let lines = if last > line {
+            t!("results.lines", first = line + 1, last = last + 1)
+        } else {
+            t!("results.line", line = line + 1)
+        };
         self.set_status(format!("{what}, {lines} ({again})"), false);
     }
 
@@ -187,7 +190,7 @@ impl App {
             .engine()
             .dialect()
             .format_plan(&outcome.columns, &outcome.rows)
-            .unwrap_or_else(|| crate::db::Plan { text: "The server returned no plan.".to_string(), notes: Vec::new() });
+            .unwrap_or_else(|| crate::db::Plan { text: t!("plan.none").to_string(), notes: Vec::new() });
         self.tab.plan = Some(plan);
         self.tab.plan_selected = None;
         self.tab.plan_source =
@@ -203,6 +206,6 @@ impl App {
         self.set_result_tab(ResultTab::Plan);
         // Ready to scroll the plan; `1` goes back to the result.
         self.focus = Focus::Results;
-        self.set_status("Query plan shown (the statement was not executed)".to_string(), false);
+        self.set_status(t!("plan.shown").to_string(), false);
     }
 }

@@ -9,55 +9,54 @@ impl App {
     pub(super) fn start_cell_edit(&mut self) {
         match self.cell_edit_target() {
             Ok(edit) => self.cell_edit = Some(edit),
-            Err(why) => self.set_status(format!("Can't edit: {why}"), true),
+            Err(why) => self.set_status(t!("edit.cant", why = why), true),
         }
     }
 
     fn cell_edit_target(&self) -> Result<CellEdit, String> {
         if self.connection.mode == ConnectionMode::ReadOnly {
-            return Err("this connection is read-only".into());
+            return Err(t!("rows.read_only").into());
         }
-        let results = self.tab.grid.results.as_ref().ok_or("no results")?;
+        let results = self.tab.grid.results.as_ref().ok_or(t!("rows.no_results"))?;
         let row = *self
             .tab
             .grid
             .view
-            .get(self.tab.grid.table_state.selected().ok_or("no row selected")?)
-            .ok_or("no row selected")?;
+            .get(self.tab.grid.table_state.selected().ok_or(t!("follow.no_row_selected"))?)
+            .ok_or(t!("follow.no_row_selected"))?;
         let col = self.tab.grid.selected_col;
-        let (sql, _) = self.tab.last_sql.as_ref().ok_or("no query")?;
-        let source = analyze::edit_source(&parse(sql, self.engine()))
-            .ok_or("only results of a plain SELECT from one table (no joins or grouping) can be edited")?;
+        let (sql, _) = self.tab.last_sql.as_ref().ok_or(t!("rows.no_query"))?;
+        let source = analyze::edit_source(&parse(sql, self.engine())).ok_or(t!("rows.not_editable"))?;
 
         // The table in the catalog: by schema if the query named one.
-        let catalog = self.connection.schema.as_ref().ok_or("the schema hasn't loaded yet")?;
+        let catalog = self.connection.schema.as_ref().ok_or(t!("rows.schema_loading"))?;
         let mut matches = catalog
             .tables
             .iter()
             .filter(|t| t.info.name == source.table && source.schema.as_ref().is_none_or(|s| *s == t.info.schema));
-        let table = matches.next().ok_or_else(|| format!("table {} not found in the schema", source.table))?;
+        let table = matches.next().ok_or_else(|| t!("rows.table_not_found", table = source.table))?;
         if matches.next().is_some() {
-            return Err(format!("{} exists in several schemas; qualify it in the query", source.table));
+            return Err(t!("rows.ambiguous_table", table = source.table));
         }
         if table.info.is_view {
-            return Err("it's a view".into());
+            return Err(t!("rows.is_view").into());
         }
         let selectable = |name: &str| source.columns.as_ref().is_none_or(|cols| cols.iter().any(|c| c == name));
         let position = |name: &str| results.columns.iter().position(|c| c == name);
 
         let column = &results.columns[col];
         if !selectable(column) {
-            return Err(format!("{column} is computed, not a table column"));
+            return Err(t!("edit.computed", column = column));
         }
         let info = table
             .columns
             .iter()
             .find(|c| c.name == *column)
-            .ok_or_else(|| format!("{column} isn't a column of {}", source.table))?;
+            .ok_or_else(|| t!("edit.not_a_column", column = column, table = source.table))?;
 
         let pk: Vec<&ColumnInfo> = table.columns.iter().filter(|c| c.primary_key).collect();
         if pk.is_empty() {
-            return Err(format!("{} has no primary key", source.table));
+            return Err(t!("rows.no_primary_key", table = source.table));
         }
         let engine = self.engine();
         let ty = |i: usize| results.column_types.get(i).map_or("", |t| t);
@@ -65,8 +64,8 @@ impl App {
         for k in pk {
             let i = position(&k.name)
                 .filter(|_| selectable(&k.name))
-                .ok_or_else(|| format!("the result doesn't include the primary key column {}", k.name))?;
-            let value = results.rows[row][i].as_deref().ok_or("the primary key value is NULL")?;
+                .ok_or_else(|| t!("rows.key_not_in_result", column = k.name))?;
+            let value = results.rows[row][i].as_deref().ok_or(t!("rows.key_is_null"))?;
             key.push((k.name.clone(), crate::db::value_literal(value, ty(i), engine)));
         }
         let table_name = match &source.schema {
@@ -91,7 +90,7 @@ impl App {
             if edit.nullable {
                 self.save_cell_edit(None);
             } else {
-                let msg = format!("{} doesn't allow NULL", edit.column);
+                let msg = t!("edit.not_null", column = edit.column);
                 self.set_status(msg, true);
             }
             return;
@@ -109,7 +108,7 @@ impl App {
     /// Runs the UPDATE through the normal safety checks (production asks).
     fn save_cell_edit(&mut self, value: Option<String>) {
         if self.run.executing {
-            return self.set_status("A query is running: the edit stays open until it's done".to_string(), true);
+            return self.set_status(t!("edit.wait_for_query").to_string(), true);
         }
         let Some(edit) = self.cell_edit.take() else { return };
         let engine = self.engine();
@@ -137,16 +136,16 @@ impl App {
                     *cell = value;
                     self.tab.grid.col_widths = column_widths(results);
                 }
-                self.log("Updated 1 row".to_string(), false);
-                self.set_status("Saved · updated 1 row".to_string(), false);
+                self.log(t!("edit.updated").to_string(), false);
+                self.set_status(t!("edit.saved").to_string(), false);
             }
             Some(0) => {
-                let msg = "No row was updated: it may have been changed or deleted".to_string();
+                let msg = t!("edit.not_updated").to_string();
                 self.log(msg.clone(), true);
                 self.set_status(msg, true);
             }
             n => {
-                let msg = format!("Updated {} rows (expected 1)", n.unwrap_or(0));
+                let msg = t!("edit.updated_many", n = n.unwrap_or(0));
                 self.log(msg.clone(), true);
                 self.set_status(msg, true);
             }

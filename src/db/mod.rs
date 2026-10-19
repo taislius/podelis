@@ -4,19 +4,18 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use futures_util::TryStreamExt;
-use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::pool::PoolConnection;
 use sqlx::{AssertSqlSafe, Column, Either, Executor, Row, SqlSafeStr, Statement, TypeInfo, ValueRef};
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, mpsc, oneshot};
-use uuid::Uuid;
 
 use crate::sql;
 
 // The engines (`Engine`, `Engine::ALL`, `Pool`, `Session`, their modules
-// and `on_engine!` / `on_pool!` / `on_session!`), found by build.rs.
+// and `on_engine!` / `on_driver!` / `on_pool!` / `on_session!`), found by
+// build.rs.
 include!(concat!(env!("OUT_DIR"), "/engines.rs"));
 
 mod activity;
@@ -256,10 +255,16 @@ impl Database {
     /// made for it after something went wrong: reopening the session,
     /// cancelling. There a server that's down fails at once, with why.
     async fn check_reach(&self) -> Result<()> {
-        on_engine!(self.0.engine, engine::connect::check_reach(self).await)
+        on_driver!(self.0.engine, engine::connect::check_reach(self).await)
     }
 
     pub async fn connect(params: ConnectParams) -> Result<Self> {
+        if !params.engine.built() {
+            anyhow::bail!(
+                "this Podėlis was built without {} (its Cargo feature is off; see `cargo build --features`)",
+                params.engine.label()
+            );
+        }
         let params = params.with_password().await?;
         // An IPv6 address may come in brackets; a file path is used as given.
         let mut host = if params.engine.is_file_based() {
@@ -285,11 +290,11 @@ impl Database {
         let address = (!params.engine.is_file_based() && !host.starts_with('/') && tunnel.is_none())
             .then(|| (host.clone(), port));
         if let Some((host, port)) = &address {
-            on_engine!(params.engine, engine::connect::check_before_connect(host, *port).await)?;
+            on_driver!(params.engine, engine::connect::check_before_connect(host, *port).await)?;
         }
         let host = host.as_str();
         let open = |params: ConnectParams| async move {
-            on_engine!(params.engine, engine::connect::connect(&params, host, port).await)
+            on_driver!(params.engine, engine::connect::connect(&params, host, port).await)
         };
         // `prefer` means TLS if the server can: when it offers TLS the
         // client can't speak (an old MySQL's TLS 1.0/1.1), try without.

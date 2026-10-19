@@ -11,12 +11,12 @@ pub(super) fn draw_agents(f: &mut Frame, app: &App, area: Rect) {
     let rect = centered_box(area, area.width.saturating_sub(6).max(40), area.height.saturating_sub(4).max(8));
     f.render_widget(Clear, rect);
     let title = match session {
-        Some(s) => format!("AGENT ACTIVITY · {}", s.label()),
-        None => "AGENT ACTIVITY".to_string(),
+        Some(s) => format!("{} · {}", t!("agents.title"), s.label()),
+        None => t!("agents.title").to_string(),
     };
     let keys = match session {
-        Some(_) => " ↵ details · o open in a tab · y copy SQL · / search · ! worth a look · Esc back ",
-        None => " ↵ open · / search · ! worth a look · Esc close ",
+        Some(_) => format!(" {} ", t!("agents.call_keys")),
+        None => format!(" {} ", t!("agents.session_keys")),
     };
     let block = popup(&title, t.accent).title_bottom(Line::from(Span::styled(keys, dim())).right_aligned());
     let inner = block.inner(rect);
@@ -30,10 +30,10 @@ pub(super) fn draw_agents(f: &mut Frame, app: &App, area: Rect) {
 
     // The search, and what's shown.
     let what = match session {
-        Some(s) => format!("{} of {} calls", rows.len(), s.calls()),
-        None => format!("{} of {} sessions", rows.len(), app.agents.sessions.len()),
+        Some(s) => t!("agents.calls_of", shown = rows.len(), total = s.calls()),
+        None => t!("agents.sessions_of", shown = rows.len(), total = app.agents.sessions.len()),
     };
-    let only = if view.flagged_only { " · only what's worth a look" } else { "" };
+    let only = if view.flagged_only { format!(" · {}", t!("agents.only_flagged")) } else { String::new() };
     let mut search = vec![Span::styled(" / ", bold(t.accent))];
     if view.filtering || !view.filter.text().is_empty() {
         search.extend(input_spans(&view.filter, fg(t.text_bright)));
@@ -43,7 +43,7 @@ pub(super) fn draw_agents(f: &mut Frame, app: &App, area: Rect) {
     if let Some(s) = session {
         let mut about = vec![format!("{} {}", s.agent, s.version.as_deref().unwrap_or_default()).trim().to_string()];
         if !s.id.is_empty() {
-            about.push(format!("session {}", s.id));
+            about.push(t!("agents.session", id = s.id));
         }
         if let Some(dir) = &s.dir {
             about.push(short_dir(dir));
@@ -59,10 +59,9 @@ pub(super) fn draw_agents(f: &mut Frame, app: &App, area: Rect) {
 
     if rows.is_empty() {
         let empty = if app.agents.sessions.is_empty() {
-            " No agent has used this project's connections. Share one in its settings (AI agents), then add \
-             `podelis mcp` to your agent."
+            format!(" {}", t!("agents.none_yet"))
         } else {
-            " Nothing matches."
+            format!(" {}", t!("agents.no_matches"))
         };
         f.render_widget(Paragraph::new(empty).style(dim()).wrap(Wrap { trim: false }), list);
         return;
@@ -81,12 +80,16 @@ pub(super) fn draw_agents(f: &mut Frame, app: &App, area: Rect) {
 /// `! 10-13 10:05  billing (claude-code 2.0)  ~/src/shop  shop, prod  14 calls  2 refused`
 fn session_row(s: &crate::agents::Session, width: usize) -> ListItem<'static> {
     let t = theme();
-    let dry = if s.dry_runs == 1 { "dry run" } else { "dry runs" };
-    let issues: Vec<String> = [(s.refused, "refused"), (s.failed, "failed"), (s.wrote, "wrote"), (s.dry_runs, dry)]
-        .into_iter()
-        .filter(|(n, _)| *n > 0)
-        .map(|(n, what)| format!("{n} {what}"))
-        .collect();
+    let issues: Vec<String> = [
+        (s.refused, t!("agents.refused", n = s.refused)),
+        (s.failed, t!("agents.failed", n = s.failed)),
+        (s.wrote, t!("agents.wrote", n = s.wrote)),
+        (s.dry_runs, tn!("agents.dry_runs", s.dry_runs)),
+    ]
+    .into_iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(_, said)| said)
+    .collect();
     let flagged = !issues.is_empty();
     let who = match (&s.name, &s.version) {
         (Some(_), Some(v)) => format!("{} ({} {v})", s.label(), s.agent),
@@ -94,10 +97,10 @@ fn session_row(s: &crate::agents::Session, width: usize) -> ListItem<'static> {
         (None, Some(v)) => format!("{} {v}", s.label()),
         (None, None) => s.label().to_string(),
     };
-    let who = if s.id.is_empty() { format!("{who} · earlier") } else { who };
+    let who = if s.id.is_empty() { format!("{who} · {}", t!("agents.earlier")) } else { who };
     let dir = s.dir.as_deref().map(short_dir).unwrap_or_default();
     let issues = if flagged { format!("  {}", issues.join(" · ")) } else { String::new() };
-    let calls = format!("{} call{}", s.calls(), if s.calls() == 1 { "" } else { "s" });
+    let calls = tn!("agents.calls", s.calls());
     let main = format!("{}  {who}  {dir}  {}  {calls}", short_time(&s.last), s.connections.join(", "));
     let room = width.saturating_sub(2 + issues.chars().count());
     ListItem::new(Line::from(vec![

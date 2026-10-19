@@ -164,7 +164,7 @@ impl App {
         self.completion = self.compute_completion();
         if self.completion.is_none() {
             let loading = self.connection.schema.as_ref().is_some_and(|s| s.loading);
-            let msg = if loading { "No completions yet (schema still loading)" } else { "No completions" };
+            let msg = if loading { t!("editor.no_completions_yet") } else { t!("editor.no_completions") };
             self.notes.editor_note = Some(msg.to_string());
             self.notes.editor_note_is_error = false;
         }
@@ -207,7 +207,7 @@ impl App {
         if self.tab.editor.undo() {
             self.edited();
         } else {
-            self.set_status("Nothing to undo".to_string(), false);
+            self.set_status(t!("editor.nothing_to_undo").to_string(), false);
         }
     }
 
@@ -216,7 +216,7 @@ impl App {
         if self.tab.editor.redo() {
             self.edited();
         } else {
-            self.set_status("Nothing to redo".to_string(), false);
+            self.set_status(t!("editor.nothing_to_redo").to_string(), false);
         }
     }
 

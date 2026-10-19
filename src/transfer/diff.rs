@@ -587,7 +587,7 @@ mod tests {
                    code char(3), note text, price numeric(10,2), ratio double precision, ok boolean, \
                    day date, at time, seen DECIMAL(5,0))";
         let mut shapes = Vec::new();
-        for engine in Engine::ALL {
+        for engine in Engine::BUILT {
             let Some((db, _)) = crate::db::tests::own_live_db(engine, "podelis_diff").await else { continue };
             let shape = async |later: &str| {
                 db.run("DROP TABLE IF EXISTS same_t", 1).await.unwrap();

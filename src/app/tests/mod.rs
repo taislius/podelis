@@ -13,6 +13,7 @@ mod plans;
 mod results;
 mod running;
 mod safety;
+mod settings;
 mod tabs;
 
 pub(super) fn outcome(columns: &[&str], rows: &[&[Option<&str>]]) -> QueryOutcome {

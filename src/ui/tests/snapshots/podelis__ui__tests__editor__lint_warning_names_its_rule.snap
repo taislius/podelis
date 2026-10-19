@@ -1,5 +1,6 @@
 ---
 source: src/ui/tests/editor.rs
+assertion_line: 52
 expression: "render(&mut app, 160, 14)"
 ---
 " >_  PODĖLIS v0.0.0   │  project  shop ▼                                                                                                                        "
@@ -15,4 +16,4 @@ expression: "render(&mut app, 160, 14)"
 "│ VIEWS                              1 ││ 01     1 ana@example.com  ∅                                                                                          │"
 "│  ◇ active_users                 view ││ CELL 01:id  int4   NULL AS ∅                                                               1–3 / 3  · 3 cols  · 4 ms │"
 "└──────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" ● prod  db.internal:3306 · MySQL  3 row(s) in 4 ms                                                                                                             "
+" ● prod  db.internal:3306 · MySQL  3 rows in 4 ms                                                                                                               "

@@ -14,21 +14,24 @@ impl App {
     /// settings, TLS, latency.
     pub(super) fn show_connection_info(&mut self) {
         let Some(db) = self.connection.database.clone() else {
-            return self.set_status("This tab isn't connected".to_string(), true);
+            return self.set_status(t!("info.not_connected").to_string(), true);
         };
         let form = &self.connection.form;
         let mut local = vec![
-            ("Connection".to_string(), if form.name.is_empty() { "(unsaved)".to_string() } else { form.name.clone() }),
-            ("Target".to_string(), form.summary()),
-            ("Mode".to_string(), form.mode.label().to_string()),
+            (
+                t!("info.connection").to_string(),
+                if form.name.is_empty() { t!("info.unsaved").to_string() } else { form.name.clone() },
+            ),
+            (t!("info.target").to_string(), form.summary()),
+            (t!("info.mode").to_string(), form.mode.label().to_string()),
         ];
         if let Ok(Some(t)) = form.query_timeout() {
-            local.push(("Query timeout".to_string(), format!("{} s", t.as_secs())));
+            local.push((t!("info.query_timeout").to_string(), format!("{} s", t.as_secs())));
         }
         if let Some(l) = self.connection.latency {
-            local.push(("Latency".to_string(), format!("{} ms", l.as_millis())));
+            local.push((t!("info.latency").to_string(), format!("{} ms", l.as_millis())));
         }
-        let title = format!("CONNECTION · {}", local[0].1);
+        let title = format!("{} · {}", t!("info.title"), local[0].1);
         let send = self.sender();
         tokio::spawn(async move {
             let started = Instant::now();
@@ -130,7 +133,7 @@ impl App {
                     .map(|o| (started.elapsed(), o.reconnected))
                     .map_err(|e| (crate::db::error_message(&e), Ping::Failed))
             } else {
-                Err((format!("no answer in {} s", PING_WITHIN.as_secs()), Ping::NoAnswer))
+                Err((t!("info.no_answer", s = PING_WITHIN.as_secs()), Ping::NoAnswer))
             };
             send(DbEventKind::Pinged(result));
         });
@@ -143,13 +146,13 @@ impl App {
         if self.settings.keepalive > 0 {
             self.heartbeat_secs = self.settings.keepalive;
             self.settings.keepalive = 0;
-            self.set_status("Connection heartbeat off".to_string(), false);
+            self.set_status(t!("info.heartbeat_off").to_string(), false);
         } else {
             self.settings.keepalive = self.heartbeat_secs.max(1);
             // Check right away.
             self.last_activity =
                 Instant::now().checked_sub(Duration::from_secs(self.settings.keepalive)).unwrap_or(self.last_activity);
-            let msg = format!("Connection heartbeat on: checking every {} s while idle", self.settings.keepalive);
+            let msg = t!("info.heartbeat_on", s = self.settings.keepalive);
             self.set_status(msg, false);
             self.keepalive_tick();
         }
@@ -176,23 +179,20 @@ impl App {
             Ok((latency, reconnected)) => {
                 self.connection.latency = Some(latency);
                 if was_lost && !reconnected {
-                    self.log("The connection is back".to_string(), false);
-                    self.set_status("The connection is back".to_string(), false);
+                    self.log(t!("info.back").to_string(), false);
+                    self.set_status(t!("info.back").to_string(), false);
                 }
                 if reconnected {
                     self.connection.txn = TxnState::Idle;
-                    self.log("The connection had dropped: reconnected".to_string(), true);
-                    self.set_status(
-                        "The connection had dropped: reconnected (session settings were reset)".to_string(),
-                        true,
-                    );
+                    self.log(t!("info.reconnected").to_string(), true);
+                    self.set_status(format!("{}: {}", t!("info.reconnected"), t!("info.settings_reset")), true);
                 }
             }
             // Said once: while it stays lost, the checks every few seconds
             // keep quiet (the status bar says "connection lost").
             Err(_) if was_lost => {}
             Err(e) => {
-                let msg = format!("Connection check failed: {}", crate::db::with_hint(&e).replace('\n', " · "));
+                let msg = t!("info.check_failed", e = crate::db::with_hint(&e).replace('\n', " · "));
                 self.log(msg.clone(), true);
                 self.set_status(msg, true);
             }

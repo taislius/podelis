@@ -3,11 +3,15 @@
 use std::fmt::Write as _;
 
 mod agent_constraints;
+#[cfg(feature = "sqlite")]
 pub(super) mod cells;
+#[cfg(feature = "sqlite")]
 pub(super) mod connect;
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 pub(in crate::db) mod db_tests;
+#[cfg(feature = "sqlite")]
 pub(super) mod passwords;
+#[cfg(feature = "sqlite")]
 pub(super) mod queries;
 
 use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan, PlanNote, hex_digits};
@@ -15,10 +19,13 @@ use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan, Plan
 pub struct Sqlite;
 
 /// A row's value as text: what `db::run` reads results with.
+#[cfg(feature = "sqlite")]
 pub(super) use cells::sqlite_cell as cell;
 
 /// What `db::Pool` and `db::Session` hold for this engine (see build.rs).
+#[cfg(feature = "sqlite")]
 pub(super) type DriverPool = sqlx::SqlitePool;
+#[cfg(feature = "sqlite")]
 pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::Sqlite>;
 
 /// This engine's dialect, for `Engine::dialect`.

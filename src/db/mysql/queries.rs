@@ -319,3 +319,13 @@ pub(in crate::db) async fn estimated_rows(db: &Database, scans: Vec<Scan>) -> Ve
 pub(in crate::db) async fn transaction_state(_c: &mut DriverConnection) -> Option<TxnState> {
     None
 }
+
+/// It has no `COPY` (`Capabilities::copy_in` is off): imports insert rows.
+pub(in crate::db) async fn copy_in(
+    db: &Database,
+    _statement: &str,
+    _first_line: u64,
+    _chunks: impl Iterator<Item = Result<Vec<u8>>>,
+) -> Result<u64> {
+    anyhow::bail!("{} has no COPY", db.engine().label())
+}

@@ -52,14 +52,14 @@ impl App {
     /// Why asking can't start here, if it can't.
     fn why_cant_ask(&self) -> Option<String> {
         if self.asking.is_some() {
-            return Some("A question is being answered: wait for it, or Esc stops it".into());
+            return Some(t!("ask.busy").into());
         }
         if !self.connected() {
             return Some(self.not_connected_message());
         }
         let saved = self.project().is_some_and(|p| p.connections.iter().any(|c| c.name == self.connection.form.name));
         if !saved {
-            return Some("Asking works on saved connections (the gateway opens it itself): save this one first".into());
+            return Some(t!("ask.needs_saved").into());
         }
         None
     }
@@ -84,7 +84,7 @@ impl App {
     /// `share_once`: the user allowed the schema to go to the model.
     fn start_ask(&mut self, question: Question, share_once: bool) {
         if question.tab >= self.tabs.len() {
-            return self.set_status("The tab the question was about is closed".into(), true);
+            return self.set_status(t!("ask.tab_closed").into(), true);
         }
         // By id: two projects' names may differ only in case.
         let project = self.current_project.as_ref().map(|id| format!("id:{id}")).unwrap_or_default();
@@ -122,13 +122,13 @@ impl App {
             let result = result.map_err(|e| match e {
                 CallError::Rpc(e) => AskFailure { code: Some(e.code), message: e.message, data: e.data },
                 CallError::Io(e) => {
-                    AskFailure { code: None, message: format!("the gateway couldn't be reached: {e}"), data: None }
+                    AskFailure { code: None, message: t!("ask.gateway_unreachable", e = e), data: None }
                 }
             });
             send(DbEventKind::AskDone(id, Box::new(result)));
         });
         self.asking = Some(Asking { id, question, chars: 0, started: Instant::now(), task });
-        self.say_asking("Asking… the SQL comes to the editor (Esc stops it)".into());
+        self.say_asking(t!("ask.asking").into());
     }
 
     /// Progress goes to the status bar, not a pane's footer (which keeps a
@@ -172,7 +172,7 @@ impl App {
         }
         if let Some(asking) = self.asking.take() {
             asking.task.abort();
-            self.set_status("Stopped asking".into(), false);
+            self.set_status(t!("ask.stopped").into(), false);
         }
     }
 
@@ -180,7 +180,7 @@ impl App {
         let Some(asking) = self.asking.as_mut().filter(|a| a.id == id) else { return };
         asking.chars += chars;
         let secs = asking.started.elapsed().as_secs();
-        let status = format!("Asking… {} characters written, {secs} s (Esc stops it)", asking.chars);
+        let status = t!("ask.asking_progress", chars = asking.chars, secs = secs);
         self.say_asking(status);
     }
 
@@ -199,14 +199,12 @@ impl App {
                 }
             }
             Err(e) if e.code == Some(code::NOT_SHARED) => {
-                let project = e.data.as_ref().and_then(|d| d["project"].as_str()).unwrap_or("this project").to_string();
+                let project =
+                    e.data.as_ref().and_then(|d| d["project"].as_str()).unwrap_or(t!("ask.this_project")).to_string();
                 // Shown once no other confirmation is open (`share_tick`).
                 self.pending_share = Some(Confirm {
-                    message: format!("Send {project}'s table and column names to the model?"),
-                    details: vec![
-                        e.message,
-                        "Rows are never sent; only the tables that matter for the question.".into(),
-                    ],
+                    message: t!("ask.share_schema", project = project),
+                    details: vec![e.message, t!("ask.rows_never_sent").into()],
                     danger: false,
                     action: ConfirmAction::ShareSchema {
                         question: asking.question,
@@ -216,7 +214,7 @@ impl App {
                 });
             }
             Err(e) => {
-                let status = format!("Couldn't ask: {}", e.message);
+                let status = t!("ask.failed", e = e.message);
                 self.log(status.clone(), true);
                 self.set_status(status, true);
             }
@@ -255,10 +253,10 @@ impl App {
     /// The SQL at the end of the editor, a blank line apart, under the
     /// question and what the model said, as comments; the cursor on it.
     fn insert_answer(&mut self, question: &str, answer: &serde_json::Value) {
-        let model = answer["model"].as_str().unwrap_or("the model");
+        let model = answer["model"].as_str().unwrap_or(t!("ask.the_model"));
         let said = answer["said"].as_str().unwrap_or_default();
         let Some(sql) = answer["sql"].as_str() else {
-            let why = if said.is_empty() { "it wrote no SQL".to_string() } else { one_line(said) };
+            let why = if said.is_empty() { t!("ask.no_sql").to_string() } else { one_line(said) };
             return self.set_status(format!("{model}: {why}"), true);
         };
         let mut block = format!("-- {}\n", one_line(question));
@@ -268,7 +266,7 @@ impl App {
         let problems: Vec<&str> =
             answer["problems"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str).collect();
         if !problems.is_empty() {
-            let _ = writeln!(block, "-- CHECK: {}", problems.join("; "));
+            let _ = writeln!(block, "-- {}: {}", t!("ask.check"), problems.join("; "));
         }
         let assumed: Vec<String> = answer["suggested"]
             .as_array()
@@ -284,21 +282,19 @@ impl App {
             })
             .collect();
         for a in &assumed {
-            let _ = writeln!(block, "-- assumed: {a} (Ctrl+K k: confirm or forget)");
+            let _ = writeln!(block, "-- {}", t!("ask.assumed", fact = a));
         }
         block.push_str(&ended(sql.trim_end(), self.engine()));
         self.append_statement(&block);
         let tokens = &answer["usage"];
-        let mut status = format!(
-            "SQL from {model} ({} tokens in, {} out): read it, then F6 runs it — nothing ran",
-            tokens["input_tokens"], tokens["output_tokens"]
-        );
+        let mut status =
+            t!("ask.sql_from", model = model, tokens_in = tokens["input_tokens"], tokens_out = tokens["output_tokens"]);
         if !assumed.is_empty() {
             let n = assumed.len();
-            let _ = write!(status, " · it assumed {n} thing{}: Ctrl+K k to confirm", if n == 1 { "" } else { "s" });
+            let _ = write!(status, " · {}", tn!("ask.assumed_things", n));
         }
         if !problems.is_empty() {
-            status = format!("SQL from {model}: check it — {}", problems.join("; "));
+            status = t!("ask.check_it", model = model, problems = problems.join("; "));
         }
         self.set_status(status, !problems.is_empty());
     }

@@ -3,34 +3,29 @@
 use super::super::*;
 use sqlx::postgres::PgDatabaseError;
 
-impl Database {
-    /// Runs `statement`, a `COPY … FROM STDIN`, on the session and sends it
-    /// `chunks` of data in `COPY`'s format. A chunk that fails aborts the
-    /// copy. Returns how many rows were copied. The data's first row is line
-    /// `first_line` of its file, so an error can name the line.
-    pub async fn copy_in(
-        &self,
-        statement: &str,
-        first_line: u64,
-        chunks: impl Iterator<Item = Result<Vec<u8>>>,
-    ) -> Result<u64> {
-        let mut session = self.0.session.lock().await;
-        let Session::Postgres(conn) = &mut *session else {
-            anyhow::bail!("COPY needs PostgreSQL");
+/// `Database::copy_in` on PostgreSQL: `COPY`'s data sent on the session.
+pub(in crate::db) async fn copy_in(
+    db: &Database,
+    statement: &str,
+    first_line: u64,
+    chunks: impl Iterator<Item = Result<Vec<u8>>>,
+) -> Result<u64> {
+    let mut session = db.0.session.lock().await;
+    let Session::Postgres(conn) = &mut *session else {
+        anyhow::bail!("COPY needs PostgreSQL");
+    };
+    let mut copy = conn.copy_in_raw(statement).await?;
+    for chunk in chunks {
+        let sent = match chunk {
+            Ok(data) => copy.send(data).await.map(drop).map_err(|e| failed_line(e, first_line)),
+            Err(e) => Err(e),
         };
-        let mut copy = conn.copy_in_raw(statement).await?;
-        for chunk in chunks {
-            let sent = match chunk {
-                Ok(data) => copy.send(data).await.map(drop).map_err(|e| failed_line(e, first_line)),
-                Err(e) => Err(e),
-            };
-            if let Err(e) = sent {
-                let _ = copy.abort(format!("{e:#}")).await;
-                return Err(e);
-            }
+        if let Err(e) = sent {
+            let _ = copy.abort(format!("{e:#}")).await;
+            return Err(e);
         }
-        copy.finish().await.map_err(|e| failed_line(e, first_line))
     }
+    copy.finish().await.map_err(|e| failed_line(e, first_line))
 }
 
 /// The server's error, with the line of the file it's about: PostgreSQL

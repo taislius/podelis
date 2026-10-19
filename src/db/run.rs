@@ -105,6 +105,20 @@ macro_rules! collect_statements {
 }
 
 impl Database {
+    /// Runs `statement`, a `COPY … FROM STDIN`, on the session and sends it
+    /// `chunks` of data in `COPY`'s format, on an engine that has it
+    /// (`Capabilities::copy_in`). A chunk that fails aborts the copy.
+    /// Returns how many rows were copied. The data's first row is line
+    /// `first_line` of its file, so an error can name the line.
+    pub async fn copy_in(
+        &self,
+        statement: &str,
+        first_line: u64,
+        chunks: impl Iterator<Item = Result<Vec<u8>>>,
+    ) -> Result<u64> {
+        on_driver!(self.0.engine, engine::queries::copy_in(self, statement, first_line, chunks).await)
+    }
+
     /// Whether the session is inside a transaction, where its engine can
     /// ask (PostgreSQL); `None` elsewhere, and the caller tracks
     /// BEGIN/COMMIT itself.
@@ -329,7 +343,7 @@ impl Database {
             // I/O or protocol trouble: not something to show as a hint.
             return Ok(CheckOutcome::Unsupported);
         };
-        let problem = on_engine!(self.0.engine, engine::queries::prepare_problem(db));
+        let problem = on_driver!(self.0.engine, engine::queries::prepare_problem(db));
         let Some(syntax) = problem else { return Ok(CheckOutcome::Unsupported) };
         let err = anyhow::Error::from(err);
         let message = error_message(&err);
@@ -430,7 +444,7 @@ impl Database {
     pub async fn cancel(&self) -> Result<()> {
         self.check_reach().await?;
         let id = self.0.backend_id.load(Ordering::SeqCst);
-        on_engine!(self.0.engine, engine::queries::cancel(self, id).await)
+        on_driver!(self.0.engine, engine::queries::cancel(self, id).await)
     }
 
     pub async fn close(&self) {

@@ -30,7 +30,7 @@ impl App {
                 let offset = stmt.as_ptr() as usize - text.as_ptr() as usize;
                 self.execute(stmt.to_string(), offset);
             }
-            None => self.set_status("No statement at cursor".to_string(), true),
+            None => self.set_status(t!("editor.no_statement").to_string(), true),
         }
     }
 
@@ -42,13 +42,13 @@ impl App {
 
     pub(in crate::app) fn execute_with(&mut self, sql: String, offset: usize, purpose: RunPurpose) {
         if self.run.executing {
-            return self.set_status(self.running_elsewhere("wait for it, or Esc there stops it"), true);
+            return self.set_status(self.running_elsewhere(t!("run.wait_or_esc_there")), true);
         }
         if self.connection.database.is_none() {
             return self.set_status(self.not_connected_message(), true);
         }
         if sql.trim().is_empty() {
-            self.set_status("Nothing to run".to_string(), true);
+            self.set_status(t!("run.nothing").to_string(), true);
             return;
         }
         if matches!(purpose, RunPurpose::Query) && self.ask_for_params(&sql, offset, false) {
@@ -59,9 +59,9 @@ impl App {
 
     pub(in crate::app) fn not_connected_message(&self) -> String {
         if self.conns.restoring.is_empty() {
-            "This tab isn't connected: Ctrl+O picks a connection".to_string()
+            t!("run.not_connected").to_string()
         } else {
-            format!("Still reconnecting to {}…", self.conns.restoring.join(", "))
+            t!("run.still_reconnecting", names = self.conns.restoring.join(", "))
         }
     }
 
@@ -79,7 +79,7 @@ impl App {
         if self.connection.mode == ConnectionMode::ReadOnly
             && let Some(first) = writes.first()
         {
-            let msg = format!("Read-only connection: not running “{}” (it changes data)", first.summary);
+            let msg = t!("run.read_only_refused", what = first.summary);
             return self.set_status(msg, true);
         }
         if let Some(msg) = self.tx_mode_refusal(&infos, &purpose) {
@@ -88,11 +88,8 @@ impl App {
         let risky: Vec<String> = infos.iter().filter_map(|i| i.risk.map(|r| format!("{r}: {}", i.summary))).collect();
         let production = self.connection.mode == ConnectionMode::Production && !writes.is_empty();
         if production || !risky.is_empty() {
-            let message = if production {
-                format!("PRODUCTION: {} statement(s) will change data. Run?", writes.len())
-            } else {
-                "This looks destructive. Run anyway?".to_string()
-            };
+            let message =
+                if production { tn!("run.production_writes", writes.len()) } else { t!("run.destructive").to_string() };
             let mut details = risky;
             if production {
                 details.extend(writes.iter().filter(|w| w.risk.is_none()).map(|w| w.summary.clone()));
@@ -115,7 +112,7 @@ impl App {
             && !infos.is_empty()
             && infos.iter().all(|i| i.kind == Kind::Read);
         if guarded && let Some(db) = self.connection.database.clone() {
-            self.set_result_status("Checking the plan before running on production…".to_string(), false);
+            self.set_result_status(t!("run.checking_plan").to_string(), false);
             // Running, as far as the rest of the app goes: nothing else
             // starts, and Esc stops it.
             self.run.executing = true;
@@ -150,14 +147,14 @@ impl App {
         let heavy: Vec<String> = scans
             .iter()
             .filter(|(_, rows)| *rows >= limit)
-            .map(|(table, rows)| format!("{table}: about {} rows, read in full", crate::db::human_rows(*rows)))
+            .map(|(table, rows)| t!("run.full_scan", table = table, rows = crate::db::human_rows(*rows)))
             .collect();
         if heavy.is_empty() {
             return self.run_writes(sql, offset, infos, RunPurpose::Query, filled);
         }
         self.set_status(String::new(), false);
         self.confirm = Some(Confirm {
-            message: "PRODUCTION: this reads a whole big table. Run anyway?".to_string(),
+            message: t!("run.big_read").to_string(),
             details: heavy,
             danger: true,
             action: ConfirmAction::RunHeavy { sql, offset, infos, filled },
@@ -169,17 +166,17 @@ impl App {
     /// since it executes them again).
     pub(in crate::app) fn load_more(&mut self) {
         if self.run.executing {
-            return self.set_status(self.running_elsewhere("load more once it's done"), true);
+            return self.set_status(self.running_elsewhere(t!("run.load_more_after")), true);
         }
         if self.run.stream.is_some() {
             return self.fetch_more(self.settings.row_limit * 10);
         }
         let Some(results) = &self.tab.grid.results else { return };
         if !results.truncated() && !self.tab.grid.cut_short {
-            return self.set_status("All rows are already loaded".to_string(), false);
+            return self.set_status(t!("run.all_loaded").to_string(), false);
         }
         if !self.tab.last_query_infos.iter().all(|i| i.kind == Kind::Read) {
-            return self.set_status("Only read-only queries can be re-run to load more rows".to_string(), true);
+            return self.set_status(t!("run.reads_only_more").to_string(), true);
         }
         let Some((sql, offset)) = self.tab.last_sql.clone() else { return };
         self.next_row_limit = Some((results.rows.len() * 10).min(MAX_ROW_LIMIT));
@@ -192,12 +189,12 @@ impl App {
     /// across the tabs), how to get there, then `then`.
     pub(in crate::app) fn running_elsewhere(&self, then: &str) -> String {
         let Some(t) = self.run.owner.filter(|&t| t != self.active_tab) else {
-            return format!("A query is running: {then}");
+            return t!("run.running", then = then);
         };
-        let Some(tab) = self.tabs.get(t) else { return format!("A query is running: {then}") };
+        let Some(tab) = self.tabs.get(t) else { return t!("run.running", then = then) };
         let on = tab.conn.and_then(|id| self.conn_name(id)).map(|n| format!(" on {n}")).unwrap_or_default();
-        let go = if t < 9 { format!("Alt+{} goes to it, ", t + 1) } else { String::new() };
-        format!("Tab “{}”{on} is running a query: {go}{then}", tab.name)
+        let go = if t < 9 { format!("{}, ", t!("run.alt_goes", n = t + 1)) } else { String::new() };
+        t!("run.tab_running", tab = tab.name, on = on, go = go, then = then)
     }
 
     /// Settings changed by the last run (`USE`, `SET`…) are the session's
@@ -224,7 +221,7 @@ impl App {
         let new_result = matches!(purpose, RunPurpose::Query) && !self.watch_rerun && !same_result;
         // Anything else run stops watch mode.
         if !self.watch_rerun {
-            self.stop_watch(": another query ran");
+            self.stop_watch(&format!(": {}", t!("run.another_query")));
             // The tab for what's coming, while it runs.
             match purpose {
                 RunPurpose::Query => self.set_result_tab(ResultTab::Rows),
@@ -288,7 +285,7 @@ impl App {
             _ => false,
         };
         self.run.owner = free.then_some(self.active_tab);
-        self.set_result_status("Running… (Esc to cancel)".to_string(), false);
+        self.set_result_status(t!("tabs.running").to_string(), false);
         let send = self.run_sender();
         let row_limit = self.next_row_limit.take().unwrap_or(self.settings.row_limit);
         tracing::debug!(statements = self.run.infos.len(), stream, row_limit, "run");
@@ -361,8 +358,8 @@ impl App {
         } else {
             self.tab.grid.view.extend(start..loaded);
         }
-        let more = if self.run.stream.is_some() { " · more as you scroll" } else { " · all rows loaded" };
-        self.set_status(format!("{loaded} rows loaded{more}"), false);
+        let more = if self.run.stream.is_some() { t!("run.more_as_you_scroll") } else { t!("run.all_rows_loaded") };
+        self.set_status(format!("{} · {more}", t!("run.rows_loaded", n = loaded)), false);
     }
 
     /// Near the end of the loaded rows of a streamed result, fetch more.
@@ -424,13 +421,13 @@ impl App {
     pub(in crate::app) fn request_disconnect(&mut self) {
         // (In its own tab, disconnecting stops it.)
         if self.run.executing && !self.running_here() {
-            return self.set_status(self.running_elsewhere("disconnect once it's done"), true);
+            return self.set_status(self.running_elsewhere(t!("run.disconnect_after")), true);
         }
         if self.connection.txn == TxnState::Idle {
             return self.disconnect();
         }
         self.confirm = Some(Confirm {
-            message: "A transaction is open. Disconnect and roll it back?".to_string(),
+            message: t!("run.disconnect_rollback").to_string(),
             details: vec![],
             danger: true,
             action: ConfirmAction::Disconnect,

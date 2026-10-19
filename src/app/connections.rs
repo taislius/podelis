@@ -97,9 +97,9 @@ impl ConnectForm {
             original_legacy: false,
             name: String::new(),
             // The first engine (by its `order`): PostgreSQL.
-            engine: Engine::ALL[0],
+            engine: Engine::BUILT[0],
             host: "localhost".to_string(),
-            port: Engine::ALL[0].default_port().to_string(),
+            port: Engine::BUILT[0].default_port().to_string(),
             user: String::new(),
             password: String::new(),
             password_command: String::new(),
@@ -190,7 +190,7 @@ impl ConnectForm {
     pub fn connect_failure(&self, err: &str) -> String {
         let supplied = !self.password.is_empty() || !self.password_command.trim().is_empty();
         match &self.keychain_note {
-            Some(note) if !supplied => format!("{err} (no saved password: {note})"),
+            Some(note) if !supplied => t!("connections.no_saved_password", err = err, note = note),
             _ => err.to_string(),
         }
     }
@@ -202,7 +202,7 @@ impl ConnectForm {
         }
         let words = crate::db::password_command::split(&self.password_command)?;
         if words.first().is_some_and(String::is_empty) {
-            return Err("The password command's program is empty".to_string());
+            return Err(t!("connections.empty_command").to_string());
         }
         Ok(words)
     }
@@ -257,10 +257,10 @@ impl ConnectForm {
     /// `postgres://user:pass@host:5432/db?sslmode=require`,
     /// `mysql://user@host/db` or `sqlite:path/to/file.db`.
     pub fn apply_url(&mut self, text: &str) -> Result<(), String> {
-        let url = url::Url::parse(text).map_err(|e| format!("Not a valid connection URL: {e}"))?;
+        let url = url::Url::parse(text).map_err(|e| t!("connections.bad_url", e = e))?;
         let decode = |s: &str| percent_decode(s).unwrap_or_else(|| s.to_string());
         let engine =
-            Engine::from_scheme(url.scheme()).ok_or_else(|| format!("Unsupported URL scheme '{}'", url.scheme()))?;
+            Engine::from_scheme(url.scheme()).ok_or_else(|| t!("connections.bad_scheme", scheme = url.scheme()))?;
         self.engine = engine;
         if engine.is_file_based() {
             // sqlite:file.db, sqlite://relative.db, sqlite:///abs/path.db
@@ -299,7 +299,7 @@ impl ConnectForm {
         match text.parse::<u64>() {
             Ok(0) => Ok(None),
             Ok(secs) => Ok(Some(Duration::from_secs(secs))),
-            Err(_) => Err("Timeout must be a number of seconds (or empty for none)".to_string()),
+            Err(_) => Err(t!("connections.bad_timeout").to_string()),
         }
     }
 
@@ -309,7 +309,7 @@ impl ConnectForm {
         let ssh = Some(self.ssh.trim().to_string()).filter(|s| !s.is_empty());
         if self.engine.is_file_based() {
             if host.is_empty() {
-                return Err("Enter the database file path (or :memory:)".to_string());
+                return Err(t!("connections.need_file").to_string());
             }
             return Ok(ConnectParams {
                 engine: self.engine,
@@ -325,11 +325,11 @@ impl ConnectForm {
             });
         }
         if host.is_empty() {
-            return Err("Host is required".to_string());
+            return Err(t!("connections.need_host").to_string());
         }
         let port = match self.port.trim().parse::<u16>() {
             Ok(p) if p > 0 => p,
-            _ => return Err("Port must be a number between 1 and 65535".to_string()),
+            _ => return Err(t!("connections.bad_port").to_string()),
         };
         // A password command replaces the typed (or saved) password.
         let password_command = self.password_command_words()?;
@@ -446,8 +446,7 @@ impl App {
             }
             KeyCode::Char('m') if on_profile => {
                 if self.move_targets().is_empty() {
-                    self.manager.connection_message =
-                        Some(("Create another project first (← then n)".to_string(), true));
+                    self.manager.connection_message = Some((t!("connections.need_other_project").to_string(), true));
                 } else {
                     self.manager.connection_message = None;
                     self.manager.moving_to = Some(0);
@@ -513,8 +512,7 @@ impl App {
             KeyCode::Enter => {
                 let Some(container) = picker.found.get(picker.selected).cloned() else { return };
                 let Some(profile) = container.profile else {
-                    picker.note =
-                        Some(format!("'{}' doesn't publish its database port: start it with -p", container.name));
+                    picker.note = Some(t!("connections.port_not_published", name = container.name));
                     return;
                 };
                 self.manager.containers = None;
@@ -529,14 +527,14 @@ impl App {
     /// new one under a name not yet taken. Enter then connects (and saves it).
     fn fill_from_container(&mut self, container: &str, mut profile: ConnectionProfile) {
         let Some(project_id) = self.current_project.clone() else {
-            self.manager.connection_message = Some(("Open a project first".to_string(), true));
+            self.manager.connection_message = Some((t!("connections.need_project").to_string(), true));
             return;
         };
         if let Some(saved) = self.saved_like(&profile).cloned() {
             if let Some(i) = self.profiles().iter().position(|p| p.name == saved.name) {
                 self.manager.connection_selected = i;
             }
-            let said = format!("'{container}' is already saved as '{}'", saved.name);
+            let said = t!("connections.container_saved", container = container, name = saved.name);
             self.load_profile(saved);
             self.manager.connection_message = Some((said, false));
             return;
@@ -545,7 +543,7 @@ impl App {
         self.new_connection();
         self.connection.form =
             ConnectForm { original_name: None, ..ConnectForm::from_profile(&profile, String::new()) };
-        self.connection.form.info = Some(format!("From the container '{container}': Enter connects, Ctrl+S saves"));
+        self.connection.form.info = Some(t!("connections.from_container", container = container));
     }
 
     /// A saved connection of the open project to the same place: server,
@@ -632,7 +630,7 @@ impl App {
         let target_name = self.store.project(target).map(|p| p.name.clone()).unwrap_or_default();
         if self.store.name_taken(target, None, &profile.name) {
             self.manager.connection_message =
-                Some((format!("'{target_name}' already has a connection named '{}'", profile.name), true));
+                Some((t!("connections.target_has_name", target = target_name, name = profile.name), true));
             return;
         }
         let old_account = store::keychain_account(&from, &profile);
@@ -641,7 +639,7 @@ impl App {
         // read stops the move: the password would be lost with the old entry.
         let (password, note) = store::saved_password(&from, &profile);
         if let Some(note) = note {
-            self.manager.connection_message = Some((format!("Couldn't move password: {note}"), true));
+            self.manager.connection_message = Some((t!("connections.move_password_failed", note = note), true));
             return;
         }
         if !password.is_empty()
@@ -653,7 +651,8 @@ impl App {
         match self.store.move_connection(&from, &profile.name, target) {
             Ok(()) => {
                 let _ = store::delete_password(&old_account);
-                self.manager.connection_message = Some((format!("Moved '{}' to '{target_name}'", profile.name), false));
+                self.manager.connection_message =
+                    Some((t!("connections.moved", name = profile.name, target = target_name), false));
                 let len = self.profiles().len();
                 if self.manager.connection_selected > 0 && self.manager.connection_selected >= len {
                     self.manager.connection_selected -= 1;
@@ -673,7 +672,7 @@ impl App {
         match self.store.delete(&project_id, &name) {
             Ok(()) => {
                 let _ = store::delete_password(&store::keychain_account(&project_id, &profile));
-                self.manager.connection_message = Some((format!("Deleted '{name}'"), false));
+                self.manager.connection_message = Some((t!("connections.deleted", name = name), false));
                 if self.manager.connection_selected > 0 && self.manager.connection_selected >= self.profiles().len() {
                     self.manager.connection_selected -= 1;
                 }
@@ -687,7 +686,7 @@ impl App {
             if key.code == KeyCode::Esc {
                 self.invalidate_tasks();
                 self.connection.form.connecting = false;
-                self.connection.form.info = Some("Connection attempt cancelled".to_string());
+                self.connection.form.info = Some(t!("connections.cancelled").to_string());
             }
             return;
         }
@@ -756,7 +755,7 @@ impl App {
         let focus = form.focus;
         form.error = None;
         if focus == ConnectField::Password {
-            form.info = Some("The password isn't copied".to_string());
+            form.info = Some(t!("connections.password_not_copied").to_string());
             return;
         }
         let value = match focus {
@@ -768,10 +767,10 @@ impl App {
             _ => form.field_mut(focus).map(|f| f.clone()).unwrap_or_default(),
         };
         if value.is_empty() {
-            form.info = Some("Nothing to copy: the field is empty".to_string());
+            form.info = Some(t!("connections.nothing_to_copy").to_string());
             return;
         }
-        form.info = Some(format!("Copied: {value}"));
+        form.info = Some(t!("connections.copied", value = value));
         self.clipboard = Some(value);
     }
 
@@ -783,7 +782,7 @@ impl App {
         let profile = form.to_profile();
         let name = profile.name.clone();
         if name.is_empty() {
-            form.error = Some("Enter a name (top field) before saving".to_string());
+            form.error = Some(t!("connections.need_name").to_string());
             return;
         }
         if let Err(e) = form.password_command_words() {
@@ -792,7 +791,7 @@ impl App {
         }
         let original = form.original_name.clone();
         if self.store.name_taken(&project_id, original.as_deref(), &name) {
-            form.error = Some(format!("A connection named '{name}' already exists in this project"));
+            form.error = Some(t!("connections.name_taken", name = name));
             return;
         }
         // An empty password removes the entry rather than storing "", and
@@ -807,14 +806,12 @@ impl App {
         {
             let pgpass = form.engine.dialect().password_files_note();
             let instead = match crate::db::password_command::installed(crate::cli::doctor::on_path).first() {
-                Some(tool) => format!(
-                    "{} is installed: set Passwd cmd to {} and leave Password empty{pgpass}",
-                    tool.label,
-                    tool.example(&name)
-                ),
-                None => format!("leave Password empty and use Passwd cmd{pgpass}"),
+                Some(tool) => {
+                    t!("connections.tool_installed", tool = tool.label, example = tool.example(&name), pgpass = pgpass)
+                }
+                None => t!("connections.use_password_command", pgpass = pgpass),
             };
-            form.error = Some(format!("Failed to save: {e:#}. No keychain here: {instead}"));
+            form.error = Some(t!("connections.no_keychain", e = format!("{e:#}"), instead = instead));
             return;
         }
         if let Err(e) = self.store.upsert(&project_id, original.as_deref(), profile) {
@@ -831,8 +828,8 @@ impl App {
         form.original_legacy = false;
         let renamed_from = original.filter(|o| *o != name);
         form.info = Some(match renamed_from {
-            Some(old) => format!("Renamed '{old}' to '{name}'"),
-            None => format!("Saved connection '{name}'"),
+            Some(old) => t!("connections.renamed", old = old, name = name),
+            None => t!("connections.saved", name = name),
         });
         form.original_name = Some(name);
     }
@@ -854,7 +851,7 @@ impl App {
                 self.connection.form.name.clone_from(&name);
                 self.connection.form.original_name = Some(name.clone());
                 self.connection.form.original_legacy = legacy;
-                return Some((format!("Already saved as '{name}'"), false));
+                return Some((t!("connections.already_saved", name = name), false));
             }
             let base = form.short_name();
             self.connection.form.name = self.free_name(&project_id, &base);
@@ -862,8 +859,8 @@ impl App {
         self.save_connection();
         let form = &mut self.connection.form;
         let said = match form.error.take() {
-            Some(e) => (format!("Connected, but not saved: {e} (Ctrl+S in the connection form)"), true),
-            None => (format!("Saved as '{}' in this project", form.name), false),
+            Some(e) => (t!("connections.not_saved", e = e), true),
+            None => (t!("connections.saved_in_project", name = form.name), false),
         };
         form.info = None;
         Some(said)
@@ -882,8 +879,8 @@ impl App {
             }
         };
         self.connection.form.error = None;
-        self.connection.form.info = Some("Testing the connection…".to_string());
-        let title = format!("CONNECTION TEST · {}", self.connection.form.summary());
+        self.connection.form.info = Some(t!("connections.testing").to_string());
+        let title = format!("{} · {}", t!("connections.test_title"), self.connection.form.summary());
         let send = self.sender();
         tokio::spawn(async move {
             let steps = crate::db::diagnose(params).await;
@@ -909,7 +906,7 @@ impl App {
             let form = &mut self.connection.form;
             form.create_file = Some(path.to_string());
             form.error = None;
-            form.info = Some(format!("{path} doesn't exist: Enter again to create a new database there"));
+            form.info = Some(t!("connections.create_file", path = path));
             return;
         }
         if !self.may_reach_outside() {

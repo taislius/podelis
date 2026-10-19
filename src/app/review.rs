@@ -68,22 +68,16 @@ impl App {
             return None;
         }
         let switch = self.keymap.label(Action::TxMode);
-        let label = if mode == TxMode::RollbackOnly { "Rollback-only" } else { "Manual commit" };
+        let label = if mode == TxMode::RollbackOnly { t!("review.rollback_only") } else { t!("review.manual") };
         if infos.iter().any(|i| matches!(i.kind, Kind::Transaction(_))) {
-            return Some(format!(
-                "{label}: the script has its own BEGIN/COMMIT. Remove it, or switch to auto-commit ({switch})"
-            ));
+            return Some(t!("review.own_begin", label = label, switch = switch));
         }
         if self.engine().capabilities().ddl_commits && infos.iter().any(|i| i.kind == Kind::Ddl) {
             let engine = self.engine().label();
-            return Some(format!(
-                "{label}: {engine} saves schema changes at once, so they can't be rolled back. Switch to auto-commit ({switch}) to run them"
-            ));
+            return Some(t!("review.ddl_commits", label = label, engine = engine, switch = switch));
         }
         if mode == TxMode::RollbackOnly && matches!(purpose, RunPurpose::CellEdit { .. }) {
-            return Some(format!(
-                "Rollback-only: edits would be rolled back. Switch to auto-commit or manual commit ({switch}) to edit"
-            ));
+            return Some(t!("review.edits_rolled_back", switch = switch));
         }
         None
     }
@@ -93,12 +87,12 @@ impl App {
         let why = if !self.connected() {
             self.not_connected_message()
         } else if self.connection.mode == ConnectionMode::ReadOnly {
-            "Read-only connection: writes are refused anyway".to_string()
+            t!("review.read_only").to_string()
         } else if self.connection.txn != TxnState::Idle {
-            format!(
-                "Finish the open transaction first: {} commits, {} rolls back",
-                self.keymap.label(Action::Commit),
-                self.keymap.label(Action::Rollback)
+            t!(
+                "review.finish_first",
+                commit = self.keymap.label(Action::Commit),
+                rollback = self.keymap.label(Action::Rollback)
             )
         } else {
             return true;
@@ -146,15 +140,13 @@ impl App {
     fn set_tx_mode(&mut self, mode: TxMode) {
         self.connection.tx_mode = mode;
         let msg = match self.connection.tx_mode {
-            TxMode::AutoCommit => "Auto-commit: each statement is committed as it runs".to_string(),
-            TxMode::Manual => format!(
-                "Manual commit: changes wait for COMMIT ({}) or ROLLBACK ({})",
-                self.keymap.label(Action::Commit),
-                self.keymap.label(Action::Rollback)
+            TxMode::AutoCommit => t!("review.set_autocommit").to_string(),
+            TxMode::Manual => t!(
+                "review.set_manual",
+                commit = self.keymap.label(Action::Commit),
+                rollback = self.keymap.label(Action::Rollback)
             ),
-            TxMode::RollbackOnly => {
-                "Rollback-only: statements run, show what they change, and are always rolled back".to_string()
-            }
+            TxMode::RollbackOnly => t!("review.set_rollback_only").to_string(),
         };
         self.set_status(msg, false);
     }
@@ -195,7 +187,7 @@ impl App {
             return;
         }
         if self.connection.txn == TxnState::Idle {
-            return self.set_status("No transaction is open".to_string(), true);
+            return self.set_status(t!("review.none_open").to_string(), true);
         }
         let infos = analyze::analyze(&parse(command, self.engine()));
         self.run_now(command.to_string(), 0, infos, RunPurpose::TxControl(command), None);
@@ -214,21 +206,21 @@ impl App {
 
     pub(super) fn transaction_ended(&mut self, command: &str) {
         if let Some(dry_run) = self.run.extra.dry_run.take() {
-            self.tab.grid.result_note = Some("rolled back (rollback-only)".to_string());
+            self.tab.grid.result_note = Some(t!("run.rolled_back").to_string());
             return match dry_run {
                 DryRun::Failed(error) => self.set_status(error, true),
                 DryRun::Running => {}
                 DryRun::Done(rows) => {
-                    let msg = format!("Rollback-only: {rows} row(s) changed, then rolled back");
+                    let msg = tn!("review.dry_run_done", rows);
                     self.log(msg.clone(), false);
                     self.set_status(msg, false);
                 }
             };
         }
-        let msg = if command == "COMMIT" { "Committed" } else { "Rolled back" };
+        let msg = if command == "COMMIT" { t!("review.committed") } else { t!("review.rolled_back") };
         // The shown "N rows affected" no longer stands after a rollback.
         if command == "ROLLBACK" {
-            self.tab.grid.result_note = Some("rolled back".to_string());
+            self.tab.grid.result_note = Some(t!("review.rolled_back_note").to_string());
         }
         self.log(msg.to_string(), false);
         self.set_status(msg.to_string(), false);

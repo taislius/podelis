@@ -45,19 +45,20 @@ impl App {
         };
         match std::fs::write(&path, text) {
             Ok(()) => {
-                let mut note = format!(" ({rows} rows");
-                if truncated && self.run.stream.is_some() {
-                    note.push_str(" loaded; Ctrl+K “export all” writes every row");
+                let said = if truncated && self.run.stream.is_some() {
+                    t!("export.rows_loaded", rows = rows)
                 } else if truncated {
-                    let _ = write!(note, " of {}; M loads more", results.total_rows);
+                    t!("export.rows_of", rows = rows, total = results.total_rows)
                 } else if !self.tab.grid.filter.is_empty() {
-                    note.push_str(", filtered");
-                }
-                note.push(')');
+                    t!("export.rows_filtered", rows = rows)
+                } else {
+                    tn!("export.rows", rows)
+                };
+                let note = format!(" ({said})");
                 let shown = std::fs::canonicalize(&path).unwrap_or(path);
-                self.set_status(format!("Exported to {}{note}", shown.display()), false);
+                self.set_status(t!("export.done", path = shown.display(), note = note), false);
             }
-            Err(e) => self.set_status(format!("Export failed: {e}"), true),
+            Err(e) => self.set_status(t!("run.export_failed", e = e), true),
         }
     }
 
@@ -67,7 +68,7 @@ impl App {
         let col = self.tab.grid.selected_col;
         match crate::chart::chart(results, &self.tab.grid.view, col) {
             Ok(text) => {
-                let title = format!("CHART · {}", results.columns.get(col).map_or("", String::as_str));
+                let title = format!("{} · {}", t!("export.chart"), results.columns.get(col).map_or("", String::as_str));
                 self.cell_view = Some(CellView::new(title, text));
             }
             Err(e) => self.set_status(e, true),
@@ -80,21 +81,17 @@ impl App {
     pub(in crate::app) fn export_all(&mut self, format: ExportFormat) {
         const PAGE: usize = 10_000;
         if self.export_task.is_some() {
-            return self.set_status("An export is already running (Esc stops it)".to_string(), true);
+            return self.set_status(t!("export.already_running").to_string(), true);
         }
         let Some(results) = &self.tab.grid.results else { return };
         if self.run.stream.is_none() {
             if results.truncated() {
-                return self.set_status(
-                    "Only a statement run on its own (F6) can be exported in full; this result was cut at the row limit"
-                        .to_string(),
-                    true,
-                );
+                return self.set_status(t!("export.not_in_full").to_string(), true);
             }
             return self.export(format);
         }
         if self.run.fetching_more {
-            return self.set_status("Rows are still loading; try again in a moment".to_string(), true);
+            return self.set_status(t!("export.still_loading").to_string(), true);
         }
         let Some(stream) = self.run.stream.take() else { return };
         let path = self.export_path(format);
@@ -140,13 +137,13 @@ impl App {
             send(DbEventKind::ExportDone(target, written.map_err(|e| format!("{e:#}"))));
         });
         self.export_task = Some((stop, path));
-        self.set_status("Exporting every row… (Esc stops it)".to_string(), false);
+        self.set_status(t!("export.exporting").to_string(), false);
     }
 
     /// Stops a running export; it removes its unfinished file.
     pub(in crate::app) fn stop_export(&mut self) {
         let Some((stop, _)) = self.export_task.take() else { return };
         let _ = stop.send(());
-        self.set_status("Export stopped; the unfinished file is removed".to_string(), false);
+        self.set_status(t!("export.stopped").to_string(), false);
     }
 }

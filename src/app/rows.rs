@@ -47,23 +47,22 @@ impl App {
     /// The editable table behind the current result, or why there isn't one.
     pub(super) fn edit_table(&self) -> Result<EditTable, String> {
         if self.connection.mode == ConnectionMode::ReadOnly {
-            return Err("this connection is read-only".into());
+            return Err(t!("rows.read_only").into());
         }
-        let results = self.tab.grid.results.as_ref().ok_or("no results")?;
-        let (sql, _) = self.tab.last_sql.as_ref().ok_or("no query")?;
-        let source = analyze::edit_source(&parse(sql, self.engine()))
-            .ok_or("only results of a plain SELECT from one table (no joins or grouping) can be edited")?;
-        let catalog = self.connection.schema.as_ref().ok_or("the schema hasn't loaded yet")?;
+        let results = self.tab.grid.results.as_ref().ok_or(t!("rows.no_results"))?;
+        let (sql, _) = self.tab.last_sql.as_ref().ok_or(t!("rows.no_query"))?;
+        let source = analyze::edit_source(&parse(sql, self.engine())).ok_or(t!("rows.not_editable"))?;
+        let catalog = self.connection.schema.as_ref().ok_or(t!("rows.schema_loading"))?;
         let mut matches = catalog
             .tables
             .iter()
             .filter(|t| t.info.name == source.table && source.schema.as_ref().is_none_or(|s| *s == t.info.schema));
-        let table = matches.next().ok_or_else(|| format!("table {} not found in the schema", source.table))?;
+        let table = matches.next().ok_or_else(|| t!("rows.table_not_found", table = source.table))?;
         if matches.next().is_some() {
-            return Err(format!("{} exists in several schemas; qualify it in the query", source.table));
+            return Err(t!("rows.ambiguous_table", table = source.table));
         }
         if table.info.is_view {
-            return Err("it's a view".into());
+            return Err(t!("rows.is_view").into());
         }
         let engine = self.engine();
         let sql_name = match &source.schema {
@@ -85,14 +84,14 @@ impl App {
     /// The `pk = value` condition identifying result row `row`.
     fn row_condition(&self, table: &EditTable, row: usize) -> Result<String, String> {
         if table.key.is_empty() {
-            return Err(format!("{} has no primary key", table.name));
+            return Err(t!("rows.no_primary_key", table = table.name));
         }
-        let results = self.tab.grid.results.as_ref().ok_or("no results")?;
+        let results = self.tab.grid.results.as_ref().ok_or(t!("rows.no_results"))?;
         let engine = self.engine();
         let mut parts = Vec::new();
         for (name, pos) in &table.key {
-            let pos = pos.ok_or_else(|| format!("the result doesn't include the primary key column {name}"))?;
-            let value = results.rows[row][pos].as_deref().ok_or("a primary key value is NULL")?;
+            let pos = pos.ok_or_else(|| t!("rows.key_not_in_result", column = name))?;
+            let value = results.rows[row][pos].as_deref().ok_or(t!("rows.key_is_null"))?;
             let ty = results.column_types.get(pos).map_or("", |t| t);
             parts.push(format!("{} = {}", engine.quote_ident(name), crate::db::value_literal(value, ty, engine)));
         }
@@ -117,10 +116,7 @@ impl App {
         }
         self.tab.grid.table_state.select(Some((at + 1).min(self.tab.grid.view.len().saturating_sub(1))));
         let n = self.tab.grid.marked.len();
-        self.set_status(
-            if n == 0 { String::new() } else { format!("{n} row(s) marked · d deletes · C copies") },
-            false,
-        );
+        self.set_status(if n == 0 { String::new() } else { tn!("rows.marked", n) }, false);
     }
 
     /// `a`: opens the add-row form.
@@ -136,7 +132,7 @@ impl App {
                     field: 0,
                 });
             }
-            Err(why) => self.set_status(format!("Can't add a row: {why}"), true),
+            Err(why) => self.set_status(t!("rows.cant_add", why = why), true),
         }
     }
 
@@ -164,7 +160,7 @@ impl App {
     /// INSERT with the filled-in fields; empty ones get their default.
     fn submit_row_insert(&mut self) {
         if self.run.executing {
-            return self.set_status("A query is running: the row stays here until it's done".to_string(), true);
+            return self.set_status(t!("rows.wait_for_query").to_string(), true);
         }
         let Some(form) = self.row_form.take() else { return };
         let engine = self.engine();
@@ -181,7 +177,7 @@ impl App {
             let (cols, vals): (Vec<String>, Vec<String>) = filled.into_iter().unzip();
             format!("INSERT INTO {} ({}) VALUES ({})", form.table_sql, cols.join(", "), vals.join(", "))
         };
-        self.execute_with(sql, 0, RunPurpose::RowChange("Added"));
+        self.execute_with(sql, 0, RunPurpose::RowChange(t!("rows.added")));
     }
 
     /// `d`: deletes the marked rows (or the current one), always asking first.
@@ -189,35 +185,35 @@ impl App {
         let rows = self.target_rows();
         let table = match self.edit_table() {
             Ok(t) => t,
-            Err(why) => return self.set_status(format!("Can't delete: {why}"), true),
+            Err(why) => return self.set_status(t!("rows.cant_delete", why = why), true),
         };
         if rows.is_empty() {
-            return self.set_status("No row selected".to_string(), true);
+            return self.set_status(t!("rows.none_selected").to_string(), true);
         }
         let mut conditions = Vec::new();
         for &row in &rows {
             match self.row_condition(&table, row) {
                 Ok(c) => conditions.push(format!("({c})")),
-                Err(why) => return self.set_status(format!("Can't delete: {why}"), true),
+                Err(why) => return self.set_status(t!("rows.cant_delete", why = why), true),
             }
         }
         let sql = format!("DELETE FROM {} WHERE {}", table.sql_name, conditions.join(" OR "));
         let mut details: Vec<String> =
             conditions.iter().take(5).map(|c| c.trim_matches(['(', ')']).to_string()).collect();
         if conditions.len() > 5 {
-            details.push(format!("… and {} more", conditions.len() - 5));
+            details.push(t!("rows.and_more", n = conditions.len() - 5));
         }
         let infos = analyze::analyze(&parse(&sql, self.engine()));
         let offer_transaction = self.connection.txn == TxnState::Idle;
         self.confirm = Some(Confirm {
-            message: format!("Delete {} row(s) from {}?", rows.len(), table.name),
+            message: tn!("rows.delete_from", rows.len(), table = table.name),
             details,
             danger: true,
             action: ConfirmAction::Run {
                 sql,
                 offset: 0,
                 infos,
-                purpose: RunPurpose::RowChange("Deleted"),
+                purpose: RunPurpose::RowChange(t!("rows.deleted")),
                 filled: None,
             },
             offer_transaction,
@@ -228,7 +224,7 @@ impl App {
     /// again to show the change.
     pub(super) fn rows_changed(&mut self, what: &str, outcome: &QueryOutcome) {
         let n = outcome.rows_affected.unwrap_or(0);
-        let msg = format!("{what} {n} row(s)");
+        let msg = format!("{what} {}", tn!("rows.rows", n));
         self.log(msg.clone(), false);
         self.set_status(msg.clone(), false);
         self.tab.grid.marked.clear();
@@ -243,7 +239,7 @@ impl App {
     /// `C`: copies the marked rows (or all rows shown) as a Markdown table.
     pub(super) fn copy_markdown(&mut self) {
         let Some(results) = self.tab.grid.results.as_ref().filter(|r| !r.columns.is_empty()) else {
-            return self.set_status("No rows to copy".to_string(), true);
+            return self.set_status(t!("rows.none_to_copy").to_string(), true);
         };
         let rows: Vec<usize> = if self.tab.grid.marked.is_empty() {
             self.tab.grid.view.clone()
@@ -253,7 +249,7 @@ impl App {
         let text = to_markdown(results, &rows);
         let n = rows.len().min(MARKDOWN_MAX_ROWS);
         let more = if rows.len() > MARKDOWN_MAX_ROWS { format!(" (first {MARKDOWN_MAX_ROWS})") } else { String::new() };
-        self.copy_text(text, &format!("Copied {n} row(s) as a Markdown table{more}"));
+        self.copy_text(text, &tn!("rows.copied_markdown", n, more = more));
     }
 }
 
@@ -266,9 +262,9 @@ impl App {
             ExportFormat::Sql => OpenFormat::Sql,
         };
         let Some((rows, text)) = self.rows_as(format) else {
-            return self.set_status("No rows to copy".to_string(), true);
+            return self.set_status(t!("rows.none_to_copy").to_string(), true);
         };
-        self.copy_text(text, &format!("Copied {rows} row(s) as {}", format.name()));
+        self.copy_text(text, &tn!("rows.copied_as", rows, format = format.name()));
     }
 
     /// The rows to copy or open (the marked ones, else those shown), in

@@ -25,15 +25,15 @@ pub struct AgentQuery {
 impl AgentQuery {
     pub(super) fn new(entry: crate::agents::Entry, engine: crate::db::Engine) -> Self {
         let flag = if let Some(why) = &entry.refused {
-            Some(format!("refused: {why}"))
+            Some(t!("agent_log.refused", why = why))
         } else if let Some(e) = &entry.error {
-            Some(format!("failed: {e}"))
+            Some(t!("agent_log.failed", e = e))
         } else if entry.dry_run {
-            Some(format!("dry run: would change {} row(s)", entry.changed.unwrap_or(0)))
+            Some(tn!("agent_log.dry_run", entry.changed.unwrap_or(0)))
         } else if entry.approved {
-            Some(format!("approved by you: changed {} row(s)", entry.changed.unwrap_or(0)))
+            Some(tn!("agent_log.approved", entry.changed.unwrap_or(0)))
         } else if entry.changed.is_some_and(|n| n > 0) {
-            Some(format!("changed {} row(s)", entry.changed.unwrap_or(0)))
+            Some(tn!("agent_log.changed", entry.changed.unwrap_or(0)))
         } else {
             None
         };
@@ -61,9 +61,9 @@ impl AgentQuery {
             return notice.to_string();
         }
         match (self.entry.rows, self.entry.changed) {
-            (Some(rows), _) => format!("{rows} row(s)"),
-            (None, Some(changed)) => format!("{changed} row(s) changed"),
-            _ => "done".to_string(),
+            (Some(rows), _) => tn!("agent_log.rows", rows),
+            (None, Some(changed)) => tn!("agent_log.rows_changed", changed),
+            _ => t!("agent_log.done").to_string(),
         }
     }
 }
@@ -186,10 +186,10 @@ impl App {
         }
         details.push(String::new());
         details.push(request.dry_run.clone());
-        self.notification = Some(format!("{} asks to write on {}", request.agent, request.connection));
+        self.notification = Some(t!("agent_log.asks", agent = request.agent, connection = request.connection));
         self.agents.asked = Some(Instant::now());
         self.confirm = Some(Confirm {
-            message: format!("{} asks to write on {}{place}. Allow it?", request.agent, request.connection),
+            message: t!("agent_log.asks_allow", agent = request.agent, connection = request.connection, place = place),
             details,
             danger: request.production,
             action: ConfirmAction::AgentWrite(request),
@@ -199,14 +199,15 @@ impl App {
 
     pub(super) fn answer_agent(&mut self, request: &crate::agents::Request, approve: bool) {
         let Some(dir) = self.pending_dir() else { return };
-        let what = if approve { "Approved" } else { "Said no to" };
         if crate::agents::answer(&dir, &request.id, approve) {
-            self.set_status(format!("{what} {}'s write on {}", request.agent, request.connection), false);
+            let said = if approve {
+                t!("agent_log.approved_write", agent = request.agent, connection = request.connection)
+            } else {
+                t!("agent_log.refused_write", agent = request.agent, connection = request.connection)
+            };
+            self.set_status(said, false);
         } else {
-            self.set_status(
-                format!("{} stopped waiting for an answer: Agent activity says whether it ran", request.agent),
-                true,
-            );
+            self.set_status(t!("agent_log.stopped_waiting", agent = request.agent), true);
         }
     }
 
@@ -248,13 +249,17 @@ impl App {
         if !self.agents.alerts.any() || !self.watching_agents() {
             return None;
         }
-        let dry = if dry_runs == 1 { "dry run" } else { "dry runs" };
-        let parts: Vec<String> = [(refused, "refused"), (failed, "failed"), (wrote, "wrote"), (dry_runs, dry)]
-            .into_iter()
-            .filter(|(n, _)| *n > 0)
-            .map(|(n, what)| format!("{n} {what}"))
-            .collect();
-        Some(format!("agents: {}", parts.join(" · ")))
+        let parts: Vec<String> = [
+            (refused, t!("agents.refused", n = refused)),
+            (failed, t!("agents.failed", n = failed)),
+            (wrote, t!("agents.wrote", n = wrote)),
+            (dry_runs, tn!("agents.dry_runs", dry_runs)),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(_, said)| said)
+        .collect();
+        Some(format!("{}: {}", t!("agent_log.agents"), parts.join(" · ")))
     }
 
     /// Opens the agent activity window, and marks everything in it seen.
@@ -362,7 +367,7 @@ impl App {
             KeyCode::Enter => {
                 if let Some(i) = row {
                     let text = self.agent_query_text(i);
-                    self.cell_view = Some(CellView::new("AGENT QUERY".to_string(), text));
+                    self.cell_view = Some(CellView::new(t!("agent_log.query_title").to_string(), text));
                 }
             }
             KeyCode::Char('o') if view.session.is_some() => {
@@ -371,12 +376,12 @@ impl App {
                 let name = q.entry.name.clone().unwrap_or_else(|| q.entry.agent.clone());
                 self.agents.view = None;
                 self.open_sql_in_tab(Some(name.clone()), &sql, None);
-                self.set_status(format!("{name} ran this on {ran_on}; here it runs on this tab's connection"), false);
+                self.set_status(t!("agent_log.ran_on", name = name, ran_on = ran_on), false);
             }
             KeyCode::Char('y') if view.session.is_some() => {
                 if let Some(q) = row.and_then(|i| self.agents.log.get(i)) {
                     let sql = q.entry.sql.clone();
-                    self.copy_text(sql, "Copied the agent's SQL");
+                    self.copy_text(sql, t!("agent_log.copied_sql"));
                 }
             }
             _ => {}
@@ -394,27 +399,27 @@ impl App {
         if let Some(t) = &e.agent_title {
             let _ = write!(agent, " ({t})");
         }
-        let mut lines = vec![format!("When        {}", e.at.replace('T', " "))];
+        let mut lines = vec![format!("{:<12}{}", t!("agent_log.when"), e.at.replace('T', " "))];
         if let Some(name) = &e.name {
-            lines.push(format!("Name        {name}"));
+            lines.push(format!("{:<12}{name}", t!("agent_log.name")));
         }
-        lines.push(format!("Agent       {agent}"));
+        lines.push(format!("{:<12}{agent}", t!("agent_log.agent")));
         if !e.session.is_empty() {
-            lines.push(format!("Session     {}", e.session));
+            lines.push(format!("{:<12}{}", t!("agent_log.session"), e.session));
         }
         if let Some(dir) = &e.dir {
-            lines.push(format!("Folder      {}", short_dir(dir)));
+            lines.push(format!("{:<12}{}", t!("agent_log.folder"), short_dir(dir)));
         }
-        lines.push(format!("Connection  {}", e.connection));
-        lines.push(format!("Tool        {} · {} ms", e.tool, e.ms));
-        lines.push(format!("Outcome     {}", q.outcome()));
+        lines.push(format!("{:<12}{}", t!("agent_log.connection"), e.connection));
+        lines.push(format!("{:<12}{} · {} ms", t!("agent_log.tool"), e.tool, e.ms));
+        lines.push(format!("{:<12}{}", t!("agent_log.outcome"), q.outcome()));
         if let Some(why) = &e.refused {
             lines.push(String::new());
-            lines.push(format!("Refused: {why}"));
+            lines.push(t!("agent_log.refused_detail", why = why));
         }
         if let Some(err) = &e.error {
             lines.push(String::new());
-            lines.push(format!("Error: {err}"));
+            lines.push(t!("agent_log.error", err = err));
         }
         let engine = e.engine.unwrap_or_else(|| self.engine());
         let sql = crate::sql::format(&e.sql, engine).unwrap_or_else(|| e.sql.clone());

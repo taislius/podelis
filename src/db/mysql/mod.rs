@@ -1,12 +1,16 @@
 //! MySQL (and MariaDB).
 
 mod agent_constraints;
+#[cfg(feature = "mysql")]
 pub(super) mod cells;
+#[cfg(feature = "mysql")]
 pub(super) mod connect;
-#[cfg(test)]
+#[cfg(all(test, feature = "mysql"))]
 pub(in crate::db) mod db_tests;
+#[cfg(feature = "mysql")]
 pub(super) mod passwords;
 mod plan;
+#[cfg(feature = "mysql")]
 pub(super) mod queries;
 
 use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan, hex_digits};
@@ -15,10 +19,13 @@ use crate::sql::TokenKind;
 pub struct MySql;
 
 /// A row's value as text: what `db::run` reads results with.
+#[cfg(feature = "mysql")]
 pub(super) use cells::mysql_cell as cell;
 
 /// What `db::Pool` and `db::Session` hold for this engine (see build.rs).
+#[cfg(feature = "mysql")]
 pub(super) type DriverPool = sqlx::MySqlPool;
+#[cfg(feature = "mysql")]
 pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::MySql>;
 
 /// This engine's dialect, for `Engine::dialect`.
@@ -110,6 +117,7 @@ impl Dialect for MySql {
     }
 
     /// Its syntax errors start with a long boilerplate sentence.
+    #[cfg(feature = "mysql")]
     fn database_error_message(&self, err: &dyn sqlx::error::DatabaseError) -> Option<String> {
         let msg = err.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>()?.message();
         Some(match msg.find("for the right syntax to use ") {
@@ -120,6 +128,7 @@ impl Dialect for MySql {
 
     /// "… at line N", and "near 'rest of the statement' at line N": the
     /// quoted text is what follows the error, which pins down the column.
+    #[cfg(feature = "mysql")]
     fn database_error_position(&self, err: &dyn sqlx::error::DatabaseError) -> Option<super::ErrorPos> {
         use super::ErrorPos;
         let msg = err.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>()?.message();

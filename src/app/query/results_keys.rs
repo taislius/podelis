@@ -38,7 +38,7 @@ impl App {
         }
         // A plan's table can be looked at, not changed.
         if self.tab.plan_swapped && matches!(key.code, KeyCode::Char('c' | 'a' | 'd' | 'f' | 'M' | 'i' | '<' | '>')) {
-            return self.set_status("That's for query results, not the plan".to_string(), true);
+            return self.set_status(t!("results.not_for_plan").to_string(), true);
         }
         let Some(results) = &self.tab.grid.results else { return };
         let cols = results.columns.len();
@@ -108,7 +108,7 @@ impl App {
         let grid = &mut self.tab.grid;
         grid.vertical = !grid.vertical;
         grid.vertical_by_g = false;
-        let msg = if grid.vertical { "One column per line (X: back to the table)" } else { "Table view" };
+        let msg = if grid.vertical { t!("results.vertical_on") } else { t!("results.vertical_off") };
         self.set_status(msg.to_string(), false);
     }
 
@@ -186,7 +186,7 @@ impl App {
             let _ = writeln!(text, "{name:<name_w$}  {value}");
         }
         let at = self.tab.grid.table_state.selected().unwrap_or(0);
-        let title = format!("ROW {} of {}", at + 1, self.tab.grid.view.len());
+        let title = t!("record.title", n = at + 1, of = self.tab.grid.view.len());
         self.cell_view = Some(CellView { record: true, ..CellView::new(title, text) });
     }
 
@@ -221,7 +221,7 @@ impl App {
             KeyCode::Home => view.scroll = 0,
             KeyCode::Char('y') if view.sql.is_some() => {
                 let text = view.sql.as_ref().map(|(sql, _)| sql.clone()).unwrap_or_default();
-                self.copy_text(text, "Copied the SQL");
+                self.copy_text(text, t!("copy.sql"));
             }
             KeyCode::Char('e') if view.follow.is_some() => {
                 let Some((tab, sql)) = view.follow.take() else { return };
@@ -229,7 +229,7 @@ impl App {
             }
             KeyCode::Char('y') if view.follow.is_some() => {
                 let text = view.text.clone();
-                self.copy_text(text, "Copied the row");
+                self.copy_text(text, t!("copy.row"));
             }
             KeyCode::Char('e') if view.sql.is_some() => {
                 let Some((sql, conn)) = view.sql.take() else { return };
@@ -238,11 +238,11 @@ impl App {
             }
             KeyCode::Char('y') if view.browse => {
                 let text = view.text.clone();
-                self.copy_text(text, "Copied the definition");
+                self.copy_text(text, t!("copy.definition"));
             }
             KeyCode::Char('y') if view.record => {
                 let text = view.text.clone();
-                self.copy_text(text, "Copied the row");
+                self.copy_text(text, t!("copy.row"));
             }
             KeyCode::Char('y') if view.copies_text.is_some() => {
                 let (text, said) = (view.text.clone(), view.copies_text.unwrap_or_default());
@@ -264,7 +264,7 @@ impl App {
         let Some(row) = self.selected_row() else { return };
         let Some(cell) = row.get(self.tab.grid.selected_col) else { return };
         let text = cell.clone().unwrap_or_default();
-        let status = format!("Copied cell ({} chars)", text.chars().count());
+        let status = t!("copy.cell", chars = text.chars().count());
         self.copy_text(text, &status);
     }
 
@@ -277,11 +277,11 @@ impl App {
         if marked.is_empty() {
             let Some(cells) = self.selected_row() else { return };
             let text = line(cells);
-            return self.copy_text(text, "Copied row (tab-separated)");
+            return self.copy_text(text, t!("copy.row_tsv"));
         }
         let Some(results) = self.tab.grid.results.as_ref() else { return };
         let lines: Vec<_> = marked.iter().filter_map(|&i| results.rows.get(i)).map(|r| line(r)).collect();
-        let status = format!("Copied {} rows (tab-separated, a line each)", lines.len());
+        let status = tn!("copy.rows_tsv", lines.len());
         self.copy_text(lines.join("\n"), &status);
     }
 

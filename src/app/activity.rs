@@ -20,10 +20,10 @@ pub struct ActivityView {
 impl App {
     pub(super) fn open_activity(&mut self) {
         if self.connection.database.is_none() {
-            return self.set_status("This tab isn't connected".to_string(), true);
+            return self.set_status(t!("info.not_connected").to_string(), true);
         }
         if !self.engine().capabilities().activity {
-            return self.set_status("SQLite has no server sessions to show".to_string(), true);
+            return self.set_status(t!("activity.no_sessions").to_string(), true);
         }
         self.activity = Some(ActivityView {
             rows: Vec::new(),
@@ -95,14 +95,14 @@ impl App {
             }
             KeyCode::Enter => {
                 if let Some(a) = view.rows.get(view.selected) {
-                    let title = format!("SESSION {} · {}@{}", a.id, a.user, a.client);
-                    let text = if a.query.is_empty() { "(no query)".to_string() } else { a.query.clone() };
+                    let title = format!("{} {} · {}@{}", t!("activity.session"), a.id, a.user, a.client);
+                    let text = if a.query.is_empty() { t!("activity.no_query").to_string() } else { a.query.clone() };
                     self.cell_view = Some(CellView::new(title, text));
                 }
             }
             KeyCode::Char(c @ ('c' | 'x')) => {
                 if self.connection.mode == ConnectionMode::ReadOnly {
-                    return self.set_status("Read-only connection: not stopping other sessions".to_string(), true);
+                    return self.set_status(t!("activity.read_only").to_string(), true);
                 }
                 let Some(view) = &mut self.activity else { return };
                 if let Some(a) = view.rows.get(view.selected) {
@@ -115,7 +115,7 @@ impl App {
 
     fn stop_session(&mut self, id: String, kill: bool) {
         let Some(db) = self.connection.database.clone() else { return };
-        let what = if kill { "Ended session" } else { "Cancelled the query of session" };
+        let what = if kill { t!("activity.ended") } else { t!("activity.cancelled") };
         let send = self.sender();
         tokio::spawn(async move {
             let result = db.stop_session(&id, kill).await.map(|()| format!("{what} {id}"));
@@ -129,7 +129,7 @@ impl App {
                 self.log(msg.clone(), false);
                 self.set_status(msg, false);
             }
-            Err(e) => self.set_status(format!("Couldn't stop it: {e}"), true),
+            Err(e) => self.set_status(t!("activity.stop_failed", e = e), true),
         }
         if let Some(view) = &mut self.activity {
             view.refreshed = None;
@@ -146,12 +146,12 @@ impl App {
         }
         let engine = self.engine();
         let Some((stmt, line)) = self.statement_to_explain() else {
-            return self.set_status("No statement at cursor".to_string(), true);
+            return self.set_status(t!("editor.no_statement").to_string(), true);
         };
         let version = self.connection.database.as_ref().map_or("", |db| db.version());
         let Some(explain) = engine.dialect().explain_analyze(&stmt, version) else {
-            let server = if engine.is_file_based() { engine.label() } else { "This server" };
-            self.set_status(format!("{server} can't EXPLAIN ANALYZE this statement; showing the plan instead"), false);
+            let server = if engine.is_file_based() { engine.label() } else { t!("activity.this_server") };
+            self.set_status(t!("activity.no_analyze", server = server), false);
             return self.explain_current();
         };
         // Tracking uses the EXPLAIN alone, so the wrapper doesn't look
@@ -169,7 +169,7 @@ impl App {
         };
         let action = ConfirmAction::Run { sql, offset: 0, infos, purpose: RunPurpose::Explain, filled: None };
         self.confirm = Some(Confirm {
-            message: "EXPLAIN ANALYZE runs the statement. Its changes are rolled back afterwards. Run it?".into(),
+            message: t!("activity.analyze_runs").into(),
             details: vec![stmt.lines().next().unwrap_or_default().to_string()],
             danger: self.connection.mode == ConnectionMode::Production,
             action,

@@ -43,14 +43,18 @@ pub fn expand_home(path: &str) -> std::path::PathBuf {
     }
 }
 
-/// User preferences from `config.toml`. Every field is optional; the file
-/// is only read, never written.
+/// User preferences from `config.toml`. Every field is optional. The file
+/// is written only by the settings screen, one value at a time
+/// ([`save_value`]), keeping everything else in it as it was.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     /// Rows kept in memory per result set.
     pub row_limit: usize,
     pub theme: ThemeName,
+    /// The language of the app's words: `auto` (the system's, from
+    /// `LC_ALL`, `LC_MESSAGES` or `LANG`), `en` or `lt`.
+    pub language: String,
     /// Check SQL with the server (prepare without running) after typing
     /// pauses, instead of only the built-in parser.
     pub server_syntax_check: bool,
@@ -103,6 +107,7 @@ impl Default for Settings {
         Self {
             row_limit: DEFAULT_ROW_LIMIT,
             theme: ThemeName::Dark,
+            language: "auto".to_string(),
             server_syntax_check: true,
             lint: true,
             system_tables: false,
@@ -223,6 +228,41 @@ impl Settings {
     }
 }
 
+/// Sets `key` to `value` in `dir`'s `config.toml` (made if there's none),
+/// or removes it (`None`: back to its default), keeping the file's
+/// comments, layout and other settings. A file that's there but can't be
+/// read is left alone: writing it back would lose what's in it.
+pub fn save_value(dir: &Path, key: &str, value: Option<toml_edit::Value>) -> Result<(), String> {
+    let path = dir.join("config.toml");
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let mut doc: toml_edit::DocumentMut =
+        text.parse().map_err(|e| format!("{}: {}", path.display(), one_line_toml_error(&e)))?;
+    // A new key goes before the first table ([keys], [[models]]…), where
+    // top-level settings belong.
+    match (doc.get_mut(key).and_then(toml_edit::Item::as_value_mut), value) {
+        (Some(old), Some(value)) => {
+            let decor = old.decor().clone();
+            *old = value;
+            *old.decor_mut() = decor;
+        }
+        (None, Some(value)) => {
+            doc.insert(key, toml_edit::Item::Value(value));
+        }
+        (_, None) => {
+            doc.remove(key);
+        }
+    }
+    crate::config::store::write_atomic(&path, &doc.to_string()).map_err(|e| format!("{}: {e:#}", path.display()))
+}
+
+fn one_line_toml_error(e: &toml_edit::TomlError) -> String {
+    e.to_string().lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap_or_default().to_string()
+}
+
 /// Where a TOML file is wrong and what's wrong, on one line: its first
 /// line (the place) and its last (what), without the excerpt between.
 fn toml_problem(e: &toml::de::Error) -> String {
@@ -269,6 +309,33 @@ mod tests {
         assert!(warning.is_none(), "{warning:?}");
         assert_eq!(s.viewers["csv"], Viewer::Command("libreoffice --calc".into()));
         assert!(s.viewers["tsv"].in_terminal() && s.viewers["tsv"].command() == "vd");
+    }
+
+    #[test]
+    fn a_saved_value_keeps_the_rest_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // None yet: made.
+        save_value(dir.path(), "theme", Some("light".into())).unwrap();
+        assert_eq!(Settings::load(dir.path()).0.theme, ThemeName::Light);
+        fs::write(&path, "# mine\ntheme = \"dark\"   # for the evenings\nrow_limit = 500\n\n[keys]\nrun = \"F5\"\n")
+            .unwrap();
+        save_value(dir.path(), "theme", Some("light".into())).unwrap();
+        save_value(dir.path(), "lint", Some(false.into())).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("# mine\ntheme = \"light\"   # for the evenings\nrow_limit = 500\n"), "{text}");
+        assert!(text.contains("lint = false") && text.contains("[keys]\nrun = \"F5\""), "{text}");
+        assert!(text.find("lint").unwrap() < text.find("[keys]").unwrap(), "top-level, before the tables: {text}");
+        let s = Settings::load(dir.path()).0;
+        assert_eq!((s.theme, s.lint, s.row_limit), (ThemeName::Light, false, 500));
+        // Removed: back to the default, the rest kept.
+        save_value(dir.path(), "row_limit", None).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("row_limit") && text.contains("# mine"), "{text}");
+        // A file that can't be read isn't written over.
+        fs::write(&path, b"theme = \"dark\" # caf\xe9\n").unwrap();
+        assert!(save_value(dir.path(), "lint", Some(true.into())).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"theme = \"dark\" # caf\xe9\n");
     }
 
     #[test]

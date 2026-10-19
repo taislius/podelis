@@ -20,22 +20,21 @@ fn draw_welcome(f: &mut Frame, app: &App, body: Rect) {
         Line::default(),
         Line::from(chrome::brand()).alignment(Alignment::Center),
         Line::default(),
-        Line::from(Span::styled("A terminal SQL client for PostgreSQL, MySQL and SQLite", fg(t.text)))
-            .alignment(Alignment::Center),
+        Line::from(Span::styled(t!("welcome.tagline"), fg(t.text))).alignment(Alignment::Center),
         Line::default(),
-        key("n  or  ↵", "create a project, then add its connections"),
-        Line::from(Span::styled(format!("  {:<34}(paste a connection URL into the form)", ""), muted())),
-        key("podelis postgres://me@host/db", "open a database right away"),
-        key("podelis app.db", "open a SQLite file"),
+        key("n  or  ↵", t!("welcome.create_project")),
+        Line::from(Span::styled(format!("  {:<34}({})", "", t!("welcome.paste_url")), muted())),
+        key("podelis postgres://me@host/db", t!("welcome.open_url")),
+        key("podelis app.db", t!("welcome.open_file")),
         Line::default(),
-        Line::from(Span::styled("? keys · q quits", dim())).alignment(Alignment::Center),
+        Line::from(Span::styled(t!("welcome.keys"), dim())).alignment(Alignment::Center),
     ];
     if let Some((msg, is_error)) = &app.manager.project_message {
         lines.insert(lines.len() - 1, Line::from(Span::styled(format!("  {msg}"), message_style(*is_error))));
     }
     let width = fit(lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 6, 30, body.width);
     let rect = centered_box(body, width, lines.len() as u16 + 2);
-    f.render_widget(Paragraph::new(lines).block(popup("Welcome", t.accent)), rect);
+    f.render_widget(Paragraph::new(lines).block(popup(t!("welcome.title"), t.accent)), rect);
 }
 
 /// Where each pane goes; a narrow terminal shows the focused pane and the
@@ -170,7 +169,7 @@ fn draw_projects(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
     let focused = app.screen == Screen::Projects;
     let n = app.store.projects.len();
-    let block = pane("Projects", &n.to_string(), focused);
+    let block = pane(t!("help.projects"), &n.to_string(), focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -178,7 +177,7 @@ fn draw_projects(f: &mut Frame, app: &mut App, area: Rect) {
         let project = app.store.projects.get(app.manager.project_selected);
         let name = project.map(|p| p.name.as_str()).unwrap_or_default();
         let n = project.map_or(0, |p| p.connections.len());
-        Some((format!("Delete project '{name}', its {n} connection(s) and their passwords? y/n"), bold(t.warn)))
+        Some((t!("manager.delete_project", name = name, n = n), bold(t.warn)))
     } else {
         app.manager.project_message.as_ref().map(|(msg, is_error)| (msg.clone(), message_style(*is_error)))
     };
@@ -195,7 +194,7 @@ fn draw_projects(f: &mut Frame, app: &mut App, area: Rect) {
             let dot = open.then_some(t.ok);
             row(
                 &p.name,
-                if open { "open" } else { "" },
+                if open { t!("manager.open") } else { "" },
                 dot,
                 i == app.manager.project_selected,
                 focused,
@@ -203,15 +202,15 @@ fn draw_projects(f: &mut Frame, app: &mut App, area: Rect) {
             )
         })
         .collect();
-    items.push(new_row("+ New project", app.manager.project_selected >= n, focused));
+    items.push(new_row(t!("manager.new_project"), app.manager.project_selected >= n, focused));
     let mut state = ListState::default().with_selected(Some(app.manager.project_selected));
     f.render_stateful_widget(List::new(items), list_area, &mut state);
     app.hits.manager_projects = (list_area, state.offset());
 
     if let Some(prompt) = &app.manager.project_prompt {
         let label = match prompt.kind {
-            PromptKind::NewProject => "Name",
-            PromptKind::RenameProject(_) => "Rename to",
+            PromptKind::NewProject => t!("form.name"),
+            PromptKind::RenameProject(_) => t!("manager.rename_to"),
         };
         let room = (prompt_area.width as usize).saturating_sub(label.chars().count() + 3);
         // A long name scrolls to keep the cursor in view.
@@ -251,30 +250,30 @@ fn draw_connections(f: &mut Frame, app: &mut App, area: Rect) {
     // look at (Enter there opens it).
     let project = if live { app.project() } else { app.store.projects.get(app.manager.project_selected) };
     let Some(project) = project else {
-        let block = pane("Connections", "", false);
+        let block = pane(t!("help.connections"), "", false);
         let inner = block.inner(area);
         f.render_widget(block, area);
-        let hint = if app.store.projects.is_empty() { "" } else { "↵ names a new project" };
+        let hint = if app.store.projects.is_empty() { "" } else { t!("manager.names_project") };
         f.render_widget(Paragraph::new(format!(" {hint}")).style(dim()), inner);
         return;
     };
     let profiles = &project.connections;
-    let block = pane("Connections", &project.name, focused);
+    let block = pane(t!("help.connections"), &project.name, focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     if let Some(picker) = &app.manager.containers {
-        let title = Line::from(Span::styled(" Database containers:", bold(t.accent)));
+        let title = Line::from(Span::styled(format!(" {}", t!("manager.containers")), bold(t.accent)));
         let (text, style) = if picker.loading {
-            ("Looking for running containers…".to_string(), muted())
+            (t!("manager.containers_looking").to_string(), muted())
         } else if let Some(e) = &picker.error {
             (e.clone(), message_style(true))
         } else if picker.found.is_empty() {
-            ("No running PostgreSQL or MySQL containers · Esc".to_string(), dim())
+            (t!("manager.containers_none").to_string(), dim())
         } else if let Some(note) = &picker.note {
             (note.clone(), message_style(true))
         } else {
-            ("↵ fills in a new connection · Esc".to_string(), dim())
+            (t!("manager.containers_fill").to_string(), dim())
         };
         let [list_area, _, message_area] = split_pane(inner, false, Some(&text));
         let message = Some((text, style));
@@ -284,7 +283,7 @@ fn draw_connections(f: &mut Frame, app: &mut App, area: Rect) {
             .enumerate()
             .map(|(i, c)| {
                 let place = c.profile.as_ref().map_or_else(
-                    || "port not published".to_string(),
+                    || t!("manager.port_not_published").to_string(),
                     |p| format!("{} · {}:{}", p.engine.label(), p.host, p.port),
                 );
                 row(&c.name, &place, None, i == picker.selected, true, list_area.width)
@@ -304,18 +303,18 @@ fn draw_connections(f: &mut Frame, app: &mut App, area: Rect) {
             .map(|(i, p)| row(&p.name, "", None, i == target, true, inner.width))
             .collect();
         let mut state = ListState::default().with_selected(Some(target));
-        let title = Line::from(Span::styled(format!(" Move '{name}' to:"), bold(t.accent)));
+        let title = Line::from(Span::styled(format!(" {}", t!("manager.move_to", name = name)), bold(t.accent)));
         f.render_stateful_widget(List::new(items).block(Block::default().title(title)), inner, &mut state);
         return;
     }
 
     let message = if !live {
-        Some((format!("→ or ↵ opens '{}'", project.name), dim()))
+        Some((t!("manager.opens", name = project.name), dim()))
     } else if app.manager.loading_profile {
-        Some(("Reading the password from the keychain… (Esc to cancel)".to_string(), muted()))
+        Some((t!("manager.reading_password").to_string(), muted()))
     } else if app.manager.confirm_delete {
         let name = profiles.get(app.manager.connection_selected).map(|p| p.name.as_str()).unwrap_or_default();
-        Some((format!("Delete '{name}' and its saved password? y/n"), bold(t.warn)))
+        Some((t!("manager.delete_connection", name = name), bold(t.warn)))
     } else {
         app.manager.connection_message.as_ref().map(|(msg, is_error)| (msg.clone(), message_style(*is_error)))
     };
@@ -327,9 +326,9 @@ fn draw_connections(f: &mut Frame, app: &mut App, area: Rect) {
         .enumerate()
         .map(|(i, p)| {
             let mode = match p.mode {
-                ConnectionMode::Production => " · prod",
-                ConnectionMode::ReadOnly => " · read-only",
-                ConnectionMode::Normal => "",
+                ConnectionMode::Production => format!(" · {}", t!("manager.prod")),
+                ConnectionMode::ReadOnly => format!(" · {}", t!("tx.read_only")),
+                ConnectionMode::Normal => String::new(),
             };
             let dot = (live && in_use.contains(&p.name.as_str())).then_some(t.ok);
             let selected = live && i == app.manager.connection_selected;
@@ -337,9 +336,9 @@ fn draw_connections(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
     if live {
-        items.push(new_row("+ New connection", app.manager.connection_selected >= profiles.len(), focused));
+        items.push(new_row(t!("manager.new_connection"), app.manager.connection_selected >= profiles.len(), focused));
     } else if profiles.is_empty() {
-        items.push(ListItem::new(Span::styled("  no connections yet", dim())));
+        items.push(ListItem::new(Span::styled(format!("  {}", t!("manager.no_connections")), dim())));
     }
     let selected = live.then_some(app.manager.connection_selected);
     let mut state = ListState::default().with_selected(selected);
@@ -352,7 +351,11 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let editing = app.screen == Screen::Connect;
     if editing {
         let form = &app.connection.form;
-        let title = if form.original_name.is_some() { "Edit connection" } else { "New connection" };
+        let title = if form.original_name.is_some() {
+            t!("manager.edit_connection")
+        } else {
+            t!("manager.new_connection_title")
+        };
         let block = pane(title, form.engine.label(), true);
         let inner = block.inner(area);
         f.render_widget(block, area);
@@ -372,24 +375,21 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     }
     // The container being picked: what its connection would be.
     if let Some(c) = app.manager.containers.as_ref().and_then(|p| p.found.get(p.selected)) {
-        let block = pane("Container", &c.image, false);
+        let block = pane(t!("manager.container"), &c.image, false);
         let inner = block.inner(area);
         f.render_widget(block, area);
         let lines = match &c.profile {
             Some(profile) => {
                 let mut lines = form_lines(&Settings::from(profile), None, "");
                 lines.push(Line::default());
-                lines.push(Line::from(Span::styled(
-                    " The password stays in the container: read when connecting",
-                    dim(),
-                )));
+                lines.push(Line::from(Span::styled(format!(" {}", t!("manager.password_in_container")), dim())));
                 lines
             }
             None => vec![
-                Line::from(Span::styled(" Its database port isn't published, so", muted())),
-                Line::from(Span::styled(" there's no address here to connect to.", muted())),
+                Line::from(Span::styled(format!(" {}", t!("manager.unpublished_1")), muted())),
+                Line::from(Span::styled(format!(" {}", t!("manager.unpublished_2")), muted())),
                 Line::default(),
-                Line::from(Span::styled(" Start it with -p, e.g. -p 5433:5432", dim())),
+                Line::from(Span::styled(format!(" {}", t!("manager.unpublished_3")), dim())),
             ],
         };
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
@@ -397,23 +397,23 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     }
     let profile = app.viewing_open_project().then(|| app.profiles().get(app.manager.connection_selected)).flatten();
     let Some(profile) = profile else {
-        let block = pane("Settings", "", false);
+        let block = pane(t!("help.settings"), "", false);
         let inner = block.inner(area);
         f.render_widget(block, area);
         if app.viewing_open_project() && app.manager.moving_to.is_none() {
             let lines = vec![
-                Line::from(Span::styled(" ↵ adds a connection", dim())),
-                Line::from(Span::styled(" (paste a connection URL into its form)", dim())),
+                Line::from(Span::styled(format!(" {}", t!("manager.adds_connection")), dim())),
+                Line::from(Span::styled(format!(" ({})", t!("welcome.paste_url")), dim())),
             ];
             f.render_widget(Paragraph::new(lines), inner);
         }
         return;
     };
-    let block = pane("Settings", profile.engine.label(), false);
+    let block = pane(t!("help.settings"), profile.engine.label(), false);
     let inner = block.inner(area);
     f.render_widget(block, area);
-    let mut lines = form_lines(&Settings::from(profile), None, "in the keychain");
+    let mut lines = form_lines(&Settings::from(profile), None, t!("manager.in_keychain"));
     lines.push(Line::default());
-    lines.push(Line::from(Span::styled(" ↵ connects · e edits", dim())));
+    lines.push(Line::from(Span::styled(format!(" {}", t!("manager.connects_edits")), dim())));
     f.render_widget(Paragraph::new(lines), inner);
 }

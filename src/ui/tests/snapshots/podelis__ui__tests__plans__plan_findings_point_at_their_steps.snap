@@ -1,5 +1,6 @@
 ---
 source: src/ui/tests/plans.rs
+assertion_line: 15
 expression: "render(&mut app, 100, 20)"
 ---
 " >_  PODĖLIS v0.0.0   │  project  shop ▼                                                            "
@@ -21,4 +22,4 @@ expression: "render(&mut app, 100, 20)"
 "│                            ││   ->  Seq Scan on orders  (cost=0.00..800.00 rows=10)  ◀ 1,2       │"
 "│                            ││                                                                    │"
 "└────────────────────────────┘└────────────────────────────────────────────────────────────────────┘"
-" ● prod  db.internal:3306 · MySQL  3 row(s) in 4 ms                                                 "
+" ● prod  db.internal:3306 · MySQL  3 rows in 4 ms                                                   "

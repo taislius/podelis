@@ -5,6 +5,7 @@
 #![allow(clippy::unreadable_literal)]
 
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ratatui::style::Color;
 
@@ -113,18 +114,22 @@ const LIGHT: Theme = Theme {
     selection: hex(0xc6eadb),
 };
 
-static THEME: OnceLock<Theme> = OnceLock::new();
+/// Both themes, as this terminal shows them (24-bit or 256 colours).
+static THEMES: OnceLock<[Theme; 2]> = OnceLock::new();
+
+/// The theme in use: dark (0) or light (1). The settings change it.
+static CURRENT: AtomicUsize = AtomicUsize::new(0);
 
 pub fn set_theme(name: ThemeName) {
-    let theme = match name {
-        ThemeName::Dark => DARK,
-        ThemeName::Light => LIGHT,
-    };
-    let _ = THEME.set(if supports_truecolor() { theme } else { theme.to_256() });
+    THEMES.get_or_init(|| {
+        let true_color = supports_truecolor();
+        [DARK, LIGHT].map(|t| if true_color { t } else { t.to_256() })
+    });
+    CURRENT.store(usize::from(name == ThemeName::Light), Ordering::Relaxed);
 }
 
 pub fn theme() -> &'static Theme {
-    THEME.get().unwrap_or(&DARK)
+    THEMES.get().map_or(&DARK, |themes| &themes[CURRENT.load(Ordering::Relaxed)])
 }
 
 /// Whether the terminal shows 24-bit colour. Terminals that don't (e.g.

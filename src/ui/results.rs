@@ -58,8 +58,8 @@ pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Results;
     // How long it ran is the result's, in its footer.
     let info = app.running_label().unwrap_or_default();
-    let info = if app.panes.zoomed { format!("ZOOMED · {info}") } else { info };
-    let block = pane("Query result", &info, focused);
+    let info = if app.panes.zoomed { format!("{} · {info}", t!("pane.zoomed")) } else { info };
+    let block = pane(t!("results.title"), &info, focused);
     app.hits.results = area;
     app.hits.result_rows = Rect::default();
     app.hits.plan_source = Rect::default();
@@ -128,11 +128,11 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     let result_grid = if app.tab.plan_swapped { app.tab.plan_grid.as_deref() } else { Some(&app.tab.grid) };
     let rows = result_grid.and_then(|g| g.results.as_ref()).map(|r| {
         if r.columns.is_empty() {
-            format!("{} affected", r.rows_affected.unwrap_or(0))
+            t!("results.affected", n = r.rows_affected.unwrap_or(0))
         } else if app.run.stream.is_some() || result_grid.is_some_and(|g| g.cut_short) {
-            format!("{}+ rows", r.total_rows)
+            t!("results.rows_more", n = r.total_rows)
         } else {
-            format!("{} rows", r.total_rows)
+            t!("results.rows", n = r.total_rows)
         }
     });
     let focused = app.focus == Focus::Results;
@@ -155,21 +155,25 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     let start = area.x;
     // A script's result sets: which one is shown.
     let label = if let Some(g) = result_grid.filter(|g| g.result_sets.len() > 1) {
-        format!("RESULT {}/{}", g.result_set + 1, g.result_sets.len())
+        format!("{} {}/{}", t!("results.result"), g.result_set + 1, g.result_sets.len())
     } else {
-        "RESULT".into()
+        t!("results.result").into()
     };
     left.extend(tab(label, rows, app.tab.result_tab == ResultTab::Rows));
     tab_hits.push((start, area.x + width(&left), ResultTab::Rows));
     let errors = app.notes.log.iter().filter(|m| m.is_error).count();
     let msg_extra = (!app.notes.log.is_empty()).then(|| {
-        if errors > 0 { format!("{} · {errors} err", app.notes.log.len()) } else { app.notes.log.len().to_string() }
+        if errors > 0 {
+            t!("results.messages_errors", n = app.notes.log.len(), errors = errors)
+        } else {
+            app.notes.log.len().to_string()
+        }
     });
     let tab_x = area.x + width(&left);
-    left.extend(tab("MESSAGES".into(), msg_extra, app.tab.result_tab == ResultTab::Messages));
+    left.extend(tab(t!("results.messages").into(), msg_extra, app.tab.result_tab == ResultTab::Messages));
     tab_hits.push((tab_x, area.x + width(&left), ResultTab::Messages));
     let tab_x = area.x + width(&left);
-    left.extend(tab("QUERY PLAN".into(), None, app.tab.result_tab == ResultTab::Plan));
+    left.extend(tab(t!("results.plan").into(), None, app.tab.result_tab == ResultTab::Plan));
     tab_hits.push((tab_x, area.x + width(&left), ResultTab::Plan));
     app.hits.result_tabs = tab_hits;
     app.hits.result_tabs_y = area.y;
@@ -179,12 +183,15 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     let right = if !grid_shown {
         Line::default()
     } else if app.tab.grid.filter_editing {
-        let mut spans = vec![Span::styled("filter: ", bold(t.accent))];
+        let mut spans = vec![Span::styled(format!("{} ", t!("results.filter")), bold(t.accent))];
         spans.extend(input_spans(&app.tab.grid.filter, fg(t.text_bright)));
         spans.push(Span::raw(" "));
         Line::from(spans)
     } else if !app.tab.grid.filter.is_empty() {
-        Line::from(vec![Span::styled(format!("filter: {} ", app.tab.grid.filter.text()), bold(t.accent))])
+        Line::from(vec![Span::styled(
+            format!("{} {} ", t!("results.filter"), app.tab.grid.filter.text()),
+            bold(t.accent),
+        )])
     } else {
         // Key hints are in the status bar, not here.
         Line::default()
@@ -194,9 +201,9 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     let rows_shown = grid_shown && app.tab.grid.results.as_ref().is_some_and(|r| !r.columns.is_empty());
     let mut buttons = Vec::new();
     if rows_shown {
-        buttons.push((" export ▾ ", true));
+        buttons.push((format!(" {} ▾ ", t!("results.export")), true));
     }
-    buttons.push((" menu ▾ ", false));
+    buttons.push((format!(" {} ▾ ", t!("results.menu")), false));
     let buttons_w: u16 = buttons.iter().map(|(label, _)| label.chars().count() as u16).sum();
     let left_w = width(&left);
     let right_w = right.width() as u16;
@@ -242,7 +249,11 @@ fn draw_across_footer(f: &mut Frame, app: &App, footer: Rect, widest: usize, wid
     let to = (from + width).min(widest);
     let left = if from > 0 { "◀ " } else { "  " };
     let right = if to < widest { " ▶" } else { "  " };
-    let text = format!("{left}cols {}–{to} of {widest}{right}  ←/→ scroll ", from + 1);
+    let text = format!(
+        "{left}{}{right}  {} ",
+        t!("results.columns_of", from = from + 1, to = to, total = widest),
+        t!("results.scroll")
+    );
     f.render_widget(Paragraph::new(Span::styled(text, dim())).alignment(Alignment::Right), footer);
 }
 
@@ -252,35 +263,35 @@ fn draw_no_result(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
     let run = app.keymap.short_label(crate::config::keys::Action::Run);
     let text = if let Some(running) = app.running_label() {
-        // "running… 12 s", as the pane's title has it.
-        let running = running.trim_start_matches('r');
+        // "running… 12 s", as the pane's title has it, capitalised.
+        let mut chars = running.chars();
+        let running: String = chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default();
         if app.run.cancel_failed {
             // Orange: it needs the user (see `stop_waiting`).
-            Paragraph::new(format!(" R{running} · the server didn't take the cancel · Esc again stops waiting"))
-                .style(fg(t.warn))
+            Paragraph::new(format!(" {running} · {}", t!("results.cancel_failed"))).style(fg(t.warn))
         } else {
-            Paragraph::new(format!(" R{running} · Esc cancels it")).style(fg(t.text))
+            Paragraph::new(format!(" {running} · {}", t!("results.esc_cancels"))).style(fg(t.text))
         }
     } else if let Some(err) = &app.tab.run_error {
         // The link, not the SQL: nothing to fix in the editor.
         let link = err.contains("the server doesn't answer") || err.contains("couldn't reconnect");
         let (said, then) = if link {
-            (" The server doesn't answer:", " Check the network or VPN, then run it again: Podėlis reconnects.")
+            (t!("results.no_answer"), t!("results.no_answer_then"))
         } else {
-            (" The query failed:", " Fix it in the editor and run it again; MESSAGES keeps the error.")
+            (t!("results.failed"), t!("results.failed_then"))
         };
         Paragraph::new(vec![
-            Line::from(Span::styled(said, bold(t.error))),
+            Line::from(Span::styled(format!(" {said}"), bold(t.error))),
             Line::from(Span::styled(format!(" {err}"), fg(t.error))),
-            Line::from(Span::styled(then, dim())),
+            Line::from(Span::styled(format!(" {then}"), dim())),
         ])
         .wrap(Wrap { trim: false })
     } else if !app.connected() {
-        Paragraph::new(" Not connected: Ctrl+O picks a connection for this tab.").style(dim())
+        Paragraph::new(format!(" {}", t!("results.not_connected"))).style(dim())
     } else if app.tab.runs.is_empty() {
-        Paragraph::new(format!(" Nothing run in this tab yet: write a query above and press {run}.")).style(dim())
+        Paragraph::new(format!(" {}", t!("results.nothing_run", run = run))).style(dim())
     } else {
-        Paragraph::new(" No result.").style(dim())
+        Paragraph::new(format!(" {}", t!("results.no_result"))).style(dim())
     };
     f.render_widget(text, area);
 }
@@ -289,7 +300,7 @@ fn draw_no_result(f: &mut Frame, app: &App, area: Rect) {
 fn draw_messages(f: &mut Frame, app: &mut App, area: Rect) -> usize {
     let t = theme();
     if app.notes.log.is_empty() {
-        f.render_widget(Paragraph::new(" No messages yet.").style(dim()), area);
+        f.render_widget(Paragraph::new(format!(" {}", t!("results.no_messages"))).style(dim()), area);
         return 0;
     }
     let selected = app.notes.selected;
@@ -368,11 +379,15 @@ fn source_place(app: &App, source: &crate::app::PlanSource) -> (String, Style, b
     let t = theme();
     let lines = |first: usize| {
         let last = first + source.sql.matches('\n').count();
-        if last > first { format!("lines {}–{}", first + 1, last + 1) } else { format!("line {}", first + 1) }
+        if last > first {
+            t!("results.lines", first = first + 1, last = last + 1)
+        } else {
+            t!("results.line", line = first + 1)
+        }
     };
     match source.find_in_editor(&app.tab.editor) {
         Some((_, n)) => (lines(n), fg(t.accent).add_modifier(Modifier::UNDERLINED), true),
-        None => (format!("was {} · edited since", lines(source.line)), fg(t.warn), false),
+        None => (t!("results.edited_since", place = lines(source.line)), fg(t.warn), false),
     }
 }
 
@@ -418,10 +433,10 @@ fn draw_run_source(f: &mut Frame, app: &mut App, area: Rect) -> Rect {
         Some(source) => {
             let (place, place_style, found) = source_place(app, source);
             let when = format!("  {} · {}", source.at.format("%H:%M:%S"), age(chrono::Local::now() - source.at));
-            let pin = if run.pinned { "  pinned" } else { "" };
+            let pin = if run.pinned { format!("  {}", t!("results.pinned")) } else { String::new() };
             let used: usize = spans.iter().map(Span::width).sum();
             let room = usize::from(line.width)
-                .saturating_sub(used + place.chars().count() + when.chars().count() + pin.len() + 3);
+                .saturating_sub(used + place.chars().count() + when.chars().count() + pin.chars().count() + 3);
             spans.push(Span::styled(truncate(&one_line(&source.sql), room), fg(t.text)));
             spans.push(Span::raw("  "));
             spans.push(Span::styled(place, place_style));
@@ -431,7 +446,7 @@ fn draw_run_source(f: &mut Frame, app: &mut App, area: Rect) -> Rect {
                 app.hits.run_source = Rect { x, ..line };
             }
         }
-        None => spans.push(Span::styled(if run.pinned { "pinned" } else { "" }, fg(t.accent))),
+        None => spans.push(Span::styled(if run.pinned { t!("results.pinned") } else { "" }, fg(t.accent))),
     }
     // The run tabs' row, for clicks (the statement only where it's linked).
     app.hits.run_source.y = line.y;
@@ -443,11 +458,11 @@ fn draw_run_source(f: &mut Frame, app: &mut App, area: Rect) -> Rect {
 fn age(d: chrono::TimeDelta) -> String {
     let s = d.num_seconds().max(0);
     match s {
-        0..5 => "just now".to_string(),
-        5..60 => format!("{s} s ago"),
-        60..3600 => format!("{} min ago", s / 60),
-        3600..86400 => format!("{} h ago", s / 3600),
-        _ => format!("{} days ago", s / 86400),
+        0..5 => t!("age.now").to_string(),
+        5..60 => t!("age.seconds", n = s),
+        60..3600 => t!("age.minutes", n = s / 60),
+        3600..86400 => t!("age.hours", n = s / 3600),
+        _ => t!("age.days", n = s / 86400),
     }
 }
 
@@ -479,10 +494,7 @@ fn draw_plan(f: &mut Frame, app: &mut App, area: Rect) -> usize {
     let t = theme();
     match &app.tab.plan {
         None => {
-            f.render_widget(
-                Paragraph::new(" Press F7 in the editor to see the plan for the statement at the cursor.").style(dim()),
-                area,
-            );
+            f.render_widget(Paragraph::new(format!(" {}", t!("results.no_plan"))).style(dim()), area);
             0
         }
         Some(plan) => {
@@ -528,8 +540,10 @@ fn draw_rows(f: &mut Frame, app: &mut App, area: Rect, footer: Rect) {
         return draw_no_result(f, app, area);
     };
     if results.columns.is_empty() {
-        let mut msg = results.rows_affected.map_or_else(|| " OK".to_string(), |n| format!(" {n} row(s) affected"));
-        msg = format!("{msg} in {}", crate::app::format_elapsed(results.elapsed));
+        let mut msg = results
+            .rows_affected
+            .map_or_else(|| " OK".to_string(), |n| format!(" {}", t!("results.rows_affected", n = n)));
+        msg = t!("results.took", what = msg, time = crate::app::format_elapsed(results.elapsed));
         if let Some(note) = &app.tab.grid.result_note {
             msg = format!("{msg} — {note}");
         }
@@ -742,8 +756,9 @@ fn draw_rows_footer(f: &mut Frame, app: &App, footer: Rect, offset: usize, count
         ];
         spans.extend(input_spans(&edit.text, fg(t.text_bright)));
         let left = Line::from(spans);
-        let null = if edit.nullable { "  ^N null" } else { "" };
-        let right = Line::from(Span::styled(format!("↵ save{null}  Esc cancel "), muted()));
+        let null = if edit.nullable { format!("  ^N {}", t!("cell.null")) } else { String::new() };
+        let right =
+            Line::from(Span::styled(format!("↵ {}{null}  Esc {} ", t!("cell.save"), t!("cell.cancel")), muted()));
         let right_w = right.width() as u16;
         let [l, r] = Layout::default()
             .direction(Direction::Horizontal)
@@ -758,7 +773,7 @@ fn draw_rows_footer(f: &mut Frame, app: &App, footer: Rect, offset: usize, count
     let cell = app.tab.grid.table_state.selected().map(|r| {
         let col = &results.columns[app.tab.grid.selected_col.min(results.columns.len() - 1)];
         let ty = results.column_types.get(app.tab.grid.selected_col).filter(|t| *t != "?").cloned().unwrap_or_default();
-        format!(" CELL {:0>2}:{col}  {}", r + 1, ty.to_lowercase())
+        format!(" {} {:0>2}:{col}  {}", t!("cell.cell"), r + 1, ty.to_lowercase())
     });
     let left = Line::from(vec![
         Span::styled(cell.unwrap_or_default(), fg(t.accent)),
@@ -768,11 +783,11 @@ fn draw_rows_footer(f: &mut Frame, app: &App, footer: Rect, offset: usize, count
     let plus = if app.run.stream.is_some() || app.tab.grid.cut_short { "+" } else { "" };
     let mut right = vec![Span::styled(format!("1–{shown} / {}{plus}", results.total_rows), bold(t.text))];
     if app.run.fetching_more {
-        right.push(Span::styled("  · loading…", fg(t.warn)));
+        right.push(Span::styled(format!("  · {}", t!("results.loading")), fg(t.warn)));
     } else if app.run.stream.is_some() {
-        right.push(Span::styled("  · scroll or M for more", dim()));
+        right.push(Span::styled(format!("  · {}", t!("results.scroll_for_more")), dim()));
     } else if results.truncated() || app.tab.grid.cut_short {
-        right.push(Span::styled("  · M loads more", dim()));
+        right.push(Span::styled(format!("  · {}", t!("results.m_loads_more")), dim()));
     }
     // Which columns show, with arrows where more are hidden.
     let total = results.columns.len();
@@ -781,11 +796,14 @@ fn draw_rows_footer(f: &mut Frame, app: &App, footer: Rect, offset: usize, count
         let right_more = if offset + count < total { " ▶" } else { "" };
         right.push(Span::styled("  · ", dim()));
         right.push(Span::styled(
-            format!("{left}cols {}–{} of {total}{right_more}", offset + 1, offset + count),
+            format!(
+                "{left}{}{right_more}",
+                t!("results.columns_of", from = offset + 1, to = offset + count, total = total)
+            ),
             fg(t.text),
         ));
     } else {
-        right.push(Span::styled(format!("  · {total} cols"), dim()));
+        right.push(Span::styled(format!("  · {}", t!("results.columns", n = total)), dim()));
     }
     // The query's time (not a plan's: that's the EXPLAIN's).
     if !app.tab.plan_swapped {

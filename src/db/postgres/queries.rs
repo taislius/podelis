@@ -402,3 +402,13 @@ pub(in crate::db) async fn transaction_state(c: &mut DriverConnection) -> Option
         Err(_) => None,
     }
 }
+
+/// `COPY … FROM STDIN` (see `copy.rs`).
+pub(in crate::db) async fn copy_in(
+    db: &Database,
+    statement: &str,
+    first_line: u64,
+    chunks: impl Iterator<Item = Result<Vec<u8>>>,
+) -> Result<u64> {
+    super::copy::copy_in(db, statement, first_line, chunks).await
+}

@@ -29,8 +29,8 @@ pub(super) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Option<(u
     let t = theme();
     let focused = app.focus == Focus::Editor;
     let info = [
-        app.panes.zoomed.then_some("ZOOMED"),
-        app.panes.statement_zoom.then_some("THE STATEMENT ALONE"),
+        app.panes.zoomed.then_some(t!("pane.zoomed")),
+        app.panes.statement_zoom.then_some(t!("editor.statement_alone")),
         app.vim_mode().map(crate::app::VimMode::label),
     ]
     .into_iter()
@@ -38,7 +38,7 @@ pub(super) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Option<(u
     .collect::<Vec<_>>()
     .join(" · ");
     // No line/column readout: the gutter already marks the current line.
-    let mut block = pane("Query", &info, focused);
+    let mut block = pane(t!("editor.title"), &info, focused);
     if app.connection.mode == ConnectionMode::Production {
         block = block.border_style(fg(t.error));
     }
@@ -360,20 +360,16 @@ fn draw_find_bar(f: &mut Frame, app: &App, bar: &crate::app::FindBar, area: Rect
         spans
     };
     let count = match (matches.len(), current) {
-        (0, _) if !bar.query.is_empty() => "no matches".to_string(),
+        (0, _) if !bar.query.is_empty() => t!("find.no_matches").to_string(),
         (0, _) => String::new(),
         (n, Some(i)) => format!("{}/{n}", i + 1),
-        (n, None) => format!("{n} found"),
+        (n, None) => t!("find.found", n = n),
     };
-    let mut spans = field("FIND", &bar.query, !bar.in_replace);
-    spans.extend(field("REPLACE", &bar.replacement, bar.in_replace));
+    let mut spans = field(t!("find.find"), &bar.query, !bar.in_replace);
+    spans.extend(field(t!("find.replace"), &bar.replacement, bar.in_replace));
     spans.push(Span::styled(format!(" {count} "), bold(t.accent)));
-    let help = if bar.in_replace {
-        " ↵ replace · Ctrl+A all · Tab find · Esc"
-    } else {
-        " ↵/↓ next · ↑ prev · Tab replace · Esc"
-    };
-    spans.push(Span::styled(help, dim()));
+    let help = if bar.in_replace { t!("find.replace_keys") } else { t!("find.find_keys") };
+    spans.push(Span::styled(format!(" {help}"), dim()));
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -514,9 +510,9 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Option<(u16, u16
 fn run_buttons(app: &App, width: u16) -> Vec<(String, Action)> {
     let key = |a: Action| app.keymap.short_label(a);
     let mut buttons = vec![
-        (format!(" ▶ {} Run ", key(Action::Run)), Action::Run),
-        (format!("  {} Statement ", key(Action::RunStatement)), Action::RunStatement),
-        (format!("  {} Explain ", key(Action::Explain)), Action::Explain),
+        (format!(" ▶ {} {} ", key(Action::Run), t!("editor.run")), Action::Run),
+        (format!("  {} {} ", key(Action::RunStatement), t!("editor.statement")), Action::RunStatement),
+        (format!("  {} {} ", key(Action::Explain), t!("editor.explain")), Action::Explain),
     ];
     // Leave the tabs room for at least one tab and the `+`.
     let room = (width as usize).saturating_sub(24);
@@ -567,7 +563,7 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
     // Which statement F6 runs, when there's more than one and no selection.
     let position = statement_position(app)
         .filter(|&(_, total)| total > 1 && area.width >= 60 && app.tab.editor.selection().is_none())
-        .map(|(nth, total)| format!("stmt {nth}/{total}   "))
+        .map(|(nth, total)| format!("{}   ", t!("editor.statement_of", nth = nth, total = total)))
         .unwrap_or_default();
     let [l, middle, r] = Layout::default()
         .direction(Direction::Horizontal)
@@ -584,9 +580,9 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
         Line::from(Span::styled(format!(" {}", truncate(&one_line(note), l.width as usize)), style))
     } else if let Some(hint) = &app.tab.syntax_hint {
         let (label, color, rule) = match hint.source {
-            HintSource::Server => ("SERVER", t.error, ""),
-            HintSource::Parser => ("HINT", t.warn, ""),
-            HintSource::Lint(rule) => ("LINT", t.warn, rule),
+            HintSource::Server => (t!("hint.server"), t.error, ""),
+            HintSource::Parser => (t!("hint.parser"), t.warn, ""),
+            HintSource::Lint(rule) => (t!("hint.lint"), t.warn, rule),
         };
         // "LINT 2/3" when there are several; Ctrl+K w goes to the next.
         let label = match hint.nth {
@@ -595,7 +591,7 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
         };
         // Which line it's about: often not the one being edited.
         let label = match hint.offset {
-            Some(offset) => format!("{label} line {}", app.tab.editor.pos_of_offset(offset).0 + 1),
+            Some(offset) => t!("hint.at_line", label = label, line = app.tab.editor.pos_of_offset(offset).0 + 1),
             None => label,
         };
         let message = one_line(&hint.message);
@@ -659,18 +655,18 @@ fn tx_status(app: &App, width: u16) -> Vec<Span<'static>> {
     let key = |a: Action| app.keymap.short_label(a);
     let mut spans = match app.connection.txn {
         TxnState::Open => vec![Span::styled(
-            format!("● uncommitted · {} commit · {} undo", key(Action::Commit), key(Action::Rollback)),
+            format!("● {}", t!("tx.uncommitted", commit = key(Action::Commit), rollback = key(Action::Rollback))),
             bold(t.warn),
         )],
         TxnState::Aborted => {
-            vec![Span::styled(format!("✕ transaction failed · {} roll back", key(Action::Rollback)), bold(t.error))]
+            vec![Span::styled(format!("✕ {}", t!("tx.failed", rollback = key(Action::Rollback))), bold(t.error))]
         }
         TxnState::Idle if app.connection.mode == ConnectionMode::ReadOnly => {
-            vec![Span::styled("Transaction:", muted()), Span::styled(" read-only", dim())]
+            vec![Span::styled(t!("tx.label"), muted()), Span::styled(format!(" {}", t!("tx.read_only")), dim())]
         }
         // All three modes when there's room next to the run key, else the current one.
         TxnState::Idle => {
-            let mut spans = vec![Span::styled("Transaction:", muted())];
+            let mut spans = vec![Span::styled(t!("tx.label"), muted())];
             let all = width >= 72;
             for mode in [TxMode::AutoCommit, TxMode::Manual, TxMode::RollbackOnly] {
                 if mode == app.connection.tx_mode {

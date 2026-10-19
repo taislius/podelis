@@ -85,6 +85,7 @@ pub(super) fn draw_query(f: &mut Frame, app: &mut App, body: Rect) {
             }
             Overlay::CellView => draw_cell_view(f, app, area),
             Overlay::Library => draw_library(f, app, area),
+            Overlay::Settings => super::settings::draw_settings(f, app, area),
             Overlay::TabPrompt => draw_tab_prompt(f, app, area),
             Overlay::ParamForm => draw_param_form(f, app, area),
             Overlay::Review => draw_review(f, app, area),
@@ -134,7 +135,7 @@ fn draw_menu(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
     let block = popup(menu.title, t.accent)
-        .title_bottom(Line::from(Span::styled(" ↵ choose · Esc close ", dim())).right_aligned());
+        .title_bottom(Line::from(Span::styled(format!(" {} ", t!("popup.choose_close")), dim())).right_aligned());
     f.render_widget(Clear, rect);
     f.render_widget(Paragraph::new(lines).block(block), rect);
     app.hits.menu = rect;
@@ -146,7 +147,7 @@ fn draw_library(f: &mut Frame, app: &App, area: Rect) {
     let Some(view) = &app.library_view else { return };
     let rect = centered_box(area, fit(area.width * 4 / 5, 30, area.width), fit(area.height * 4 / 5, 8, area.height));
     f.render_widget(Clear, rect);
-    let block = popup("QUERY LIBRARY", t.accent);
+    let block = popup(t!("library.title"), t.accent);
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     let [search, list, hints] = Layout::default()
@@ -161,7 +162,10 @@ fn draw_library(f: &mut Frame, app: &App, area: Rect) {
             [
                 vec![Span::styled(" / ", bold(t.accent))],
                 input_spans(&view.query, fg(t.text_bright)),
-                vec![Span::styled(format!("   {saved} saved · {} from history", items.len() - saved), dim())],
+                vec![Span::styled(
+                    format!("   {}", t!("library.counts", saved = saved, history = items.len() - saved)),
+                    dim(),
+                )],
             ]
             .concat(),
         ))
@@ -194,19 +198,16 @@ fn draw_library(f: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
     if rows.is_empty() {
-        f.render_widget(Paragraph::new(" Nothing matches.").style(dim()), list);
+        f.render_widget(Paragraph::new(format!(" {}", t!("agents.no_matches"))).style(dim()), list);
     } else {
         let mut state = ListState::default().with_selected(Some(view.selected.min(rows.len() - 1)));
         f.render_stateful_widget(List::new(rows).highlight_style(Style::default().bg(t.active)), list, &mut state);
     }
 
     let hint = if view.confirm_delete {
-        Line::from(Span::styled(" Delete this saved query? y/n", bold(t.warn)))
+        Line::from(Span::styled(format!(" {}", t!("library.delete")), bold(t.warn)))
     } else {
-        Line::from(Span::styled(
-            " type to search name, group and SQL · ↵ open · F4 rename/move · ^D delete · Esc close",
-            dim(),
-        ))
+        Line::from(Span::styled(format!(" {}", t!("library.keys")), dim()))
     };
     f.render_widget(Paragraph::new(hint).style(Style::default().bg(t.inset)), hints);
 }
@@ -217,8 +218,8 @@ fn draw_activity(f: &mut Frame, app: &App, area: Rect) {
     let Some(view) = &app.activity else { return };
     let rect = centered_box(area, area.width.saturating_sub(6).max(40), area.height.saturating_sub(4).max(8));
     f.render_widget(Clear, rect);
-    let title = format!("ACTIVITY · {} session(s)", view.rows.len());
-    let keys = " ↑↓ select · ↵ full query · c cancel query · x end session · r refresh · Esc close ";
+    let title = format!("{} · {}", t!("activity.title"), tn!("activity.sessions", view.rows.len()));
+    let keys = format!(" {} ", t!("activity.keys"));
     let block = popup(&title, t.accent).title_bottom(Line::from(Span::styled(keys, dim())).right_aligned());
     let inner = block.inner(rect);
     f.render_widget(block, rect);
@@ -226,8 +227,14 @@ fn draw_activity(f: &mut Frame, app: &App, area: Rect) {
     let mut lines = vec![Line::from(Span::styled(
         truncate(
             &format!(
-                "{:<8} {:<12} {:<12} {:<20} {:>7} {:<18} QUERY",
-                "ID", "USER", "DATABASE", "STATE", "TIME", "WAITING ON"
+                "{:<8} {:<12} {:<12} {:<20} {:>7} {:<18} {}",
+                "ID",
+                t!("activity.user"),
+                t!("activity.database"),
+                t!("activity.state"),
+                t!("activity.time"),
+                t!("activity.waiting"),
+                t!("activity.query")
             ),
             w,
         ),
@@ -237,11 +244,11 @@ fn draw_activity(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(Span::styled(e.clone(), fg(t.error))));
     }
     if let Some((id, kill)) = &view.confirm {
-        let what = if *kill { "End session" } else { "Cancel the running query of session" };
+        let what = if *kill { t!("activity.end_session") } else { t!("activity.cancel_query") };
         lines.push(Line::from(vec![
             Span::styled(format!("{what} {id}? "), bold(t.error)),
             Span::styled(" y ", bold(t.on_accent).bg(t.error)),
-            Span::styled(" yes   any other key: no", muted()),
+            Span::styled(format!(" {}", t!("confirm.yes_other_no")), muted()),
         ]));
     }
     let rows = (inner.height as usize).saturating_sub(lines.len());
@@ -252,8 +259,11 @@ fn draw_activity(f: &mut Frame, app: &App, area: Rect) {
             s if s >= 60 => format!("{}m{:02}s", s / 60, s % 60),
             s => format!("{s}s"),
         });
-        let waiting =
-            if a.blocked_by.is_empty() { a.wait.clone() } else { format!("blocked by {}", a.blocked_by.join(",")) };
+        let waiting = if a.blocked_by.is_empty() {
+            a.wait.clone()
+        } else {
+            t!("activity.blocked_by", ids = a.blocked_by.join(","))
+        };
         let id = if a.own { format!("{}*", a.id) } else { a.id.clone() };
         let text = format!(
             "{:<8} {:<12} {:<12} {:<20} {:>7} {:<18} {}",
@@ -277,7 +287,7 @@ fn draw_activity(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(Span::styled(truncate(&text, w), style)));
     }
     if view.rows.iter().any(|a| a.own) {
-        lines.push(Line::from(Span::styled("* this tab's session", dim())));
+        lines.push(Line::from(Span::styled(t!("activity.this_tab"), dim())));
     }
     f.render_widget(Paragraph::new(lines), inner);
 }
@@ -309,22 +319,22 @@ fn draw_row_form(f: &mut Frame, app: &App, area: Rect) {
                 v.chars().rev().take(value_w.saturating_sub(1)).collect::<Vec<_>>().into_iter().rev().collect();
             Span::styled(format!("{shown}█"), fg(t.text_bright).bg(t.active))
         } else if v.is_empty() {
-            Span::styled("default", dim())
+            Span::styled(t!("row_form.default"), dim())
         } else {
             Span::styled(truncate(v, value_w), fg(t.text))
         };
         lines.push(Line::from(vec![marker, name, ty, value]));
     }
     lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        " empty = default · NULL · numbers as-is · =expr raw SQL · ! = required",
-        dim(),
-    )));
-    lines.push(Line::from(Span::styled(" ↑↓ field · ↵ add the row · Esc cancel", dim())));
+    lines.push(Line::from(Span::styled(format!(" {}", t!("row_form.help")), dim())));
+    lines.push(Line::from(Span::styled(format!(" {}", t!("row_form.keys")), dim())));
     let height = fit(lines.len() as u16 + 2, 6, area.height);
     let rect = centered_box(area, width, height);
     f.render_widget(Clear, rect);
-    f.render_widget(Paragraph::new(lines).block(popup(&format!("ADD ROW · {}", form.table), t.accent)), rect);
+    f.render_widget(
+        Paragraph::new(lines).block(popup(&format!("{} · {}", t!("row_form.title"), form.table), t.accent)),
+        rect,
+    );
 }
 
 /// `| command`: what to pipe the result rows through.
@@ -335,9 +345,9 @@ fn draw_pipe_prompt(f: &mut Frame, command: &LineInput, area: Rect) {
     let lines = vec![
         Line::from([vec![Span::styled(" | ", bold(t.accent))], input_spans(command, fg(t.text_bright))].concat()),
         Line::default(),
-        Line::from(Span::styled(" rows go in as TSV with a header (JSON for jq) · ↵ run · Esc cancel", dim())),
+        Line::from(Span::styled(format!(" {}", t!("pipe.help")), dim())),
     ];
-    f.render_widget(Paragraph::new(lines).block(popup("PIPE ROWS THROUGH", t.accent)), rect);
+    f.render_widget(Paragraph::new(lines).block(popup(t!("pipe.title"), t.accent)), rect);
 }
 
 /// `Ctrl+K q`: the question for a model, about the tab's connection.
@@ -349,10 +359,10 @@ fn draw_ask_prompt(f: &mut Frame, app: &App, area: Rect) {
     let lines = vec![
         Line::from([vec![Span::styled(" ? ", bold(t.accent))], input_spans(question, fg(t.text_bright))].concat()),
         Line::default(),
-        Line::from(Span::styled(" a model writes the SQL from the tables that matter (never their rows)", dim())),
-        Line::from(Span::styled(" it lands in the editor and doesn't run · ↵ ask · Esc cancel", dim())),
+        Line::from(Span::styled(format!(" {}", t!("ask.help_1")), dim())),
+        Line::from(Span::styled(format!(" {}", t!("ask.help_2")), dim())),
     ];
-    let title = format!("ASK ABOUT {}", app.connection.form.name.to_uppercase());
+    let title = t!("ask.title", name = app.connection.form.name.to_uppercase());
     f.render_widget(Paragraph::new(lines).block(popup(&title, t.accent)), rect);
 }
 
@@ -368,9 +378,9 @@ fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
     let room = usize::from(width).saturating_sub(4);
     let mut lines = Vec::new();
     if view.loading {
-        lines.push(Line::from(Span::styled(" Loading…", dim())));
+        lines.push(Line::from(Span::styled(format!(" {}", t!("navigator.loading_tables")), dim())));
     } else if view.facts.is_empty() {
-        lines.push(Line::from(Span::styled(" No facts yet: a adds one (orders.status 3 = cancelled).", dim())));
+        lines.push(Line::from(Span::styled(format!(" {}", t!("memory.none")), dim())));
     }
     let shown = usize::from(height.saturating_sub(6));
     let first = view.selected.saturating_sub(shown.saturating_sub(1));
@@ -384,7 +394,7 @@ fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
         );
         // The fact comes first: a long source (a migrations folder's
         // path) gets what's left of the row (16 at least), its end kept.
-        let tail = if confirmed { "" } else { ", not confirmed: c" };
+        let tail = if confirmed { String::new() } else { format!(", {}", t!("memory.not_confirmed")) };
         let left = room.saturating_sub(text.chars().count() + tail.len() + 4).max(16);
         let source = truncate_start(fact["source"].as_str().unwrap_or("?"), left);
         let who = format!("  · {source}{tail}");
@@ -401,16 +411,13 @@ fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(
             [vec![Span::styled(" + ", bold(t.accent))], input_spans(input, fg(t.text_bright))].concat(),
         ));
-        lines.push(Line::from(Span::styled(
-            " what it's about, then what's said: orders.status 3 = cancelled · ↵ add",
-            dim(),
-        )));
+        lines.push(Line::from(Span::styled(format!(" {}", t!("memory.add_help")), dim())));
     } else {
-        lines.push(Line::from(Span::styled(" shown to models with the tables they're about, once confirmed", dim())));
-        lines.push(Line::from(Span::styled(" a add · c confirm · d forget · Esc close", dim())));
+        lines.push(Line::from(Span::styled(format!(" {}", t!("memory.shown")), dim())));
+        lines.push(Line::from(Span::styled(format!(" {}", t!("memory.keys")), dim())));
     }
     let project = app.project().map(|p| p.name.to_uppercase()).unwrap_or_default();
-    f.render_widget(Paragraph::new(lines).block(popup(&format!("MEMORY · {project}"), t.accent)), rect);
+    f.render_widget(Paragraph::new(lines).block(popup(&format!("{} · {project}", t!("memory.title")), t.accent)), rect);
 }
 
 /// The save-as / rename prompt.
@@ -418,15 +425,15 @@ fn draw_tab_prompt(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
     let Some(prompt) = &app.tab_prompt else { return };
     let title = match prompt.kind {
-        TabPromptKind::SaveAs => "SAVE QUERY",
-        TabPromptKind::Rename | TabPromptKind::RenameSaved(_) => "RENAME",
+        TabPromptKind::SaveAs => t!("tab_prompt.save"),
+        TabPromptKind::Rename | TabPromptKind::RenameSaved(_) => t!("tab_prompt.rename"),
     };
     let rect = centered_box(area, fit(64, 24, area.width), 5);
     f.render_widget(Clear, rect);
     let lines = vec![
         Line::from([vec![Span::styled(" › ", bold(t.accent))], input_spans(&prompt.text, fg(t.text_bright))].concat()),
         Line::default(),
-        Line::from(Span::styled(" group/name, e.g. reports/churn by month · ↵ ok · Esc cancel", dim())),
+        Line::from(Span::styled(format!(" {}", t!("tab_prompt.help")), dim())),
     ];
     f.render_widget(Paragraph::new(lines).block(popup(title, t.accent)), rect);
 }
@@ -472,7 +479,7 @@ fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
     let width = fit(84, 30, area.width);
     let col = (width.saturating_sub(2) / 2) as usize;
     // Writes and transactions first, then the query, then the rest.
-    const ORDER: &str = "xcreaf-inzmltodpush";
+    const ORDER: &str = "xcreaf-inzmlgtodpush,";
     let mut keys = app.keymap.leader_keys();
     // The editor's own (explain, format…) only from the editor; they still
     // work elsewhere, they're just not what's at hand there.
@@ -487,8 +494,8 @@ fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
     keys.sort_by_key(|(c, _)| ORDER.find(*c).unwrap_or(ORDER.len()));
     let mut leader: Vec<(String, String)> =
         keys.into_iter().map(|(c, a)| (c.to_string(), a.brief().to_string())).collect();
-    leader.push(("?".into(), "all keys".into()));
-    let (pane, pane_keys) = chrome::pane_keys(app);
+    leader.push(("?".into(), t!("menu.all_keys").into()));
+    let (_, pane_keys) = chrome::pane_keys(app);
     // The open tabs by number: Ctrl+K 2 goes to the second.
     let tabs: Vec<(String, String)> = app
         .tabs
@@ -497,17 +504,21 @@ fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
         .take(9)
         .map(|(i, tab)| {
             let dirty = if app.tab_dirty(i) { " ●" } else { "" };
-            let here = if i == app.active_tab { " (this one)" } else { "" };
+            let here = if i == app.active_tab { format!(" ({})", t!("menu.this_one")) } else { String::new() };
             ((i + 1).to_string(), format!("{}{dirty}{here}", tab.name))
         })
         .collect();
 
-    let mut lines = vec![Line::from(Span::styled(" THEN PRESS", bold(t.accent)))];
+    let mut lines = vec![Line::from(Span::styled(format!(" {}", t!("menu.then_press")), bold(t.accent)))];
     lines.extend(two_columns(&leader, col, bold(t.accent)));
     lines.push(Line::default());
     if app.tabs.len() > 1 {
         let more = app.tabs.len().saturating_sub(9);
-        let title = if more > 0 { format!(" TABS (+{more} more: type to search)") } else { " TABS".to_string() };
+        let title = if more > 0 {
+            format!(" {} ({})", t!("menu.tabs"), t!("menu.more_tabs", more = more))
+        } else {
+            format!(" {}", t!("menu.tabs"))
+        };
         lines.push(Line::from(Span::styled(title, bold(t.accent))));
         lines.extend(two_columns(&tabs, col, bold(t.accent)));
         lines.push(Line::default());
@@ -515,8 +526,18 @@ fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
     // The letters above take the keys while this menu is open: these are
     // for the pane itself.
     lines.push(Line::from(vec![
-        Span::styled(format!(" IN THE {}", pane.to_uppercase()), bold(t.accent)),
-        Span::styled("  (close this menu, then press)", dim()),
+        Span::styled(
+            format!(
+                " {}",
+                match app.focus {
+                    Focus::Editor => t!("menu.in_editor"),
+                    Focus::Results => t!("menu.in_results"),
+                    Focus::Schema => t!("menu.in_navigator"),
+                }
+            ),
+            bold(t.accent),
+        ),
+        Span::styled(format!("  {}", t!("menu.close_then_press")), dim()),
     ]));
     // Two columns if nothing gets cut, else one, if it fits on the screen.
     let rows_left = usize::from(area.height).saturating_sub(lines.len() + 6);
@@ -526,7 +547,7 @@ fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
         lines.extend(one_column(&pane_keys, usize::from(width.saturating_sub(2)), bold(t.text)));
     }
     lines.push(Line::default());
-    lines.push(Line::from(Span::styled(" Type to search every command · F1 all keys · Esc closes", dim())));
+    lines.push(Line::from(Span::styled(format!(" {}", t!("menu.search")), dim())));
 
     let height = (lines.len() as u16 + 2).min(area.height);
     let rect = Rect { y: area.y + area.height.saturating_sub(height).min(2), ..centered_box(area, width, height) };
@@ -551,7 +572,7 @@ fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
     let rows = (area.height.saturating_sub(6) as usize).clamp(1, 14).min(items.len().max(1));
     let rect = Rect { y: area.y + 2, ..centered_box(area, width, (rows as u16 + 4).min(area.height)) };
     f.render_widget(Clear, rect);
-    let block = popup("COMMANDS", t.accent);
+    let block = popup(if palette.tabs_only { t!("tab_list.title") } else { t!("palette.title") }, t.accent);
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     let [search, list] = Layout::default()
@@ -582,7 +603,11 @@ fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
             ])
         })
         .collect();
-    let lines = if lines.is_empty() { vec![Line::from(Span::styled(" No matching command", dim()))] } else { lines };
+    let lines = if lines.is_empty() {
+        vec![Line::from(Span::styled(format!(" {}", t!("palette.none")), dim()))]
+    } else {
+        lines
+    };
     f.render_widget(Paragraph::new(lines), list);
 }
 
@@ -603,11 +628,11 @@ fn draw_tx_picker(f: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
     lines.push(Line::default());
-    lines.push(Line::from(Span::styled(" ● current · Esc keeps it", dim())));
+    lines.push(Line::from(Span::styled(format!(" {}", t!("tx_picker.help")), dim())));
     let width = fit(lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 2, 30, area.width);
     let rect = centered_box(area, width, lines.len() as u16 + 2);
     f.render_widget(Clear, rect);
-    f.render_widget(Paragraph::new(lines).block(popup("TRANSACTION MODE", t.accent)), rect);
+    f.render_widget(Paragraph::new(lines).block(popup(t!("tx_picker.title"), t.accent)), rect);
 }
 
 /// After writes ran in a transaction: commit or roll back?
@@ -616,24 +641,21 @@ fn draw_review(f: &mut Frame, app: &App, area: Rect) {
     let Some(review) = &app.review else { return };
     let rows = review.rows_affected;
     let lines = vec![
-        Line::from(Span::styled(
-            format!("{rows} row{} changed, not committed yet", if rows == 1 { "" } else { "s" }),
-            bold(t.warn),
-        )),
+        Line::from(Span::styled(tn!("review.changed", rows), bold(t.warn))),
         Line::default(),
         Line::from(vec![
             Span::styled(" c ", bold(t.on_accent).bg(t.ok)),
-            Span::styled(" commit   ", fg(t.text)),
+            Span::styled(format!(" {}   ", t!("review.commit")), fg(t.text)),
             Span::styled(" r ", bold(t.on_accent).bg(t.error)),
-            Span::styled(" roll back   ", fg(t.text)),
+            Span::styled(format!(" {}   ", t!("review.rollback")), fg(t.text)),
             Span::styled(" Esc ", bold(t.text).bg(t.active)),
-            Span::styled(" keep it open to check", muted()),
+            Span::styled(format!(" {}", t!("review.keep_open")), muted()),
         ]),
     ];
     let width = fit(lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4, 40, area.width.saturating_sub(4));
     let rect = centered_box(area, width, 5);
     f.render_widget(Clear, rect);
-    f.render_widget(Paragraph::new(lines).block(popup("REVIEW", t.warn)), rect);
+    f.render_widget(Paragraph::new(lines).block(popup(t!("review.title"), t.warn)), rect);
 }
 
 /// The query parameters form: one line per placeholder.
@@ -662,27 +684,27 @@ fn draw_param_form(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(vec![marker, name, value]));
     }
     lines.push(Line::default());
-    lines.push(Line::from(Span::styled(" numbers and NULL go in as-is, text is quoted, =expr is raw SQL", dim())));
-    lines.push(Line::from(Span::styled(" ↑↓ field · ↵ run · Esc cancel", dim())));
+    lines.push(Line::from(Span::styled(format!(" {}", t!("params.help")), dim())));
+    lines.push(Line::from(Span::styled(format!(" {}", t!("params.keys")), dim())));
     let height = fit(lines.len() as u16 + 2, 5, area.height);
     let rect = centered_box(area, width, height);
     f.render_widget(Clear, rect);
-    f.render_widget(Paragraph::new(lines).block(popup("QUERY PARAMETERS", t.accent)), rect);
+    f.render_widget(Paragraph::new(lines).block(popup(t!("params.title"), t.accent)), rect);
 }
 
 /// The text view's keys (a cell, a row with `x`, a definition…), most
 /// important first; closing it last.
-fn text_view_keys(view: &crate::app::CellView) -> &'static [&'static str] {
+fn text_view_keys(view: &crate::app::CellView) -> Vec<&'static str> {
     if view.record {
-        &["↑↓ scroll, next row", "←→ row", "y copy row", "Esc close"]
+        vec![t!("cell_view.scroll_next_row"), t!("cell_view.row"), t!("cell_view.copy_row"), t!("cell_view.close")]
     } else if view.browse {
-        &["←→ previous / next table", "↑↓ scroll", "y copy", "Esc close"]
+        vec![t!("cell_view.prev_next_table"), t!("cell_view.scroll"), t!("cell_view.copy"), t!("cell_view.close")]
     } else if view.follow.is_some() {
-        &["e open in a tab", "y copy", "↑↓ scroll", "Esc close"]
+        vec![t!("cell_view.open_tab"), t!("cell_view.copy"), t!("cell_view.scroll"), t!("cell_view.close")]
     } else if view.sql.is_some() {
-        &["↑↓ scroll", "y copy SQL", "e open it in a tab there", "Esc close"]
+        vec![t!("cell_view.scroll"), t!("cell_view.copy_sql"), t!("cell_view.open_tab_there"), t!("cell_view.close")]
     } else {
-        &["↑↓ scroll", "y copy", "Esc close"]
+        vec![t!("cell_view.scroll"), t!("cell_view.copy"), t!("cell_view.close")]
     }
 }
 
@@ -740,7 +762,7 @@ pub(super) fn draw_cell_view(f: &mut Frame, app: &mut App, area: Rect) {
     view.max_scroll = u16::try_from(lines.saturating_sub(usize::from(body.height))).unwrap_or(u16::MAX);
     view.scroll = view.scroll.min(view.max_scroll);
     f.render_widget(text.scroll((view.scroll, 0)), body);
-    let hint = fitting_hints(text_view_keys(view), usize::from(keys.width));
+    let hint = fitting_hints(&text_view_keys(view), usize::from(keys.width));
     f.render_widget(Paragraph::new(Span::styled(hint, dim())).style(Style::default().bg(t.inset)), keys);
 }
 
@@ -757,23 +779,36 @@ pub(super) fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
     let mut keys = Vec::new();
     if confirm.offer_transaction {
         keys.push(Span::styled(" t ", bold(t.on_accent).bg(t.ok)));
-        keys.push(Span::styled(" in a transaction, review first   ", fg(t.text)));
+        keys.push(Span::styled(format!(" {}   ", t!("confirm.review_first")), fg(t.text)));
     }
     // Sending a schema to a model: this once, or always for the project.
     if matches!(confirm.action, crate::app::ConfirmAction::ShareSchema { .. }) {
         keys.push(Span::styled(" a ", bold(t.on_accent).bg(t.accent)));
-        keys.push(Span::styled(" always, for this project", fg(t.text)));
+        keys.push(Span::styled(format!(" {}", t!("confirm.always")), fg(t.text)));
     }
     // An agent's write: only `n` or Esc say no, so typing can't.
     let agent = matches!(confirm.action, crate::app::ConfirmAction::AgentWrite(_));
     let share = matches!(confirm.action, crate::app::ConfirmAction::ShareSchema { .. });
     lines.push(Line::from(vec![
         Span::styled(" y ", bold(t.on_accent).bg(color)),
-        Span::styled(if share { " this once   " } else { " yes   " }, fg(t.text)),
+        Span::styled(
+            if share { format!(" {}   ", t!("confirm.this_once")) } else { format!(" {}   ", t!("confirm.yes")) },
+            fg(t.text),
+        ),
         // An agent's write and the sharing question: only `n` or Esc say
         // no, so typing can't.
-        Span::styled(if agent || share { " n / Esc " } else { " any other key " }, bold(t.text).bg(t.active)),
-        Span::styled(if agent || share { " no" } else { " cancel" }, muted()),
+        Span::styled(
+            if agent || share {
+                format!(" {} ", t!("confirm.n_esc"))
+            } else {
+                format!(" {} ", t!("confirm.any_other_key"))
+            },
+            bold(t.text).bg(t.active),
+        ),
+        Span::styled(
+            if agent || share { format!(" {}", t!("confirm.no")) } else { format!(" {}", t!("cell.cancel")) },
+            muted(),
+        ),
     ]));
     if !keys.is_empty() {
         lines.push(Line::from(keys));
@@ -796,7 +831,7 @@ pub(super) fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
     let height = (u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(2)).min(area.height);
     let rect = centered_box(area, width, height);
     f.render_widget(Clear, rect);
-    let title = if confirm.danger { "CONFIRM" } else { "QUESTION" };
+    let title = if confirm.danger { t!("confirm.title_danger") } else { t!("confirm.title") };
     f.render_widget(text.block(popup(title, color)), rect);
 }
 

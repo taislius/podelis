@@ -34,6 +34,7 @@ impl App {
             Some(Overlay::ParamForm) => return self.handle_param_key(key),
             Some(Overlay::TabPrompt) => return self.handle_tab_prompt_key(key),
             Some(Overlay::Library) => return self.handle_library_key(key),
+            Some(Overlay::Settings) => return self.handle_settings_key(key),
             Some(Overlay::Confirm | Overlay::CellView | Overlay::Completion) | None => {}
         }
         // Ctrl+U and Ctrl+W edit the input being typed in, before any key
@@ -120,7 +121,7 @@ impl App {
             // Another tab's query isn't stopped from here: Esc says whose it
             // is (tab and connection) and how to get there.
             KeyCode::Esc if self.run.executing && !self.running_here() && !self.esc_has_a_job() => {
-                return self.set_status(self.running_elsewhere("Esc there stops it"), false);
+                return self.set_status(self.running_elsewhere(t!("run.esc_there")), false);
             }
             KeyCode::Tab => return self.cycle_focus(true),
             KeyCode::BackTab => return self.cycle_focus(false),
@@ -212,6 +213,7 @@ impl App {
                 }
             }
             Some(Overlay::ParamForm) => self.paste_param(text),
+            Some(Overlay::Settings) => self.paste_setting(text),
             Some(Overlay::RowForm) => self.paste_row_form(text),
             // Popups without text to type into.
             Some(
@@ -239,13 +241,13 @@ impl App {
             Focus::Editor => {
                 let ed = &self.tab.editor;
                 if let Some(text) = ed.selected_text() {
-                    return self.copy_text(text, "Copied selection");
+                    return self.copy_text(text, t!("copy.selection"));
                 }
                 let row = ed.cursor().0;
                 let (start, end) = (ed.offset_of((row, 0)), ed.offset_of((row, ed.line_len(row))));
                 let line = ed.text()[start..end].to_string();
                 if !line.trim().is_empty() {
-                    return self.copy_text(line, &format!("Copied line {}", row + 1));
+                    return self.copy_text(line, &t!("copy.line", line = row + 1));
                 }
             }
             Focus::Results if has_row => return self.copy_row(),
@@ -257,12 +259,12 @@ impl App {
             }
             Focus::Schema => {
                 if let Some((name, what)) = self.schema_name() {
-                    return self.copy_text(name.clone(), &format!("Copied {what} {name}"));
+                    return self.copy_text(name.clone(), &t!("copy.name", what = what, name = name));
                 }
             }
             Focus::Results => {}
         }
-        self.set_status("Nothing to copy here · Ctrl+Q quits".to_string(), false);
+        self.set_status(t!("copy.nothing").to_string(), false);
     }
 
     /// The navigator's selection as it's written in SQL (a table with its
@@ -274,12 +276,17 @@ impl App {
         Some(match *panel.nodes().get(panel.selected)? {
             SchemaNode::Table(t) => {
                 let info = &panel.tables[t].info;
-                (format!("{}.{}", quote(&info.schema), quote(&info.name)), if info.is_view { "view" } else { "table" })
+                (
+                    format!("{}.{}", quote(&info.schema), quote(&info.name)),
+                    if info.is_view { t!("kind.view") } else { t!("kind.table") },
+                )
             }
-            SchemaNode::Column(t, c) => (quote(&panel.tables[t].columns[c].name), "column"),
-            SchemaNode::Index(t, i) => (quote(&panel.tables[t].details.as_ref()?.indexes.get(i)?.name), "index"),
+            SchemaNode::Column(t, c) => (quote(&panel.tables[t].columns[c].name), t!("kind.column")),
+            SchemaNode::Index(t, i) => {
+                (quote(&panel.tables[t].details.as_ref()?.indexes.get(i)?.name), t!("kind.index"))
+            }
             // Its name with the argument types, as Postgres shows overloads.
-            SchemaNode::Routine(r) => (panel.routines.get(r)?.name.clone(), "routine"),
+            SchemaNode::Routine(r) => (panel.routines.get(r)?.name.clone(), t!("kind.routine")),
             SchemaNode::Section(_) => return None,
         })
     }
@@ -295,7 +302,7 @@ impl App {
     pub(in crate::app) fn cut_selection(&mut self) {
         if let Some(text) = self.tab.editor.cut() {
             self.edited();
-            self.copy_text(text, "Cut selection");
+            self.copy_text(text, t!("copy.cut"));
         }
     }
 
@@ -382,6 +389,8 @@ impl App {
             Action::Menu => self.open_menu(None),
             Action::Zoom => self.toggle_zoom(),
             Action::ZoomStatement => self.toggle_statement_zoom(),
+            Action::TabList => self.open_tab_list(),
+            Action::Settings => self.open_settings(),
             Action::SelectStatement => self.select_statement(),
             Action::Heartbeat => self.toggle_heartbeat(),
             Action::TxMode => self.open_tx_picker(),
@@ -396,11 +405,8 @@ impl App {
         self.panes.zoomed = !self.panes.zoomed;
         self.panes.statement_zoom = false;
         self.completion = None;
-        let msg = if self.panes.zoomed {
-            format!("Zoomed: Tab moves between panes; {} or Esc returns", self.keymap.label(Action::Zoom))
-        } else {
-            String::new()
-        };
+        let msg =
+            if self.panes.zoomed { t!("zoom.pane", key = self.keymap.label(Action::Zoom)) } else { String::new() };
         self.set_status(msg, false);
     }
 
@@ -413,10 +419,7 @@ impl App {
         self.completion = None;
         if self.panes.statement_zoom {
             self.focus = Focus::Editor;
-            self.set_status(
-                format!("The statement alone: {} or Esc returns", self.keymap.label(Action::ZoomStatement)),
-                false,
-            );
+            self.set_status(t!("zoom.statement", key = self.keymap.label(Action::ZoomStatement)), false);
         } else {
             self.set_status(String::new(), false);
         }
@@ -427,14 +430,14 @@ impl App {
     pub(in crate::app) fn select_statement(&mut self) {
         let text = self.tab.editor.text();
         let Some(range) = sql::statement_range(&text, self.tab.editor.cursor_offset(), self.engine()) else {
-            return self.set_status("No statement here".into(), true);
+            return self.set_status(t!("editor.no_statement_here").into(), true);
         };
         self.focus = Focus::Editor;
         self.completion = None;
         self.tab.editor.select_offsets(range.start, range.end);
         let which = sql::Statements::of(&text, self.engine()).position(range.start);
-        let said = which.map_or_else(String::new, |(n, of)| format!(" ({n} of {of})"));
-        self.set_status(format!("Selected the statement{said}"), false);
+        let said = which.map_or_else(String::new, |(n, of)| format!(" ({})", t!("editor.n_of", n = n, of = of)));
+        self.set_status(t!("editor.selected_statement", said = said), false);
     }
 
     pub(in crate::app) fn cycle_focus(&mut self, forward: bool) {

@@ -47,11 +47,11 @@ impl App {
             (Some(id), _) => id,
             (None, [(id, _)]) => *id,
             (None, []) => {
-                self.set_status("Open another connection in a tab first (Ctrl+O), then compare with it".into(), true);
+                self.set_status(t!("compare.need_other").into(), true);
                 return None;
             }
             (None, _) => {
-                self.set_status("Pick which connection: Ctrl+K, then type “compare”".into(), true);
+                self.set_status(t!("compare.pick").into(), true);
                 return None;
             }
         };
@@ -71,14 +71,14 @@ impl App {
         let Some((there, other)) = self.compare_target(id) else { return };
         // An open stream holds this side's session.
         self.run.stream = None;
-        self.set_status(format!("Comparing the schema with {}…", other.name), false);
+        self.set_status(t!("compare.comparing_schema", name = other.name), false);
         let send = self.sender();
         tokio::spawn(async move {
             let (a, b) = tokio::join!(shapes(&db), shapes(&there));
             let result = match (a, b) {
                 (Ok(a), Ok(b)) => Ok((a, b)),
-                (Err(e), _) => Err(format!("Couldn't read this schema: {e}")),
-                (_, Err(e)) => Err(format!("Couldn't read {}'s schema: {e}", other.name)),
+                (Err(e), _) => Err(t!("compare.read_failed_here", e = e)),
+                (_, Err(e)) => Err(t!("compare.read_failed_there", name = other.name, e = e)),
             };
             send(DbEventKind::SchemaCompared { other, result });
         });
@@ -97,9 +97,9 @@ impl App {
             Side { name: &other.name, engine: other.engine },
         );
         let status = if diff.differences == 0 {
-            format!("The schemas match ({this} and {})", other.name)
+            t!("compare.schemas_match", this = this, name = other.name)
         } else {
-            format!("{} difference(s) between {this} and {}", diff.differences, other.name)
+            tn!("compare.differences", diff.differences, this = this, name = other.name)
         };
         self.log(status.clone(), false);
         self.set_status(status, false);
@@ -108,7 +108,10 @@ impl App {
             text = format!("{text}\n\n{}", diff.sql);
         }
         let sql = (!diff.sql.is_empty()).then_some((diff.sql, other.id));
-        self.cell_view = Some(CellView { sql, ..CellView::new(format!("SCHEMA · {this} ↔ {}", other.name), text) });
+        self.cell_view = Some(CellView {
+            sql,
+            ..CellView::new(format!("{} · {this} ↔ {}", t!("compare.schema_title"), other.name), text)
+        });
     }
 
     /// The project's schema snapshots, newest first.
@@ -128,7 +131,7 @@ impl App {
         let dir = crate::transfer::snapshots::dir(dir, id);
         let connection = self.connection.form.short_name();
         self.run.stream = None;
-        self.set_status(format!("Saving a snapshot of {connection}'s schema…"), false);
+        self.set_status(t!("compare.saving_snapshot", connection = connection), false);
         let send = self.sender();
         tokio::spawn(async move {
             let saved = async {
@@ -147,11 +150,11 @@ impl App {
     pub(super) fn snapshot_saved(&mut self, result: Result<(PathBuf, usize), String>) {
         match result {
             Ok((path, tables)) => {
-                let status = format!("Saved a schema snapshot ({tables} tables): {}", path.display());
+                let status = t!("compare.snapshot_saved", tables = tables, path = path.display());
                 self.log(status.clone(), false);
                 self.set_status(status, false);
             }
-            Err(e) => self.set_status(format!("Couldn't save a snapshot: {e}"), true),
+            Err(e) => self.set_status(t!("compare.snapshot_failed", e = e), true),
         }
     }
 
@@ -163,7 +166,7 @@ impl App {
         };
         let Some(saved) = self.snapshots().into_iter().nth(index) else { return };
         self.run.stream = None;
-        self.set_status(format!("Comparing with the snapshot of {} from {}…", saved.connection, saved.taken), false);
+        self.set_status(t!("compare.comparing_snapshot", connection = saved.connection, taken = saved.taken), false);
         let send = self.sender();
         tokio::spawn(async move {
             let result = async {
@@ -183,8 +186,9 @@ impl App {
             Ok(both) => both,
             Err(e) => return self.set_status(e, true),
         };
-        let this = format!("{} now", self.connection.form.short_name());
-        let then = format!("the snapshot of {} from {}", snapshot.connection, snapshot.taken.replace('T', " "));
+        let this = t!("compare.now", name = self.connection.form.short_name());
+        let then =
+            t!("compare.the_snapshot", connection = snapshot.connection, taken = snapshot.taken.replace('T', " "));
         let diff = diff::schema_diff(
             &now,
             &snapshot.tables,
@@ -192,9 +196,9 @@ impl App {
             Side { name: &then, engine: snapshot.engine },
         );
         let status = if diff.differences == 0 {
-            format!("No changes since {then}")
+            t!("compare.no_changes", then = then)
         } else {
-            format!("{} change(s) since {then}", diff.differences)
+            tn!("compare.changes_since", diff.differences, then = then)
         };
         self.log(status.clone(), false);
         self.set_status(status, false);
@@ -202,9 +206,9 @@ impl App {
         // the database as it was then up to now.
         let mut text = diff.report;
         if !diff.sql.is_empty() {
-            text = format!("{text}\n\nThe changes since, as SQL:\n\n{}", diff.sql);
+            text = format!("{text}\n\n{}\n\n{}", t!("compare.changes_as_sql"), diff.sql);
         }
-        self.cell_view = Some(CellView::new(format!("SCHEMA · {this} ↔ {then}"), text));
+        self.cell_view = Some(CellView::new(format!("{} · {this} ↔ {then}", t!("compare.schema_title")), text));
     }
 
     /// Runs the selection, or the statement at the cursor, on this and
@@ -221,26 +225,26 @@ impl App {
             Some((a, b)) => text[a..b].trim().to_string(),
             None => match sql::statement_at(&text, self.tab.editor.cursor_offset(), self.engine()) {
                 Some(s) => s.to_string(),
-                None => return self.set_status("No statement at cursor".to_string(), true),
+                None => return self.set_status(t!("compare.no_statement").to_string(), true),
             },
         };
         let infos = analyze::analyze(&parse(&sql, self.engine()));
         if infos.is_empty() || infos.iter().any(|i| i.kind != Kind::Read) {
-            return self.set_status("Only reads can be compared: the query runs on both connections".into(), true);
+            return self.set_status(t!("compare.reads_only").into(), true);
         }
         let Some((there, other)) = self.compare_target(id) else { return };
         self.run.stream = None;
         self.run.executing = true;
         self.run.since = Some(Instant::now());
         self.run.owner = None;
-        self.set_result_status(format!("Running on this connection and on {}…", other.name), false);
+        self.set_result_status(t!("compare.running_both", name = other.name), false);
         let send = self.sender();
         let limit = self.settings.row_limit;
         self.task = Some(tokio::spawn(async move {
             let (a, b) = tokio::join!(db.run(&sql, limit), there.run(&sql, limit));
             let result = match (a, b) {
                 (Ok(a), Ok(b)) => Ok((a, b)),
-                (Err(e), _) => Err(format!("Here: {}", crate::db::error_message(&e))),
+                (Err(e), _) => Err(t!("compare.here_failed", e = crate::db::error_message(&e))),
                 (_, Err(e)) => Err(format!("On {}: {}", other.name, crate::db::error_message(&e))),
             };
             send(DbEventKind::RowsCompared { other, result: Box::new(result) });
@@ -270,17 +274,22 @@ impl App {
         // The rows are a comparison, not a table's: nothing to edit or re-run.
         self.tab.last_sql = None;
         self.tab.last_query_infos.clear();
-        let by = diff.key.map(|k| format!(" by {k}")).unwrap_or_default();
+        let by = diff.key.map(|k| format!(" {}", t!("compare.by_key", key = k))).unwrap_or_default();
         let mut status = if diff.only_here + diff.only_there + diff.changed == 0 {
-            format!("The rows match: {} the same here and on {}", diff.same, other.name)
+            t!("compare.rows_match", same = diff.same, name = other.name)
         } else {
-            format!(
-                "Compared{by} with {}: {} only here, {} only there, {} changed, {} the same",
-                other.name, diff.only_here, diff.only_there, diff.changed, diff.same
+            t!(
+                "compare.rows_differ",
+                by = by,
+                name = other.name,
+                here = diff.only_here,
+                there = diff.only_there,
+                changed = diff.changed,
+                same = diff.same
             )
         };
         if truncated {
-            let _ = write!(status, " (first {rows} rows; row_limit)");
+            let _ = write!(status, " ({})", t!("compare.first_rows", rows = rows));
         }
         self.log(status.clone(), false);
         self.set_result_status(status, false);

@@ -14,14 +14,14 @@ pub(super) fn draw_app_bar(f: &mut Frame, app: &mut App, area: Rect) {
     left.push(Span::styled("  │  ", fg(t.line)));
     let project = app.project().map(|p| p.name.clone());
     let crumbs: Vec<String> = match app.screen {
-        Screen::Projects => vec!["projects & connections".into()],
-        Screen::Connections => vec![project.clone().unwrap_or_default(), "connections".into()],
+        Screen::Projects => vec![t!("bar.projects_and_connections").into()],
+        Screen::Connections => vec![project.clone().unwrap_or_default(), t!("hint.connections").into()],
         Screen::Connect => vec![
             project.clone().unwrap_or_default(),
             if app.connection.form.original_name.is_some() {
                 app.connection.form.name.clone()
             } else {
-                "new connection".into()
+                t!("bar.new_connection").into()
             },
         ],
         // The status bar shows the connection.
@@ -37,7 +37,7 @@ pub(super) fn draw_app_bar(f: &mut Frame, app: &mut App, area: Rect) {
         if i > 0 {
             left.push(Span::styled(" / ", dim()));
         } else if named_project {
-            left.push(Span::styled("project ", muted()));
+            left.push(Span::styled(format!("{} ", t!("bar.project")), muted()));
         }
         // The project is a switch: clicking it shows the projects.
         if named_project && i == 0 {
@@ -53,7 +53,7 @@ pub(super) fn draw_app_bar(f: &mut Frame, app: &mut App, area: Rect) {
     // Connecting from the form; on the query screen the status bar has
     // the connection.
     let right = if app.connection.form.connecting && !matches!(app.screen, Screen::Query) {
-        vec![Span::styled(" ◌ CONNECTING… ", bold(t.warn).bg(t.active)), Span::raw(" ")]
+        vec![Span::styled(format!(" ◌ {} ", t!("bar.connecting")), bold(t.warn).bg(t.active)), Span::raw(" ")]
     } else {
         Vec::new()
     };
@@ -92,9 +92,12 @@ fn connection_status(app: &App, room: usize) -> Vec<Span<'static>> {
     if !app.connected() {
         return if app.reconnecting().is_empty() {
             let key = app.keymap.short_label(Action::OpenConnection);
-            vec![Span::styled("○ not connected", muted()), Span::styled(format!(" · {key} connect  "), dim())]
+            vec![
+                Span::styled(format!("○ {}", t!("bar.not_connected")), muted()),
+                Span::styled(format!(" · {key} {}  ", t!("hint.connect")), dim()),
+            ]
         } else {
-            vec![Span::styled("◌ reconnecting…  ", bold(t.warn))]
+            vec![Span::styled(format!("◌ {}  ", t!("bar.reconnecting")), bold(t.warn))]
         };
     }
     let (dot, name_style) = if app.connection_lost { (fg(t.error), bold(t.error)) } else { (fg(t.ok), bold(t.ok)) };
@@ -103,11 +106,11 @@ fn connection_status(app: &App, room: usize) -> Vec<Span<'static>> {
         Span::styled(app.connection.form.short_name(), name_style),
     ];
     if app.connection_lost {
-        spans.push(Span::styled(" · connection lost", bold(t.error)));
+        spans.push(Span::styled(format!(" · {}", t!("bar.connection_lost")), bold(t.error)));
     }
     match app.connection.mode {
-        ConnectionMode::Production => spans.extend([Span::raw(" "), badge("PRODUCTION", t.on_accent, t.error)]),
-        ConnectionMode::ReadOnly => spans.extend([Span::raw(" "), badge("READ-ONLY", t.on_accent, t.ok)]),
+        ConnectionMode::Production => spans.extend([Span::raw(" "), badge(t!("bar.production"), t.on_accent, t.error)]),
+        ConnectionMode::ReadOnly => spans.extend([Span::raw(" "), badge(t!("bar.read_only"), t.on_accent, t.ok)]),
         ConnectionMode::Normal => {}
     }
     let engine = app.connection.form.engine.label();
@@ -205,71 +208,71 @@ fn menu_chip(app: &App) -> Option<Vec<Span<'static>>> {
         _ if app.typing() => return None,
         _ => "m".to_string(),
     };
-    Some(chip(&key, "menu · right-click", false))
+    Some(chip(&key, t!("hint.menu_click"), false))
 }
 
 /// As many key hints as fit in `width` cells, most important first.
 fn key_hints(app: &App, width: u16) -> Vec<Span<'static>> {
     let keys = &app.keymap;
     let editor_hints = [
-        (keys.short_label(Action::RunStatement), "statement"),
+        (keys.short_label(Action::RunStatement), t!("hint.statement")),
         // Right after a word Tab completes; Esc first makes it move on.
-        ((if app.tab_completes() { "ESC TAB" } else { "TAB" }).to_string(), "next pane"),
-        (keys.short_label(Action::NewTab), "new tab"),
-        (keys.short_label(Action::SaveTab), "save"),
-        (keys.short_label(Action::Library), "library"),
-        (keys.short_label(Action::HistoryPrev), "history"),
-        (keys.short_label(Action::Explain), "explain"),
-        (keys.short_label(Action::Palette), "keys"),
+        ((if app.tab_completes() { "ESC TAB" } else { "TAB" }).to_string(), t!("hint.next_pane")),
+        (keys.short_label(Action::NewTab), t!("hint.new_tab")),
+        (keys.short_label(Action::SaveTab), t!("hint.save")),
+        (keys.short_label(Action::Library), t!("hint.library")),
+        (keys.short_label(Action::HistoryPrev), t!("hint.history")),
+        (keys.short_label(Action::Explain), t!("hint.explain")),
+        (keys.short_label(Action::Palette), t!("hint.keys")),
     ];
     let hints: Vec<(String, &str)> = match app.screen {
         Screen::Projects => owned(&[
-            ("↵", "open"),
-            ("n", "new"),
-            ("r", "rename"),
-            ("d", "delete"),
-            ("→", "connections"),
-            ("Esc", "back"),
-            ("?", "keys"),
+            ("↵", t!("hint.open")),
+            ("n", t!("hint.new")),
+            ("r", t!("hint.rename")),
+            ("d", t!("hint.delete")),
+            ("→", t!("hint.connections")),
+            ("Esc", t!("hint.back")),
+            ("?", t!("hint.keys")),
         ]),
         Screen::Connections => owned(&[
-            ("↵", "connect"),
-            ("e", "edit"),
-            ("n", "new"),
-            ("m", "move"),
-            ("d", "delete"),
-            ("c", "containers"),
-            ("←", "projects"),
-            ("Esc", "back"),
+            ("↵", t!("hint.connect")),
+            ("e", t!("hint.edit")),
+            ("n", t!("hint.new")),
+            ("m", t!("hint.move")),
+            ("d", t!("hint.delete")),
+            ("c", t!("hint.containers")),
+            ("←", t!("hint.projects")),
+            ("Esc", t!("hint.back")),
         ]),
         Screen::Connect => owned(&[
-            ("↵", "connect"),
-            ("^S", "save"),
-            ("^T", "test"),
-            ("↑↓", "field"),
-            ("←→", "option"),
-            ("Tab", "next pane"),
+            ("↵", t!("hint.connect")),
+            ("^S", t!("hint.save")),
+            ("^T", t!("hint.test")),
+            ("↑↓", t!("hint.field")),
+            ("←→", t!("hint.option")),
+            ("Tab", t!("hint.next_pane")),
         ]),
         Screen::Query => match app.focus {
             Focus::Results => owned(&[
-                ("↵", "view"),
-                ("s", "sort"),
-                ("/", "filter"),
-                ("c", "edit"),
-                ("e", "export"),
-                ("m", "menu"),
-                ("[ ]", "tabs"),
-                ("?", "keys"),
+                ("↵", t!("hint.view")),
+                ("s", t!("hint.sort")),
+                ("/", t!("hint.filter")),
+                ("c", t!("hint.edit")),
+                ("e", t!("hint.export")),
+                ("m", t!("hint.menu")),
+                ("[ ]", t!("hint.tabs")),
+                ("?", t!("hint.keys")),
             ]),
             Focus::Schema => owned(&[
-                ("↵", "expand"),
-                ("s", "select"),
-                ("d", "definition"),
-                ("/", "filter"),
-                ("o", "order"),
-                ("r", "refresh"),
-                ("m", "menu"),
-                ("?", "keys"),
+                ("↵", t!("hint.expand")),
+                ("s", t!("hint.select")),
+                ("d", t!("hint.definition")),
+                ("/", t!("hint.filter")),
+                ("o", t!("hint.order")),
+                ("r", t!("hint.refresh")),
+                ("m", t!("hint.menu")),
+                ("?", t!("hint.keys")),
             ]),
             Focus::Editor => editor_hints.to_vec(),
         },
@@ -277,11 +280,11 @@ fn key_hints(app: &App, width: u16) -> Vec<Span<'static>> {
     let mut chips = Vec::new();
     if matches!(app.screen, Screen::Query) && app.panes.zoomed {
         let back = if app.focus == Focus::Editor { keys.short_label(Action::Zoom) } else { "z".to_string() };
-        chips.push(chip(&back, "unzoom", true));
+        chips.push(chip(&back, t!("hint.unzoom"), true));
     }
     if app.settings.hints == Hints::Full {
         if matches!(app.screen, Screen::Query) {
-            chips.push(chip(&keys.short_label(Action::Run), "run", true));
+            chips.push(chip(&keys.short_label(Action::Run), t!("hint.run"), true));
         }
         chips.extend(hints.iter().map(|(key, label)| chip(key, label, false)));
     } else {
@@ -295,7 +298,7 @@ fn key_hints(app: &App, width: u16) -> Vec<Span<'static>> {
             _ if app.typing() => "F1".to_string(),
             _ => "?".to_string(),
         };
-        chips.push(chip(&help, "keys", false));
+        chips.push(chip(&help, t!("hint.keys"), false));
         // The pane's menu (what right-click opens), each item with its key.
         chips.extend(menu_chip(app));
     }
@@ -324,140 +327,135 @@ pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String
     let complete = format!("Tab · {}", k(Action::Complete));
     let tx_keys = format!("{} / {}", k(Action::Commit), k(Action::Rollback));
     let comment_format = format!("{} · {}", k(Action::Comment), k(Action::Format));
-    let keys_menu = format!("{} · ? (outside the editor)", k(Action::Palette));
+    let keys_menu = format!("{} · ? ({})", k(Action::Palette), t!("help.outside_editor"));
+    let menu_keys = format!("m · {}", t!("help.right_click"));
     let sections: Vec<(&'static str, Vec<(&str, &str)>)> = match app.screen {
         Screen::Query => vec![
             (
-                "Run",
+                t!("help.run"),
                 vec![
-                    (k(Action::Run), "run the selection, or everything"),
-                    (k(Action::RunStatement), "run the statement at the cursor"),
-                    (k(Action::Explain), "show the query plan (not executed)"),
-                    (k(Action::ExplainAnalyze), "explain analyze (runs it; writes rolled back)"),
-                    (k(Action::TxMode), "transaction mode: auto-commit · manual commit · rollback-only"),
-                    (&tx_keys, "commit / roll back the open transaction"),
-                    ("Esc", "cancel the running query"),
+                    (k(Action::Run), t!("help.run_all")),
+                    (k(Action::RunStatement), t!("help.run_statement")),
+                    (k(Action::Explain), t!("help.explain")),
+                    (k(Action::ExplainAnalyze), t!("help.explain_analyze")),
+                    (k(Action::TxMode), t!("help.tx_mode")),
+                    (&tx_keys, t!("help.commit")),
+                    ("Esc", t!("help.cancel")),
                 ],
             ),
             (
-                "Editor",
+                t!("pane.editor"),
                 vec![
-                    (&complete, "autocomplete"),
-                    (&undo_redo, "undo / redo"),
-                    ("Shift+move · Ctrl+A", "select · select all"),
-                    ("Ctrl+C / Ctrl+X / Ctrl+V", "copy / cut / paste"),
-                    (&history, "query history"),
-                    (k(Action::Find), "find and replace"),
-                    (k(Action::SelectStatement), "select the statement at the cursor"),
-                    (k(Action::ZoomStatement), "the statement alone, taller (F5 runs it; Esc returns)"),
-                    (k(Action::InsertSnippet), "insert a snippet / saved query"),
-                    (k(Action::Menu), "menu of what you can do here"),
-                    (&comment_format, "comment lines · format SQL"),
-                    ("vim keys", "editor_mode = \"vim\" in config.toml"),
-                    ("rebind keys", "[keys] in config.toml"),
+                    (&complete, t!("help.complete")),
+                    (&undo_redo, t!("help.undo")),
+                    (t!("help.key_select"), t!("help.select")),
+                    ("Ctrl+C / Ctrl+X / Ctrl+V", t!("help.copy")),
+                    (&history, t!("help.history")),
+                    (k(Action::Find), t!("help.find")),
+                    (k(Action::SelectStatement), t!("help.select_statement")),
+                    (k(Action::ZoomStatement), t!("help.zoom_statement")),
+                    (k(Action::InsertSnippet), t!("help.snippet")),
+                    (k(Action::Menu), t!("help.menu")),
+                    (&comment_format, t!("help.comment")),
+                    (t!("help.key_vim"), t!("help.vim")),
+                    (t!("help.key_rebind"), t!("help.rebind")),
                 ],
             ),
             (
-                "Results",
+                t!("pane.results"),
                 vec![
-                    ("↵ · v", "full value of the cell"),
-                    ("x · f", "row vertically · follow foreign key"),
-                    ("X · …\\G", "all rows one column per line (end a query with \\G)"),
-                    ("| · o", "pipe rows through a command · open in viewer"),
-                    ("s · /", "sort · filter"),
-                    ("[ · ] · 1 2 3", "rows / messages / plan tabs"),
-                    ("< · >", "previous / next result set of a script"),
-                    (", · . · p", "earlier / later result kept from a run · pin it"),
-                    ("↑↓ · ↵ · y · Y", "in MESSAGES: select · whole message · copy it · copy all"),
-                    ("c", "edit the cell (saved by primary key)"),
-                    ("a · Space · d", "add a row · mark rows · delete marked rows"),
-                    ("C", "copy rows as a Markdown table"),
-                    ("m · right-click", "menu of what you can do here"),
-                    ("y · Y", "copy cell · row"),
-                    ("e · J · i · M", "export CSV · JSON · INSERTs · load more"),
+                    ("↵ · v", t!("help.cell")),
+                    ("x · f", t!("help.row")),
+                    ("X · …\\G", t!("help.vertical")),
+                    ("| · o", t!("help.pipe")),
+                    ("s · /", t!("help.sort")),
+                    ("[ · ] · 1 2 3", t!("help.result_tabs")),
+                    ("< · >", t!("help.result_sets")),
+                    (", · . · p", t!("help.kept")),
+                    ("↑↓ · ↵ · y · Y", t!("help.messages")),
+                    ("c", t!("help.edit_cell")),
+                    ("a · Space · d", t!("help.rows")),
+                    ("C", t!("help.markdown")),
+                    (&menu_keys, t!("help.menu")),
+                    ("y · Y", t!("help.copy_cell")),
+                    ("e · J · i · M", t!("help.export")),
                 ],
             ),
             (
-                "Navigator",
+                t!("navigator.title"),
                 vec![
-                    ("↵ · → / ←", "expand / collapse"),
-                    ("s", "SELECT the table (added to the editor and run)"),
-                    ("d", "definition of the table, view or function"),
-                    ("/ · r", "filter · refresh"),
-                    ("o", "order by name, rows or size"),
-                    ("PgUp · PgDn", "a page up · down"),
-                    (".", "show / hide system tables"),
-                    ("z · m", "zoom · menu of what you can do here"),
-                    ("Space", "command menu (like Ctrl+K)"),
+                    ("↵ · → / ←", t!("help.expand")),
+                    ("s", t!("help.select_table")),
+                    ("d", t!("help.definition")),
+                    ("/ · r", t!("help.filter")),
+                    ("o", t!("help.order")),
+                    ("PgUp · PgDn", t!("help.page")),
+                    (".", t!("help.system")),
+                    ("z · m", t!("help.zoom_menu")),
+                    ("Space", t!("help.command_menu")),
                 ],
             ),
             (
-                "Tabs & library",
+                t!("help.tabs"),
                 vec![
-                    (&tabs, "new tab (same connection) / close"),
-                    (&switch, "switch tab"),
-                    (k(Action::SaveTab), "save tab to the library (group/name)"),
-                    (k(Action::RenameTab), "rename / move to another group"),
-                    (k(Action::Library), "search saved queries and history"),
+                    (&tabs, t!("help.new_tab")),
+                    (&switch, t!("help.switch_tab")),
+                    (k(Action::SaveTab), t!("help.save_tab")),
+                    (k(Action::RenameTab), t!("help.rename_tab")),
+                    (k(Action::Library), t!("help.library")),
                 ],
             ),
             (
-                "Panes",
+                t!("help.panes"),
                 vec![
-                    ("Tab / Shift+Tab", "next / previous pane (in the editor after a word: Esc Tab)"),
-                    (k(Action::ToggleSchema), "show/hide the navigator"),
-                    (k(Action::Zoom), "zoom the pane to full screen (z in results/navigator)"),
+                    ("Tab / Shift+Tab", t!("help.next_pane")),
+                    (k(Action::ToggleSchema), t!("help.navigator")),
+                    (k(Action::Zoom), t!("help.zoom")),
                 ],
             ),
+            (t!("help.ai"), vec![(k(Action::Ask), t!("help.ask")), (k(Action::Memory), t!("help.memory"))]),
             (
-                "AI",
+                t!("help.connection"),
                 vec![
-                    (k(Action::Ask), "ask in plain language: a model writes the SQL (lands in the editor, not run)"),
-                    (k(Action::Memory), "project memory: what models are told; confirm their guesses"),
-                ],
-            ),
-            (
-                "Connection & project",
-                vec![
-                    (&keys_menu, "one-letter actions and this pane's keys; type to search all"),
-                    (k(Action::OpenConnection), "open a connection (new tab if connected)"),
-                    (k(Action::Disconnect), "disconnect this tab"),
-                    (k(Action::Projects), "projects and connections (or click the project in the top bar)"),
+                    (&keys_menu, t!("help.keys_menu")),
+                    (k(Action::OpenConnection), t!("help.open_connection")),
+                    (k(Action::Disconnect), t!("help.disconnect")),
+                    (k(Action::Projects), t!("help.projects_screen")),
                 ],
             ),
         ],
         Screen::Projects | Screen::Connections | Screen::Connect => vec![
             (
-                "Projects",
+                t!("help.projects"),
                 vec![
-                    ("↵", "open (the open project: its connections)"),
-                    ("n · r · d", "new · rename · delete"),
-                    ("Tab / Shift+Tab", "next / previous pane (all three, round)"),
-                    ("→", "its connections (opening it first)"),
-                    ("Esc", "back to the tabs"),
-                    ("q", "quit"),
+                    ("↵", t!("help.open_project")),
+                    ("n · r · d", t!("help.new_rename_delete")),
+                    ("Tab / Shift+Tab", t!("help.next_pane_round")),
+                    ("→", t!("help.its_connections")),
+                    ("Esc", t!("help.back_to_tabs")),
+                    ("q", t!("help.quit")),
                 ],
             ),
             (
-                "Connections",
+                t!("help.connections"),
                 vec![
-                    ("↵", "connect (in a new tab if this one is connected)"),
-                    ("e · →", "edit its settings"),
-                    ("n · d · m", "new · delete · move to another project"),
-                    ("c", "find database containers (Docker, Podman)"),
-                    ("←", "projects"),
-                    ("Esc", "back to the tabs"),
+                    ("↵", t!("help.connect")),
+                    ("e · →", t!("help.edit_settings")),
+                    ("n · d · m", t!("help.new_delete_move")),
+                    ("c", t!("help.containers")),
+                    ("←", t!("hint.projects")),
+                    ("Esc", t!("help.back_to_tabs")),
                 ],
             ),
             (
-                "Settings",
+                t!("help.settings"),
                 vec![
-                    ("↑↓", "move between fields"),
-                    ("← →", "change engine, SSL mode, mode"),
-                    ("↵ · Ctrl+S", "connect · save"),
-                    ("Ctrl+T", "test the connection step by step"),
-                    ("paste a URL", "fills the whole form"),
-                    ("Esc", "back to the connections (unsaved changes are dropped)"),
+                    ("↑↓", t!("help.fields")),
+                    ("← →", t!("help.change_option")),
+                    ("↵ · Ctrl+S", t!("help.connect_save")),
+                    ("Ctrl+T", t!("help.test")),
+                    (t!("help.key_paste_url"), t!("help.fills_form")),
+                    ("Esc", t!("help.back_to_connections")),
                 ],
             ),
         ],
@@ -471,9 +469,9 @@ pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String
 /// The focused pane's section of the help.
 pub(super) fn pane_keys(app: &App) -> (&'static str, Vec<(String, String)>) {
     let title = match app.focus {
-        Focus::Editor => "Editor",
-        Focus::Results => "Results",
-        Focus::Schema => "Navigator",
+        Focus::Editor => t!("pane.editor"),
+        Focus::Results => t!("pane.results"),
+        Focus::Schema => t!("navigator.title"),
     };
     help_sections(app).into_iter().find(|(t, _)| *t == title).unwrap_or((title, Vec::new()))
 }
@@ -494,12 +492,12 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect) {
         }
         lines.push(Line::default());
     }
-    lines.push(Line::from(Span::styled("Esc or ? closes this", dim())));
+    lines.push(Line::from(Span::styled(t!("help.closes"), dim())));
     let height = fit(lines.len() as u16 + 2, 5, area.height);
     let width = lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4;
     let rect = centered_box(area, fit(width.max(64), 20, area.width), height);
     f.render_widget(Clear, rect);
-    f.render_widget(Paragraph::new(lines).block(popup("KEYS", t.accent)), rect);
+    f.render_widget(Paragraph::new(lines).block(popup(t!("help.title"), t.accent)), rect);
 }
 
 /// The version in the badge. Tests draw a fixed one, so a release doesn't
@@ -524,8 +522,11 @@ pub(super) fn draw_splash(f: &mut Frame, app: &App, area: Rect) {
         Line::default(),
         Line::from(brand()).alignment(Alignment::Center),
         Line::default(),
-        Line::from(vec![Span::styled("reopening ", muted()), Span::styled(splash.project.clone(), bold(t.text))])
-            .alignment(Alignment::Center),
+        Line::from(vec![
+            Span::styled(format!("{} ", t!("splash.reopening")), muted()),
+            Span::styled(splash.project.clone(), bold(t.text)),
+        ])
+        .alignment(Alignment::Center),
         Line::default(),
     ];
     for (name, error) in &splash.done {
@@ -542,7 +543,7 @@ pub(super) fn draw_splash(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(vec![Span::styled("  ◌ ", fg(t.warn)), Span::styled(format!("{name}…"), muted())]));
     }
     lines.push(Line::default());
-    lines.push(Line::from(Span::styled("any key continues", dim())).alignment(Alignment::Center));
+    lines.push(Line::from(Span::styled(t!("splash.any_key"), dim())).alignment(Alignment::Center));
     let width = fit(lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 6, 40, area.width);
     let rect = centered_box(area, width, lines.len() as u16 + 2);
     f.render_widget(Clear, rect);

@@ -126,10 +126,9 @@ impl App {
         }
         // Its outcome goes to the result shown.
         if self.running_here() {
-            return self
-                .set_status("Wait for the query to finish (or press Esc) to see an earlier result".into(), true);
+            return self.set_status(t!("runs.wait").into(), true);
         }
-        self.stop_watch(": another result");
+        self.stop_watch(&format!(": {}", t!("runs.another")));
         self.close_stream();
         self.close_cell_popups();
         self.set_result_tab(ResultTab::Rows);
@@ -137,7 +136,7 @@ impl App {
         self.tab.run_at = i;
         self.tab.swap_shown();
         let run = &self.tab.runs[i];
-        let mut status = format!("Result #{} of {} kept", run.number, self.tab.runs.len());
+        let mut status = t!("runs.showing", n = run.number, of = self.tab.runs.len());
         if let Some(source) = &run.source {
             let _ = write!(status, ": {}", one_line(&source.sql));
         }
@@ -148,13 +147,13 @@ impl App {
     pub(super) fn step_run(&mut self, forward: bool) {
         let n = self.tab.runs.len();
         if n < 2 {
-            return self.set_status("No other results kept yet: each query you run keeps its own".into(), false);
+            return self.set_status(t!("runs.none_kept").into(), false);
         }
         let at = self.tab.run_at;
         let next = if forward { (at + 1).min(n - 1) } else { at.saturating_sub(1) };
         if next == at {
-            let edge = if forward { "the newest" } else { "the oldest kept" };
-            return self.set_status(format!("This is {edge} result"), false);
+            let said = if forward { t!("runs.newest") } else { t!("runs.oldest") };
+            return self.set_status(said.to_string(), false);
         }
         self.show_run(next);
     }
@@ -163,11 +162,11 @@ impl App {
     pub(super) fn toggle_pin_run(&mut self) {
         let at = self.tab.run_at;
         let Some(run) = self.tab.runs.get_mut(at) else {
-            return self.set_status("Nothing to pin: run a query first".into(), false);
+            return self.set_status(t!("runs.nothing_to_pin").into(), false);
         };
         run.pinned = !run.pinned;
         let status = if run.pinned {
-            format!("Pinned result #{}: kept however many queries run after it", run.number)
+            t!("runs.pinned", n = run.number)
         } else {
             format!("Unpinned result #{}: it goes once {KEEP} newer ones are kept", run.number)
         };
@@ -186,6 +185,6 @@ impl App {
     /// there as it ran.
     pub(super) fn go_to_run_statement(&mut self) {
         let Some(source) = self.tab.shown_run().and_then(|r| r.source.clone()) else { return };
-        self.go_to_source(&source, "The result's statement", "F6 runs it again");
+        self.go_to_source(&source, t!("runs.its_statement"), t!("runs.f6_again"));
     }
 }

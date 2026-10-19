@@ -26,6 +26,8 @@ pub enum Overlay {
     ParamForm,
     TabPrompt,
     Library,
+    /// The settings (`Ctrl+K ,`).
+    Settings,
     Completion,
 }
 
@@ -43,6 +45,7 @@ impl Overlay {
                 | Overlay::ParamForm
                 | Overlay::TabPrompt
                 | Overlay::Library
+                | Overlay::Settings
                 | Overlay::Agents
                 | Overlay::Completion
         )
@@ -53,7 +56,7 @@ impl App {
     /// Each popup and whether it's open, front first. The text view sits
     /// in front of the activity monitor (a session's full query) and
     /// behind the rest.
-    fn overlay_states(&self) -> [(Overlay, bool); 17] {
+    fn overlay_states(&self) -> [(Overlay, bool); 18] {
         // The text view shows a session's query or an agent's call in front
         // of their windows.
         let over_list = self.activity.is_some() || self.agents.view.is_some();
@@ -73,6 +76,7 @@ impl App {
             (Overlay::ParamForm, self.param_form.is_some()),
             (Overlay::TabPrompt, self.tab_prompt.is_some()),
             (Overlay::Library, self.library_view.is_some()),
+            (Overlay::Settings, self.settings_view.is_some()),
             (Overlay::CellView, self.cell_view.is_some() && !over_list),
             (Overlay::Completion, self.completion.is_some()),
         ]

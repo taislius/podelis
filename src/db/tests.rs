@@ -22,7 +22,7 @@ pub(in crate::db) fn server_params(engine: Engine, prefix: &str, user: &str) -> 
 
 /// The engine's test server, if one is set (none for a file database).
 pub(in crate::db) fn live_params(engine: Engine) -> Option<ConnectParams> {
-    on_engine!(engine, engine::db_tests::live_params())
+    on_driver!(engine, engine::db_tests::live_params())
 }
 
 pub(crate) async fn live_db(engine: Engine) -> Option<Database> {
@@ -34,7 +34,7 @@ pub(crate) async fn live_db(engine: Engine) -> Option<Database> {
 /// again: on its test server (none set: `None`), or a new file. For the
 /// tests every engine shares, so each runs on each engine there is.
 pub(crate) async fn own_live_db(engine: Engine, name: &str) -> Option<(Database, ConnectParams)> {
-    on_engine!(engine, engine::db_tests::own_live_db(name).await)
+    on_driver!(engine, engine::db_tests::own_live_db(name).await)
 }
 
 /// A new SQLite file named after the test (each test its own name), in
@@ -76,7 +76,7 @@ pub(crate) struct TestSql {
 }
 
 pub(crate) fn test_sql(engine: Engine) -> &'static TestSql {
-    on_engine!(engine, &engine::db_tests::TEST_SQL)
+    on_driver!(engine, &engine::db_tests::TEST_SQL)
 }
 
 #[test]
@@ -196,7 +196,7 @@ pub(in crate::db) async fn live_cancel(db: &Database, slow: &str, stopped: impl 
 /// The engine whose database is a file, needing no server: for tests that
 /// need a database that's always there.
 pub(crate) fn file_engine() -> Engine {
-    Engine::ALL.into_iter().find(|e| e.is_file_based()).expect("an engine with file databases")
+    Engine::BUILT.into_iter().find(|e| e.is_file_based()).expect("an engine with file databases")
 }
 
 /// A file database at `path`.
@@ -240,7 +240,7 @@ pub(crate) fn file_profile(name: &str, path: &std::path::Path) -> crate::config:
 #[tokio::test]
 async fn live_ssh_tunnel() {
     let Ok(dest) = std::env::var("PODELIS_TEST_SSH_DEST") else { return };
-    let Some(mut params) = Engine::ALL.into_iter().find_map(live_params) else { return };
+    let Some(mut params) = Engine::BUILT.into_iter().find_map(live_params) else { return };
     params.ssh = Some(dest);
     let db = Database::connect(params.clone()).await.expect("connect through tunnel");
     assert_eq!(cells(&db.run("SELECT 1", DEFAULT_ROW_LIMIT).await.unwrap()), vec![vec![Some("1")]]);
@@ -382,7 +382,7 @@ pub(in crate::db) async fn live_activity(engine: Engine, slow: &str, cancelled_i
 /// and `INSERT` exports).
 #[tokio::test]
 async fn binary_values_show_in_hex_and_go_back_as_literals() {
-    for engine in Engine::ALL {
+    for engine in Engine::BUILT {
         let Some((db, _)) = own_live_db(engine, "podelis_bin").await else { continue };
         let [create, insert, shown] = test_sql(engine).binary;
         db.run(&format!("{create}; INSERT INTO bin_t VALUES ({insert}), ({insert})"), 1).await.unwrap();
@@ -399,7 +399,7 @@ async fn binary_values_show_in_hex_and_go_back_as_literals() {
 /// are made from.
 #[tokio::test]
 async fn links_on_each_engine() {
-    for engine in Engine::ALL {
+    for engine in Engine::BUILT {
         let Some((db, _)) = own_live_db(engine, "podelis_links").await else { continue };
         db.run("DROP TABLE IF EXISTS link_child", 1).await.unwrap();
         db.run("DROP TABLE IF EXISTS link_parent", 1).await.unwrap();
@@ -427,7 +427,7 @@ async fn links_on_each_engine() {
 /// each engine that has them (each says how: `TestSql::comments`).
 #[tokio::test]
 async fn comments_on_each_engine() {
-    for engine in Engine::ALL {
+    for engine in Engine::BUILT {
         let Some((db, _)) = own_live_db(engine, "podelis_comments").await else { continue };
         db.run("DROP VIEW IF EXISTS noted_view", 1).await.unwrap();
         db.run("DROP TABLE IF EXISTS noted", 1).await.unwrap();
@@ -455,7 +455,7 @@ async fn comments_on_each_engine() {
 /// with neither, as SQLite, it can't tell, and says none).
 #[tokio::test]
 async fn full_scans_on_live_servers() {
-    for engine in Engine::ALL {
+    for engine in Engine::BUILT {
         let Some((db, _)) = own_live_db(engine, "podelis_scans").await else { continue };
         db.run("DROP TABLE IF EXISTS scan_big", 1).await.unwrap();
         db.run("CREATE TABLE scan_big (id INT PRIMARY KEY, note VARCHAR(20))", 1).await.unwrap();
@@ -483,7 +483,7 @@ async fn full_scans_on_live_servers() {
 /// session's settings change (or for SQLite, never).
 #[tokio::test]
 async fn live_plans_aside_while_the_session_is_busy() {
-    for engine in Engine::ALL {
+    for engine in Engine::BUILT {
         let Some((db, _)) = own_live_db(engine, "podelis_aside").await else { continue };
         let explain = engine.dialect().explain("SELECT 1", db.version());
         // Where a query can't wait, there's nothing to plan around.

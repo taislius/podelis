@@ -11,9 +11,9 @@ impl Engine {
     }
 
     pub fn cycle(self, forward: bool) -> Engine {
-        let idx = Engine::ALL.iter().position(|e| *e == self).unwrap_or(0);
-        let n = Engine::ALL.len();
-        Engine::ALL[if forward { (idx + 1) % n } else { (idx + n - 1) % n }]
+        let idx = Engine::BUILT.iter().position(|e| *e == self).unwrap_or(0);
+        let n = Engine::BUILT.len();
+        Engine::BUILT[if forward { (idx + 1) % n } else { (idx + n - 1) % n }]
     }
 
     /// A local file: no server, port, user or TLS.
@@ -76,9 +76,9 @@ const MODES: [ConnectionMode; 3] = [ConnectionMode::Normal, ConnectionMode::Prod
 impl ConnectionMode {
     pub fn label(self) -> &'static str {
         match self {
-            ConnectionMode::Normal => "read-write",
-            ConnectionMode::Production => "production",
-            ConnectionMode::ReadOnly => "read-only",
+            ConnectionMode::Normal => t!("mode.normal"),
+            ConnectionMode::Production => t!("mode.production"),
+            ConnectionMode::ReadOnly => t!("mode.read_only"),
         }
     }
 
@@ -111,10 +111,10 @@ const AGENT_ACCESS: [AgentAccess; 4] = [AgentAccess::None, AgentAccess::Read, Ag
 impl AgentAccess {
     pub fn label(self) -> &'static str {
         match self {
-            AgentAccess::None => "not shared",
-            AgentAccess::Read => "read",
-            AgentAccess::Write => "read and write",
-            AgentAccess::Approve => "write when you approve",
+            AgentAccess::None => t!("agent_access.none"),
+            AgentAccess::Read => t!("agent_access.read"),
+            AgentAccess::Write => t!("agent_access.write"),
+            AgentAccess::Approve => t!("agent_access.approve"),
         }
     }
 
@@ -168,24 +168,24 @@ impl TxMode {
     /// What it does, for the picker.
     pub fn explain(self) -> &'static str {
         match self {
-            TxMode::AutoCommit => "each statement is committed as it runs",
-            TxMode::Manual => "changes wait for COMMIT or ROLLBACK",
-            TxMode::RollbackOnly => "statements run, then are always rolled back",
+            TxMode::AutoCommit => t!("tx_mode.autocommit_about"),
+            TxMode::Manual => t!("tx_mode.manual_about"),
+            TxMode::RollbackOnly => t!("tx_mode.rollback_only_about"),
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            TxMode::AutoCommit => "auto-commit",
-            TxMode::Manual => "manual commit",
-            TxMode::RollbackOnly => "rollback-only",
+            TxMode::AutoCommit => t!("tx_mode.autocommit"),
+            TxMode::Manual => t!("tx_mode.manual"),
+            TxMode::RollbackOnly => t!("tx_mode.rollback_only"),
         }
     }
 
     /// Shorter, for the editor's footer.
     pub fn short(self) -> &'static str {
         match self {
-            TxMode::Manual => "manual",
+            TxMode::Manual => t!("tx_mode.manual_short"),
             _ => self.label(),
         }
     }

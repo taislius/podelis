@@ -26,6 +26,9 @@ pub struct Notes {
     /// next drawing scrolls it into view.
     pub selected: Option<usize>,
     pub reveal: bool,
+    /// What following a foreign key said it waits for ("Looking up…"),
+    /// cleared from the results pane when the row comes.
+    pub(super) following: Option<String>,
 }
 
 impl App {
@@ -55,7 +58,7 @@ impl App {
             }
             KeyCode::Char('Y') => {
                 let all: Vec<String> = self.notes.log.iter().map(|m| format!("{}  {}", m.time, m.text)).collect();
-                self.copy_text(all.join("\n"), &format!("Copied {n} messages"));
+                self.copy_text(all.join("\n"), &tn!("copy.messages", n));
                 return true;
             }
             KeyCode::Esc if self.notes.selected.is_some() => {
@@ -77,13 +80,14 @@ impl App {
     pub(super) fn copy_message(&mut self) {
         let Some(m) = self.chosen_message() else { return };
         let text = m.text.clone();
-        self.copy_text(text, "Copied the message");
+        self.copy_text(text, t!("copy.message"));
     }
 
     fn open_message(&mut self) {
         let Some(m) = self.chosen_message() else { return };
-        let title = format!("MESSAGE · {}{}", m.time, if m.is_error { " · error" } else { "" });
-        let view = CellView { copies_text: Some("Copied the message"), ..CellView::new(title, m.text.clone()) };
+        let error = if m.is_error { format!(" · {}", t!("messages.error")) } else { String::new() };
+        let title = format!("{} · {}{error}", t!("messages.title"), m.time);
+        let view = CellView { copies_text: Some(t!("copy.message")), ..CellView::new(title, m.text.clone()) };
         self.cell_view = Some(view);
     }
 

@@ -34,10 +34,10 @@ impl App {
             let (lo, hi) = (a.min(b), a.max(b).min(lines.len().saturating_sub(1)));
             let text = lines[lo..=hi].join("\n");
             let n = hi - lo + 1;
-            self.copy_text(text, &format!("Copied {n} line{} of the plan", if n == 1 { "" } else { "s" }));
+            self.copy_text(text, &tn!("copy.plan_lines", n));
         } else {
             let text = plan.text.clone();
-            self.copy_text(text, "Copied the plan");
+            self.copy_text(text, t!("copy.plan"));
         }
     }
 

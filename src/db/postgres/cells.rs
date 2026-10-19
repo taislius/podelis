@@ -1,7 +1,9 @@
 //! Decoding Postgres values as text.
 
 use super::super::*;
+use rust_decimal::Decimal;
 use sqlx::postgres::{PgRow, PgValueFormat};
+use uuid::Uuid;
 
 macro_rules! try_decode {
     ($row:expr, $idx:expr, $($ty:ty),+ $(,)?) => {

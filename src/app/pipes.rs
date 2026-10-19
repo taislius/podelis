@@ -41,7 +41,7 @@ impl App {
     /// `|`: asks for the command to pipe the rows through.
     pub(super) fn open_pipe_prompt(&mut self) {
         if self.tab.grid.results.as_ref().is_none_or(|r| r.columns.is_empty()) {
-            return self.set_status("No rows to pipe".to_string(), true);
+            return self.set_status(t!("pipes.no_rows").to_string(), true);
         }
         self.pipe_prompt = Some(LineInput::new(self.last_pipe.clone()));
     }
@@ -71,7 +71,7 @@ impl App {
             export::tsv(results, &self.tab.grid.view)
         };
         self.last_pipe.clone_from(&command);
-        self.set_status(format!("Running | {command}…"), false);
+        self.set_status(t!("pipes.running", command = command), false);
         let send = self.sender();
         tokio::spawn(async move {
             let result = pipe_through(&command, input).await;
@@ -83,7 +83,8 @@ impl App {
         match result {
             Ok(output) => {
                 self.set_status(String::new(), false);
-                let text = if output.is_empty() { "(no output)".to_string() } else { export::align_tabs(&output) };
+                let text =
+                    if output.is_empty() { t!("pipes.no_output").to_string() } else { export::align_tabs(&output) };
                 self.cell_view = Some(CellView::new(format!("| {command}"), text));
             }
             Err(e) => self.set_status(format!("| {command}: {e}"), true),
@@ -94,7 +95,7 @@ impl App {
     /// opens it.
     pub(super) fn open_in_viewer(&mut self) {
         if self.tab.grid.results.as_ref().is_none_or(|r| r.columns.is_empty()) {
-            return self.set_status("No rows to open".to_string(), true);
+            return self.set_status(t!("pipes.nothing_to_open").to_string(), true);
         }
         self.open_viewer_menu();
     }
@@ -109,12 +110,12 @@ impl App {
     /// wait for, or in this terminal for a viewer that runs in one.
     pub(super) fn open_rows_as(&mut self, format: OpenFormat) {
         let Some((rows, text)) = self.rows_as(format) else {
-            return self.set_status("No rows to open".to_string(), true);
+            return self.set_status(t!("pipes.nothing_to_open").to_string(), true);
         };
         let dir = opened_dir(&self.data_dir.clone().unwrap_or_else(store::config_dir));
         let file = match write_opened(&dir, format, &text) {
             Ok(file) => file,
-            Err(e) => return self.set_status(format!("Couldn't write the rows: {e}"), true),
+            Err(e) => return self.set_status(t!("pipes.write_failed", e = e), true),
         };
         let viewer = self.viewer_for(format);
         let path = shell_quote(&file.to_string_lossy());
@@ -127,9 +128,9 @@ impl App {
         if !self.may_reach_outside() {
             return;
         }
-        let what = format!("{rows} row(s) as {}", format.name());
+        let what = tn!("pipes.rows_as", rows, format = format.name());
         let send = self.sender();
-        self.set_status(format!("Opening {what}…"), false);
+        self.set_status(t!("pipes.opening", what = what), false);
         let log = dir.join("open.log");
         tokio::spawn(async move {
             let result = start_app(&command, &log).await;
@@ -139,12 +140,12 @@ impl App {
 
     pub(super) fn opened(&mut self, what: &str, command: &str, result: Result<(), String>) {
         match result {
-            Ok(()) => self.set_status(format!("Opened {what}"), false),
+            Ok(()) => self.set_status(t!("pipes.opened", what = what), false),
             // The program, not the whole command: its file's long path
             // would push out why.
             Err(e) => {
                 let program = command.split_whitespace().next().unwrap_or(command);
-                self.set_status(format!("Couldn't open {what} with {program}: {e}"), true);
+                self.set_status(t!("pipes.open_failed", what = what, program = program, e = e), true);
             }
         }
     }
@@ -161,8 +162,8 @@ impl App {
         let _ = std::fs::remove_file(&external.file);
         match status {
             Ok(s) if s.success() => self.set_status(String::new(), false),
-            Ok(s) => self.set_status(format!("`{}` exited with {s}", external.command), true),
-            Err(e) => self.set_status(format!("Couldn't run `{}`: {e}", external.command), true),
+            Ok(s) => self.set_status(t!("pipes.exited", command = external.command, status = s), true),
+            Err(e) => self.set_status(t!("pipes.run_failed", command = external.command, e = e), true),
         }
     }
 }
@@ -199,8 +200,8 @@ impl OpenFormat {
             OpenFormat::Csv => "CSV",
             OpenFormat::Tsv => "TSV",
             OpenFormat::Json => "JSON",
-            OpenFormat::Sql => "INSERT statements",
-            OpenFormat::Text => "a text table",
+            OpenFormat::Sql => t!("pipes.format_sql"),
+            OpenFormat::Text => t!("pipes.format_text"),
         }
     }
 }
@@ -259,7 +260,7 @@ async fn start_app(command: &str, log: &std::path::Path) -> Result<(), String> {
         Ok(Ok(status)) => {
             let said = std::fs::read_to_string(log).unwrap_or_default();
             let said = said.trim().lines().last().unwrap_or_default();
-            Err(if said.is_empty() { format!("it exited with {status}") } else { said.to_string() })
+            Err(if said.is_empty() { t!("pipes.it_exited", status = status) } else { said.to_string() })
         }
         Ok(Err(e)) => Err(e.to_string()),
         Err(_) => Ok(()),
@@ -275,7 +276,7 @@ async fn pipe_through(command: &str, input: String) -> Result<String, String> {
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("couldn't start it: {e}"))?;
+        .map_err(|e| t!("pipes.start_failed", e = e))?;
     // Write in the background: the command may print before reading it all.
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
     tokio::spawn(async move {
@@ -283,13 +284,13 @@ async fn pipe_through(command: &str, input: String) -> Result<String, String> {
     });
     let output = tokio::time::timeout(Duration::from_secs(60), child.wait_with_output())
         .await
-        .map_err(|_| "still running after 60 s; stopped".to_string())?
+        .map_err(|_| t!("pipes.still_running").to_string())?
         .map_err(|e| e.to_string())?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !output.status.success() && stdout.trim().is_empty() {
         let why = stderr.trim();
-        return Err(if why.is_empty() { format!("exited with {}", output.status) } else { why.to_string() });
+        return Err(if why.is_empty() { t!("pipes.exited_with", status = output.status) } else { why.to_string() });
     }
     Ok(if stderr.trim().is_empty() { stdout.into_owned() } else { format!("{stdout}\n{}", stderr.trim_end()) })
 }

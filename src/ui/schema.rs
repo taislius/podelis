@@ -9,17 +9,17 @@ pub(super) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Schema;
     let count = app.connection.schema.as_ref().map_or(0, |s| s.tables.len());
     let info = if app.connection.schema.as_ref().is_some_and(|s| s.loading) {
-        "loading…".to_string()
+        t!("navigator.loading").to_string()
     } else {
         match app.connection.schema.as_ref().map_or(SchemaSort::Name, |s| s.sort) {
-            SchemaSort::Name => format!("{count} objects"),
-            sort => format!("{count} · by {}", sort.label()),
+            SchemaSort::Name => t!("navigator.objects", count = count),
+            sort => t!("navigator.objects_by", count = count, order = sort.label()),
         }
     };
     // " NAVIGATOR " plus the info must fit on the top border.
     let info = if area.width as usize >= 14 + info.chars().count() { info } else { String::new() };
-    let info = if app.panes.zoomed { format!("ZOOMED · {info}") } else { info };
-    let block = pane("Navigator", &info, focused);
+    let info = if app.panes.zoomed { format!("{} · {info}", t!("pane.zoomed")) } else { info };
+    let block = pane(t!("navigator.title"), &info, focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
     let [filter, database, tree] = Layout::default()
@@ -36,7 +36,7 @@ pub(super) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
             Line::from([vec![Span::raw(" / ")], input_spans(&s.filter, fg(t.text_bright))].concat())
         }
         Some(s) if !s.filter.is_empty() => Line::styled(format!(" / {}", s.filter.text()), bold(t.accent)),
-        _ => Line::styled(" / filter by name…", dim()),
+        _ => Line::styled(format!(" / {}", t!("navigator.filter")), dim()),
     };
     f.render_widget(Paragraph::new(line).style(Style::default().bg(t.inset)), filter);
 
@@ -46,7 +46,8 @@ pub(super) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     if panel.tables.is_empty() {
-        let msg = if panel.loading { " Loading…" } else { " No tables" };
+        let msg =
+            format!(" {}", if panel.loading { t!("navigator.loading_tables") } else { t!("navigator.no_tables") });
         f.render_widget(Paragraph::new(msg).style(dim()), tree);
         return;
     }
@@ -77,7 +78,7 @@ fn draw_database_line(f: &mut Frame, app: &App, database: Rect, focused: bool) {
     let db_name = if form.engine.is_file_based() {
         std::path::Path::new(&form.host).file_name().map_or(form.host.clone(), |n| n.to_string_lossy().into_owned())
     } else if form.database.is_empty() {
-        "(default database)".to_string()
+        t!("navigator.default_database").to_string()
     } else {
         form.database.clone()
     };
@@ -104,12 +105,15 @@ fn schema_item(panel: &SchemaPanel, node: SchemaNode, width: usize, show_schema:
     };
     match node {
         SchemaNode::Section(section) => {
-            let title = match section {
-                SchemaSection::Tables => " TABLES",
-                SchemaSection::Views => " VIEWS",
-                SchemaSection::System => " SYSTEM",
-                SchemaSection::Routines => " FUNCTIONS",
-            };
+            let title = format!(
+                " {}",
+                match section {
+                    SchemaSection::Tables => t!("navigator.tables"),
+                    SchemaSection::Views => t!("navigator.views"),
+                    SchemaSection::System => t!("navigator.system"),
+                    SchemaSection::Routines => t!("navigator.functions"),
+                }
+            );
             let n = match section {
                 SchemaSection::Routines => panel.routines.len(),
                 _ => panel.tables.iter().filter(|t| section.holds(&t.info)).count(),
@@ -135,7 +139,7 @@ fn schema_item(panel: &SchemaPanel, node: SchemaNode, width: usize, show_schema:
                 }
             };
             let right = if table.info.is_view {
-                "view".to_string()
+                t!("navigator.view").to_string()
             } else if panel.sort == SchemaSort::Size {
                 table.info.bytes.map(human_bytes).unwrap_or_default()
             } else {
@@ -169,11 +173,11 @@ fn schema_item(panel: &SchemaPanel, node: SchemaNode, width: usize, show_schema:
         SchemaNode::Index(i, x) => {
             let ix = &panel.tables[i].details.as_ref().expect("index rows come from details").indexes[x];
             let kind = if ix.primary {
-                " PK"
+                " PK".to_string()
             } else if ix.unique {
-                " unique"
+                format!(" {}", t!("navigator.unique"))
             } else {
-                ""
+                String::new()
             };
             let right = truncate(&format!("({}){kind}", ix.columns), width / 2);
             let name = truncate(&ix.name, width.saturating_sub(right.chars().count() + 9));

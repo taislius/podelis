@@ -32,6 +32,7 @@ mod manager;
 mod query;
 mod results;
 mod schema;
+mod settings;
 #[cfg(test)]
 mod tests;
 

@@ -1080,7 +1080,7 @@ pub(crate) mod tests {
     /// dry run changes nothing.
     #[tokio::test]
     async fn live_agents_on_servers() {
-        for engine in Engine::ALL {
+        for engine in Engine::BUILT {
             let Some((setup, params)) = crate::db::tests::own_live_db(engine, "podelis_agents").await else { continue };
             let sql = crate::db::tests::test_sql(engine);
             setup.run("DROP TABLE IF EXISTS agent_t", 1).await.unwrap();

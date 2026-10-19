@@ -1,5 +1,6 @@
 ---
 source: src/ui/tests/layout.rs
+assertion_line: 153
 expression: "render(&mut app, 100, 30)"
 ---
 " >_  PODĖLIS v0.0.0   │  project  shop ▼                                                            "
@@ -31,4 +32,4 @@ expression: "render(&mut app, 100, 30)"
 "│                            ││          │ Load more rows                                 M │      │"
 "│                            ││ CELL 02:e│ Zoom this pane (and back)                      z │ 4 ms │"
 "└────────────────────────────┘└──────────│                                                  │──────┘"
-" ● prod  db.internal:3306 · MySQL  3 row(s) in 4 ms─────────────────── ↵ choose · Esc close ┘       "
+" ● prod  db.internal:3306 · MySQL  3 rows in 4 ms───────────────────── ↵ choose · Esc close ┘       "

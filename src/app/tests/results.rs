@@ -583,7 +583,7 @@ async fn add_mark_delete_and_copy_rows() {
     type_text(&mut app, "Žąsis");
     app.handle_key(key(KeyCode::Enter));
     finish(&mut app).await;
-    assert!(app.notes.status.starts_with("Added 1 row(s) · 4 row(s)"), "{}", app.notes.status);
+    assert!(app.notes.status.starts_with("Added 1 row · 4 rows"), "{}", app.notes.status);
     let rows = &app.tab.grid.results.as_ref().unwrap().rows;
     assert_eq!(rows.len(), 4);
     assert_eq!(rows[3], vec![Some("4".to_string()), Some("Žąsis".to_string()), Some("cat".to_string())]);
@@ -607,7 +607,7 @@ async fn add_mark_delete_and_copy_rows() {
     assert_eq!(said(&app), "Copied 2 rows (tab-separated, a line each)");
     app.handle_key(key(KeyCode::Char('d')));
     let confirm = app.confirm.as_ref().expect("asks before deleting");
-    assert_eq!(confirm.message, "Delete 2 row(s) from pets?");
+    assert_eq!(confirm.message, "Delete 2 rows from pets?");
     app.handle_key(key(KeyCode::Char('y')));
     finish(&mut app).await;
     let names: Vec<_> = app.tab.grid.results.as_ref().unwrap().rows.iter().map(|r| r[1].clone().unwrap()).collect();

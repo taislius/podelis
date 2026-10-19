@@ -19,7 +19,7 @@ async fn f7_shows_the_plan_without_running() {
 
 #[tokio::test]
 async fn f7_during_a_slow_query_shows_the_plan_at_once() {
-    for engine in Engine::ALL {
+    for engine in Engine::BUILT {
         let Some(sleep) = crate::db::tests::test_sql(engine).sleep else { continue };
         let Some((mut app, _dir)) = live_app(engine, "podelis_f7").await else { continue };
         finish_catalog(&mut app).await;

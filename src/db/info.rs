@@ -5,7 +5,7 @@ use super::*;
 impl Database {
     /// Name/value pairs describing the session, for the connection panel.
     pub async fn session_info(&self) -> Vec<(String, String)> {
-        let (sql, names) = on_engine!(self.0.engine, engine::queries::SESSION_INFO);
+        let (sql, names) = on_driver!(self.0.engine, engine::queries::SESSION_INFO);
         let mut out = vec![("Server version".to_string(), self.version().to_string())];
         if let Ok(o) = self.run(sql, 1).await
             && let Some(row) = o.rows.first()
@@ -28,6 +28,6 @@ impl Database {
 
     /// The TLS version and cipher of the session, if it's encrypted.
     pub async fn tls_info(&self) -> Option<String> {
-        on_engine!(self.0.engine, engine::queries::tls_info(self).await)
+        on_driver!(self.0.engine, engine::queries::tls_info(self).await)
     }
 }

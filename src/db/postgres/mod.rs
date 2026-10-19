@@ -3,13 +3,19 @@
 mod agent_constraints;
 mod plan;
 
+#[cfg(feature = "postgres")]
 pub(super) mod cells;
+#[cfg(feature = "postgres")]
 pub(super) mod connect;
-#[cfg(test)]
+#[cfg(all(test, feature = "postgres"))]
 pub(in crate::db) mod db_tests;
+#[cfg(feature = "postgres")]
 mod copy;
+#[cfg(feature = "postgres")]
 pub(super) mod passwords;
+#[cfg(feature = "postgres")]
 pub(super) mod pgpass;
+#[cfg(feature = "postgres")]
 pub(super) mod queries;
 
 use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan};
@@ -17,10 +23,13 @@ use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan};
 pub struct Postgres;
 
 /// A row's value as text: what `db::run` reads results with.
+#[cfg(feature = "postgres")]
 pub(super) use cells::pg_cell as cell;
 
 /// What `db::Pool` and `db::Session` hold for this engine (see build.rs).
+#[cfg(feature = "postgres")]
 pub(super) type DriverPool = sqlx::PgPool;
+#[cfg(feature = "postgres")]
 pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::Postgres>;
 
 /// This engine's dialect, for `Engine::dialect`.
@@ -88,6 +97,7 @@ impl Dialect for Postgres {
         })
     }
 
+    #[cfg(feature = "postgres")]
     fn database_error_message(&self, err: &dyn sqlx::error::DatabaseError) -> Option<String> {
         let pg = err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()?;
         let mut msg = pg.message().to_string();
@@ -100,6 +110,7 @@ impl Dialect for Postgres {
         Some(msg)
     }
 
+    #[cfg(feature = "postgres")]
     fn database_error_position(&self, err: &dyn sqlx::error::DatabaseError) -> Option<super::ErrorPos> {
         let pg = err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()?;
         match pg.position() {
@@ -110,6 +121,7 @@ impl Dialect for Postgres {
 
     /// Admin and crash shutdowns (57P01–57P03): said just before the
     /// connection goes.
+    #[cfg(feature = "postgres")]
     fn closes_connection(&self, err: &dyn sqlx::error::DatabaseError) -> bool {
         err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>().is_some()
             && err.code().is_some_and(|c| matches!(c.as_ref(), "57P01" | "57P02" | "57P03"))

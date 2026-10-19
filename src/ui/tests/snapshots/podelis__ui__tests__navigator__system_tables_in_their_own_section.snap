@@ -1,5 +1,6 @@
 ---
 source: src/ui/tests/navigator.rs
+assertion_line: 47
 expression: "render(&mut app, 90, 16)"
 ---
 " >_  PODĖLIS v0.0.0   │  project  shop ▼                                                  "
@@ -17,4 +18,4 @@ expression: "render(&mut app, 90, 16)"
 "│ SYSTEM                   2 ││ 02     2 ben@example.com  line one↵line two              │"
 "│  ▶ pg_catalog.pg_class     ││ CELL 01:id  int4   NULL AS ∅   1–3 / 3  · 3 cols  · 4 ms │"
 "└────────────────────────────┘└──────────────────────────────────────────────────────────┘"
-" ● prod  db.internal:3306 · MySQL  3 row(s) in 4 ms                                       "
+" ● prod  db.internal:3306 · MySQL  3 rows in 4 ms                                         "

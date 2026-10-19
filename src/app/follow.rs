@@ -19,12 +19,19 @@ pub(super) struct Followed {
 const MAX_ROWS: usize = 20;
 
 impl App {
+    /// Says what following is waiting for, kept to take back once it's
+    /// done (by what was said, whatever the language is by then).
+    fn say_following(&mut self, said: String) {
+        self.notes.following = Some(said.clone());
+        self.set_status(said, false);
+    }
+
     pub(super) fn follow_foreign_key(&mut self) {
         match self.foreign_key_query() {
             Ok(Some(found)) => self.look_up(found),
             // Waiting for the tables' foreign keys; tried again when they arrive.
-            Ok(None) => self.set_status("Loading foreign keys…".to_string(), false),
-            Err(why) => self.set_status(format!("Can't follow: {why}"), true),
+            Ok(None) => self.say_following(t!("follow.loading").to_string()),
+            Err(why) => self.set_status(t!("follow.cant", why = why), true),
         }
     }
 
@@ -32,14 +39,14 @@ impl App {
     /// its open transaction too) and shows the row when it comes.
     fn look_up(&mut self, found: Followed) {
         if self.run.executing {
-            return self.set_status("A query is running: follow the key once it's done".into(), true);
+            return self.set_status(t!("follow.wait_for_query").into(), true);
         }
         let Some(db) = self.connection.database.clone() else { return };
         // Rows still streaming hold the session: they stop here (as on
         // switching tabs), or the lookup would wait for the last of them.
         self.close_stream();
         let send = self.sender();
-        self.set_status(format!("Looking up {}…", found.title), false);
+        self.say_following(t!("follow.looking_up", what = found.title));
         tokio::spawn(async move {
             let result = db.run(&found.sql, MAX_ROWS + 1).await.map_err(|e| crate::db::error_message(&e));
             send(DbEventKind::Followed(Box::new((found, result))));
@@ -54,26 +61,22 @@ impl App {
         }
         let outcome = match result {
             Ok(outcome) => outcome,
-            Err(e) => return self.set_status(format!("Couldn't look up {}: {e}", found.title), true),
+            Err(e) => return self.set_status(t!("follow.lookup_failed", what = found.title, e = e), true),
         };
         // "Loading foreign keys…", "Looking up…": done.
-        if self
-            .notes
-            .results_note
-            .as_ref()
-            .is_some_and(|(m, _)| m.starts_with("Loading foreign keys") || m.starts_with("Looking up"))
-        {
+        let said = self.notes.following.take();
+        if said.is_some() && self.notes.results_note.as_ref().map(|(m, _)| m) == said.as_ref() {
             self.notes.results_note = None;
         }
         self.set_status(String::new(), false);
         let name_w = outcome.columns.iter().map(|c| c.chars().count()).max().unwrap_or(0).min(30);
         let mut text = String::new();
         if outcome.rows.is_empty() {
-            text.push_str("No row has that key (it was deleted, or the key isn't enforced).");
+            text.push_str(t!("follow.no_row"));
         }
         for (i, row) in outcome.rows.iter().take(MAX_ROWS).enumerate() {
             if outcome.rows.len() > 1 {
-                let _ = writeln!(text, "{}— row {} —", if i > 0 { "\n" } else { "" }, i + 1);
+                let _ = writeln!(text, "{}— {} —", if i > 0 { "\n" } else { "" }, t!("follow.row", n = i + 1));
             }
             for (name, cell) in outcome.columns.iter().zip(row) {
                 let value = cell.as_deref().map_or_else(|| NULL_TEXT.to_string(), pretty_value);
@@ -82,7 +85,7 @@ impl App {
             }
         }
         if outcome.rows.len() > MAX_ROWS {
-            let _ = write!(text, "\n… and more: `e` opens them all in a tab");
+            let _ = write!(text, "\n{}", t!("follow.and_more"));
         }
         self.cell_view = Some(CellView {
             follow: Some((found.tab_name, found.sql)),
@@ -102,22 +105,22 @@ impl App {
     /// keys of the tables the query reads (a join's too): it must be one
     /// in exactly one of them.
     fn foreign_key_query(&mut self) -> Result<Option<Followed>, String> {
-        let results = self.tab.grid.results.as_ref().ok_or("no results")?;
+        let results = self.tab.grid.results.as_ref().ok_or(t!("rows.no_results"))?;
         let row = *self
             .tab
             .grid
             .view
-            .get(self.tab.grid.table_state.selected().ok_or("no row selected")?)
-            .ok_or("no row selected")?;
-        let column = results.columns.get(self.tab.grid.selected_col).ok_or("no column selected")?.clone();
-        let value = results.rows[row][self.tab.grid.selected_col].clone().ok_or("the value is NULL")?;
-        let (sql, _) = self.tab.last_sql.as_ref().ok_or("no query")?;
+            .get(self.tab.grid.table_state.selected().ok_or(t!("follow.no_row_selected"))?)
+            .ok_or(t!("follow.no_row_selected"))?;
+        let column = results.columns.get(self.tab.grid.selected_col).ok_or(t!("follow.no_column"))?.clone();
+        let value = results.rows[row][self.tab.grid.selected_col].clone().ok_or(t!("follow.value_null"))?;
+        let (sql, _) = self.tab.last_sql.as_ref().ok_or(t!("rows.no_query"))?;
         let engine = self.engine();
         let sources = query_tables(sql, engine);
         if sources.is_empty() {
-            return Err("only results of a SELECT from tables can be followed".into());
+            return Err(t!("follow.not_followable").into());
         }
-        let panel = self.connection.schema.as_ref().ok_or("the schema hasn't loaded yet")?;
+        let panel = self.connection.schema.as_ref().ok_or(t!("rows.schema_loading"))?;
         let lower = |s: &str| s.to_lowercase();
         let mut found: Vec<usize> = sources
             .iter()
@@ -132,7 +135,7 @@ impl App {
         found.sort_unstable();
         found.dedup();
         if found.is_empty() {
-            return Err(format!("{} isn't in the schema", sources[0].1));
+            return Err(t!("follow.not_in_schema", table = sources[0].1));
         }
         // Each table's foreign keys, loaded first where they aren't yet.
         if let Some(&t) = found.iter().find(|&&t| panel.tables[t].details.is_none()) {
@@ -151,15 +154,15 @@ impl App {
         let matching: Vec<_> = keys.iter().filter(|(_, fk)| lower(&fk.column) == lower(&column)).collect();
         let (t, fk) = match matching.as_slice() {
             [one] => **one,
-            [] if keys.is_empty() => return Err(format!("{column} isn't a foreign key, and these tables have none")),
+            [] if keys.is_empty() => return Err(t!("follow.no_keys", column = column)),
             [] => {
                 let some: Vec<String> =
                     keys.iter().take(4).map(|(_, fk)| format!("{} → {}", fk.column, fk.target_table)).collect();
-                return Err(format!("{column} isn't a foreign key; these are: {}", some.join(", ")));
+                return Err(t!("follow.not_a_key", column = column, keys = some.join(", ")));
             }
             _ => {
                 let tables: Vec<&str> = matching.iter().map(|(t, _)| panel.tables[*t].info.name.as_str()).collect();
-                return Err(format!("{column} is a foreign key in {}: select from one of them", tables.join(" and ")));
+                return Err(t!("follow.several_tables", column = column, tables = tables.join(", ")));
             }
         };
         // SQLite may leave the target column unnamed: the primary key.

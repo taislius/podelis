@@ -64,10 +64,10 @@ impl App {
     /// Starts running the last query again every `seconds`: reads only.
     pub(super) fn start_watch(&mut self, seconds: u64) {
         if self.tab.last_sql.is_none() {
-            return self.set_status("Run a query first, then watch it".to_string(), true);
+            return self.set_status(t!("watch.run_first").to_string(), true);
         }
         if !self.tab.last_query_infos.iter().all(|i| i.kind == Kind::Read) {
-            return self.set_status("Only a query that reads can be watched".to_string(), true);
+            return self.set_status(t!("watch.reads_only").to_string(), true);
         }
         let every = Duration::from_secs(seconds);
         let sql = self.tab.last_sql.as_ref().map(|(sql, _)| sql.clone()).unwrap_or_default();
@@ -86,7 +86,7 @@ impl App {
     pub(super) fn stop_watch(&mut self, why: &str) {
         if self.watch.take().is_some() {
             self.tab.grid.changed_rows.clear();
-            self.set_status(format!("Stopped watching{why}"), false);
+            self.set_status(t!("watch.stopped", why = why), false);
         }
     }
 
@@ -104,7 +104,7 @@ impl App {
             .as_ref()
             .is_some_and(|w| w.sql == sql && w.tab == self.active_tab && w.generation == self.generation);
         if !same || !infos.iter().all(|i| i.kind == Kind::Read) {
-            return self.stop_watch(": the query or connection changed");
+            return self.stop_watch(&format!(": {}", t!("watch.changed_query")));
         }
         let filled = self.tab.last_filled.clone();
         self.watch_rerun = true;
@@ -127,9 +127,9 @@ impl App {
         grid.table_state.select(selected.map(|s| s.min(grid.view.len().saturating_sub(1))));
         grid.selected_col = col;
         grid.row_offset = offset;
-        let note = if runs == 1 { String::new() } else { format!(" · {} changed", changed.len()) };
+        let note = if runs == 1 { String::new() } else { format!(" · {}", t!("watch.changed", n = changed.len())) };
         grid.changed_rows = changed;
-        self.set_status(format!("Watching every {every} s · run {runs}{note} · Esc stops"), false);
+        self.set_status(t!("watch.watching", every = every, runs = runs, note = note), false);
     }
 }
 

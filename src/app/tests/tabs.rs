@@ -358,3 +358,39 @@ fn tabs_are_autosaved_when_typing_pauses() {
     let saved = std::fs::read_to_string(dir.path().join("drafts").join(format!("{id}.json"))).unwrap();
     assert!(saved.contains("select 'unsaved work'"), "{saved}");
 }
+
+#[test]
+fn the_tab_list_finds_a_tab_by_name_connection_or_sql() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    for i in 2..=12 {
+        app.handle_key(ctrl('t'));
+        app.tab.editor.set_text(&format!("select {i} from orders_{i}"));
+        app.tabs[app.active_tab].name = format!("report {i}");
+    }
+    app.handle_key(ctrl('k'));
+    app.handle_key(key(KeyCode::Char('g')));
+    let palette = app.palette.as_ref().expect("the tab list");
+    assert!(palette.tabs_only && palette.selected == app.active_tab);
+    // All of them, the shown one marked.
+    assert_eq!(app.palette_items().len(), 12);
+    assert!(app.tab_entry(app.active_tab).ends_with("(this one)"), "{}", app.tab_entry(app.active_tab));
+    // By the SQL in a tab.
+    type_text(&mut app, "orders_7");
+    assert_eq!(app.palette_items(), [crate::app::palette::Command::SwitchTab(6)]);
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.palette.is_none());
+    assert_eq!((app.active_tab, app.tabs[app.active_tab].name.as_str()), (6, "report 7"));
+    // By name, then Esc keeps the tab.
+    app.handle_key(ctrl('k'));
+    app.handle_key(key(KeyCode::Char('g')));
+    type_text(&mut app, "report 1");
+    assert_eq!(app.palette_items().len(), 3, "reports 10, 11 and 12");
+    // Backspace past the start stays in the list (no letters menu there).
+    for _ in 0..12 {
+        app.handle_key(key(KeyCode::Backspace));
+    }
+    assert!(app.palette.as_ref().is_some_and(|p| p.tabs_only && p.searching));
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.active_tab, 6);
+}

@@ -67,6 +67,7 @@ mod rows;
 mod runs;
 mod schema;
 mod session;
+pub mod settings_view;
 mod tabs;
 #[cfg(test)]
 mod tests;
@@ -162,9 +163,9 @@ impl SchemaSort {
 
     pub fn label(self) -> &'static str {
         match self {
-            SchemaSort::Name => "name",
-            SchemaSort::Rows => "rows",
-            SchemaSort::Size => "size",
+            SchemaSort::Name => t!("navigator.by_name"),
+            SchemaSort::Rows => t!("navigator.by_rows"),
+            SchemaSort::Size => t!("navigator.by_size"),
         }
     }
 }
@@ -647,6 +648,8 @@ pub struct App {
     pub panes: panes::Panes,
     /// The projects and connections screen's state.
     pub manager: projects::Manager,
+    /// The settings screen (Ctrl+K ,).
+    pub settings_view: Option<settings_view::SettingsView>,
     /// The shown tab's connection; the other tabs' are parked (`Conns`).
     pub connection: session::Connection,
     /// What agents did and asked for (the agents view).
@@ -789,16 +792,7 @@ impl App {
         let projects_selected =
             store.last_project.as_ref().and_then(|id| store.projects.iter().position(|p| &p.id == id)).unwrap_or(0);
         let projects_message = store_warning.map(|w| (w, true)).or_else(|| {
-            store.migrated_project.as_ref().map(|_| {
-                (
-                    format!(
-                        "Your saved connections were moved into the '{}' project. \
-                         Use m in a project to move connections elsewhere.",
-                        store::DEFAULT_PROJECT
-                    ),
-                    false,
-                )
-            })
+            store.migrated_project.as_ref().map(|_| (t!("projects.migrated", project = store::DEFAULT_PROJECT), false))
         });
         Self {
             screen: Screen::Projects,
@@ -838,7 +832,7 @@ impl App {
             cell_edit: None,
             vim: Vim::default(),
             conns: session::Conns::default(),
-            tabs: vec![TabMeta { name: "Query 1".into(), saved_id: None, conn: None }],
+            tabs: vec![TabMeta { name: tabs::default_tab_name(1), saved_id: None, conn: None }],
             tab: TabState::default(),
             parked: vec![None],
             active_tab: 0,
@@ -870,6 +864,7 @@ impl App {
             run: Run::default(),
             notes: messages::Notes::default(),
             panes: panes::Panes { editor_percent: 40, editor_height: 1, ..panes::Panes::default() },
+            settings_view: None,
             manager: projects::Manager {
                 project_selected: projects_selected,
                 project_message: projects_message,
@@ -950,7 +945,7 @@ impl App {
             .store
             .project_by_name(name)
             .map(|p| p.id.clone())
-            .ok_or_else(|| format!("No project named '{name}'"))?;
+            .ok_or_else(|| t!("projects.no_such", name = name))?;
         self.open_project(&id);
         Ok(())
     }
@@ -1107,7 +1102,7 @@ impl App {
             return;
         }
         self.confirm = Some(Confirm {
-            message: "A transaction is open. Quit and roll it back?".to_string(),
+            message: t!("app.quit_rollback").to_string(),
             details: vec![],
             danger: true,
             action: ConfirmAction::Quit,
@@ -1155,9 +1150,9 @@ impl App {
         }
         let secs = self.run.since.map_or(0, |since| since.elapsed().as_secs());
         Some(match secs {
-            0 => "running…".to_string(),
-            1..60 => format!("running… {secs} s"),
-            _ => format!("running… {}:{:02}", secs / 60, secs % 60),
+            0 => t!("run.running_label").to_string(),
+            1..60 => format!("{} {secs} s", t!("run.running_label")),
+            _ => format!("{} {}:{:02}", t!("run.running_label"), secs / 60, secs % 60),
         })
     }
 
@@ -1208,21 +1203,21 @@ impl App {
 
         let elapsed = format_elapsed(outcome.elapsed);
         let mut status = if outcome.statements == 0 {
-            "Nothing to run".to_string()
+            t!("run.nothing").to_string()
         } else if !outcome.columns.is_empty() {
             if outcome.truncated() {
-                format!("Showing first {} of {} rows in {elapsed}", outcome.rows.len(), outcome.total_rows)
+                t!("run.showing_first", shown = outcome.rows.len(), total = outcome.total_rows, time = elapsed)
             } else {
-                format!("{} row(s) in {elapsed}", outcome.rows.len())
+                tn!("run.rows_in", outcome.rows.len(), time = elapsed)
             }
         } else {
-            format!("{} row(s) affected in {elapsed}", outcome.rows_affected.unwrap_or(0))
+            tn!("run.affected_in", outcome.rows_affected.unwrap_or(0), time = elapsed)
         };
         if outcome.statements > 1 {
-            let _ = write!(status, " · {} statements", outcome.statements);
+            let _ = write!(status, " · {}", tn!("run.statements", outcome.statements));
         }
         if sets > 1 {
-            let _ = write!(status, " · {sets} result sets (< > to switch)");
+            let _ = write!(status, " · {}", tn!("run.result_sets", sets));
         }
         self.set_status(status, false);
     }
@@ -1240,9 +1235,18 @@ impl App {
         }
         self.close_cell_popups();
         let Some(next) = &self.tab.grid.results else { return };
-        let from = if next.statement > 0 { format!(", from statement {}", next.statement) } else { String::new() };
-        let status =
-            format!("Result set {}/{}{from}: {} row(s)", index + 1, self.tab.grid.result_sets.len(), next.total_rows);
+        let from = if next.statement > 0 {
+            format!(", {}", t!("run.from_statement", n = next.statement))
+        } else {
+            String::new()
+        };
+        let status = t!(
+            "run.result_set",
+            n = index + 1,
+            of = self.tab.grid.result_sets.len(),
+            from = from,
+            rows = tn!("rows.rows", next.total_rows)
+        );
         self.set_status(status, false);
         self.set_result_tab(ResultTab::Rows);
     }
@@ -1252,10 +1256,7 @@ impl App {
         match self.tab.grid.step_set(forward) {
             Some(index) => self.show_result_set(index),
             None => {
-                self.set_status(
-                    "Only one result set: a script shows one per statement that returns rows".into(),
-                    false,
-                );
+                self.set_status(t!("run.one_result_set").into(), false);
             }
         }
     }
@@ -1278,7 +1279,7 @@ impl App {
                     match self.connection.form.apply_url(text.trim()) {
                         Ok(()) => {
                             self.connection.form.error = None;
-                            self.connection.form.info = Some("Filled in from the URL".to_string());
+                            self.connection.form.info = Some(t!("connections.from_url").to_string());
                         }
                         Err(e) => self.connection.form.error = Some(e),
                     }
@@ -1339,7 +1340,7 @@ impl App {
                 Some(Some(always)) if settled => {
                     return self.answer_share(question.clone(), project_id.as_deref(), always);
                 }
-                Some(None) if settled => return self.set_status("Not sent".into(), false),
+                Some(None) if settled => return self.set_status(t!("app.not_sent").into(), false),
                 _ => {
                     self.confirm = Some(confirm);
                     return;

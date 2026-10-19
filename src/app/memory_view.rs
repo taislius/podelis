@@ -37,7 +37,7 @@ impl App {
     /// `Ctrl+K k`: the project's memory.
     pub(super) fn open_memory(&mut self) {
         let Some(project_id) = self.current_project.clone() else {
-            return self.set_status("Open a project first: memory is a project's".into(), true);
+            return self.set_status(t!("memory.need_project").into(), true);
         };
         self.memory_view = Some(MemoryView { project_id: project_id.clone(), loading: true, ..MemoryView::default() });
         self.load_memory(project_id);
@@ -64,7 +64,7 @@ impl App {
             let result = result.map_err(|e| match e {
                 CallError::Rpc(e) => AskFailure { code: Some(e.code), message: e.message, data: e.data },
                 CallError::Io(e) => {
-                    AskFailure { code: None, message: format!("the gateway couldn't be reached: {e}"), data: None }
+                    AskFailure { code: None, message: t!("ask.gateway_unreachable", e = e), data: None }
                 }
             });
             send(DbEventKind::GatewayDone(purpose, Box::new(result)));
@@ -99,7 +99,7 @@ impl App {
                 if let Some(view) = &mut self.memory_view {
                     view.loading = false;
                 }
-                self.set_status(format!("Memory: {}", e.message), true);
+                self.set_status(t!("memory.failed", e = e.message), true);
             }
         }
     }
@@ -149,7 +149,7 @@ impl App {
     /// `a` in the memory window: `subject what…`, as `podelis memory add`.
     fn add_fact(&mut self, text: &str, project: String) {
         if crate::gateway::memory::parse_fact(text).is_none() {
-            return self.set_status("Type what it's about, then what's said: orders.status 3 = cancelled".into(), true);
+            return self.set_status(t!("memory.add_hint").into(), true);
         }
         let params = json!({ "text": text });
         self.gateway_call("memory.add", params, GatewayPurpose::MemoryChanged("Remembered", project, None));

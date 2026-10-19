@@ -229,6 +229,13 @@ fn find_replace_comment_and_format() {
     app.tab.editor.set_text("select a, b from t join u on t.id = u.id where a > 1 order by b");
     app.handle_key(key(KeyCode::F(9)));
     assert_eq!(app.tab.editor.text(), "select a, b\nfrom t join u on t.id = u.id\nwhere a > 1\norder by b");
+    // In a script, only the statement at the cursor.
+    app.tab.editor.set_text("select a,b from t where x=1;\nselect c,d from u where y=2;\nselect e from v;");
+    app.tab.editor.set_cursor((1, 3));
+    app.handle_key(key(KeyCode::F(9)));
+    let text = app.tab.editor.text();
+    assert!(text.starts_with("select a,b from t where x=1;\n"), "{text}");
+    assert!(text.contains("select c, d\nfrom u\nwhere y = 2;") && text.ends_with("select e from v;"), "{text}");
 }
 
 #[test]

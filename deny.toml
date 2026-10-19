@@ -6,6 +6,14 @@ all-features = true
 [advisories]
 # Fail on known vulnerabilities and on unmaintained/yanked crates in use.
 yanked = "deny"
+# Unmaintained, not vulnerable: merged into zbus 6, which secret-service
+# (keyring's Linux store, through zbus 5) doesn't use yet. Remove these
+# once secret-service moves to zbus 6.
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: merged into zbus 6; secret-service still on zbus 5" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: merged into zbus 6; secret-service still on zbus 5" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: merged into zbus 6; secret-service still on zbus 5" },
+]
 
 [licenses]
 # Permissive licences compatible with shipping under AGPL-3.0-only.

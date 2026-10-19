@@ -89,7 +89,7 @@ async fn schema_snapshots_show_what_changed_since() {
     run_sql(&mut app, "alter table people add column email text; create table orders (id integer primary key)").await;
     app.compare_snapshot(0);
     until_event(&mut app, |k| matches!(k, DbEventKind::SnapshotCompared(_))).await;
-    assert!(app.notes.status.starts_with("2 change(s) since the snapshot"), "{}", app.notes.status);
+    assert!(app.notes.status.starts_with("2 changes since the snapshot"), "{}", app.notes.status);
     let text = &app.cell_view.as_ref().unwrap().text;
     assert!(text.contains("ONLY HERE\n  table orders") && text.contains("column email TEXT: only here"), "{text}");
     assert!(text.contains("people ADD COLUMN email TEXT;"), "{text}");

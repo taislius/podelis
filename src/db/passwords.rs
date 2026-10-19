@@ -19,7 +19,7 @@ pub struct Found {
 
 pub fn from_environment(params: &ConnectParams) -> Option<Found> {
     let host = params.host.trim().trim_start_matches('[').trim_end_matches(']');
-    on_engine!(params.engine, engine::passwords::from_environment(params, host))
+    on_driver!(params.engine, engine::passwords::from_environment(params, host), other => None)
 }
 
 /// A password found in `from`.

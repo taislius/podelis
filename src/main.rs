@@ -1,3 +1,10 @@
+// Built with fewer database engines than the default (Cargo features), code
+// only the others use goes unused, and with one engine its own pool can't
+// be another's: that's expected there.
+#![cfg_attr(not(feature = "default"), allow(dead_code, unused_imports, irrefutable_let_patterns))]
+
+#[macro_use]
+mod lang;
 mod agents;
 mod app;
 mod chart;
@@ -83,6 +90,7 @@ async fn main() -> Result<()> {
     }
     let (settings, settings_warning) = config::settings::Settings::load(&config::store::config_dir());
     config::theme::set_theme(settings.theme);
+    lang::choose(&settings.language, lang::system().as_deref());
     let (keymap, key_warnings) = config::keys::KeyMap::new(&settings.keys);
     let warnings: Vec<String> = store_warning.into_iter().chain(settings_warning).chain(key_warnings).collect();
     let warning = (!warnings.is_empty()).then(|| warnings.join("\n"));
@@ -100,6 +108,7 @@ async fn main() -> Result<()> {
     // with CSI u) report Ctrl+Enter distinctly from Enter.
     let enhanced = matches!(supports_keyboard_enhancement(), Ok(true));
     let mouse = app.settings.mouse;
+    MOUSE_ON.store(mouse, Ordering::Relaxed);
     enable_input_modes(enhanced, mouse)?;
 
     let ratatui_hook = std::panic::take_hook();
@@ -111,7 +120,8 @@ async fn main() -> Result<()> {
             system::crash::note_background(info);
             return;
         }
-        restore_input_modes(enhanced, mouse);
+        // The mouse as it is now: the settings may have turned it on or off.
+        restore_input_modes(enhanced, MOUSE_ON.load(Ordering::Relaxed));
         ratatui_hook(info);
         if let Some(path) = log {
             let _ = writeln!(
@@ -123,6 +133,8 @@ async fn main() -> Result<()> {
     }));
 
     let result = run(&mut terminal, &mut app, enhanced, mouse).await;
+    // The settings may have turned the mouse on or off since.
+    let mouse = app.settings.mouse;
     app.save_draft();
 
     restore_input_modes(enhanced, mouse);
@@ -199,7 +211,36 @@ async fn received(signal: &mut Option<Signal>) {
     }
 }
 
-async fn run(terminal: &mut DefaultTerminal, app: &mut App, enhanced: bool, mouse: bool) -> Result<()> {
+/// Whether mouse capture is on now, for the panic hook to turn it off.
+static MOUSE_ON: AtomicBool = AtomicBool::new(false);
+
+/// What the app asked of the terminal meanwhile: vim's cursor shape, the
+/// mouse turned on or off in the settings, a copy, a notification.
+fn follow_app(app: &mut App, cursor_shape: &mut Option<SetCursorStyle>, mouse: &mut bool) {
+    // Block cursor in vim Normal/Visual mode, bar in Insert mode.
+    let shape = match app.vim_mode() {
+        None => SetCursorStyle::DefaultUserShape,
+        Some(app::VimMode::Insert) => SetCursorStyle::SteadyBar,
+        Some(_) => SetCursorStyle::SteadyBlock,
+    };
+    if Some(shape) != *cursor_shape {
+        let _ = execute!(stdout(), shape);
+        *cursor_shape = Some(shape);
+    }
+    if app.settings.mouse != *mouse {
+        *mouse = app.settings.mouse;
+        MOUSE_ON.store(*mouse, Ordering::Relaxed);
+        let _ = if *mouse { execute!(stdout(), EnableMouseCapture) } else { execute!(stdout(), DisableMouseCapture) };
+    }
+    if let Some(text) = app.take_clipboard() {
+        copy_to_clipboard(text);
+    }
+    if let Some(text) = app.take_notification() {
+        notify(&text);
+    }
+}
+
+async fn run(terminal: &mut DefaultTerminal, app: &mut App, enhanced: bool, mut mouse: bool) -> Result<()> {
     let (input_tx, mut input_rx) = mpsc::unbounded_channel::<Event>();
     // Paused while another program (the viewer) has the terminal, so its
     // keystrokes aren't read here.
@@ -277,22 +318,7 @@ async fn run(terminal: &mut DefaultTerminal, app: &mut App, enhanced: bool, mous
             () = received(&mut terminate) => break,
         }
 
-        // Block cursor in vim Normal/Visual mode, bar in Insert mode.
-        let shape = match app.vim_mode() {
-            None => SetCursorStyle::DefaultUserShape,
-            Some(app::VimMode::Insert) => SetCursorStyle::SteadyBar,
-            Some(_) => SetCursorStyle::SteadyBlock,
-        };
-        if Some(shape) != cursor_shape {
-            let _ = execute!(stdout(), shape);
-            cursor_shape = Some(shape);
-        }
-        if let Some(text) = app.take_clipboard() {
-            copy_to_clipboard(text);
-        }
-        if let Some(text) = app.take_notification() {
-            notify(&text);
-        }
+        follow_app(app, &mut cursor_shape, &mut mouse);
         if let Some(external) = app.take_external() {
             // Hand the terminal over, run it, and take the terminal back.
             paused.store(true, Ordering::SeqCst);

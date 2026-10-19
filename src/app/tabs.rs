@@ -236,7 +236,7 @@ impl App {
                 TabsFile {
                     active: 0,
                     tabs: vec![SavedTab {
-                        name: "Query 1".into(),
+                        name: default_tab_name(1),
                         sql: draft.unwrap_or_default(),
                         saved_id: None,
                         connection: None,
@@ -374,9 +374,9 @@ impl App {
             return;
         }
         if self.blocks_tabs() {
-            return self.set_status("Wait for the query to finish (or press Esc) before switching tabs".into(), true);
+            return self.set_status(t!("tabs.wait_switch").into(), true);
         }
-        self.stop_watch(": another tab");
+        self.stop_watch(&format!(": {}", t!("tabs.another_tab")));
         // An open stream would hold the session while its tab is hidden.
         self.close_stream();
         self.completion = None;
@@ -390,9 +390,9 @@ impl App {
         self.switch_conn(self.tabs[i].conn);
         // A query running in one tab: said in its results, else in the bar.
         if self.running_here() {
-            self.set_result_status("Running… (Esc to cancel)".to_string(), false);
+            self.set_result_status(t!("tabs.running").to_string(), false);
         } else if self.run.executing {
-            self.notes.status = self.running_elsewhere("its outcome is said here when it's done");
+            self.notes.status = self.running_elsewhere(t!("tabs.outcome_here"));
             (self.notes.status_is_error, self.notes.status_in_results) = (false, false);
         }
     }
@@ -401,15 +401,15 @@ impl App {
     /// `tabs.len() + 1` numbers is always free).
     fn unused_tab_name(&self) -> String {
         (1..=self.tabs.len() + 1)
-            .map(|n| format!("Query {n}"))
+            .map(default_tab_name)
             .find(|name| self.tabs.iter().all(|t| t.name != *name))
-            .unwrap_or_else(|| "Query".to_string())
+            .unwrap_or_else(|| default_tab_name(0))
     }
 
     /// Opens a new tab with `sql` and switches to it.
     pub(super) fn new_tab(&mut self, name: Option<String>, sql: &str, saved_id: Option<String>) {
         if self.blocks_tabs() {
-            return self.set_status("Wait for the query to finish (or press Esc) before opening a tab".into(), true);
+            return self.set_status(t!("tabs.wait_open").into(), true);
         }
         let name = name.unwrap_or_else(|| self.unused_tab_name());
         // A new tab shares the current tab's connection.
@@ -423,22 +423,22 @@ impl App {
     /// SQL meant for that connection runs there.
     pub(super) fn open_tab_on(&mut self, conn: u64, sql: &str) {
         if self.blocks_tabs() {
-            return self.set_status("Wait for the query to finish (or press Esc) before opening a tab".into(), true);
+            return self.set_status(t!("tabs.wait_open").into(), true);
         }
         let name = self.unused_tab_name();
         self.tabs.push(TabMeta { name, saved_id: None, conn: Some(conn) });
         self.parked.push(Some(TabState { editor: TextEditor::with_text(sql), ..TabState::default() }));
         self.switch_tab(self.tabs.len() - 1);
         self.save_draft();
-        self.set_status("Opened on the other connection: review it, then run it there".into(), false);
+        self.set_status(t!("tabs.opened_other").into(), false);
     }
 
     /// Closes the active tab, asking first if it has unsaved changes.
     pub(super) fn request_close_tab(&mut self) {
         if self.tab_dirty(self.active_tab) {
             self.confirm = Some(Confirm {
-                message: format!("Close '{}'? Its unsaved changes will be lost.", self.tabs[self.active_tab].name),
-                details: vec!["Ctrl+S saves it to the library first.".into()],
+                message: t!("tabs.close_unsaved", name = self.tabs[self.active_tab].name),
+                details: vec![t!("tabs.save_first").into()],
                 danger: false,
                 action: ConfirmAction::CloseTab,
                 offer_transaction: false,
@@ -450,7 +450,7 @@ impl App {
 
     pub(super) fn close_tab(&mut self) {
         if self.run.executing {
-            return self.set_status("Wait for the query to finish before closing the tab".into(), true);
+            return self.set_status(t!("tabs.wait_close").into(), true);
         }
         let closing = self.active_tab;
         // A question asked from this tab stops; one from a later tab follows
@@ -458,7 +458,7 @@ impl App {
         self.tab_closing(closing);
         if self.tabs.len() == 1 {
             // Keep one (empty) tab.
-            self.tabs[0] = TabMeta { name: "Query 1".into(), saved_id: None, conn: self.tabs[0].conn };
+            self.tabs[0] = TabMeta { name: default_tab_name(1), saved_id: None, conn: self.tabs[0].conn };
             let mut fresh = TabState::default();
             swap_tab(self, &mut fresh);
             self.run.stream = None;
@@ -484,14 +484,14 @@ impl App {
         let text = self.tab.editor.text();
         let Some(id) = self.tabs[self.active_tab].saved_id.clone() else {
             let name = self.tabs[self.active_tab].name.clone();
-            let text = if name.starts_with("Query ") { String::new() } else { name };
+            let text = if is_default_tab_name(&name) { String::new() } else { name };
             self.tab_prompt = Some(TabPrompt { kind: TabPromptKind::SaveAs, text: LineInput::new(text) });
             return;
         };
         match self.library.update_sql(&id, &text) {
             Ok(()) => {
                 let path = self.library.get(&id).map(library::SavedQuery::path).unwrap_or_default();
-                self.set_status(format!("Saved '{path}'"), false);
+                self.set_status(t!("tabs.saved", path = path), false);
             }
             Err(e) => self.set_status(e, true),
         }
@@ -532,14 +532,14 @@ impl App {
                 let id = self.library.add(text, &self.tab.editor.text())?;
                 let (_, name) = library::split_path(text);
                 self.tabs[self.active_tab] = TabMeta { name, saved_id: Some(id), ..self.tabs[self.active_tab].clone() };
-                self.set_status(format!("Saved '{text}' to the library (F3 to search)"), false);
+                self.set_status(t!("tabs.saved_to_library", name = text), false);
             }
             TabPromptKind::Rename => match self.tabs[self.active_tab].saved_id.clone() {
                 Some(id) => {
                     self.library.rename(&id, text)?;
                     self.tabs[self.active_tab].name = library::split_path(text).1;
                 }
-                None if text.is_empty() => return Err("Give the tab a name".into()),
+                None if text.is_empty() => return Err(t!("tabs.need_name").into()),
                 None => self.tabs[self.active_tab].name = text.to_string(),
             },
             TabPromptKind::RenameSaved(id) => {
@@ -691,5 +691,35 @@ impl App {
             self.new_tab(name, sql, saved_id);
         }
         self.focus = Focus::Editor;
+    }
+}
+
+/// A new tab's name: "Query 1", in the user's language.
+pub(super) fn default_tab_name(n: usize) -> String {
+    t!("tabs.default_name", n = n)
+}
+
+/// Whether `name` is one [`default_tab_name`] gives, in any language (a
+/// tab made before the language changed): nothing to keep when it's saved
+/// under a name of its own.
+fn is_default_tab_name(name: &str) -> bool {
+    crate::lang::in_every_language("tabs.default_name").into_iter().any(|template| {
+        let (before, after) = template.split_once("{n}").unwrap_or((template, ""));
+        name.strip_prefix(before)
+            .and_then(|rest| rest.strip_suffix(after))
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn default_tab_names_in_any_language() {
+        for name in ["Query 1", "Query 12", "Užklausa 3"] {
+            assert!(super::is_default_tab_name(name), "{name}");
+        }
+        for name in ["Query", "Query one", "Queries 1", "monthly report 1"] {
+            assert!(!super::is_default_tab_name(name), "{name}");
+        }
     }
 }

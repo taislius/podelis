@@ -558,7 +558,7 @@ async fn a_read_finishes_in_its_tab_while_one_on_another_connection_is_shown() {
     // Still on beta's tab, with beta's connection; alpha's tab has its rows.
     assert_eq!((app.active_tab, app.connection.form.name.as_str()), (1, "beta"));
     assert!(app.tab.grid.results.is_none());
-    assert!(app.notes.status.starts_with("Query 1: 1 row(s)"), "{}", app.notes.status);
+    assert!(app.notes.status.starts_with("Query 1: 1 row in"), "{}", app.notes.status);
     app.handle_key(alt('1'));
     assert_eq!(app.connection.form.name, "alpha");
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("1".to_string())]]);
@@ -713,7 +713,7 @@ async fn session_is_restored_on_startup() {
 
 #[tokio::test]
 async fn queries_are_cancelled_at_the_connection_timeout() {
-    for engine in Engine::ALL {
+    for engine in Engine::BUILT {
         let Some(sleep) = crate::db::tests::test_sql(engine).sleep else { continue };
         let Some((mut app, _dir)) = live_app(engine, "podelis_timeout").await else { continue };
         app.connection.form.timeout = "1".into();

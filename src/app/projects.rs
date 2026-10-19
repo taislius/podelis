@@ -93,8 +93,7 @@ impl App {
                 }
             }
             KeyCode::Char('d') if is_current => {
-                self.manager.project_message =
-                    Some(("This project is open: switch to another one to delete it".to_string(), true));
+                self.manager.project_message = Some((t!("projects.is_open").to_string(), true));
             }
             KeyCode::Char('d') if selected.is_some() => self.manager.confirm_delete_project = true,
             _ => {}
@@ -187,8 +186,7 @@ impl App {
         match self.store.delete_project(&id) {
             Ok(project) => {
                 let count = project.connections.len();
-                self.manager.project_message =
-                    Some((format!("Deleted project '{}' and its {count} connection(s)", project.name), false));
+                self.manager.project_message = Some((tn!("projects.deleted", count, name = project.name), false));
                 // Its memory for models too (the gateway may keep it open: on
                 // Unix the file goes, and nothing asks for this project again).
                 let memory = self.data_dir.as_ref().map(|d| crate::gateway::memory::path(d, &id));

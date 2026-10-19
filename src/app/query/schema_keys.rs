@@ -35,8 +35,9 @@ impl App {
     /// Shows or hides the database's own catalog tables, for this session.
     pub(in crate::app) fn toggle_system_tables(&mut self) {
         self.settings.system_tables = !self.settings.system_tables;
-        let shown = if self.settings.system_tables { "Showing" } else { "Hiding" };
-        self.set_status(format!("{shown} system tables"), false);
+        let said =
+            if self.settings.system_tables { t!("navigator.showing_system") } else { t!("navigator.hiding_system") };
+        self.set_status(said.to_string(), false);
         self.load_catalog();
     }
 
@@ -151,7 +152,7 @@ impl App {
         panel.selected = step_selectable(&nodes, panel.selected, 1);
         panel.scroll = 0;
         let order = panel.sort.label();
-        self.set_status(format!("Navigator ordered by {order}"), false);
+        self.set_status(t!("navigator.ordered", order = order), false);
     }
 }
 

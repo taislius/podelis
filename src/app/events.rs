@@ -73,7 +73,7 @@ impl App {
         if self.export_task.is_some() {
             #[allow(clippy::cast_precision_loss)] // display only, one decimal
             let rows = crate::db::human_rows(rows as f64);
-            self.set_status(format!("Exporting every row… {rows} so far (Esc stops it)"), false);
+            self.set_status(t!("run.exporting", rows = rows), false);
         }
     }
 
@@ -86,10 +86,10 @@ impl App {
         match result {
             Ok(rows) => {
                 let shown = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-                self.set_status(format!("Exported all {rows} rows to {}", shown.display()), false);
+                self.set_status(t!("run.exported_all", rows = rows, path = shown.display()), false);
             }
             Err(e) => {
-                let status = format!("Export failed: {}", one_line(&e));
+                let status = t!("run.export_failed", e = one_line(&e));
                 self.log(status.clone(), true);
                 self.set_status(status, true);
             }
@@ -105,7 +105,7 @@ impl App {
                 // Without the keychain, the database's own sources (PGPASSWORD,
                 // ~/.pgpass) may still have the password: connect anyway.
                 let connect_now = std::mem::take(&mut self.conns.auto_connect);
-                self.connection.form.error = note.as_ref().map(|n| format!("No saved password: {n}"));
+                self.connection.form.error = note.as_ref().map(|n| t!("run.no_saved_password", note = n));
                 self.connection.form.keychain_note = note;
                 self.screen = Screen::Connect;
                 if connect_now {
@@ -123,7 +123,7 @@ impl App {
                 if crate::db::is_auth_failure(&err) && form.password_command.trim().is_empty() {
                     // Said before clearing: the keychain is only to blame if
                     // there was no password.
-                    let said = format!("{err} · type the password and press Enter (Ctrl+S saves it)");
+                    let said = t!("run.type_password", err = err);
                     form.error = Some(form.connect_failure(&said));
                     form.password.clear();
                     form.focus = ConnectField::Password;
@@ -146,7 +146,7 @@ impl App {
             DbEventKind::MoreFailed(err) => {
                 self.run.fetching_more = false;
                 self.run.stream = None;
-                let status = format!("Couldn't load more rows: {}", one_line(&err));
+                let status = t!("run.load_more_failed", err = one_line(&err));
                 self.log(status.clone(), true);
                 self.set_status(status, true);
             }
@@ -211,8 +211,8 @@ impl App {
         let stuck = self.run.executing && unreachable;
         self.run.cancel_failed = stuck;
         self.connection_lost |= stuck;
-        let again = if stuck { "Esc again stops waiting · " } else { "" };
-        let status = format!("Couldn't cancel: {again}{}", one_line(err));
+        let again = if stuck { format!("{} · ", t!("run.esc_again")) } else { String::new() };
+        let status = t!("run.cancel_failed", again = again, err = one_line(err));
         self.log(status.clone(), true);
         self.set_status(status, true);
     }
@@ -239,8 +239,9 @@ impl App {
         self.screen = Screen::Query;
         self.focus = Focus::Editor;
         self.connection.latency = self.connect_started.take().map(|s| s.elapsed());
-        let ms = self.connection.latency.map(|d| format!(" in {} ms", d.as_millis())).unwrap_or_default();
-        self.log(format!("Connected to {}{ms}", self.connection.form.summary()), false);
+        let ms =
+            self.connection.latency.map(|d| format!(" {}", t!("run.in_ms", ms = d.as_millis()))).unwrap_or_default();
+        self.log(t!("run.connected", summary = self.connection.form.summary(), ms = ms), false);
         self.set_status(String::new(), false);
         if let Some((said, is_error)) = self.keep_new_connection() {
             self.connection.summary = format!("[{project}] {}", self.connection.form.summary());
@@ -249,10 +250,14 @@ impl App {
         // SSL mode `prefer` gave up on TLS: say so, it's not what was asked.
         let tls_failed = self.connection.database.as_ref().and_then(|db| db.tls_failed().map(str::to_string));
         if let Some(why) = tls_failed {
-            let ssh = if self.connection.form.ssh.trim().is_empty() { "" } else { " (the SSH tunnel still encrypts)" };
-            let warning = format!("Not encrypted: TLS isn't possible with this server, so it connected without{ssh}");
-            self.log(format!("{warning}. TLS failed: {why}"), true);
-            self.set_status(format!("{warning} · details in MESSAGES"), true);
+            let ssh = if self.connection.form.ssh.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", t!("run.ssh_encrypts"))
+            };
+            let warning = t!("run.not_encrypted", ssh = ssh);
+            self.log(t!("run.tls_failed", warning = warning, why = why), true);
+            self.set_status(t!("run.details_in_messages", warning = warning), true);
         }
     }
 
@@ -303,7 +308,7 @@ impl App {
                 // meanwhile stays in view.)
                 self.tab.tab_scroll = 0;
                 if stream.is_some() {
-                    self.notes.status.push_str(" · more load as you scroll");
+                    let _ = write!(self.notes.status, " · {}", t!("run.more_as_you_scroll"));
                 }
                 self.run.stream = stream;
                 let status = self.notes.status.clone();
@@ -315,7 +320,7 @@ impl App {
             RunPurpose::RowChange(what) => self.rows_changed(what, &outcome),
         }
         if reconnected {
-            self.notes.status.push_str(" · the connection had dropped: reconnected (session settings were reset)");
+            let _ = write!(self.notes.status, " · {}", t!("run.reconnected"));
         }
         if std::mem::take(&mut self.run.extra.reviewing) {
             self.open_review(rows_affected);
@@ -327,23 +332,19 @@ impl App {
         // ordinary results: stopped by the connection's limit, it's said so.
         if let Some(limit) = self.run.extra.timed_out.take() {
             self.run.cancelling = false;
-            self.notes.status = format!(
-                "Timed out after {} s (the connection's limit), stopped early: {}",
-                limit.as_secs(),
-                self.notes.status
-            );
+            self.notes.status = t!("run.timed_out_early", s = limit.as_secs(), status = self.notes.status);
         } else if std::mem::take(&mut self.run.cancelling) {
-            self.notes.status.push_str(" · cancel requested");
+            let _ = write!(self.notes.status, " · {}", t!("run.cancel_requested"));
         }
         // The outcome is shown with the results.
         self.notes.status_in_results = true;
         let status = self.notes.status.clone();
-        self.notify_if_long(|took| format!("Query finished in {}: {status}", format_elapsed(took)));
+        self.notify_if_long(|took| t!("run.finished_in", took = format_elapsed(took), status = status));
     }
 
     pub(super) fn on_query_failed(&mut self, err: &str, position: Option<ErrorPos>, txn: Option<TxnState>) {
         self.run.db = None;
-        self.stop_watch(": the query failed");
+        self.stop_watch(&format!(": {}", t!("run.query_failed")));
         if err.contains("couldn't reconnect") || err.contains("the server doesn't answer") {
             self.connection_lost = true;
         }
@@ -359,15 +360,15 @@ impl App {
             self.connection.txn = txn;
         }
         let prefix = match self.run.extra.timed_out.take() {
-            Some(limit) => format!("Timed out after {} s (the connection's limit): ", limit.as_secs()),
-            None if self.run.cancelling => "Cancelled: ".to_string(),
+            Some(limit) => format!("{}: ", t!("run.timed_out", s = limit.as_secs())),
+            None if self.run.cancelling => format!("{}: ", t!("run.cancelled")),
             None => String::new(),
         };
         self.run.cancelling = false;
         let mut status = format!("{prefix}{}", one_line(err));
         if let Some(marker) = position.and_then(|p| self.locate_error(&p)) {
             let (row, col) = marker.0;
-            let _ = write!(status, " (line {}, col {})", row + 1, col + 1);
+            let _ = write!(status, " ({})", t!("run.at_line_col", line = row + 1, col = col + 1));
             self.tab.error_marker = Some(marker);
         }
         let dry_run = self.run.extra.dry_run.is_some();
@@ -377,10 +378,10 @@ impl App {
                 self.connection.txn = TxnState::Open;
             }
             if dry_run {
-                status.push_str(" · rolled back (rollback-only)");
+                let _ = write!(status, " · {}", t!("run.rolled_back"));
             } else {
                 let rollback = self.keymap.label(Action::Rollback);
-                let _ = write!(status, " · the transaction is still open: {rollback} rolls back");
+                let _ = write!(status, " · {}", t!("run.still_open", rollback = rollback));
             }
         }
         self.log(status.clone(), true);
@@ -390,7 +391,7 @@ impl App {
         if query {
             self.tab.run_error = Some(status.clone());
         }
-        self.notify_if_long(|took| format!("Query failed after {}: {status}", format_elapsed(took)));
+        self.notify_if_long(|took| t!("run.failed_after", took = format_elapsed(took), status = status));
         if dry_run {
             self.end_dry_run(review::DryRun::Failed(status));
         }
@@ -466,7 +467,7 @@ impl App {
             self.task = None;
             self.run.stream = None;
             let log = crate::system::crash::log_path();
-            self.set_status(format!("Internal error: {message} (details in {})", log.display()), true);
+            self.set_status(t!("run.internal_error", message = message, log = log.display()), true);
         }
     }
 
@@ -533,7 +534,7 @@ impl App {
         let cursor = self.tab.editor.cursor_offset();
         let next = hints.iter().find(|h| h.offset.is_some_and(|o| o > cursor)).or_else(|| hints.first()).cloned();
         let Some(hint) = next else {
-            let why = if self.settings.lint { "No lint warnings" } else { "Lint warnings are off (lint = false)" };
+            let why = if self.settings.lint { t!("run.no_lint") } else { t!("run.lint_off") };
             return self.set_status(why.to_string(), false);
         };
         if let Some(offset) = hint.offset {
