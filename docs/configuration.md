@@ -28,7 +28,7 @@ gateway_idle = 30           # minutes the gateway waits with no client before it
 
 [viewers]                   # what opens result rows (`o`), by format; default: the system's app for the type (no desktop: $PAGER, else less -S)
 csv = "libreoffice --calc"  # `{}` is the file, else it goes last; started on its own, Podėlis runs on
-json = "code"
+json = "code"                # also sql, txt (a text table) and ascii (an ASCII table; else txt's)
 tsv = { command = "vd", terminal = true }  # runs in Podėlis's terminal until it exits (the old `viewer = "vd"` still works: this)
 
 [keys]                      # rebind query-screen keys (replaces that action's defaults)

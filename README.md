@@ -101,8 +101,9 @@ same way tools like `lazygit` do.
   can be given up on (`Esc` twice)
 - **Results:** type-aware columns, sideways scrolling, sort, filter, a
   full-value view (JSON pretty-printed), copying (Ctrl+C: a cell, rows, marked
-  rows as Markdown, CSV, JSON or `INSERT`s), CSV, JSON and SQL `INSERT`
-  export (`export ▾` above the rows lists them all), **opening rows in an
+  rows as Markdown, CSV, JSON, `INSERT`s or an ASCII table), CSV, JSON, SQL
+  `INSERT` and ASCII-table (`+--+`) export (`export ▾` above the rows lists
+  them all), **opening rows in an
   app** by format (`o`: CSV in a spreadsheet, JSON or SQL in an editor,
   in their own window; `[viewers]` in `config.toml` picks the programs),
   **earlier results kept**: each query you run gets its own (`#1`, `#2`…,

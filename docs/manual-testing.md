@@ -112,7 +112,9 @@ OS and the server version when something is off.
 ### Big results
 
 - [ ] `select * from pgbench_accounts` (10M rows): the first rows show at
-  once, scrolling loads more, `M` loads more at once, and memory stays
+  once, scrolling loads more, `M` loads more at once (the first new row is
+  selected, so they're in sight, sorted or filtered too; `M` while a page
+  is coming says so, and its rows follow that page), and memory stays
   reasonable.
 - [ ] Run another query while rows are still streaming: the stream is
   cancelled on the server (check with the activity monitor, `Ctrl+K s`).
@@ -124,10 +126,19 @@ OS and the server version when something is off.
   (`vd`) runs in the terminal and Podėlis comes back after it. A program
   that isn't installed says so in the status bar; `podelis doctor` lists
   the viewers.
+- [ ] The ASCII table (`+--+`): from `export ▾` to a `.txt` file, copied
+  (menu, Ctrl+K "Copy the rows as an ASCII table") and opened (`o`), it
+  lines up with Lithuanian and wide (CJK) text, `NULL`s say so, a cell
+  with line breaks (or a log's ANSI colours) stays one line and lines up,
+  and a huge JSON cell is cut with `…` at
+  120 columns (a long column name stays whole). It opens with `[viewers] ascii`, else with what `txt` uses.
+  "Export all rows" doesn't offer it.
 - [ ] A wide table (many columns): sideways scrolling, and the record view
   (`x`).
 - [ ] Over a slow link (a public server): the UI stays responsive while a
-  query runs, and `Esc` cancels it.
+  query runs, and `Esc` cancels it. Zoomed (`Ctrl+K z`, or `Shift+F12` on
+  the statement), the first `Esc` leaves the zoom and the status bar says
+  the query still runs; the second cancels it.
 - [ ] A dropped link (turn the VPN off, or `docker pause` the server's
   container): after a minute idle, F5 or F7 fails in about 5 s with "the
   server doesn't answer" and *connection lost* in red; during a query,
@@ -215,6 +226,8 @@ OS and the server version when something is off.
 - [ ] Transaction modes (`Ctrl+K x`): manual commit holds writes until F8;
   rollback-only shows how many rows changed and rolls them back.
 - [ ] Quitting or disconnecting with a transaction open asks first.
+  Disconnecting (`Ctrl+K d`) always asks, in orange when it would roll back
+  a transaction or cancel the query running in that tab (and says so).
 - [ ] Edit a cell (`c`), add a row (`a`), delete marked rows (`d`) on a
   table with a primary key.
 - [ ] A connection's query timeout cancels a long query on the server.
@@ -246,8 +259,10 @@ Use two databases with the same tables, e.g. `pgbench -i -s 10 a` and
 ### Schema navigator and server tools
 
 - [ ] A big catalog (Ensembl, MusicBrainz): the navigator loads and filters
-  (`/`) quickly; expanding a table shows indexes and foreign keys; `d`
-  shows definitions.
+  (`/`) quickly, the best matches first (`produc`: the names starting with
+  it, `production_log` and `products`, then those with a word starting
+  with it, `alternative_produce`, then the rest); expanding a table shows
+  indexes and foreign keys; `d` shows definitions.
 - [ ] SQLite: a mistyped file path in the form says it doesn't exist and
   creates nothing; Enter again creates and opens it. `podelis typo.db -e
   "select 1"` refuses without `--create` (`--yes` isn't enough). `Ctrl+T` on
@@ -264,7 +279,12 @@ Use two databases with the same tables, e.g. `pgbench -i -s 10 a` and
 - [ ] A script of several statements: `Ctrl+K v` (and right-click →
   *Select the statement*) selects the one under the cursor or pointer;
   `Shift+F12` shows it alone, `F5` there runs only it, moving out of it
-  shows the next, `Esc` returns. The mouse wheel scrolls the editor
+  shows the next, `Esc` returns. Run the script: the line above each result
+  set shows the statement that made it, and a click there selects only
+  that statement. Drag a selection up past the editor's top edge: it
+  scrolls up and keeps selecting (past the bottom, down), and goes on
+  scrolling with the pointer held still there. The mouse wheel
+  scrolls the editor
   without losing a selection (click the statement line above a plan, then
   scroll).
 - [ ] The activity monitor (`Ctrl+K s`): sessions show, and cancelling or
@@ -307,7 +327,8 @@ With a real key (a few cents) and, if you have it, Ollama:
 
 - [ ] A dozen tabs with long names: the active one shows its whole name (up
   to 40 characters), the others shortened; `‹N` and `›N` say how many
-  don't fit (a click on one goes to the next hidden tab), and the active tab
+  don't fit (a click on one lists every tab, to search by name and pick
+  from, as `Ctrl+K g` does), and the active tab
   is always in sight (Ctrl+PageUp/PageDown through them all). In a narrow
   window its name shortens too, and the `+` stays.
 

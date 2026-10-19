@@ -21,7 +21,7 @@ src/
   gateway/               the separate gateway process: models, context,
                          memory, migrations (see "The gateway")
   transfer/              data in and out: CSV import, exports (CSV, TSV,
-                         JSON, INSERTs, a table: for exports, pipes and -e
+                         JSON, INSERTs, a text table, an ASCII table: for exports, pipes and -e
                          alike), comparing connections, result snapshots
   config/                on disk: projects and connections (store),
                          settings, keys, themes, history, the query library
@@ -57,7 +57,10 @@ everywhere:
   the others are parked in their slots and swapped in to be shown, the
   way tabs are. A re-run of the shown result (`M`, the refresh after a row
   change, watch mode) replaces it instead (`rerun_shown`). Old unpinned
-  ones go past `KEEP` results or `KEEP_ROWS` rows.
+  ones go past `KEEP` results or `KEEP_ROWS` rows. A run's `PlanSource`
+  keeps the engine it ran on; a script's result set is shown with (and
+  links to) its own statement, split from it once (`PlanSource::statement`),
+  and only when the script split into as many statements as it ran.
 - **Popups** (`overlay.rs`): `App::overlays()` lists the open popups front
   first. Key handling, drawing (back to front), mouse blocking and "is the
   user typing" all read it, so a new popup is added in one place.

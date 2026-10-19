@@ -19,12 +19,12 @@ search every command by name. `F1` shows every key.
 | `f` / `-` | Format the selection, or everything / comment or uncomment lines |
 | `i` | Insert a snippet or saved query at the cursor |
 | `n` | Show/hide the navigator |
-| `z` | Zoom the focused pane to the whole screen; again or `Esc` returns. Tab still moves between panes (also `z` in results/schema, or double-click a pane's title) |
+| `z` | Zoom the focused pane to the whole screen; again or `Esc` returns (a zoom goes before a running query or watch mode: the next `Esc` stops that, as the status bar then says). Tab still moves between panes (also `z` in results/schema, or double-click a pane's title) |
 | `v` | Select the statement at the cursor (a right-click puts the cursor under the pointer: *Select the statement* in its menu) |
 | `b` | The statement at the cursor (or the selected lines) alone, in a taller pop-over over the editor, the results under it (also `Shift+F12`). It's the tab's own text, edited in place; moving out of the statement shows the next one, and `F5` runs the one in sight. It stays while another pane has the keys (an Explain's plan, the results under it); again, or `Esc` in the editor, shows the whole text |
 | `m` | Menu of what you can do in the focused pane (also right-click) |
 | `l` / `t` | Search saved queries and history / rename the tab |
-| `o` / `d` | Pick a connection for this tab (opens a new tab if this one is connected) / disconnect this tab |
+| `o` / `d` | Pick a connection for this tab (opens a new tab if this one is connected) / disconnect this tab (asks first, and says so when that rolls back a transaction or cancels the query running here) |
 | `p` | Projects and connections (or click the project's name in the top bar): see [Projects and connections](connections.md) |
 | `u` / `s` / `h` | Connection info / the server's sessions / connection heartbeat on or off |
 | `q` | Ask in plain language: a model writes the SQL for your question (see *Asking in plain language* below) |
@@ -75,7 +75,8 @@ connections and cursors come back after a restart (unless
 `restore_session = false`); results don't, press `F5` to re-run. The active
 tab shows its whole name (up to 40 characters) and the others share what's
 left; when they don't all fit, the row starts later, `‹3` saying how many
-tabs are before it (a click there goes to the one just before).
+tabs are before it and `›2` after it; a click on either lists every tab, to
+search by name and pick from (as `Ctrl+K g` does).
 
 While a query that reads runs, other tabs can be used: switch to one, open
 a new one, read its results. The running tab's name gets a green `…`, its
@@ -152,17 +153,17 @@ When focused:
 | `f` | Follow the foreign key in the selected cell: the row it points to, in a pop-over (one column per line), without leaving the result. It works from a join too, when the column is a foreign key in one of its tables. In the pop-over, `e` opens the lookup in a tab of its own and runs it, `y` copies the row |
 | `b` | Chart the selected column of the rows shown: count, sum, min, max and average, the trend as a sparkline, and a bar per row labelled by another column (the first 200) |
 | `\|` | Pipe the rows shown through a shell command (`grep -i vilnius`, `sort -t$'\t' -k3 -n`, `jq '.[].email'`, `mlr --itsv --opprint stats1 -a sum -f total`…) and show its output |
-| `o` | Open the rows (the marked ones, or those shown) in an app: a menu of formats — CSV, JSON, INSERT statements, TSV, a text table — each with what opens it. By default the system's app for the type (`open` on macOS, `xdg-open` on Linux: a spreadsheet for CSV, an editor for JSON or SQL), in a window of its own while Podėlis runs on; without a desktop to show one (over SSH, a Linux console) `$PAGER`, else `less -S`, in this terminal; `[viewers]` in `config.toml` sets another per format, or one that runs in this terminal (VisiData) |
+| `o` | Open the rows (the marked ones, or those shown) in an app: a menu of formats — CSV, JSON, INSERT statements, TSV, a text table, an ASCII table (`+--+` borders) — each with what opens it. By default the system's app for the type (`open` on macOS, `xdg-open` on Linux: a spreadsheet for CSV, an editor for JSON or SQL), in a window of its own while Podėlis runs on; without a desktop to show one (over SSH, a Linux console) `$PAGER`, else `less -S`, in this terminal; `[viewers]` in `config.toml` sets another per format (`ascii` for the ASCII table, else `txt`'s), or one that runs in this terminal (VisiData) |
 | `s` | Sort by the selected column: ascending → descending → off (numbers by value, then text, then NULLs) |
 | `/` | Filter rows (case-insensitive, any column); `Esc` clears |
 | `c` | Edit the cell: type the new value, `Enter` saves, `Ctrl+N` sets NULL, `Esc` cancels |
 | `a` | Add a row: a form of the table's columns (empty fields get their default; `NULL`; `=expr` for raw SQL) |
 | `Space` / `d` | Mark rows / delete the marked rows (or the current one); always asks first, `t` reviews it in a transaction |
-| `C` | Copy the marked rows (or all rows shown) as a Markdown table; as CSV, JSON or `INSERT` statements from the menu (`m`) or Ctrl+K ("Copy rows as…") |
+| `C` | Copy the marked rows (or all rows shown) as a Markdown table; as CSV, JSON, `INSERT` statements or an ASCII table (`+--+`) from the menu (`m`) or Ctrl+K ("Copy rows as…") |
 | `m` / right-click | Menu of everything you can do here, with each action's key |
 | `y` / `Y` or `Ctrl+C` | Copy the selected cell / row (tab-separated); `Y` and `Ctrl+C` copy the marked rows, a line each, when rows are marked |
-| `e` / `J` / `i` | Export the rows shown as CSV / JSON / SQL `INSERT` statements to `podelis-export-<timestamp>.<ext>` (in the current directory, or `export_dir`). For every row of a big result, not just those loaded, use "Export all rows" in the menu (`m`) or Ctrl+K: it writes the rest straight to the file as it arrives, without loading it into the grid; `Esc` stops it |
-| `M` | Load 10× more rows (streamed results fetch the next pages; scripts are re-run with a bigger limit, read-only ones only) |
+| `e` / `J` / `i` | Export the rows shown as CSV / JSON / SQL `INSERT` statements to `podelis-export-<timestamp>.<ext>` (in the current directory, or `export_dir`); the menu (`m`) also has an ASCII table (`+--+` borders, `.txt`; long values cut at 120 columns). For every row of a big result, not just those loaded, use "Export all rows" in the menu (`m`) or Ctrl+K: it writes the rest straight to the file as it arrives, without loading it into the grid; `Esc` stops it |
+| `M` | Load 10× more rows (streamed results fetch the next pages; scripts are re-run with a bigger limit, read-only ones only); the first of the new rows is selected, so they're in sight (sorted or filtered, the first place one of them is). Pressed while a page is still coming, its rows follow that page |
 | `[` / `]`, `1` `2` `3` (or click a tab) | Switch between the RESULT, MESSAGES and QUERY PLAN tabs (`F7` opens the plan with the results focused; `1` goes back) |
 | `,` / `.` (or click `#2`) | Show the result of an earlier / later run: each query you run keeps its own (see *Earlier results* below) |
 | `p` | Pin the result shown, so it's kept however many queries run after it (again unpins) |
@@ -175,7 +176,8 @@ a comparison…) gets a result of its own, numbered `#1`, `#2`… on the line
 above the rows, and the one before stays a key away: `,` and `.` (or a
 click on its number) switch between them, and every key works on the one
 shown, as on the newest: editing a cell, `M`, watch mode. That line also
-says which statement the result is for, with its lines in the editor
+says which statement the result is for (a script's result set shows the
+statement that made it, not the whole script), with its lines in the editor
 (`lines 12–15`; click them to select it there), and when it ran. The last
 10 are kept, and the older ones go sooner when together they hold over
 200,000 rows (the newest stays, however big); `p` pins one to keep it
@@ -318,7 +320,8 @@ doesn't wait for. A viewer set with `terminal = true` gets the terminal
 instead, and Podėlis comes back when it exits.
 
 **Mouse:** click a pane to focus it, a tab to switch to it, `+` for a new
-tab, the editor to place the cursor (drag to select), a result cell, a
+tab (`‹N` / `›N` for the list of them all), the editor to place the cursor
+(drag to select; past its top or bottom edge it scrolls, and keeps scrolling while held there), a result cell, a
 message or a schema item to select it (clicking the navigator's tree, or
 the rows, while typing their filter ends the typing: keys then go to what
 was clicked), a result's `#2` to show it; double-click opens a cell or a
@@ -339,7 +342,7 @@ When focused:
 | Key | Action |
 |---|---|
 | `↑`/`↓`, `PageUp`/`PageDown`, `Home`/`End` (`g`/`G`) | Move by a row, a page, or to the first / last |
-| `/` | Filter tables, views and functions by name (or click the filter line) |
+| `/` | Filter tables, views and functions by name (or click the filter line): the name itself first, then names starting with it, then those with a word starting with it (after `_`, `.`, `-`), then the rest, each by name |
 | `o` | Order the tables by name, by rows, or by size on disk (indexes included; the size then shows instead of the rows). Both are the server's estimates; SQLite has no sizes, and rows once `ANALYZE` has counted them |
 | `Enter` / `→` | Expand a table: its columns (with `→ table.column` for foreign keys) and indexes, scrolled into view; on a function, show its definition |
 | `←` | Collapse |
