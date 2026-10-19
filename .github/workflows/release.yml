@@ -12,8 +12,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The release, made once before the builds attach to it (four jobs making
+  # it at the same time would race). Named after the tag; a tag like
+  # v1.0.0-rc.1 is a pre-release, not shown as the latest.
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Make the release
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 && exit 0
+          pre=(); [[ "$GITHUB_REF_NAME" == *-* ]] && pre=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$GITHUB_REF_NAME" --notes "" "${pre[@]}"
+
   build:
     name: ${{ matrix.target }}
+    needs: release
+    # A stuck build doesn't hold the release for the default six hours.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -57,13 +76,19 @@ jobs:
         run: |
           if command -v sha256sum > /dev/null; then sha256sum "$ASSET" > "$ASSET.sha256"
           else shasum -a 256 "$ASSET" > "$ASSET.sha256"; fi
-      - uses: softprops/action-gh-release@v2
-        with:
-          # A tag like v1.0.0-rc.1 is a pre-release: not shown as the latest.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          files: |
-            ${{ env.ASSET }}
-            ${{ env.ASSET }}.sha256
+      # GitHub's API sometimes times out from the runners (v0.6.0-rc.3's
+      # Intel macOS upload): a few tries, waiting longer each time.
+      - name: Upload
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for try in 1 2 3 4 5; do
+            gh release upload "$GITHUB_REF_NAME" "$ASSET" "$ASSET.sha256" --repo "$GITHUB_REPOSITORY" --clobber && exit 0
+            echo "Upload $try failed; trying again in $((try * 30)) s."
+            sleep $((try * 30))
+          done
+          exit 1
 
   # Points the Homebrew tap at the new release. Needs a token that can push
   # to taislius/homebrew-tap (a fine-grained one with Contents: read and
