@@ -84,7 +84,15 @@ pub(super) fn query_app() -> (App, tempfile::TempDir) {
         primary_key: pk,
     };
     let table = |name: &str, rows: Option<i64>, is_view: bool, expanded: bool, columns: Vec<ColumnInfo>| SchemaTable {
-        info: TableInfo { schema: "public".into(), name: name.into(), is_view, rows, bytes: None, system: false },
+        info: TableInfo {
+            schema: "public".into(),
+            name: name.into(),
+            is_view,
+            rows,
+            bytes: None,
+            system: false,
+            partition_of: None,
+        },
         expanded,
         columns,
         details: None,

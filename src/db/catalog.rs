@@ -3,7 +3,8 @@ use super::*;
 /// (schema, table, column, type, nullable, "PRI" for primary key columns)
 pub(super) type ColumnRow = (String, String, String, String, String, String);
 
-/// (schema, table, type, estimated rows, estimated bytes)
+/// (schema, table, type, estimated rows, estimated bytes). A Postgres
+/// partition's type is `PARTITION OF <schema>\x1f<table>`, its parent.
 pub(super) type TableRow = (String, String, String, Option<i64>, Option<i64>);
 
 impl Database {
@@ -37,14 +38,23 @@ impl Database {
         let dialect = self.0.engine.dialect();
         Ok(rows
             .into_iter()
-            .map(|(schema, name, kind, rows, bytes)| TableInfo {
-                system: dialect.is_system_table(&schema, &name),
-                schema,
-                name,
-                is_view: kind.to_ascii_uppercase().contains("VIEW"),
-                // Postgres reports -1 for tables never analyzed.
-                rows: rows.filter(|n| *n >= 0),
-                bytes: bytes.filter(|n| *n >= 0),
+            .map(|(schema, name, kind, rows, bytes)| {
+                // A partition's type is its parent's name (`reviews` would
+                // read as a view).
+                let partition_of = kind
+                    .strip_prefix("PARTITION OF ")
+                    .and_then(|parent| parent.split_once('\x1f'))
+                    .map(|(s, t)| (s.to_string(), t.to_string()));
+                TableInfo {
+                    system: dialect.is_system_table(&schema, &name),
+                    schema,
+                    name,
+                    is_view: partition_of.is_none() && kind.to_ascii_uppercase().contains("VIEW"),
+                    partition_of,
+                    // Postgres reports -1 for tables never analyzed.
+                    rows: rows.filter(|n| *n >= 0),
+                    bytes: bytes.filter(|n| *n >= 0),
+                }
             })
             .collect())
     }

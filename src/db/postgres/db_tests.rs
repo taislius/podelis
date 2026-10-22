@@ -174,3 +174,29 @@ async fn live_import_types() {
     assert!(format!("{err:#}").starts_with("line 3: "), "{err:#}");
     db.run("DROP TABLE pets_types", 1).await.unwrap();
 }
+
+#[tokio::test]
+async fn live_postgres_partitions_name_their_parent() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    // Named like a view ("review"), and partitioned on two levels.
+    db.run(
+        "DROP TABLE IF EXISTS parted_reviews; \
+         CREATE TABLE parted_reviews (id int, at date, region text) PARTITION BY RANGE (at); \
+         CREATE TABLE parted_reviews_2022 PARTITION OF parted_reviews \
+           FOR VALUES FROM ('2022-01-01') TO ('2023-01-01') PARTITION BY LIST (region); \
+         CREATE TABLE parted_reviews_2022_eu PARTITION OF parted_reviews_2022 FOR VALUES IN ('eu')",
+        DEFAULT_ROW_LIMIT,
+    )
+    .await
+    .unwrap();
+    let tables = db.tables(false).await.unwrap();
+    let find = |name: &str| tables.iter().find(|t| t.name == name).unwrap_or_else(|| panic!("{name}"));
+    let parent = |s: &str| Some(("public".to_string(), s.to_string()));
+    assert_eq!(find("parted_reviews").partition_of, None);
+    assert_eq!(find("parted_reviews_2022").partition_of, parent("parted_reviews"));
+    assert_eq!(find("parted_reviews_2022_eu").partition_of, parent("parted_reviews_2022"));
+    for name in ["parted_reviews", "parted_reviews_2022", "parted_reviews_2022_eu"] {
+        assert!(!find(name).is_view, "{name}");
+    }
+    db.run("DROP TABLE parted_reviews", DEFAULT_ROW_LIMIT).await.unwrap();
+}

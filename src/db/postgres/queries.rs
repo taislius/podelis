@@ -58,14 +58,22 @@ pub(in crate::db) async fn column_rows(db: &Database, system: bool) -> Result<Ve
         .collect())
 }
 
-/// Sizes come from `relpages` (the table, its TOAST table and indexes),
+/// A partition's type names its parent (a partitioned table: `relkind`
+/// `'p'`, PostgreSQL 10 on; older servers have none, and an inheritance
+/// child isn't one). Sizes come from `relpages` (the table, its TOAST table and indexes),
 /// which the catalog keeps: reading each table's files instead would be
 /// slow with tens of thousands of tables.
 pub(in crate::db) async fn table_rows(db: &Database, system: bool) -> Result<Vec<TableRow>> {
     let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
     Ok({
         sqlx::query_as(
-            "SELECT t.table_schema::text, t.table_name::text, t.table_type::text, c.reltuples::bigint,
+            "SELECT t.table_schema::text, t.table_name::text,
+                            COALESCE((SELECT 'PARTITION OF ' || pn.nspname || chr(31) || pc.relname
+                                      FROM pg_inherits i JOIN pg_class pc ON pc.oid = i.inhparent
+                                      JOIN pg_namespace pn ON pn.oid = pc.relnamespace
+                                      WHERE i.inhrelid = c.oid AND pc.relkind = 'p'),
+                                     t.table_type::text),
+                            c.reltuples::bigint,
                             ((c.relpages::bigint
                               + COALESCE((SELECT tc.relpages FROM pg_class tc WHERE tc.oid = c.reltoastrelid), 0)
                               + COALESCE((SELECT sum(i.relpages) FROM pg_index x

@@ -10,6 +10,7 @@ fn schema() -> Schema {
             rows: None,
             bytes: None,
             system: false,
+            partition_of: None,
         };
         let cols = cols
             .iter()

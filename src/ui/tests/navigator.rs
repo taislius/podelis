@@ -33,8 +33,15 @@ fn system_tables_in_their_own_section() {
     let (mut app, _dir) = query_app();
     let panel = app.connection.schema.as_mut().unwrap();
     for (schema, name, is_view) in [("pg_catalog", "pg_class", false), ("information_schema", "tables", true)] {
-        let info =
-            TableInfo { schema: schema.into(), name: name.into(), is_view, rows: None, bytes: None, system: true };
+        let info = TableInfo {
+            schema: schema.into(),
+            name: name.into(),
+            is_view,
+            rows: None,
+            bytes: None,
+            system: true,
+            partition_of: None,
+        };
         panel.tables.push(SchemaTable {
             info,
             expanded: false,
@@ -73,6 +80,7 @@ fn navigator_pages_reveals_expanded_columns_and_sorts() {
                 rows: Some(i * 10),
                 bytes: Some(1000 - i),
                 system: false,
+                partition_of: None,
             },
             expanded: false,
             columns: (0..8).map(col).collect(),

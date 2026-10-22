@@ -454,6 +454,7 @@ mod tests {
                 rows: None,
                 bytes: None,
                 system: false,
+                partition_of: None,
             },
             columns,
             details: Some(TableDetails { indexes, ..TableDetails::default() }),

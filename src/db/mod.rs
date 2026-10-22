@@ -188,6 +188,10 @@ pub struct TableInfo {
     pub bytes: Option<i64>,
     /// Part of the database's own catalog (`pg_catalog`, `sqlite_schema`…).
     pub system: bool,
+    /// The table it's a partition of (Postgres): its rows are the
+    /// parent's too, so queries read the parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition_of: Option<(String, String)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

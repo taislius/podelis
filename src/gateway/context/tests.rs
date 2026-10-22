@@ -8,6 +8,7 @@ fn table(name: &str, rows: i64, columns: &[(&str, &str, bool)]) -> (TableInfo, V
         rows: Some(rows),
         bytes: None,
         system: false,
+        partition_of: None,
     };
     let cols = columns
         .iter()
