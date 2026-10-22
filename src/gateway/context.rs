@@ -5,7 +5,10 @@
 //!    their names, their columns' names and the database's comments.
 //! 2. **Their neighbours** through foreign keys, so joins can be written:
 //!    tables linked to two chosen ones (`order_items` between `orders` and
-//!    `products`) first, then those linked to one.
+//!    `products`), or to a chosen one and another neighbour (`rental`
+//!    between `customer` and `inventory`), first, then those linked to one.
+//!    A partition isn't a table of its own here: its keys are its
+//!    parent's, and queries read the parent.
 //! 3. **Rendered compactly,** within a budget: each table with its columns,
 //!    keys, where its foreign keys point, and its comments.
 //!
@@ -18,13 +21,13 @@ use std::fmt::Write as _;
 use crate::db::{ColumnInfo, Comment, Link, TableInfo};
 
 /// The most tables matched by words, before their neighbours.
-const MAX_ENTRY: usize = 8;
+pub const MAX_ENTRY: usize = 8;
 /// The most tables in all.
-const MAX_TABLES: usize = 16;
+pub const MAX_TABLES: usize = 16;
 /// A schema this small goes in whole when no table matches.
 const SMALL_SCHEMA: usize = 12;
 /// About the most text a context takes (≈ 4 characters a token).
-const MAX_CHARS: usize = 16_000;
+pub const MAX_CHARS: usize = 16_000;
 /// The most columns listed for one table.
 const MAX_COLUMNS: usize = 40;
 /// A comment is cut at this many characters.
@@ -85,15 +88,20 @@ impl Context {
 
 /// The words of `text`, lowercase, identifiers split at `_` (not part of
 /// a word) and at case changes (`orderItems` → order, items), each also
-/// without a plural ending.
+/// without a plural ending, and without `-ed`, `-ing` or `-al` (`rented`
+/// and `rental` → rent).
 fn words(text: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let mut add = |w: String| {
         if w.chars().count() < 2 || STOP.contains(&w.as_str()) {
             return;
         }
-        if let Some(stem) = singular(&w) {
+        let one = singular(&w);
+        if let Some(stem) = stem(one.as_deref().unwrap_or(&w)) {
             out.insert(stem);
+        }
+        if let Some(one) = one {
+            out.insert(one);
         }
         out.insert(w);
     };
@@ -134,6 +142,24 @@ fn singular(w: &str) -> Option<String> {
         return Some(w[..w.len() - 1].to_string());
     }
     None
+}
+
+/// `rented`, `rental` → rent; `returned` → return; `billing` → bill;
+/// `shipped` → ship. Only stems of four letters or more: shorter ones
+/// (`used` → us) would match too much.
+fn stem(w: &str) -> Option<String> {
+    let base = ["ing", "ed", "al"].iter().find_map(|suffix| w.strip_suffix(suffix))?;
+    let mut base = base.to_string();
+    // A doubled last letter: `shipp` → ship (not `bill`, `pass`, `buzz`,
+    // `staff`).
+    let mut last = base.chars().rev();
+    if let (Some(a), Some(b)) = (last.next(), last.next())
+        && a == b
+        && !"flsz".contains(a)
+    {
+        base.pop();
+    }
+    (base.chars().count() >= 4).then_some(base)
 }
 
 fn qualified(t: &TableInfo) -> String {
@@ -202,17 +228,119 @@ impl<'a> Keys<'a> {
     }
 }
 
+/// Each partition's top table: its parent, or its parent's parent when
+/// partitions are partitioned again (`payment_2022_eu` → `payment_2022`
+/// → `payment`).
+fn roots(schema: &Schema) -> HashMap<(String, String), (String, String)> {
+    let parent: HashMap<(String, String), &(String, String)> = schema
+        .tables
+        .iter()
+        .filter_map(|(t, _)| t.partition_of.as_ref().map(|p| (key(&t.schema, &t.name), p)))
+        .collect();
+    parent
+        .iter()
+        .map(|(child, &first)| {
+            let mut top = first;
+            // A catalog can't loop, but a bound costs nothing.
+            for _ in 0..32 {
+                match parent.get(&key(&top.0, &top.1)) {
+                    Some(&up) => top = up,
+                    None => break,
+                }
+            }
+            (child.clone(), top.clone())
+        })
+        .collect()
+}
+
+/// The links with a partition's as its top table's (`payment_p2022_01` →
+/// customer as `payment` → customer), each once.
+fn parents_links(schema: &Schema, roots: &HashMap<(String, String), (String, String)>) -> Vec<Link> {
+    let mut out: Vec<Link> = Vec::new();
+    for l in &schema.links {
+        let mut l = l.clone();
+        if let Some((s, t)) = roots.get(&key(&l.schema, &l.table)) {
+            (l.schema, l.table) = (s.clone(), t.clone());
+        }
+        if let Some((s, t)) = roots.get(&key(&l.target_schema, &l.target_table)) {
+            (l.target_schema, l.target_table) = (s.clone(), t.clone());
+        }
+        if !out.contains(&l) {
+            out.push(l);
+        }
+    }
+    out
+}
+
+/// The tables a foreign key joins to `entry` ones, best first: each with
+/// the entry tables it links, and the other such tables it links too
+/// (`rental` joins `customer`, chosen, to `inventory`, a neighbour of
+/// `film`), counted only between neighbours of tables matched `by_name`
+/// (two neighbours of tables matched only by a column are too far from
+/// the question). Linking more first, then the order of the schema.
+fn neighbours(
+    tables: &[&(TableInfo, Vec<ColumnInfo>)],
+    links: &[Link],
+    entry: &[usize],
+    by_name: &[usize],
+) -> Vec<(usize, BTreeSet<usize>, Vec<usize>)> {
+    let index: HashMap<(String, String), usize> =
+        tables.iter().enumerate().map(|(i, (t, _))| (key(&t.schema, &t.name), i)).collect();
+    let pairs: Vec<(usize, usize)> = links
+        .iter()
+        .filter_map(|l| {
+            Some((*index.get(&key(&l.schema, &l.table))?, *index.get(&key(&l.target_schema, &l.target_table))?))
+        })
+        .filter(|(from, to)| from != to)
+        .collect();
+    let mut linked: HashMap<usize, BTreeSet<usize>> = HashMap::new();
+    for &(from, to) in &pairs {
+        if entry.contains(&from) && !entry.contains(&to) {
+            linked.entry(to).or_default().insert(from);
+        }
+        if entry.contains(&to) && !entry.contains(&from) {
+            linked.entry(from).or_default().insert(to);
+        }
+    }
+    let near = |i: &usize| linked.get(i).is_some_and(|to| to.iter().any(|j| by_name.contains(j)));
+    let mut beside: HashMap<usize, BTreeSet<usize>> = HashMap::new();
+    for &(from, to) in &pairs {
+        if near(&from) && near(&to) {
+            beside.entry(from).or_default().insert(to);
+            beside.entry(to).or_default().insert(from);
+        }
+    }
+    let mut ranked: Vec<(usize, BTreeSet<usize>, Vec<usize>)> = linked
+        .into_iter()
+        .map(|(i, to)| (i, to, beside.get(&i).map(|b| b.iter().copied().collect()).unwrap_or_default()))
+        .collect();
+    ranked.sort_by(|a, b| {
+        (b.1.len() + b.2.len()).cmp(&(a.1.len() + a.2.len())).then(b.1.len().cmp(&a.1.len())).then(a.0.cmp(&b.0))
+    });
+    ranked
+}
+
 /// The context for `question`.
 pub fn build(schema: &Schema, question: &str) -> Context {
     let question = words(question);
-    let tables: Vec<&(TableInfo, Vec<ColumnInfo>)> = schema.tables.iter().filter(|(t, _)| !t.system).collect();
+    let tables: Vec<&(TableInfo, Vec<ColumnInfo>)> =
+        schema.tables.iter().filter(|(t, _)| !t.system && t.partition_of.is_none()).collect();
+    let roots = roots(schema);
+    let links = parents_links(schema, &roots);
+    // A partitioned table keeps no rows of its own: its partitions do.
+    let mut partition_rows: HashMap<(String, String), i64> = HashMap::new();
+    for (t, _) in &schema.tables {
+        if let (Some((s, top)), Some(rows)) = (roots.get(&key(&t.schema, &t.name)), t.rows) {
+            *partition_rows.entry(key(s, top)).or_default() += rows.max(0);
+        }
+    }
     let mut by_table: HashMap<(String, String), Vec<&Comment>> = HashMap::new();
     for c in &schema.comments {
         by_table.entry(key(&c.schema, &c.table)).or_default().push(c);
     }
     let no_comments = Vec::new();
     let comments_of = |t: &TableInfo| by_table.get(&key(&t.schema, &t.name)).unwrap_or(&no_comments).as_slice();
-    let keys = Keys::of_links(&schema.links);
+    let keys = Keys::of_links(&links);
 
     // 1. Entry points, best first.
     let mut scored: Vec<(u32, usize, Vec<String>)> = tables
@@ -235,8 +363,6 @@ pub fn build(schema: &Schema, question: &str) -> Context {
         }
     } else {
         // 2. Neighbours through foreign keys.
-        let index: HashMap<(String, String), usize> =
-            tables.iter().enumerate().map(|(i, (t, _))| (key(&t.schema, &t.name), i)).collect();
         let entry: Vec<usize> = chosen.iter().map(|(i, _)| *i).collect();
         // Matched by name: sure enough to bring in what joins to them alone.
         let by_name: Vec<usize> = scored
@@ -245,36 +371,19 @@ pub fn build(schema: &Schema, question: &str) -> Context {
             .filter(|(_, _, why)| why.iter().any(|w| w.starts_with("its name")))
             .map(|(_, i, _)| *i)
             .collect();
-        let mut neighbours: HashMap<usize, BTreeSet<usize>> = HashMap::new();
-        for l in &schema.links {
-            let (Some(&from), Some(&to)) =
-                (index.get(&key(&l.schema, &l.table)), index.get(&key(&l.target_schema, &l.target_table)))
-            else {
-                continue;
-            };
-            if entry.contains(&from) && !entry.contains(&to) {
-                neighbours.entry(to).or_default().insert(from);
-            }
-            if entry.contains(&to) && !entry.contains(&from) {
-                neighbours.entry(from).or_default().insert(to);
-            }
-        }
-        let mut ranked: Vec<(usize, BTreeSet<usize>)> = neighbours.into_iter().collect();
-        // Linking more chosen tables first, then the order of the schema.
-        ranked.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
-        for (i, linked) in ranked {
+        for (i, linked, also) in neighbours(&tables, &links, &entry, &by_name) {
             // One link, to a table matched only by a column or comment: too
             // far from the question.
-            if linked.len() == 1 && !linked.iter().any(|j| by_name.contains(j)) {
+            if linked.len() == 1 && also.is_empty() && !linked.iter().any(|j| by_name.contains(j)) {
                 continue;
             }
             if chosen.len() >= MAX_TABLES {
                 left_out += 1;
                 continue;
             }
-            let joined: Vec<String> = linked.iter().map(|&j| tables[j].0.name.clone()).collect();
+            let joined: Vec<String> = linked.iter().chain(&also).map(|&j| tables[j].0.name.clone()).collect();
             let why = if joined.len() > 1 {
-                format!("links {}", joined.join(" and "))
+                format!("links {} and {}", joined[..joined.len() - 1].join(", "), joined[joined.len() - 1])
             } else {
                 format!("joins {}", joined[0])
             };
@@ -291,7 +400,11 @@ pub fn build(schema: &Schema, question: &str) -> Context {
     let mut listed = Vec::new();
     for (i, why) in chosen {
         let (t, cols) = tables[i];
-        let block = render(t, cols, comments_of(t), &keys);
+        let rows = match partition_rows.get(&key(&t.schema, &t.name)) {
+            Some(parts) => Some(parts + t.rows.unwrap_or(0).max(0)),
+            None => t.rows,
+        };
+        let block = render(t, rows, cols, comments_of(t), &keys);
         if text.len() + block.len() > MAX_CHARS && !listed.is_empty() {
             left_out += 1;
             continue;
@@ -311,8 +424,8 @@ pub fn build(schema: &Schema, question: &str) -> Context {
     Context { text, tables: listed, left_out, facts: Vec::new() }
 }
 
-/// One table: its name, size, comment, then a column a line.
-fn render(t: &TableInfo, cols: &[ColumnInfo], comments: &[&Comment], keys: &Keys) -> String {
+/// One table: its name, size (`rows`), comment, then a column a line.
+fn render(t: &TableInfo, rows: Option<i64>, cols: &[ColumnInfo], comments: &[&Comment], keys: &Keys) -> String {
     let said = |column: Option<&str>| {
         comments
             .iter()
@@ -321,11 +434,8 @@ fn render(t: &TableInfo, cols: &[ColumnInfo], comments: &[&Comment], keys: &Keys
             .unwrap_or_default()
     };
     let kind = if t.is_view { " (view)" } else { "" };
-    let rows = t
-        .rows
-        .filter(|r| *r >= 0)
-        .map(|r| format!(", ~{r} {}", if r == 1 { "row" } else { "rows" }))
-        .unwrap_or_default();
+    let rows =
+        rows.filter(|r| *r >= 0).map(|r| format!(", ~{r} {}", if r == 1 { "row" } else { "rows" })).unwrap_or_default();
     let mut out = format!("{}{kind}{rows}{}\n", qualified(t), said(None));
     for c in cols.iter().take(MAX_COLUMNS) {
         let pk = if c.primary_key { " PK" } else { "" };

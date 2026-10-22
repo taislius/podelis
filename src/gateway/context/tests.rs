@@ -168,3 +168,103 @@ fn system_tables_are_never_shown() {
     let c = build(&s, "category");
     assert!(!names(&c).contains(&"public.categories"));
 }
+
+#[test]
+fn words_match_by_their_stem() {
+    assert!(words("which films were never rented").contains("rent"));
+    assert!(words("rental").contains("rent"));
+    assert!(words("rentals").contains("rent"));
+    assert!(words("return_date").contains("return") && words("returned late").contains("return"));
+    assert!(words("shipped").contains("ship") && words("billing").contains("bill"));
+    assert!(words("staffed").contains("staff") && words("staffing").contains("staff"));
+    // Too short a stem would match too much.
+    assert!(!words("used").contains("us"));
+    assert!(!words("total").contains("tot"));
+}
+
+/// A rental shop: `rental` joins `customer` to `inventory`, which joins
+/// `film`; `payment` is split into monthly partitions, and only the
+/// partitions have keys (as in Pagila).
+fn rentals() -> Schema {
+    let part = |name: &str| {
+        let mut t = table(name, 1000, &[("payment_id", "integer", true), ("customer_id", "integer", false)]);
+        t.0.partition_of = Some(("public".into(), "payment".into()));
+        t
+    };
+    let mut tables = vec![
+        table("customer", 600, &[("customer_id", "integer", true), ("email", "text", false)]),
+        table("film", 1000, &[("film_id", "integer", true), ("title", "text", false)]),
+        table("inventory", 4500, &[("inventory_id", "integer", true), ("film_id", "integer", false)]),
+        table("payment", 0, &[("payment_id", "integer", true), ("customer_id", "integer", false)]),
+        table(
+            "rental",
+            16000,
+            &[("rental_id", "integer", true), ("inventory_id", "integer", false), ("customer_id", "integer", false)],
+        ),
+    ];
+    let mut links = vec![
+        link("inventory", "film_id", "film"),
+        link("rental", "inventory_id", "inventory"),
+        link("rental", "customer_id", "customer"),
+    ];
+    for month in 1..=30 {
+        let name = format!("payment_p2022_{month:02}");
+        tables.push(part(&name));
+        links.push(link(&name, "customer_id", "customer"));
+    }
+    Schema { engine: "PostgreSQL".into(), dialect: crate::db::Engine::Postgres, tables, links, comments: Vec::new() }
+}
+
+#[test]
+fn partitions_are_their_parent() {
+    let c = build(&rentals(), "payments of each customer");
+    assert!(names(&c).contains(&"public.payment"), "{:?}", c.tables);
+    assert!(!names(&c).iter().any(|n| n.contains("_p2022_")), "{:?}", c.tables);
+    // The parent shows the partitions' key, once.
+    assert_eq!(c.text.matches("customer_id integer → customer.id").count(), 2, "{}", c.text);
+    assert_eq!(c.left_out, 0);
+}
+
+#[test]
+fn a_table_between_a_chosen_one_and_a_neighbour_comes_first() {
+    let c = build(&rentals(), "customers who returned a film late");
+    let rental = c.tables.iter().position(|t| t.name == "public.rental").expect("rental is shown");
+    assert_eq!(c.tables[rental].why, "links customer and inventory");
+    // Before what joins only one chosen table.
+    let payment = c.tables.iter().position(|t| t.name == "public.payment").unwrap_or(usize::MAX);
+    assert!(rental < payment, "{:?}", c.tables);
+}
+
+#[test]
+fn partitions_of_partitions_are_their_top_table_with_its_rows() {
+    let mut s = rentals();
+    // payment_p2022_01 is now under payment_2022, itself under payment.
+    let mut middle = table("payment_2022", 0, &[("payment_id", "integer", true), ("customer_id", "integer", false)]);
+    middle.0.partition_of = Some(("public".into(), "payment".into()));
+    s.tables.push(middle);
+    s.tables[5].0.partition_of = Some(("public".into(), "payment_2022".into()));
+    assert_eq!(s.tables[5].0.name, "payment_p2022_01");
+    let c = build(&s, "payments of each customer");
+    assert!(!names(&c).iter().any(|n| n.contains("2022")), "{:?}", c.tables);
+    // Thirty partitions of 1,000 rows; the parents hold none.
+    assert!(c.text.contains("public.payment, ~30000 rows"), "{}", c.text);
+    assert_eq!(c.text.matches("customer_id integer → customer.id").count(), 2, "{}", c.text);
+}
+
+#[test]
+fn neighbours_of_tables_matched_only_by_a_column_dont_pull_each_other_in() {
+    let s = Schema {
+        engine: "PostgreSQL".into(),
+        dialect: crate::db::Engine::Postgres,
+        tables: vec![
+            table("x", 1, &[("id", "integer", true), ("colour", "text", false)]),
+            table("y", 1, &[("id", "integer", true), ("colour_code", "text", false)]),
+            table("b", 1, &[("id", "integer", true), ("x_id", "integer", false), ("c_id", "integer", false)]),
+            table("c", 1, &[("id", "integer", true), ("y_id", "integer", false)]),
+        ],
+        links: vec![link("b", "x_id", "x"), link("c", "y_id", "y"), link("b", "c_id", "c")],
+        comments: Vec::new(),
+    };
+    let c = build(&s, "colour");
+    assert_eq!(names(&c), ["public.x", "public.y"]);
+}

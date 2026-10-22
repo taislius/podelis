@@ -99,3 +99,32 @@ fn the_sql_is_taken_from_the_answer() {
         (None, "I can't answer that from these tables.".into())
     );
 }
+
+#[test]
+fn a_date_part_given_to_a_function_isnt_a_column() {
+    let mysql = |sql| problems(sql, Engine::MySql, &schema());
+    let ok = [
+        "SELECT AVG(TIMESTAMPDIFF(SECOND, placed_at, NOW())) FROM orders",
+        "SELECT TIMESTAMPADD(day, 3, placed_at) FROM orders",
+        "SELECT DATE_ADD(placed_at, INTERVAL 1 DAY) FROM orders",
+    ];
+    for sql in ok {
+        assert_eq!(mysql(sql), Vec::<String>::new(), "{sql}");
+    }
+    // As a column it's still checked.
+    assert_eq!(mysql("SELECT second FROM orders"), ["no table it reads has a column `second`"]);
+}
+
+#[test]
+fn a_date_part_counts_only_where_a_date_function_takes_one() {
+    let mysql = |sql| problems(sql, Engine::MySql, &schema());
+    // Not a date function: `day` is a column, and there's none.
+    assert_eq!(mysql("SELECT COALESCE(day, 0) FROM orders"), ["no table it reads has a column `day`"]);
+    // The unit, and the same word again as a column.
+    assert_eq!(
+        mysql("SELECT TIMESTAMPDIFF(SECOND, placed_at, NOW()), second FROM orders"),
+        ["no table it reads has a column `second`"]
+    );
+    // BigQuery's order: the unit last.
+    assert_eq!(check("SELECT date_trunc(placed_at, MONTH) FROM orders"), Vec::<String>::new());
+}

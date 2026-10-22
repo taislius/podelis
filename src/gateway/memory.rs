@@ -260,26 +260,58 @@ fn fts_query(text: &str) -> String {
     words.join(" OR ")
 }
 
+/// The confirmed facts for one question, read once: all of them, and
+/// those matching its words.
+#[derive(Default)]
+pub struct ForQuestion {
+    all: Vec<Fact>,
+    matched: Vec<Fact>,
+}
+
+pub async fn for_question(conn: &mut SqliteConnection, question: &str) -> Result<ForQuestion, String> {
+    let confirmed = |facts: Vec<Fact>| facts.into_iter().filter(|f| f.confirmed).collect();
+    Ok(ForQuestion { all: confirmed(list(conn, None).await?), matched: confirmed(list(conn, Some(question)).await?) })
+}
+
+impl ForQuestion {
+    /// What the facts matching the question say, for choosing tables:
+    /// "revenue is payment.amount" brings `payment`. Not histories: a
+    /// table's past names other tables and columns.
+    pub fn words(&self) -> String {
+        let mut out = String::new();
+        for f in self.matched.iter().filter(|f| f.relation != "history") {
+            let _ = write!(out, " {} {}", f.subject, f.value);
+        }
+        out
+    }
+
+    /// Those to show a model, about `tables` (names, as the context chose
+    /// them) first, then those matching the question.
+    pub fn about(&self, tables: &[String]) -> Vec<Fact> {
+        let mut shown: Vec<Fact> = self.all.iter().filter(|f| tables.iter().any(|t| f.is_about(t))).cloned().collect();
+        for f in &self.matched {
+            if !shown.iter().any(|s| s.id == f.id) {
+                shown.push(f.clone());
+            }
+        }
+        // What people said first, then notes from files, then histories: when
+        // there's no room for all, the history goes.
+        shown.sort_by_key(|f| match (f.source.as_str(), f.relation.as_str()) {
+            ("user", _) => 0,
+            (_, "history") => 2,
+            _ => 1,
+        });
+        shown.truncate(MAX_SHOWN);
+        shown
+    }
+}
+
 /// The confirmed facts to show a model for `question`, about `tables`
 /// (names, as the context chose them): those about the tables first,
 /// then those matching the question's words.
+#[cfg(test)]
 pub async fn relevant(conn: &mut SqliteConnection, tables: &[String], question: &str) -> Result<Vec<Fact>, String> {
-    let all: Vec<Fact> = list(conn, None).await?.into_iter().filter(|f| f.confirmed).collect();
-    let mut shown: Vec<Fact> = all.iter().filter(|f| tables.iter().any(|t| f.is_about(t))).cloned().collect();
-    for f in list(conn, Some(question)).await? {
-        if f.confirmed && !shown.iter().any(|s| s.id == f.id) {
-            shown.push(f);
-        }
-    }
-    // What people said first, then notes from files, then histories: when
-    // there's no room for all, the history goes.
-    shown.sort_by_key(|f| match (f.source.as_str(), f.relation.as_str()) {
-        ("user", _) => 0,
-        (_, "history") => 2,
-        _ => 1,
-    });
-    shown.truncate(MAX_SHOWN);
-    Ok(shown)
+    Ok(for_question(conn, question).await?.about(tables))
 }
 
 /// The facts as a text file, to read, fix, or keep in git: a line each,

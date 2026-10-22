@@ -94,3 +94,19 @@ async fn a_forgotten_suggestion_is_remembered_as_rejected() {
     // Only a model's guesses: what the user forgets of their own isn't.
     assert!(!rejected(&mut conn, "orders.total", "VAT included").await.unwrap());
 }
+
+#[tokio::test]
+async fn a_questions_facts_give_words_for_choosing_tables_not_histories() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut conn = open(dir.path(), "p1").await.unwrap();
+    add(&mut conn, "revenue", "is", "payment.amount", "user", true).await.unwrap();
+    add(&mut conn, "revenue_report", "history", "created 2024-01-02; joins audit_log", "file:db", true).await.unwrap();
+    add(&mut conn, "revenue", "means", "net of refunds", "model:claude", false).await.unwrap();
+    let memory = for_question(&mut conn, "revenue per category").await.unwrap();
+    // The confirmed fact's words; not the history's, not the unconfirmed one's.
+    assert_eq!(memory.words(), " revenue payment.amount");
+    // All matching ones are still shown, the history last.
+    let lines: Vec<String> = memory.about(&[]).iter().map(Fact::line).collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[1].starts_with("revenue_report history"), "{lines:?}");
+}

@@ -85,7 +85,12 @@ async fn context(config_dir: &Path, project: Option<&str>, words: &[String]) -> 
         let _ = writeln!(out, "  {}: {}", t["name"].as_str().unwrap_or("?"), t["why"].as_str().unwrap_or(""));
     }
     if let Some(n) = built["left_out"].as_u64().filter(|n| *n > 0) {
-        let _ = writeln!(out, "  ({n} more qualified, left out for size)");
+        use super::context::{MAX_CHARS, MAX_ENTRY, MAX_TABLES};
+        let tokens = MAX_CHARS / 4;
+        let _ = writeln!(
+            out,
+            "  ({n} more qualified, left out: at most {MAX_ENTRY} tables by their words and {MAX_TABLES} in all, within about {tokens} tokens)"
+        );
     }
     let chars = built["chars"].as_u64().unwrap_or(0);
     let _ = writeln!(

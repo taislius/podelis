@@ -8,10 +8,13 @@
 //! still unknown said beside it. A parser can't follow every dialect's
 //! corner, so a valid query flagged here is a nuisance, not a block.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 
-use sqlparser::ast::{Expr, Query, SelectItem, SetExpr, Statement, Visit, Visitor};
+use sqlparser::ast::{
+    Expr, Function, FunctionArg, FunctionArgExpr, FunctionArguments, Query, SelectItem, SetExpr, Statement, Visit,
+    Visitor,
+};
 
 use super::context::Schema;
 use crate::db::Engine;
@@ -75,8 +78,14 @@ pub fn problems(sql: &str, engine: Engine, schema: &Schema) -> Vec<String> {
         for s in &statements {
             let _ = s.visit(&mut names);
         }
-        let unknown: Vec<String> =
-            names.used.into_iter().filter(|n| !columns.contains(n) && !names.aliases.contains(n)).collect();
+        // A name used only as a function's date part isn't a column.
+        let unknown: Vec<String> = names
+            .used
+            .into_iter()
+            .filter(|(n, uses)| names.units.get(n).is_none_or(|as_unit| uses > as_unit))
+            .map(|(n, _)| n)
+            .filter(|n| !columns.contains(n) && !names.aliases.contains(n))
+            .collect();
         problems.extend(unknown.into_iter().map(|c| format!("no table it reads has a column `{c}`")));
     }
     problems
@@ -86,8 +95,41 @@ pub fn problems(sql: &str, engine: Engine, schema: &Schema) -> Vec<String> {
 /// (`AS total`), which later clauses may use too.
 #[derive(Default)]
 struct Names {
-    used: BTreeSet<String>,
+    /// Each name, and how many times it's used.
+    used: BTreeMap<String, usize>,
     aliases: BTreeSet<String>,
+    /// Date parts given to a date function (`TIMESTAMPDIFF(SECOND, …)`),
+    /// which the parser reads as names, and how many times.
+    units: BTreeMap<String, usize>,
+}
+
+/// The date parts a function can be given by name.
+const UNITS: &[&str] =
+    &["microsecond", "millisecond", "second", "minute", "hour", "day", "week", "month", "quarter", "year"];
+
+/// Functions taking a date part by name first (MySQL's `TIMESTAMPDIFF`,
+/// SQL Server's and Snowflake's `DATEADD`…) or last (BigQuery's
+/// `DATE_TRUNC(d, MONTH)`).
+const UNIT_FIRST: &[&str] =
+    &["timestampdiff", "timestampadd", "datediff", "dateadd", "datepart", "datename", "datetrunc"];
+const UNIT_LAST: &[&str] = &["date_trunc", "datetime_trunc", "timestamp_trunc", "date_diff", "last_day"];
+
+/// The date part `f` is given by name, if it's a date function that takes
+/// one and it's there.
+fn unit_argument(f: &Function) -> Option<String> {
+    let FunctionArguments::List(list) = &f.args else { return None };
+    let name = f.name.to_string().to_lowercase();
+    let name = name.rsplit('.').next().unwrap_or_default();
+    let arg = if UNIT_FIRST.contains(&name) {
+        list.args.first()
+    } else if UNIT_LAST.contains(&name) && list.args.len() > 1 {
+        list.args.last()
+    } else {
+        None
+    }?;
+    let FunctionArg::Unnamed(FunctionArgExpr::Expr(Expr::Identifier(id))) = arg else { return None };
+    let unit = id.value.to_lowercase();
+    (id.quote_style.is_none() && UNITS.contains(&unit.as_str())).then_some(unit)
 }
 
 impl Visitor for Names {
@@ -101,13 +143,18 @@ impl Visitor for Names {
     fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<()> {
         match expr {
             Expr::Identifier(id) => {
-                self.used.insert(id.value.to_lowercase());
+                *self.used.entry(id.value.to_lowercase()).or_default() += 1;
             }
             // `o.total`: the column is the last part; the first is a table
             // or its alias, which the table check covers.
             Expr::CompoundIdentifier(parts) if parts.len() >= 2 => {
                 if let Some(last) = parts.last() {
-                    self.used.insert(last.value.to_lowercase());
+                    *self.used.entry(last.value.to_lowercase()).or_default() += 1;
+                }
+            }
+            Expr::Function(f) => {
+                if let Some(unit) = unit_argument(f) {
+                    *self.units.entry(unit).or_default() += 1;
                 }
             }
             _ => {}

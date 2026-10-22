@@ -224,9 +224,7 @@ pub async fn context(config_dir: &Path, caches: &Caches, params: &Value) -> (Res
         Err(e) => return (Err(RpcError::new(code::DATABASE, e)), about),
     };
     let schema = source.schema;
-    let built = super::context::build(&schema, question);
-    let facts = facts_for(config_dir, caches, &source.project_id, &built, question).await;
-    let built = built.with_facts(&facts);
+    let built = built_for(config_dir, caches, &source.project_id, &schema, question).await;
     let tables: Vec<Value> = built.tables.iter().map(|t| json!({ "name": t.name, "why": t.why })).collect();
     let about = json!({ "connection": connection, "tables": tables.len() });
     let result = json!({
@@ -264,26 +262,31 @@ pub(crate) fn find_project(config_dir: &Path, name: Option<&str>) -> Result<crat
     })
 }
 
-/// The confirmed facts to show a model for `question` over `context`'s
-/// tables. Memory that can't be read is logged and left out: asking
-/// still works without it.
-async fn facts_for(
+/// The context for `question`, with the project's memory read once: the
+/// facts matching the question help choose the tables ("revenue is
+/// payment.amount" brings `payment`), then those about the chosen tables
+/// are shown with them. Memory that can't be read is logged and left
+/// out: asking still works without it.
+async fn built_for(
     config_dir: &Path,
     caches: &Caches,
     project_id: &str,
-    context: &super::context::Context,
+    schema: &Schema,
     question: &str,
-) -> Vec<super::memory::Fact> {
-    let tables: Vec<String> = context.tables.iter().map(|t| t.name.clone()).collect();
+) -> super::context::Context {
     let found = async {
         let conn = caches.memory(config_dir, project_id).await?;
         let mut conn = conn.lock().await;
-        super::memory::relevant(&mut conn, &tables, question).await
+        super::memory::for_question(&mut conn, question).await
     };
-    found.await.unwrap_or_else(|e| {
+    let memory = found.await.unwrap_or_else(|e| {
         tracing::warn!(error = %e, "gateway: the project's memory couldn't be read");
-        Vec::new()
-    })
+        super::memory::ForQuestion::default()
+    });
+    let built = super::context::build(schema, &format!("{question}{}", memory.words()));
+    let tables: Vec<String> = built.tables.iter().map(|t| t.name.clone()).collect();
+    let facts = memory.about(&tables);
+    built.with_facts(&facts)
 }
 
 /// A connection's schema, and its project's name and setting for
@@ -393,12 +396,10 @@ pub async fn ask(
         Ok(source) => source,
         Err(e) => return (Err(RpcError::new(code::DATABASE, e)), about),
     };
-    let built = super::context::build(&source.schema, question);
+    let built = built_for(config_dir, caches, &source.project_id, &source.schema, question).await;
     if built.tables.is_empty() {
         return (Err(RpcError::new(code::DATABASE, built.text.trim().to_string())), about);
     }
-    let facts = facts_for(config_dir, caches, &source.project_id, &built, question).await;
-    let built = built.with_facts(&facts);
     // The model first, its key only once the schema may go to it: a
     // refused question mustn't wake up a password manager.
     let configs = match configured(config_dir) {
