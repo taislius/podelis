@@ -385,6 +385,8 @@ keychain (service
 account
 .Li model:\& Ns Ar model ) ,
 where only the gateway reads it.
+When standard input isn't a terminal, the key is its first line instead
+.Pq Li pbpaste \&| podelis gateway key claude .
 .It Cm gateway test Op Ar model
 Asks the model (the default one without an argument) for one word and
 prints the answer, the tokens and the time: a check that its address and

@@ -228,8 +228,10 @@ gateway/
                 from `sql/scope.rs`) and, where every source is a real table,
                 columns
   context.rs    what a model is shown of a database for a question: tables
-                matched by name, column names and comments, their foreign-key
-                neighbours, rendered within a budget
+                matched by name, column names and comments (stems too),
+                their foreign-key neighbours, partitions as their parent,
+                rendered within a budget (see "The context, in the
+                field's terms")
   models/       the models: `[[models]]` in config.toml, keys (keychain,
                 key_command, environment), retries
     anthropic.rs  Anthropic's Messages API, streamed
@@ -295,6 +297,74 @@ so does the gateway stopping. A client that only closed its sending side
 checked a few times a second for being closed for writing too. A
 `config.toml` that doesn't parse is said as it is (`models` and `ask`
 show the parse error), not taken for one without models.
+
+### The context, in the field's terms
+
+Writing SQL from a question is **text-to-SQL**, and choosing which
+tables a model sees is its first step, **schema linking** (also *schema
+pruning* or *selection*): a model shown the right few tables writes
+better SQL than one shown all of them, and the whole catalog doesn't fit
+anyway. As a whole it's **retrieval-augmented generation** (RAG): find
+what's relevant, then let the model write from it; here what's found is
+tables, not documents. Choosing everything a prompt holds is what's now
+called *context engineering*. Each part of `context.rs` and the steps
+around it has a name:
+
+| Step | In the field | Here |
+|---|---|---|
+| Score tables by the question's words against names, columns and comments | **Lexical retrieval** (the family of TF-IDF and BM25), with **stemming** | Words split at `_` and case changes, plurals made singular, `-ed`/`-ing`/`-al` taken off (`rented`, `rental` → rent); names weigh most, then columns, then comments |
+| Bring in what foreign keys join to them, linking tables first | **Join-path expansion** over the **schema graph** | Tables linking two chosen ones, or a chosen one and another neighbour (`rental` between `customer` and `inventory`), then single neighbours of tables matched by name |
+| Partitions as their parent | Schema **normalisation** before linking | A PostgreSQL partition isn't a table of its own; its keys count as its parent's |
+| A budget: 8 tables by words, 16 in all, ~4,000 tokens | **Context budgeting** | What's cut is counted and said |
+| The team's facts ("revenue is payment.amount") | **External knowledge** or **evidence** (BIRD's term), a **business glossary** or **semantic layer** | Confirmed facts go with their tables, and a fact matching the question brings the tables it names |
+| Names checked, what's wrong sent back up to twice (`names.rs`) | **Self-correction** with schema-grounded feedback (*self-debugging*) | Checked against the schema without running anything |
+| Never rows | Research systems often show sample values (*value retrieval*) | Not done: rows are private, and text in them could steer a model |
+
+**What it deliberately doesn't do,** though research systems do:
+- **No embeddings** (similarity of meaning): they'd find `payment` for
+  "revenue", but need an embedding model to send names to, an index to
+  keep up to date, and give answers that can't be explained. Words and
+  stems can be shown ("matches its name (rent)"), and the same question
+  always picks the same tables.
+- **No model choosing the tables** (a first call that reads the whole
+  catalog, as DIN-SQL, C3 and CHESS do): that would send every table
+  name to a provider and double the time, before the question is even
+  asked.
+- **No column values.**
+
+Its known limit is synonyms with no shared word ("earned money" for
+`payment.amount`). Facts in memory cover the ones a team names. The
+plan for the rest is **agentic retrieval**: the model, given tools to
+find and describe more tables, looks for itself in a loop (*ReAct*),
+with this builder staying the first, cheap try. Agents
+(`podelis mcp`) already work that way.
+
+Sources:
+- Spider, the benchmark that made text-to-SQL across many schemas a
+  field: Yu et al., *Spider: A Large-Scale Human-Labeled Dataset for
+  Complex and Cross-Domain Semantic Parsing and Text-to-SQL Task*, EMNLP
+  2018.
+- Schema linking as a step of its own: Wang et al., *RAT-SQL:
+  Relation-Aware Schema Encoding and Linking for Text-to-SQL Parsers*,
+  ACL 2020.
+- Pruning the schema first: Li et al., *RESDSQL: Decoupling Schema
+  Linking and Skeleton Parsing for Text-to-SQL*, AAAI 2023.
+- With large models: Pourreza and Rafiei, *DIN-SQL: Decomposed
+  In-Context Learning of Text-to-SQL with Self-Correction*, NeurIPS 2023;
+  Dong et al., *C3: Zero-shot Text-to-SQL with ChatGPT*, 2023; Talaei et
+  al., *CHESS: Contextual Harnessing for Efficient SQL Synthesis*, 2024.
+- External knowledge and real, messy databases: Li et al., *Can LLM
+  Already Serve as A Database Interface? A BIg Bench for Large-Scale
+  Database Grounded Text-to-SQLs* (BIRD), NeurIPS 2023.
+- Retrieval for generation: Lewis et al., *Retrieval-Augmented
+  Generation for Knowledge-Intensive NLP Tasks*, NeurIPS 2020.
+- Lexical retrieval: Robertson and Zaragoza, *The Probabilistic
+  Relevance Framework: BM25 and Beyond*, 2009; stemming: Porter, *An
+  algorithm for suffix stripping*, 1980.
+- Self-correction: Chen et al., *Teaching Large Language Models to
+  Self-Debug*, 2023.
+- Tools in a loop: Yao et al., *ReAct: Synergizing Reasoning and Acting
+  in Language Models*, ICLR 2023.
 
 ## SQL checks
 

@@ -176,16 +176,22 @@ features that ask them come next.
 
 **What a model is shown of a database.** Not the whole schema, and never
 rows: the tables whose names, column names or comments match the
-question's words, then the tables a foreign key joins to them (one that
-links two of them first), with their columns, keys, where foreign keys
-point, and the database's own comments (`COMMENT ON` in PostgreSQL,
-`COMMENT '…'` in MySQL), within about 4,000 tokens. `podelis gateway
-context` shows exactly that, with why each table is there, so you can see
-it before anything is sent anywhere; `-p` picks the project.
+question's words (or their stems: "rented" finds `rental`, "returned"
+`return_date`) and those named by the memory's facts that match them, then
+the tables a foreign key joins to them (one that links two of them, or one
+of them and another such table, first), with their columns, keys, where
+foreign keys point, and the database's own comments (`COMMENT ON` in
+PostgreSQL, `COMMENT '…'` in MySQL), within about 4,000 tokens: at most 8
+tables matched by words and 16 in all. A PostgreSQL partitioned table is
+one table there, with its partitions' foreign keys, not each partition.
+`podelis gateway context` shows exactly that, with why each table is
+there, so you can see it before anything is sent anywhere; `-p` picks the
+project.
 
 ```sh
 podelis gateway models                    # the models set up, and where each one's key comes from (without running a key_command)
 podelis gateway key claude                # store a model's API key in the OS keychain (asked, not shown)
+pbpaste | podelis gateway key claude      # …or piped in (its first line), without a terminal
 podelis gateway test                      # ask the default model for one word (costs a few tokens)
 podelis gateway test local                # …or a model by name
 podelis gateway context prod "revenue per product in September"   # what a model would be shown of prod's schema (sends nothing)

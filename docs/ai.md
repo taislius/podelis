@@ -29,6 +29,7 @@ Then the key, for a provider's model (a local one needs none):
 
 ```sh
 podelis gateway key claude      # asked for, not shown; kept in the OS keychain
+pbpaste | podelis gateway key claude   # …or piped in, where there's no terminal to ask in
 podelis gateway models          # what's set up, and where each key comes from (a key_command isn't run for this)
 podelis gateway test claude     # one word back: the address and key work (a few tokens)
 ```
@@ -55,10 +56,16 @@ anything still unknown is marked `-- CHECK:`.
 ## What the model is shown
 
 Only what the question needs: the tables whose names, columns or comments
-match its words, the tables that join them, their columns, keys, where
-foreign keys point, the database's comments, and what your team has said
-about them (below). Never rows. `podelis gateway context prod "your
-question"` shows exactly that, and sends nothing.
+match its words ("rented" finds `rental`), the tables that join them,
+their columns, keys, where foreign keys point, the database's comments,
+and what your team has said about them (below). A fact that matches the
+question brings the tables it names: with "revenue is payment.amount" in
+memory, a question about revenue gets `payment`. A partitioned table is
+shown once, as itself, not as each partition. Never rows. `podelis
+gateway context prod "your question"` shows exactly that, and sends
+nothing. How it's chosen, in the research's terms (schema linking), and
+why this way: [the context, in the field's
+terms](architecture.md#the-context-in-the-fields-terms).
 
 **Your schema stays on your machine unless you allow more.** A project
 shares its table and column names only with models on this machine. The
