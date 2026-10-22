@@ -131,17 +131,32 @@ fn list_models(listed: &serde_json::Value) -> i32 {
     0
 }
 
-/// `key <model>`: asks for the key without showing it and stores it in
-/// the OS keychain, where only the gateway reads it.
+/// `key <model>`: asks for the key without showing it (or reads it from
+/// standard input when that isn't a terminal: `pbpaste | podelis gateway
+/// key claude`) and stores it in the OS keychain, where only the gateway
+/// reads it.
 fn store_key(config_dir: &Path, name: &str) -> i32 {
+    use std::io::IsTerminal as _;
     let (settings, _) = crate::config::settings::Settings::load(config_dir);
     if !settings.models.iter().any(|m| m.name == name) {
         let known: Vec<&str> = settings.models.iter().map(|m| m.name.as_str()).collect();
         let known = if known.is_empty() { "none yet".to_string() } else { known.join(", ") };
         return say(&format!("No model `{name}` in config.toml (there: {known})."), 2);
     }
-    let Some(key) = crate::cli::prompt_password(&format!("API key for {name} (not shown): ")) else {
-        return say("Nothing stored.", 1);
+    let key = if std::io::stdin().is_terminal() {
+        let Some(key) = crate::cli::prompt_password(&format!("API key for {name} (not shown): ")) else {
+            return say("Nothing stored.", 1);
+        };
+        key
+    } else {
+        let Some(key) = key_from(std::io::stdin().lock()) else {
+            let _ = writeln!(
+                std::io::stderr(),
+                "No key on standard input, and it isn't a terminal to ask in: run this in a terminal, or pipe the key in (`pbpaste | podelis gateway key {name}`). Nothing stored."
+            );
+            return 1;
+        };
+        key
     };
     let account = super::models::ModelConfig::keychain_account(name);
     match crate::config::store::store_password(&account, key.trim()) {
@@ -151,6 +166,11 @@ fn store_key(config_dir: &Path, name: &str) -> i32 {
             1
         }
     }
+}
+
+/// The key piped in: its first line that isn't blank, trimmed.
+pub(super) fn key_from(input: impl std::io::BufRead) -> Option<String> {
+    input.lines().map_while(Result::ok).map(|line| line.trim().to_string()).find(|line| !line.is_empty())
 }
 
 /// `test [model]`: one short question, to check the model answers.

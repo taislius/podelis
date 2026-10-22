@@ -834,3 +834,12 @@ async fn a_config_that_doesnt_parse_says_why() {
         "{err}"
     );
 }
+
+#[test]
+fn a_piped_key_is_its_first_line_that_isnt_blank() {
+    use super::command::key_from;
+    assert_eq!(key_from("sk-ant-123\n".as_bytes()).as_deref(), Some("sk-ant-123"));
+    assert_eq!(key_from("\n  sk-ant-123  \r\nignored\n".as_bytes()).as_deref(), Some("sk-ant-123"));
+    assert_eq!(key_from("".as_bytes()), None);
+    assert_eq!(key_from(" \n\n".as_bytes()), None);
+}
