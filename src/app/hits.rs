@@ -55,6 +55,8 @@ pub struct Hits {
     pub result_cols: Vec<(u16, u16, usize)>,
     /// The open pop-up menu.
     pub menu: Rect,
+    /// The library window's rows, and the index of the first one shown.
+    pub library_list: (Rect, usize),
     /// The projects and connections panes: each list's rows and the
     /// index of the first one shown, and the settings pane.
     pub manager_projects: (Rect, usize),

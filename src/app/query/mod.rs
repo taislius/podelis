@@ -85,7 +85,7 @@ impl App {
                 return self.open_completion();
             }
             Some(Action::Complete) | None => {}
-            Some(a) => return self.run_action(a),
+            Some(a) => return self.run_bound(a, key),
         }
         match key.code {
             KeyCode::Esc if self.export_task.is_some() => return self.stop_export(),
@@ -345,6 +345,17 @@ impl App {
         }
     }
 
+    /// What `key`, bound to `action`, does: the action, except that
+    /// Ctrl+Shift+K (where the terminal tells it from Ctrl+K) shows Ctrl+K's
+    /// menu at once, not after a pause (or never, with `leader_menu` off).
+    fn run_bound(&mut self, action: Action, key: KeyEvent) {
+        let k = matches!(key.code, KeyCode::Char('k' | 'K'));
+        if action == Action::Palette && k && key.modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) {
+            return self.open_palette(true);
+        }
+        self.run_action(action);
+    }
+
     /// Does what a (configurable) key binding is for.
     pub(in crate::app) fn run_action(&mut self, action: Action) {
         let n = self.tabs.len();
@@ -375,6 +386,8 @@ impl App {
             Action::NextTab => self.switch_tab((self.active_tab + 1) % n),
             Action::PrevTab => self.switch_tab((self.active_tab + n - 1) % n),
             Action::SaveTab => self.save_tab(),
+            Action::SaveStatement => self.save_statement(),
+            Action::AiExplain => self.ai_explain(),
             Action::RenameTab => self.rename_tab(),
             Action::Library => self.open_library(),
             Action::Find => self.open_find(),

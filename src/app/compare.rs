@@ -220,13 +220,8 @@ impl App {
         let Some(db) = self.connection.database.clone() else {
             return self.set_status(self.not_connected_message(), true);
         };
-        let text = self.tab.editor.text();
-        let sql = match self.tab.editor.selection_offsets() {
-            Some((a, b)) => text[a..b].trim().to_string(),
-            None => match sql::statement_at(&text, self.tab.editor.cursor_offset(), self.engine()) {
-                Some(s) => s.to_string(),
-                None => return self.set_status(t!("compare.no_statement").to_string(), true),
-            },
+        let Some(sql) = self.statement_or_selection() else {
+            return self.set_status(t!("compare.no_statement").to_string(), true);
         };
         let infos = analyze::analyze(&parse(&sql, self.engine()));
         if infos.is_empty() || infos.iter().any(|i| i.kind != Kind::Read) {

@@ -413,7 +413,14 @@ pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String
                     (k(Action::Zoom), t!("help.zoom")),
                 ],
             ),
-            (t!("help.ai"), vec![(k(Action::Ask), t!("help.ask")), (k(Action::Memory), t!("help.memory"))]),
+            (
+                t!("help.ai"),
+                vec![
+                    (k(Action::Ask), t!("help.ask")),
+                    (k(Action::AiExplain), t!("help.ai_explain")),
+                    (k(Action::Memory), t!("help.memory")),
+                ],
+            ),
             (
                 t!("help.connection"),
                 vec![

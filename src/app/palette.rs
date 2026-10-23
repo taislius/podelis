@@ -197,19 +197,43 @@ impl App {
         });
         if !menu_now {
             let key = self.keymap.short_label(Action::Palette);
-            self.set_status(format!("{key}…"), false);
+            // With no menu coming by itself, how to get it.
+            let status = if self.settings.leader_menu { format!("{key}…") } else { t!("palette.waiting", key = key) };
+            self.set_status(status, false);
         }
     }
 
     /// A tab as the tab list shows it: its name, ● if its saved query has
-    /// changed, … while its query runs, its connection, and which is shown.
+    /// changed, its connection and how that is (a query running and for
+    /// how long, a transaction open, lost), and which is shown.
     pub fn tab_entry(&self, i: usize) -> String {
         let Some(tab) = self.tabs.get(i) else { return String::new() };
         let dirty = if tab.saved_id.is_some() && self.tab_dirty(i) { " ●" } else { "" };
-        let running = if self.run.executing && self.run_owner() == Some(i) { " …" } else { "" };
         let on = tab.conn.and_then(|id| self.conn_name(id)).map(|n| format!("  · {n}")).unwrap_or_default();
+        let status = self.tab_status(i).map(|s| format!("  · {s}")).unwrap_or_default();
         let here = if i == self.active_tab { format!("  ({})", t!("menu.this_one")) } else { String::new() };
-        format!("{}{dirty}{running}{on}{here}", tab.name)
+        format!("{}{dirty}{on}{status}{here}", tab.name)
+    }
+
+    /// How tab `i`'s connection is, when it's worth saying: its query
+    /// running (or being cancelled), a transaction left open, a lost
+    /// connection, or none.
+    fn tab_status(&self, i: usize) -> Option<String> {
+        let tab = self.tabs.get(i)?;
+        // A write or a check holds every tab: it's the shown tab's.
+        let runs_here = self.run_tab() == Some(i);
+        if runs_here {
+            if self.run.cancelling {
+                return Some(t!("tab_list.cancelling").to_string());
+            }
+            let secs = self.run.since.map_or(0, |s| s.elapsed().as_secs());
+            return Some(t!("tab_list.running", time = mm_ss(secs)));
+        }
+        let Some(id) = tab.conn else { return Some(t!("tab_list.no_connection").to_string()) };
+        if self.conns.active == Some(id) && self.connection_lost {
+            return Some(t!("tab_list.lost").to_string());
+        }
+        (self.conn_txn(id) == Some(TxnState::Open)).then(|| t!("tab_list.in_transaction").to_string())
     }
 
     /// Ctrl+K g: every tab in a list to search and pick from, the shown
@@ -224,14 +248,20 @@ impl App {
             snapshots: Vec::new(),
             tabs_only: true,
             tab_texts: (0..self.tabs.len())
-                .map(|i| format!("{}\n{}", self.tab_entry(i), self.tab_text(i)).to_lowercase())
+                // Its name, connection and SQL: not its status, which changes.
+                .map(|i| {
+                    let tab = &self.tabs[i];
+                    let on = tab.conn.and_then(|id| self.conn_name(id)).unwrap_or_default();
+                    format!("{}\n{on}\n{}", tab.name, self.tab_text(i)).to_lowercase()
+                })
                 .collect(),
         });
     }
 
     /// When the waiting Ctrl+K should show its menu.
     pub fn palette_menu_due(&self) -> Option<Instant> {
-        self.palette.as_ref().filter(|p| !p.searching && !p.menu).map(|p| p.opened + MENU_DELAY)
+        let palette = self.palette.as_ref().filter(|_| self.settings.leader_menu);
+        palette.filter(|p| !p.searching && !p.menu).map(|p| p.opened + MENU_DELAY)
     }
 
     /// No letter came: show the menu.
@@ -317,6 +347,8 @@ impl App {
         let Some(palette) = &mut self.palette else { return };
         match key.code {
             KeyCode::Esc => self.palette = None,
+            // Ctrl+Shift+K (where the terminal tells it apart): the menu.
+            _ if again && key.modifiers.contains(KeyModifiers::SHIFT) => palette.menu = true,
             // Ctrl+K again, or arrows/Enter: the full list.
             _ if again => palette.searching = true,
             KeyCode::Up | KeyCode::Down | KeyCode::Enter => palette.searching = true,
@@ -324,6 +356,13 @@ impl App {
                 if let Some(n) = c.to_digit(10).filter(|n| *n > 0) {
                     self.palette = None;
                     return self.switch_tab((n as usize - 1).min(self.tabs.len() - 1));
+                }
+                // `?`: with no menu coming by itself, the menu; then (or
+                // with it coming) every key.
+                if c == '?' && !palette.menu && !self.settings.leader_menu {
+                    palette.menu = true;
+                    self.notes.status.clear();
+                    return;
                 }
                 if c == '?' {
                     self.palette = None;

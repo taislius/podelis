@@ -271,6 +271,13 @@ pub trait Dialect: Sync {
     /// What AI agents may send (`db::agent_constraints`).
     fn agent_constraints(&self) -> &'static super::agent_constraints::AgentConstraints;
 
+    /// Something in `sql` that this server's `version` (as `version_query`
+    /// returned it) is too old for: what to say when it fails, so a syntax
+    /// error that is really a missing feature says so.
+    fn too_new(&self, _sql: &str, _version: &str) -> Option<TooNew> {
+        None
+    }
+
     /// The EXPLAIN statement for `stmt` (without its `;`), for a server
     /// of `version` (as `version_query` returned it).
     fn explain(&self, stmt: &str, version: &str) -> String;
@@ -355,4 +362,42 @@ impl Scan {
     pub fn name(&self) -> String {
         self.schema.as_ref().map_or_else(|| self.table.clone(), |s| format!("{s}.{}", self.table))
     }
+}
+
+/// A feature a statement uses that the server is too old for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TooNew {
+    /// What it is, as written: "EXPLAIN ANALYZE", "MERGE".
+    pub feature: &'static str,
+    /// What has it: "MySQL 8.0.18 or newer".
+    pub needs: &'static str,
+    /// The server, as it says it is: "MySQL 5.7.44".
+    pub server: String,
+}
+
+/// `sql`'s code as lowercase words and punctuation, without spaces,
+/// comments or what's in strings: what [`Dialect::too_new`] looks through.
+pub fn code_words(sql: &str, engine: crate::db::Engine) -> Vec<String> {
+    use crate::sql::TokenKind;
+    crate::sql::tokenize(sql, engine)
+        .into_iter()
+        .filter(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Comment | TokenKind::String))
+        .map(|t| sql[t.range].to_ascii_lowercase())
+        .collect()
+}
+
+/// Whether `words` has `seq` in a row somewhere.
+pub fn has_seq(words: &[String], seq: &[&str]) -> bool {
+    words.windows(seq.len()).any(|w| same(w, seq))
+}
+
+fn same(words: &[String], seq: &[&str]) -> bool {
+    words.len() == seq.len() && words.iter().zip(seq).all(|(a, b)| a == b)
+}
+
+/// Whether `words` starts a statement with `seq` (the first statement, or
+/// one after a `;`).
+pub fn starts_with(words: &[String], seq: &[&str]) -> bool {
+    let mut starts = std::iter::once(0).chain(words.iter().enumerate().filter(|(_, w)| *w == ";").map(|(i, _)| i + 1));
+    starts.any(|i| words.get(i..i + seq.len()).is_some_and(|w| same(w, seq)))
 }

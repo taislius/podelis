@@ -74,9 +74,11 @@ impl App {
                 self.action_item(t!("menu.comment"), Action::Comment),
                 self.action_item(t!("menu.find"), Action::Find),
                 self.action_item(t!("menu.snippet"), Action::InsertSnippet),
+                self.action_item(t!("menu.save_statement"), Action::SaveStatement),
                 self.action_item(t!("menu.save"), Action::SaveTab),
                 self.action_item(t!("menu.library"), Action::Library),
                 self.action_item(t!("menu.tab_list"), Action::TabList),
+                self.action_item(t!("menu.close_tab"), Action::CloseTab),
                 self.action_item(t!("menu.zoom"), Action::Zoom),
                 self.action_item(t!("menu.all_commands"), Action::Palette),
             ])

@@ -1,6 +1,5 @@
 ---
 source: src/ui/tests/editor.rs
-assertion_line: 277
 expression: screen
 ---
 " >_  PODĖLIS v0.0.0   │  project  shop ▼                                                            "
@@ -9,14 +8,14 @@ expression: screen
 "│ ▼ (def│ THEN PRESS                                                                       │       │"
 "│ TABLES│ x transaction mode                       n navigator on/off                      │       │"
 "│  ▶ ord│ z zoom pane                              m menu                                  │       │"
-"│  ▼ use│ l SQL library (saved queries, snippets)  g go to a tab…                          │       │"
+"│  ▼ use│ l SQL library (saved queries, snippets)  g tabs, connections, running queries…   │       │"
 "│      ◇│ o open connection                        d disconnect                            │       │"
 "│      ◇│ p projects                               u connection info                       │       │"
 "│      ◇│ s server sessions                        h heartbeat on/off                      │       │"
 "│ VIEWS │ , settings                               q ask in plain language                 │       │"
 "│  ◇ act│ k project memory (for models)            ? all keys                              │       │"
 "│       │                                                                                  │       │"
-"│       │ TABS                                                                             │       │"
+"│       │ TABS  Ctrl+W closes this one                                                     │       │"
 "│       │ 1 Query 1 ●                              2 Query 2 (this one)                    │ommit  │"
 "│       │                                                                                  │───────┘"
 "│       │ IN THE RESULTS  (close this menu, then press)                                    │───────┐"
@@ -36,7 +35,7 @@ expression: screen
 "│       │ y · Y           copy cell · row                                                  │       │"
 "│       │ e · J · i · M   export CSV · JSON · INSERTs · load more                          │       │"
 "│       │                                                                                  │       │"
-"│       │ Type to search every command · F1 all keys · Esc closes                          │       │"
+"│       │ / or ↵ searches every command · ? all keys · Esc closes                          │       │"
 "│       └──────────────────────────────────────────────────────────────────────────────────┘       │"
 "│                            ││                                                                    │"
 "│                            ││                                                                    │"

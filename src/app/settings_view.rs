@@ -20,9 +20,12 @@ pub enum Field {
     Lint,
     SystemTables,
     LeaderDoubleSpace,
+    LeaderMenu,
     RowLimit,
     Keepalive,
     NotifyAfter,
+    LongQuery,
+    QueryTimeout,
     GuardRows,
     GatewayIdle,
     ExportDir,
@@ -42,7 +45,7 @@ pub enum Kind {
 }
 
 impl Field {
-    pub const ALL: [Field; 16] = [
+    pub const ALL: [Field; 19] = [
         Field::Language,
         Field::Theme,
         Field::EditorMode,
@@ -53,9 +56,12 @@ impl Field {
         Field::Lint,
         Field::SystemTables,
         Field::LeaderDoubleSpace,
+        Field::LeaderMenu,
         Field::RowLimit,
         Field::Keepalive,
         Field::NotifyAfter,
+        Field::LongQuery,
+        Field::QueryTimeout,
         Field::GuardRows,
         Field::GatewayIdle,
         Field::ExportDir,
@@ -74,6 +80,9 @@ impl Field {
             Field::Lint => "lint",
             Field::SystemTables => "system_tables",
             Field::LeaderDoubleSpace => "leader_double_space",
+            Field::LeaderMenu => "leader_menu",
+            Field::LongQuery => "long_query",
+            Field::QueryTimeout => "query_timeout",
             Field::RowLimit => "row_limit",
             Field::Keepalive => "keepalive",
             Field::NotifyAfter => "notify_after",
@@ -86,9 +95,13 @@ impl Field {
     pub fn kind(self) -> Kind {
         match self {
             Field::Language | Field::Theme | Field::EditorMode | Field::Hints => Kind::Choice,
-            Field::RowLimit | Field::Keepalive | Field::NotifyAfter | Field::GuardRows | Field::GatewayIdle => {
-                Kind::Number
-            }
+            Field::RowLimit
+            | Field::Keepalive
+            | Field::NotifyAfter
+            | Field::LongQuery
+            | Field::QueryTimeout
+            | Field::GuardRows
+            | Field::GatewayIdle => Kind::Number,
             Field::ExportDir => Kind::Text,
             _ => Kind::Toggle,
         }
@@ -107,6 +120,9 @@ impl Field {
             Field::Lint => t!("settings.lint"),
             Field::SystemTables => t!("settings.system_tables"),
             Field::LeaderDoubleSpace => t!("settings.leader_double_space"),
+            Field::LeaderMenu => t!("settings.leader_menu"),
+            Field::LongQuery => t!("settings.long_query"),
+            Field::QueryTimeout => t!("settings.query_timeout"),
             Field::RowLimit => t!("settings.row_limit"),
             Field::Keepalive => t!("settings.keepalive"),
             Field::NotifyAfter => t!("settings.notify_after"),
@@ -129,6 +145,9 @@ impl Field {
             Field::Lint => t!("settings.lint_about"),
             Field::SystemTables => t!("settings.system_tables_about"),
             Field::LeaderDoubleSpace => t!("settings.leader_double_space_about"),
+            Field::LeaderMenu => t!("settings.leader_menu_about"),
+            Field::LongQuery => t!("settings.long_query_about"),
+            Field::QueryTimeout => t!("settings.query_timeout_about"),
             Field::RowLimit => t!("settings.row_limit_about"),
             Field::Keepalive => t!("settings.keepalive_about"),
             Field::NotifyAfter => t!("settings.notify_after_about"),
@@ -196,6 +215,9 @@ impl App {
             Field::Lint => on_off(s.lint),
             Field::SystemTables => on_off(s.system_tables),
             Field::LeaderDoubleSpace => on_off(s.leader_double_space),
+            Field::LeaderMenu => on_off(s.leader_menu),
+            Field::LongQuery => number_or_off(s.long_query),
+            Field::QueryTimeout => number_or_off(s.query_timeout),
             Field::RowLimit => s.row_limit.to_string(),
             Field::Keepalive => number_or_off(s.keepalive),
             Field::NotifyAfter => number_or_off(s.notify_after),
@@ -259,6 +281,8 @@ impl App {
             Field::RowLimit => u64::try_from(s.row_limit).unwrap_or(u64::MAX),
             Field::Keepalive => s.keepalive,
             Field::NotifyAfter => s.notify_after,
+            Field::LongQuery => s.long_query,
+            Field::QueryTimeout => s.query_timeout,
             Field::GuardRows => s.guard_rows,
             Field::GatewayIdle => s.gateway_idle,
             _ => 0,
@@ -302,6 +326,7 @@ impl App {
                 self.settings.system_tables.into()
             }
             Field::LeaderDoubleSpace => flip(&mut s.leader_double_space),
+            Field::LeaderMenu => flip(&mut s.leader_menu),
             _ => return,
         });
         self.save_setting(field, value);
@@ -325,6 +350,8 @@ impl App {
                 Field::RowLimit => s.row_limit = usize::try_from(n).unwrap_or(usize::MAX),
                 Field::Keepalive => s.keepalive = n,
                 Field::NotifyAfter => s.notify_after = n,
+                Field::LongQuery => s.long_query = n,
+                Field::QueryTimeout => s.query_timeout = n,
                 Field::GuardRows => s.guard_rows = n,
                 Field::GatewayIdle => s.gateway_idle = n,
                 _ => return,

@@ -263,6 +263,7 @@ impl App {
     }
 
     pub(super) fn on_query_done(&mut self, outcome: QueryOutcome, txn: Option<TxnState>, stream: Option<RowStream>) {
+        self.run.sql.clear();
         self.run.db = None;
         self.task = None;
         self.run.executing = false;
@@ -344,7 +345,9 @@ impl App {
     }
 
     pub(super) fn on_query_failed(&mut self, err: &str, position: Option<ErrorPos>, txn: Option<TxnState>) {
-        self.run.db = None;
+        // The run's own connection (another tab's may be shown now): no
+        // other server's version says anything about it.
+        let ran_on = self.run.db.take();
         self.stop_watch(&format!(": {}", t!("run.query_failed")));
         if err.contains("couldn't reconnect") || err.contains("the server doesn't answer") {
             self.connection_lost = true;
@@ -367,10 +370,26 @@ impl App {
         };
         self.run.cancelling = false;
         let mut status = format!("{prefix}{}", one_line(err));
+        let mut failed_at = None;
         if let Some(marker) = position.and_then(|p| self.locate_error(&p)) {
             let (row, col) = marker.0;
             let _ = write!(status, " ({})", t!("run.at_line_col", line = row + 1, col = col + 1));
+            failed_at = Some(self.tab.editor.offset_of(marker.0));
             self.tab.error_marker = Some(marker);
+        }
+        // A syntax error that is really a feature this server hasn't got:
+        // in the statement that failed (where the error was, or the only one).
+        let ran = std::mem::take(&mut self.run.sql);
+        let shown = failed_at.map(|_| self.tab.editor.text());
+        // Where the error is in the editor; else what was sent (an EXPLAIN
+        // around the statement, say), if it's one statement.
+        let note = |db: &Database| {
+            let at_error =
+                shown.as_deref().and_then(|text| version_note(db.engine(), db.version(), text, failed_at, err));
+            at_error.or_else(|| version_note(db.engine(), db.version(), &ran, None, err))
+        };
+        if let Some(said) = ran_on.filter(|_| prefix.is_empty()).as_ref().and_then(note) {
+            let _ = write!(status, " · {said}");
         }
         let dry_run = self.run.extra.dry_run.is_some();
         if reviewing || dry_run {
@@ -458,7 +477,33 @@ impl App {
             self.run.extra.timed_out = Some(limit);
             self.cancel_query();
         }
+        self.offer_cancel_tick();
         self.check_background_panic();
+    }
+
+    /// A query running past `long_query` says, once, how to cancel it: in
+    /// the status bar (and a notification while you're in another window),
+    /// never as a question that takes the keys being typed.
+    fn offer_cancel_tick(&mut self) {
+        if !self.run.executing {
+            self.run.extra.offered_cancel = false;
+            return;
+        }
+        let after = self.settings.long_query;
+        let long = self.run.since.is_some_and(|s| s.elapsed() >= Duration::from_secs(after));
+        if after == 0 || self.run.cancelling || self.run.extra.offered_cancel || !long {
+            return;
+        }
+        self.run.extra.offered_cancel = true;
+        let secs = self.run.since.map_or(0, |s| s.elapsed().as_secs());
+        let tab = self.run_tab().unwrap_or(self.active_tab);
+        let name = self.tabs.get(tab).map(|t| t.name.clone()).unwrap_or_default();
+        let on = self.tabs.get(tab).and_then(|t| t.conn).and_then(|id| self.conn_name(id)).unwrap_or_default();
+        let said = t!("run.long_running", time = mm_ss(secs), tab = name, on = on);
+        self.set_status(said.clone(), false);
+        if self.terminal_focused != Some(true) {
+            self.notification = Some(said);
+        }
     }
 
     /// Reports a background task that panicked (it never reports back).
@@ -502,7 +547,14 @@ impl App {
             };
             let hint = match db {
                 Some(db) => match server_syntax_hint(&db, &text, engine).await {
-                    ServerCheck::Done(Some(hint)) => Some(hint),
+                    // A syntax error that is really a feature the server
+                    // hasn't got says so.
+                    ServerCheck::Done(Some(mut hint)) => {
+                        if let Some(said) = version_note(engine, db.version(), &text, hint.offset, &hint.message) {
+                            hint.message = format!("{} · {said}", hint.message);
+                        }
+                        Some(hint)
+                    }
                     ServerCheck::Done(None) => local(text.clone(), true).await,
                     ServerCheck::Busy => local(text.clone(), false).await,
                 },
@@ -634,4 +686,45 @@ async fn server_syntax_hint(db: &Database, text: &str, engine: Engine) -> Server
         }
     }
     ServerCheck::Done(None)
+}
+
+/// What to add to `error` (from running, or checking, `text` on a server
+/// of `version`) when it's a syntax error or an unknown function because of
+/// a feature the server is too old for: looked for in the statement at
+/// `at` (where the error is), else in `text` if it's one statement.
+fn version_note(engine: Engine, version: &str, text: &str, at: Option<usize>, error: &str) -> Option<String> {
+    let lower = error.to_lowercase();
+    let unknown = lower.contains("syntax") || (lower.contains("function") && lower.contains("does not exist"));
+    if !unknown {
+        return None;
+    }
+    let range = match at {
+        Some(offset) => sql::statement_range(text, offset, engine)?,
+        None => match sql::statement_ranges(text, engine).as_slice() {
+            [only] => only.clone(),
+            _ => return None,
+        },
+    };
+    let n = engine.dialect().too_new(&text[range], version)?;
+    Some(t!("run.needs_version", feature = n.feature, needs = n.needs, server = n.server))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Engine, version_note};
+
+    #[test]
+    fn a_version_note_is_about_the_statement_that_failed() {
+        let syntax = "You have an error in your SQL syntax; check the manual";
+        let one = "explain analyze select * from t";
+        assert!(version_note(Engine::MySql, "5.7.44", one, None, syntax).unwrap().contains("EXPLAIN ANALYZE"));
+        // Not for errors that aren't about syntax.
+        assert!(version_note(Engine::MySql, "5.7.44", one, None, "Table 't' doesn't exist").is_none());
+        // In a script: the statement where the error is, else nothing.
+        let script = "with c as (select 1) select * from c;\nselct 1;";
+        assert!(version_note(Engine::MySql, "5.7.44", script, None, syntax).is_none());
+        let typo = script.find("selct").unwrap();
+        assert!(version_note(Engine::MySql, "5.7.44", script, Some(typo), syntax).is_none());
+        assert!(version_note(Engine::MySql, "5.7.44", script, Some(3), syntax).is_some());
+    }
 }

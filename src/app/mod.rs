@@ -554,6 +554,9 @@ pub struct Run {
     infos: Vec<StatementInfo>,
     /// Parameter substitutions in the last run, for mapping error positions.
     filled: Option<Filled>,
+    /// The SQL running: a failure says if it uses what the server is too
+    /// old for.
+    sql: String,
 }
 
 /// Extra state of the running query.
@@ -573,6 +576,8 @@ struct RunExtra {
     started: Option<Instant>,
     /// It ended a statement with `\G`: show the result one column per line.
     vertical: bool,
+    /// It ran past `long_query`, and the status bar said how to cancel it.
+    offered_cancel: bool,
 }
 
 /// What a run's result is for.
@@ -1225,8 +1230,14 @@ impl App {
         Some(match secs {
             0 => t!("run.running_label").to_string(),
             1..60 => format!("{} {secs} s", t!("run.running_label")),
-            _ => format!("{} {}:{:02}", t!("run.running_label"), secs / 60, secs % 60),
+            _ => format!("{} {}", t!("run.running_label"), mm_ss(secs)),
         })
+    }
+
+    /// The tab the running query (or check) is for: its own, or for a run
+    /// that holds every tab (a write, a check) the shown one.
+    pub(super) fn run_tab(&self) -> Option<usize> {
+        self.run.executing.then(|| self.run.owner.unwrap_or(self.active_tab))
     }
 
     /// A run's progress or outcome, in the results pane's footer.
@@ -1508,6 +1519,11 @@ impl App {
             Screen::Query => self.handle_query_key(key),
         }
     }
+}
+
+/// A run's time so far, as minutes and seconds (`3:07`).
+pub(super) fn mm_ss(secs: u64) -> String {
+    format!("{}:{:02}", secs / 60, secs % 60)
 }
 
 #[cfg(test)]

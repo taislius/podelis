@@ -266,6 +266,7 @@ impl App {
         }
         self.tab.last_run_offset = offset;
         self.run.filled = filled;
+        self.run.sql.clone_from(&sql);
         // After a quiet while (or a lost connection), the server is asked
         // to answer first: a link that died meanwhile fails in seconds
         // rather than leaving the run waiting.
@@ -273,8 +274,15 @@ impl App {
         self.last_activity = Instant::now();
         self.run.extra.timed_out = None;
         self.run.extra.started = Some(Instant::now());
-        self.run.extra.deadline =
-            self.connection.form.query_timeout().ok().flatten().map(|limit| (Instant::now() + limit, limit));
+        // The connection's own timeout (0 there lets its queries run), else
+        // the one for every connection.
+        let timeout = if self.connection.form.timeout.trim().is_empty() {
+            (self.settings.query_timeout > 0).then(|| Duration::from_secs(self.settings.query_timeout))
+        } else {
+            self.connection.form.query_timeout().ok().flatten()
+        };
+        self.run.extra.deadline = timeout.and_then(|limit| Some((Instant::now().checked_add(limit)?, limit)));
+        self.run.extra.offered_cancel = false;
         self.tab.error_marker = None;
         self.run.executing = true;
         self.run.db = Some(db.clone());

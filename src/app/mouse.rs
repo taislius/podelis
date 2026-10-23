@@ -46,6 +46,11 @@ impl App {
             }
             return;
         }
+        // The library: a click picks a row, a double click opens it, the
+        // wheel moves through them.
+        if self.library_view.is_some() && self.top_overlay() == Some(super::overlay::Overlay::Library) {
+            return self.library_mouse(ev);
+        }
         // Over a popup only the wheel does something (scrolling it).
         if self.popup_open() {
             if let Some(view) = &mut self.cell_view {
@@ -71,6 +76,24 @@ impl App {
                     self.panes.last_click.is_some_and(|(t, cx, cy)| t.elapsed() < DOUBLE_CLICK && cx == x && cy == y);
                 self.panes.last_click = Some((Instant::now(), x, y));
                 self.click(x, y, double);
+            }
+            // A middle click on a tab closes it (asking first if it has
+            // unsaved changes), as in browsers.
+            MouseEventKind::Down(MouseButton::Middle) if y == self.hits.tabs_y && inside(self.hits.editor, x, y) => {
+                if let Some(&(_, _, tab)) = self.hits.tabs.iter().find(|(x0, x1, _)| (*x0..*x1).contains(&x)) {
+                    let (was, count) = (self.active_tab, self.tabs.len());
+                    self.switch_tab(tab);
+                    if self.active_tab == tab {
+                        self.request_close_tab();
+                    }
+                    // Not closed, and not asking about it (a query running):
+                    // back to the tab that was shown, as browsers do.
+                    if self.tabs.len() == count && self.confirm.is_none() && was != tab {
+                        self.switch_tab(was);
+                    } else if self.tabs.len() < count && was != tab {
+                        self.switch_tab(if was > tab { was - 1 } else { was });
+                    }
+                }
             }
             MouseEventKind::Drag(MouseButton::Left) if self.panes.plan_dragging => self.drag_plan(y),
             MouseEventKind::Drag(MouseButton::Left) if self.panes.dragging => self.drag_editor(x, y),
@@ -104,6 +127,39 @@ impl App {
             MouseEventKind::ScrollLeft => self.wheel_across(x, y, -1),
             MouseEventKind::ScrollDown => self.wheel(x, y, true),
             MouseEventKind::ScrollUp => self.wheel(x, y, false),
+            _ => {}
+        }
+    }
+
+    fn library_mouse(&mut self, ev: MouseEvent) {
+        let (x, y) = (ev.column, ev.row);
+        let (list, first) = self.hits.library_list;
+        // (Counted only for what moves or picks: not on every mouse move.)
+        let moves = matches!(ev.kind, MouseEventKind::ScrollDown | MouseEventKind::ScrollUp | MouseEventKind::Down(_));
+        let count = if moves { self.library_items().len() } else { 0 };
+        let Some(view) = &mut self.library_view else { return };
+        // A delete asked about is for the row it was asked on.
+        if matches!(ev.kind, MouseEventKind::ScrollDown | MouseEventKind::ScrollUp) {
+            view.confirm_delete = false;
+        }
+        match ev.kind {
+            MouseEventKind::ScrollDown => view.selected = (view.selected + 1).min(count.saturating_sub(1)),
+            MouseEventKind::ScrollUp => view.selected = view.selected.saturating_sub(1),
+            MouseEventKind::Down(MouseButton::Left) if inside(list, x, y) => {
+                let row = first + usize::from(y - list.y);
+                if row >= count {
+                    return;
+                }
+                let double =
+                    self.panes.last_click.is_some_and(|(t, cx, cy)| t.elapsed() < DOUBLE_CLICK && cx == x && cy == y)
+                        && view.selected == row;
+                view.selected = row;
+                view.confirm_delete = false;
+                self.panes.last_click = Some((Instant::now(), x, y));
+                if double {
+                    self.handle_library_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                }
+            }
             _ => {}
         }
     }

@@ -221,6 +221,14 @@ impl App {
         }
     }
 
+    /// Connection `id`'s transaction state.
+    pub(super) fn conn_txn(&self, id: u64) -> Option<TxnState> {
+        if self.conns.active == Some(id) {
+            return Some(self.connection.txn);
+        }
+        self.conns.parked.get(&id).map(|slot| slot.txn)
+    }
+
     /// A connection's name, by its id (the shown one's or a parked one's):
     /// its saved name, else its file's name or `host/database`.
     pub(super) fn conn_name(&self, id: u64) -> Option<String> {

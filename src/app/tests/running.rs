@@ -240,3 +240,44 @@ async fn disconnecting_while_a_query_runs_says_it_is_cancelled() {
     assert!(confirm.danger && confirm.details.iter().any(|d| d.contains("cancelled")), "{:?}", confirm.details);
     app.cancel_query();
 }
+
+/// A query running past `long_query` says once how to cancel it, without
+/// a question that would take the keys being typed.
+#[tokio::test]
+async fn a_long_query_says_how_to_cancel_it() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    app.settings.long_query = 1;
+    app.tab.editor.set_text("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n");
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(app.run.executing);
+    app.tick_running();
+    assert!(!app.notes.status.contains("Esc there cancels it"), "not yet");
+    app.run.since = Instant::now().checked_sub(Duration::from_secs(2));
+    app.tick_running();
+    assert!(app.notes.status.contains("its query has run 0:02. Esc there cancels it"), "{}", app.notes.status);
+    assert!(app.confirm.is_none(), "no question");
+    // Typing goes on into the editor; a `y` cancels nothing.
+    app.focus = Focus::Editor;
+    app.handle_key(key(KeyCode::Char('y')));
+    assert!(app.run.executing && !app.run.cancelling);
+    // Said once per run.
+    app.notes.status.clear();
+    app.tick_running();
+    assert!(app.notes.status.is_empty());
+}
+
+/// `query_timeout` cancels a query on a connection without a Timeout.
+#[tokio::test]
+async fn the_query_timeout_for_every_connection() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    app.settings.query_timeout = 7;
+    app.tab.editor.set_text("select 1");
+    app.handle_key(key(KeyCode::F(5)));
+    assert_eq!(app.run.extra.deadline.map(|(_, limit)| limit), Some(Duration::from_secs(7)));
+    finish(&mut app).await;
+    // A Timeout of 0 on the connection lets its queries run.
+    app.connection.form.timeout = "0".into();
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(app.run.extra.deadline.is_none());
+    finish(&mut app).await;
+}

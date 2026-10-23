@@ -142,7 +142,7 @@ fn draw_menu(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// The F3 window: search box, then saved queries (★) and history (↺).
-fn draw_library(f: &mut Frame, app: &App, area: Rect) {
+fn draw_library(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
     let Some(view) = &app.library_view else { return };
     let rect = centered_box(area, fit(area.width * 4 / 5, 30, area.width), fit(area.height * 4 / 5, 8, area.height));
@@ -150,12 +150,21 @@ fn draw_library(f: &mut Frame, app: &App, area: Rect) {
     let block = popup(t!("library.title"), t.accent);
     let inner = block.inner(rect);
     f.render_widget(block, rect);
-    let [search, list, hints] = Layout::default()
+    let items = app.library_items();
+    let selected = view.selected.min(items.len().saturating_sub(1));
+    // The selected query's first lines, under the list: what it is,
+    // without opening it (only with room left for the list).
+    let preview: Vec<String> = items
+        .get(selected)
+        .and_then(|item| app.library_item_sql(item))
+        .map(|sql| sql.trim().lines().take(PREVIEW_LINES).map(str::to_string).collect())
+        .unwrap_or_default();
+    let preview_h = if preview.is_empty() || inner.height < 12 { 0 } else { preview.len() as u16 + 1 };
+    let [search, list, preview_area, hints] = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
+        .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(preview_h), Constraint::Length(1)])
         .areas(inner);
 
-    let items = app.library_items();
     let saved = items.iter().filter(|i| matches!(i, LibraryItem::Saved(_))).count();
     f.render_widget(
         Paragraph::new(Line::from(
@@ -174,35 +183,56 @@ fn draw_library(f: &mut Frame, app: &App, area: Rect) {
     );
 
     let width = list.width as usize;
+    let now = chrono::Local::now();
     let rows: Vec<ListItem> = items
         .iter()
         .map(|item| {
+            let when = app.library_item_time(item).map(|at| when_label(at, now)).unwrap_or_default();
             let (icon, icon_style, group, name, sql) = match item {
                 LibraryItem::Saved(id) => {
                     let Some(q) = app.library.get(id) else { return ListItem::new("") };
                     let group = if q.group.is_empty() { String::new() } else { format!("{}/", q.group) };
                     ("★ ", fg(t.warn), group, q.name.clone(), q.sql.clone())
                 }
-                LibraryItem::History(sql) => ("↺ ", dim(), String::new(), String::new(), sql.clone()),
+                LibraryItem::History(sql, _) => ("↺ ", dim(), String::new(), String::new(), sql.clone()),
             };
             let preview = one_line(&sql);
-            let head_len = 2 + group.chars().count() + name.chars().count() + 2;
-            let preview = truncate(&preview, width.saturating_sub(head_len + 1));
+            // The icon, group and name, and two spaces after a name.
+            let gap = if name.is_empty() { 0 } else { 2 };
+            let head_len = 2 + group.chars().count() + name.chars().count() + gap;
+            let when_w = if when.is_empty() { 0 } else { when.chars().count() + 2 };
+            let preview = truncate(&preview, width.saturating_sub(head_len + when_w + 1));
+            // The time at the right edge.
+            let pad = width.saturating_sub(head_len + preview.chars().count() + when_w + 1);
             ListItem::new(Line::from(vec![
                 Span::styled(icon, icon_style),
                 Span::styled(group, muted()),
                 Span::styled(name.clone(), bold(t.text_bright)),
                 Span::raw(if name.is_empty() { "" } else { "  " }),
                 Span::styled(preview, if name.is_empty() { fg(t.text) } else { dim() }),
+                Span::raw(" ".repeat(pad + 2)),
+                Span::styled(when, dim()),
             ]))
         })
         .collect();
     if rows.is_empty() {
         f.render_widget(Paragraph::new(format!(" {}", t!("agents.no_matches"))).style(dim()), list);
     } else {
-        let mut state = ListState::default().with_selected(Some(view.selected.min(rows.len() - 1)));
+        let offset = view.offset.min(selected);
+        let mut state = ListState::default().with_selected(Some(selected)).with_offset(offset);
         f.render_stateful_widget(List::new(rows).highlight_style(Style::default().bg(t.active)), list, &mut state);
+        app.hits.library_list = (list, state.offset());
+        if let Some(view) = &mut app.library_view {
+            view.offset = state.offset();
+        }
     }
+    if preview_h > 0 {
+        let w = usize::from(preview_area.width);
+        let mut lines = vec![Line::from(Span::styled("─".repeat(w), fg(t.line)))];
+        lines.extend(preview.iter().map(|l| Line::from(Span::styled(truncate(&l.replace('\t', "    "), w), muted()))));
+        f.render_widget(Paragraph::new(lines), preview_area);
+    }
+    let Some(view) = &app.library_view else { return };
 
     let hint = if view.confirm_delete {
         Line::from(Span::styled(format!(" {}", t!("library.delete")), bold(t.warn)))
@@ -210,6 +240,23 @@ fn draw_library(f: &mut Frame, app: &App, area: Rect) {
         Line::from(Span::styled(format!(" {}", t!("library.keys")), dim()))
     };
     f.render_widget(Paragraph::new(hint).style(Style::default().bg(t.inset)), hints);
+}
+
+/// How many of the selected query's lines the library shows under the list.
+const PREVIEW_LINES: usize = 5;
+
+/// When a library row was saved or ran, short: the time today, the day
+/// this year, else the date.
+fn when_label(at: i64, now: chrono::DateTime<chrono::Local>) -> String {
+    use chrono::{Datelike, TimeZone};
+    let Some(then) = chrono::Local.timestamp_opt(at, 0).single() else { return String::new() };
+    if then.date_naive() == now.date_naive() {
+        then.format("%H:%M").to_string()
+    } else if then.year() == now.year() {
+        then.format("%m-%d %H:%M").to_string()
+    } else {
+        then.format("%Y-%m-%d").to_string()
+    }
 }
 
 /// The activity monitor: one line per session on the server.
@@ -426,6 +473,7 @@ fn draw_tab_prompt(f: &mut Frame, app: &App, area: Rect) {
     let Some(prompt) = &app.tab_prompt else { return };
     let title = match prompt.kind {
         TabPromptKind::SaveAs => t!("tab_prompt.save"),
+        TabPromptKind::SaveStatement(_) => t!("tab_prompt.save_statement"),
         TabPromptKind::Rename | TabPromptKind::RenameSaved(_) => t!("tab_prompt.rename"),
     };
     let rect = centered_box(area, fit(64, 24, area.width), 5);
@@ -519,7 +567,11 @@ fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
         } else {
             format!(" {}", t!("menu.tabs"))
         };
-        lines.push(Line::from(Span::styled(title, bold(t.accent))));
+        // Its first key spelled out, as the menu's others are (none: no hint).
+        let close = app.keymap.label(crate::config::keys::Action::CloseTab).split(" · ").next().unwrap_or_default();
+        let hint =
+            if close.is_empty() { String::new() } else { format!("  {}", t!("menu.close_this_tab", key = close)) };
+        lines.push(Line::from(vec![Span::styled(title, bold(t.accent)), Span::styled(hint, dim())]));
         lines.extend(two_columns(&tabs, col, bold(t.accent)));
         lines.push(Line::default());
     }

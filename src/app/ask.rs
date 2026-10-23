@@ -19,6 +19,8 @@ pub struct Question {
     pub text: String,
     pub tab: usize,
     pub connection: String,
+    /// `text` is SQL to explain in plain words, not a question.
+    pub explain: bool,
 }
 
 /// A question on its way to a model.
@@ -49,6 +51,21 @@ impl App {
         self.ask_prompt = Some(LineInput::new(String::new()));
     }
 
+    /// `Ctrl+K y`: the statement at the cursor (or the selection) goes to
+    /// a model, which says in plain words what it does (and what looks
+    /// wrong in it); the answer shows in a pop-over, the editor untouched.
+    pub(super) fn ai_explain(&mut self) {
+        if let Some(why) = self.why_cant_ask() {
+            return self.set_status(why, true);
+        }
+        let Some(sql) = self.statement_or_selection() else {
+            return self.set_status(t!("editor.no_statement_here").into(), true);
+        };
+        let question =
+            Question { text: sql, tab: self.active_tab, connection: self.connection.form.name.clone(), explain: true };
+        self.start_ask(question, false);
+    }
+
     /// Why asking can't start here, if it can't.
     fn why_cant_ask(&self) -> Option<String> {
         if self.asking.is_some() {
@@ -71,8 +88,12 @@ impl App {
             InputResult::Submit => {
                 let Some(text) = self.ask_prompt.take().map(|q| q.text().trim().to_string()) else { return };
                 if !text.is_empty() {
-                    let question =
-                        Question { text, tab: self.active_tab, connection: self.connection.form.name.clone() };
+                    let question = Question {
+                        text,
+                        tab: self.active_tab,
+                        connection: self.connection.form.name.clone(),
+                        explain: false,
+                    };
                     self.start_ask(question, false);
                 }
             }
@@ -83,7 +104,7 @@ impl App {
     /// Sends `question` to the gateway (started if it isn't running);
     /// `share_once`: the user allowed the schema to go to the model.
     fn start_ask(&mut self, question: Question, share_once: bool) {
-        if question.tab >= self.tabs.len() {
+        if question.tab >= self.tabs.len() && !question.explain {
             return self.set_status(t!("ask.tab_closed").into(), true);
         }
         // By id: two projects' names may differ only in case.
@@ -103,6 +124,9 @@ impl App {
             serde_json::json!({ "project": project, "connection": connection, "question": question.text, "dir": dir });
         if share_once {
             params["share_once"] = serde_json::json!(true);
+        }
+        if question.explain {
+            params["explain"] = serde_json::json!(true);
         }
         let task = tokio::spawn(async move {
             let started = connect_or_start(&config_dir, "podelis", || spawn_gateway(&config_dir)).await;
@@ -144,7 +168,8 @@ impl App {
     /// Tab `closing` is about to close: a question asked from it stops,
     /// and one asked from a tab after it follows that tab's new place.
     pub(super) fn tab_closing(&mut self, closing: usize) {
-        if self.asking.as_ref().is_some_and(|a| a.question.tab == closing)
+        // (An explanation goes to a pop-over, not the tab: it goes on.)
+        if self.asking.as_ref().is_some_and(|a| a.question.tab == closing && !a.question.explain)
             || matches!(&self.pending_share, Some(Confirm { action: ConfirmAction::ShareSchema { question, .. }, .. }) if question.tab == closing)
         {
             return self.stop_asking();
@@ -194,7 +219,9 @@ impl App {
             Ok(answer) => {
                 // Closing a tab or leaving the project stops asking, so the
                 // tab is still the one asked from.
-                if asking.question.tab < self.tabs.len() {
+                if asking.question.explain {
+                    self.show_explanation(&answer);
+                } else if asking.question.tab < self.tabs.len() {
                     self.in_tab(asking.question.tab, |app| app.insert_answer(&asking.question.text, &answer));
                 }
             }
@@ -248,6 +275,44 @@ impl App {
             None => false,
         };
         self.start_ask(question, !saved);
+    }
+
+    /// What the model said a statement does, in a pop-over: its words
+    /// wrapped, its code blocks (the query it would write instead, if it
+    /// found a mistake) as they are, indented, without their fences.
+    fn show_explanation(&mut self, answer: &serde_json::Value) {
+        let model = answer["model"].as_str().unwrap_or(t!("ask.the_model"));
+        let said = answer["said"].as_str().unwrap_or_default().trim();
+        if said.is_empty() {
+            return self.set_status(format!("{model}: {}", t!("ask.no_explanation")), true);
+        }
+        let mut text = String::new();
+        let mut code = false;
+        for line in said.lines() {
+            if line.trim_start().starts_with("```") {
+                code = !code;
+                continue;
+            }
+            if code {
+                let _ = writeln!(text, "  {line}");
+            } else if line.trim().is_empty() {
+                text.push('\n');
+            } else {
+                // A list item's wrapped lines keep its indent.
+                let indent = if line.trim_start().starts_with("- ") { "  " } else { "" };
+                let _ = writeln!(text, "{}", wrap_comment(line, 76).join(&format!("\n{indent}")));
+            }
+        }
+        let title = t!("ask.explained_by", model = model);
+        self.cell_view = Some(CellView::new(title, text.trim_end().to_string()));
+        let tokens = &answer["usage"];
+        let status = t!(
+            "ask.explained",
+            model = model,
+            tokens_in = tokens["input_tokens"],
+            tokens_out = tokens["output_tokens"]
+        );
+        self.set_status(status, false);
     }
 
     /// The SQL at the end of the editor, a blank line apart, under the

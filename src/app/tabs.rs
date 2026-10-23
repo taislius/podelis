@@ -170,6 +170,9 @@ pub enum TabPromptKind {
     Rename,
     /// Rename a saved query from the library window.
     RenameSaved(String),
+    /// Save this SQL (a statement or the selection) to the library as a
+    /// query of its own: the tab stays as it is.
+    SaveStatement(String),
 }
 
 pub struct TabPrompt {
@@ -181,7 +184,8 @@ pub struct TabPrompt {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LibraryItem {
     Saved(String),
-    History(String),
+    /// A history entry, and when it ran (if that's known).
+    History(String, Option<i64>),
 }
 
 pub struct LibraryView {
@@ -191,6 +195,8 @@ pub struct LibraryView {
     pub confirm_delete: bool,
     /// Enter inserts the SQL at the cursor instead of opening it (Ctrl+E).
     pub insert: bool,
+    /// The first row in sight (kept from frame to frame).
+    pub offset: usize,
 }
 
 /// Numbers the tabs-file writes so the newest always wins.
@@ -504,6 +510,9 @@ impl App {
             let mut fresh = TabState::default();
             swap_tab(self, &mut fresh);
             self.run.set_stream(None);
+            // Its text goes from the tabs file too: it mustn't come back
+            // on the next start.
+            self.save_draft();
             return;
         }
         let next = if closing + 1 < self.tabs.len() { closing + 1 } else { closing - 1 };
@@ -537,6 +546,25 @@ impl App {
             }
             Err(e) => self.set_status(e, true),
         }
+    }
+
+    /// The selected text, else the statement at the cursor, trimmed.
+    pub(super) fn statement_or_selection(&self) -> Option<String> {
+        if let Some(selected) = self.tab.editor.selected_text().filter(|s| !s.trim().is_empty()) {
+            return Some(selected.trim().to_string());
+        }
+        let text = self.tab.editor.text();
+        let range = sql::statement_range(&text, self.tab.editor.cursor_offset(), self.engine())?;
+        Some(text[range].trim().to_string())
+    }
+
+    /// The statement at the cursor (or the selection) into the library,
+    /// under a name asked for; the tab isn't tied to it.
+    pub(super) fn save_statement(&mut self) {
+        let Some(sql) = self.statement_or_selection() else {
+            return self.set_status(t!("editor.no_statement_here").into(), true);
+        };
+        self.tab_prompt = Some(TabPrompt { kind: TabPromptKind::SaveStatement(sql), text: LineInput::default() });
     }
 
     /// F4: rename the tab (and its saved query, as "group/name").
@@ -584,6 +612,10 @@ impl App {
                 None if text.is_empty() => return Err(t!("tabs.need_name").into()),
                 None => self.tabs[self.active_tab].name = text.to_string(),
             },
+            TabPromptKind::SaveStatement(sql) => {
+                self.library.add(text, sql)?;
+                self.set_status(t!("tabs.saved_to_library", name = text), false);
+            }
             TabPromptKind::RenameSaved(id) => {
                 self.library.rename(id, text)?;
                 let name = library::split_path(text).1;
@@ -598,18 +630,27 @@ impl App {
     // ------------------------------------------------------------- library
 
     pub(super) fn open_library(&mut self) {
-        self.library_view =
-            Some(LibraryView { query: LineInput::default(), selected: 0, confirm_delete: false, insert: false });
+        self.library_view = Some(LibraryView {
+            query: LineInput::default(),
+            selected: 0,
+            confirm_delete: false,
+            insert: false,
+            offset: 0,
+        });
     }
 
     /// Ctrl+E: the library, with Enter inserting a saved query's SQL (or a
-    /// history entry) at the cursor. Starts with the snippets group.
+    /// history entry) at the cursor. Starts with the snippets group, if
+    /// there is one: else with everything (a search for a group that isn't
+    /// there showed nothing to pick until it was cleared).
     pub(super) fn open_snippets(&mut self) {
+        let snippets = self.library.queries.iter().any(|q| q.group.eq_ignore_ascii_case(library::SNIPPETS));
         self.library_view = Some(LibraryView {
-            query: LineInput::new(library::SNIPPETS),
+            query: LineInput::new(if snippets { library::SNIPPETS } else { "" }),
             selected: 0,
             confirm_delete: false,
             insert: true,
+            offset: 0,
         });
         self.focus = Focus::Editor;
     }
@@ -620,18 +661,36 @@ impl App {
         let query = self.library_view.as_ref().map_or("", |v| v.query.text());
         let mut items: Vec<LibraryItem> =
             self.library.search(query).into_iter().map(|q| LibraryItem::Saved(q.id.clone())).collect();
+        let (words, when) = library::split_dates(query, chrono::Local::now());
         let mut seen = std::collections::HashSet::new();
         let mut from_history = 0;
-        for sql in self.history.entries().iter().rev() {
+        for (i, sql) in self.history.entries().iter().enumerate().rev() {
             if from_history >= 300 {
                 break;
             }
-            if library::matches(query, &[sql]) && seen.insert(sql.as_str()) {
-                items.push(LibraryItem::History(sql.clone()));
+            let in_span = when.is_none_or(|w| w.holds(self.history.time(i)));
+            if in_span && library::matches(&words, &[sql]) && seen.insert(sql.as_str()) {
+                items.push(LibraryItem::History(sql.clone(), self.history.time(i)));
                 from_history += 1;
             }
         }
         items
+    }
+
+    /// When a library row's query was saved (or last changed) or ran.
+    pub fn library_item_time(&self, item: &LibraryItem) -> Option<i64> {
+        match item {
+            LibraryItem::Saved(id) => self.library.get(id).and_then(|q| q.changed),
+            LibraryItem::History(_, at) => *at,
+        }
+    }
+
+    /// A library row's SQL.
+    pub fn library_item_sql(&self, item: &LibraryItem) -> Option<String> {
+        match item {
+            LibraryItem::Saved(id) => self.library.get(id).map(|q| q.sql.clone()),
+            LibraryItem::History(sql, _) => Some(sql.clone()),
+        }
     }
 
     pub(super) fn handle_library_key(&mut self, key: KeyEvent) {
@@ -696,7 +755,7 @@ impl App {
                 Some(q) => q.sql.clone(),
                 None => return,
             },
-            LibraryItem::History(sql) => sql.clone(),
+            LibraryItem::History(sql, _) => sql.clone(),
         };
         self.tab.editor.insert_str(sql.trim_end());
         self.edited();
@@ -715,7 +774,7 @@ impl App {
                 let Some(q) = self.library.get(id) else { return };
                 (Some(q.name.clone()), q.sql.clone(), Some(id.clone()))
             }
-            LibraryItem::History(sql) => (None, sql.clone(), None),
+            LibraryItem::History(sql, _) => (None, sql.clone(), None),
         };
         self.open_sql_in_tab(name, &sql, saved_id);
     }

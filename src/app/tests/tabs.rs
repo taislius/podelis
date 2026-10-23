@@ -260,7 +260,9 @@ async fn save_rename_group_and_search_queries() {
     run_sql(&mut app, "select 42 as answer").await;
     app.handle_key(key(KeyCode::F(3)));
     type_text(&mut app, "answer");
-    assert_eq!(app.library_items(), [LibraryItem::History("select 42 as answer".into())]);
+    assert!(
+        matches!(app.library_items().as_slice(), [LibraryItem::History(sql, Some(_))] if sql == "select 42 as answer")
+    );
     app.handle_key(key(KeyCode::Enter));
     assert_eq!((app.tabs.len(), app.tab.editor.text().as_str()), (3, "select 42 as answer"));
 
@@ -393,4 +395,81 @@ fn the_tab_list_finds_a_tab_by_name_connection_or_sql() {
     assert!(app.palette.as_ref().is_some_and(|p| p.tabs_only && p.searching));
     app.handle_key(key(KeyCode::Esc));
     assert_eq!(app.active_tab, 6);
+}
+
+#[test]
+fn the_statement_at_the_cursor_goes_to_the_library_alone() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    app.tab.editor.set_text("select 1;\nselect * from orders where id = 2;\nselect 3;");
+    app.tab.editor.set_cursor((1, 5));
+    app.run_action(Action::SaveStatement);
+    type_text(&mut app, "reports/order two");
+    app.handle_key(key(KeyCode::Enter));
+    let saved = app.library.queries.iter().find(|q| q.name == "order two").unwrap();
+    assert_eq!((saved.group.as_str(), saved.sql.as_str()), ("reports", "select * from orders where id = 2"));
+    assert!(saved.changed.is_some());
+    // The tab isn't tied to it, and keeps all its text.
+    assert!(app.tabs[0].saved_id.is_none());
+    assert!(app.tab.editor.text().starts_with("select 1;"));
+    // A selection is what's saved, when there is one.
+    app.tab.editor.select_offsets(0, 8);
+    app.run_action(Action::SaveStatement);
+    type_text(&mut app, "one");
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.library.queries.iter().find(|q| q.name == "one").unwrap().sql, "select 1");
+}
+
+#[test]
+fn closing_the_last_tab_forgets_its_text_for_good() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("c.toml");
+    let (mut store, _) = ConnectionStore::load_from(path.clone());
+    store.add_project("a").unwrap();
+    let mut app = App::new(store, None, Some(dir.path().to_path_buf()));
+    app.open_project_by_name("a").unwrap();
+    app.tab.editor.insert_str("select 'gone'");
+    app.save_draft();
+    app.close_tab();
+    assert!(app.tab.editor.is_empty());
+    // A restart doesn't bring it back.
+    let (store, _) = ConnectionStore::load_from(path);
+    let mut app = App::new(store, None, Some(dir.path().to_path_buf()));
+    app.open_project_by_name("a").unwrap();
+    assert!(app.tab.editor.is_empty());
+}
+
+#[test]
+fn snippets_start_with_everything_when_there_is_no_snippets_group() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    app.library.add("adhoc/top", "select * from orders").unwrap();
+    app.run_action(Action::InsertSnippet);
+    assert_eq!(app.library_view.as_ref().unwrap().query.text(), "");
+    assert_eq!(app.library_items().len(), 1);
+    app.library_view = None;
+    app.library.add("snippets/now", "select now()").unwrap();
+    app.run_action(Action::InsertSnippet);
+    assert_eq!(app.library_view.as_ref().unwrap().query.text(), "snippets");
+}
+
+#[test]
+fn the_library_finds_by_date() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    app.library.add("today", "select 1").unwrap();
+    let old = app.library.add("old", "select 2").unwrap();
+    app.library.queries.iter_mut().find(|q| q.id == old).unwrap().changed = Some(1_600_000_000);
+    app.history.push("select 3");
+    app.open_library();
+    type_text(&mut app, "@today");
+    let items = app.library_items();
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert!(items.iter().any(|i| matches!(i, LibraryItem::History(sql, Some(_)) if sql == "select 3")));
+    assert!(app.library_item_time(&items[0]).is_some());
+    app.library_view = None;
+    app.open_library();
+    type_text(&mut app, "@2020-09 select");
+    let items = app.library_items();
+    assert_eq!(items, [LibraryItem::Saved(old)]);
 }

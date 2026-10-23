@@ -374,7 +374,30 @@ fn ask_system(engine: &str, context: &str) -> String {
     )
 }
 
-/// `ask`: `{ connection, question, project?, model?, share_once? }`. A
+/// What the model is told when asked what a query does; the context follows.
+fn explain_system(engine: &str, context: &str) -> String {
+    format!(
+        "You explain SQL for {engine} to the person about to run it. Using the tables and columns below (and \
+         what the team has said about them, where it's given), say in plain words what the user's query does \
+         and what its result holds: a short paragraph, then the steps worth knowing (joins, filters, grouping, \
+         anything slow on big tables) as short lines starting with `- `. If something in it looks wrong (a join \
+         that multiplies rows, a filter that can't match, a name not below), say so, and only then add the \
+         query as you'd write it in a ```sql block. Don't write a query otherwise.\n\n{context}"
+    )
+}
+
+/// The system prompt and the user's message: to write SQL for a
+/// question, or (`explain`) to say what the SQL in `question` does.
+fn ask_or_explain(explain: bool, engine: &str, context: &str, question: &str) -> (String, String) {
+    if explain {
+        (explain_system(engine, context), format!("What does this query do?\n\n```sql\n{question}\n```"))
+    } else {
+        (ask_system(engine, context), question.to_string())
+    }
+}
+
+/// `ask`: `{ connection, question, project?, model?, share_once?, explain? }`;
+/// with `explain`, `question` is SQL the model says the meaning of. A
 /// model writes SQL for the question over the connection's schema (the
 /// tables `context` picks), its names are checked against the schema and
 /// sent back to it when they're not there; the SQL is returned, never run.
@@ -428,9 +451,12 @@ pub async fn ask(
         Ok(found) => found,
         Err(e) => return (Err(e), about),
     };
+    let explain = params.get("explain").and_then(Value::as_bool).unwrap_or(false);
+    about["explain"] = json!(explain);
+    let (system, content) = ask_or_explain(explain, &source.schema.engine, &built.text, question);
     let mut prompt = Prompt {
-        system: Some(ask_system(&source.schema.engine, &built.text)),
-        messages: vec![models::Message { role: "user".into(), content: question.to_string() }],
+        system: Some(system),
+        messages: vec![models::Message { role: "user".into(), content }],
         max_tokens: None,
     };
     let (mut input_tokens, mut output_tokens, mut attempts) = (0, 0, 0);
@@ -445,7 +471,9 @@ pub async fn ask(
         };
         input_tokens += reply.input_tokens;
         output_tokens += reply.output_tokens;
-        let (sql, said) = super::names::split_answer(&reply.text);
+        // An explanation is words (its blocks quoted): no SQL to check.
+        let (sql, said) =
+            if explain { (None, reply.text.trim().to_string()) } else { super::names::split_answer(&reply.text) };
         let problems = sql
             .as_deref()
             .map(|sql| super::names::problems(sql, source.schema.dialect, &source.schema))
@@ -467,7 +495,8 @@ pub async fn ask(
     about["output_tokens"] = json!(output_tokens);
     let tables: Vec<Value> = built.tables.iter().map(|t| json!({ "name": t.name, "why": t.why })).collect();
     about["facts"] = json!(built.facts.len());
-    let (said, suggested) = suggestions(&said);
+    // (An explanation's words are kept whole: it suggests no facts.)
+    let (said, suggested) = if explain { (said, Vec::new()) } else { suggestions(&said) };
     let suggested = keep_suggestions(config_dir, caches, &source.project_id, &config.name, &suggested).await;
     about["suggested"] = json!(suggested.len());
     let result = json!({

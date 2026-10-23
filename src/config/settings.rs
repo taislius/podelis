@@ -86,6 +86,16 @@ pub struct Settings {
     pub keepalive: u64,
     /// Space twice quickly in the editor opens the command menu (Ctrl+K).
     pub leader_double_space: bool,
+    /// Ctrl+K shows its menu when no letter follows within half a second;
+    /// off, it waits quietly (`?`, or Ctrl+Shift+K where the terminal can
+    /// tell it apart, shows the menu).
+    pub leader_menu: bool,
+    /// Seconds a query runs before Podėlis says how to cancel it; 0 never
+    /// says.
+    pub long_query: u64,
+    /// Seconds after which any query is cancelled, on connections without
+    /// a Timeout of their own; 0 lets queries run.
+    pub query_timeout: u64,
     /// Seconds a query must run before its end is announced (a bell and a
     /// desktop notification) while you're in another window; 0 turns it off.
     pub notify_after: u64,
@@ -120,6 +130,9 @@ impl Default for Settings {
             viewers: HashMap::new(),
             keepalive: 0,
             leader_double_space: false,
+            leader_menu: true,
+            long_query: 600,
+            query_timeout: 0,
             notify_after: 10,
             guard_rows: 1_000_000,
             gateway_idle: 30,

@@ -27,6 +27,10 @@ impl App {
         ];
         if let Ok(Some(t)) = form.query_timeout() {
             local.push((t!("info.query_timeout").to_string(), format!("{} s", t.as_secs())));
+        } else if form.timeout.trim().is_empty() && self.settings.query_timeout > 0 {
+            // The one for every connection (`query_timeout`).
+            let every = t!("info.every_connection", s = self.settings.query_timeout);
+            local.push((t!("info.query_timeout").to_string(), every));
         }
         if let Some(l) = self.connection.latency {
             local.push((t!("info.latency").to_string(), format!("{} ms", l.as_millis())));

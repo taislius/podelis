@@ -17,6 +17,7 @@ pub(super) mod passwords;
 pub(super) mod pgpass;
 #[cfg(feature = "postgres")]
 pub(super) mod queries;
+mod versions;
 
 use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan};
 
@@ -188,6 +189,9 @@ impl Dialect for Postgres {
     }
     fn version_query(&self) -> &'static str {
         "SHOW server_version"
+    }
+    fn too_new(&self, sql: &str, version: &str) -> Option<crate::db::dialect::TooNew> {
+        versions::too_new(sql, version)
     }
     fn explain(&self, stmt: &str, _version: &str) -> String {
         format!("EXPLAIN (FORMAT JSON) {stmt}")

@@ -598,3 +598,26 @@ fn appended_sql_never_joins_the_statement_before_it() {
     app.undo();
     assert_eq!(app.tab.editor.text(), "select 1");
 }
+
+#[test]
+fn ctrl_k_can_wait_quietly_and_ctrl_shift_k_shows_the_menu_at_once() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    // With the menu coming by itself, Ctrl+K ? is every key, as before.
+    app.handle_key(ctrl('k'));
+    app.handle_key(key(KeyCode::Char('?')));
+    assert!(app.palette.is_none() && app.help_visible);
+    app.help_visible = false;
+    app.settings.leader_menu = false;
+    app.handle_key(ctrl('k'));
+    assert!(app.palette_menu_due().is_none(), "no menu by itself");
+    assert_eq!(app.notes.status, "^K… (? shows the menu)");
+    // `?` shows it, then `?` again every key.
+    app.handle_key(key(KeyCode::Char('?')));
+    assert!(app.palette.as_ref().is_some_and(|p| p.menu));
+    app.handle_key(key(KeyCode::Char('?')));
+    assert!(app.palette.is_none() && app.help_visible);
+    app.help_visible = false;
+    app.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::CONTROL | KeyModifiers::SHIFT));
+    assert!(app.palette.as_ref().is_some_and(|p| p.menu && !p.searching));
+}

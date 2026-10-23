@@ -12,6 +12,7 @@ pub(super) mod passwords;
 mod plan;
 #[cfg(feature = "mysql")]
 pub(super) mod queries;
+mod versions;
 
 use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan, hex_digits};
 use crate::sql::TokenKind;
@@ -233,6 +234,9 @@ impl Dialect for MySql {
             Server::MariaDb => format!("EXPLAIN {stmt}"),
             Server::MySql(_) => format!("EXPLAIN FORMAT=TREE {stmt}"),
         }
+    }
+    fn too_new(&self, sql: &str, version: &str) -> Option<crate::db::dialect::TooNew> {
+        versions::too_new(sql, version)
     }
     /// MySQL 8.0.18+ has EXPLAIN ANALYZE, for the statements it can run
     /// that way; MariaDB's is ANALYZE (a table with the actual rows next to

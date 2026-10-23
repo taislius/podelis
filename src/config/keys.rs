@@ -57,6 +57,8 @@ pub enum Action {
     ZoomStatement,
     TabList,
     Settings,
+    SaveStatement,
+    AiExplain,
 }
 
 impl Action {
@@ -103,6 +105,8 @@ impl Action {
             Action::ZoomStatement => t!("action.zoom_statement"),
             Action::TabList => t!("action.tab_list"),
             Action::Settings => t!("action.settings"),
+            Action::SaveStatement => t!("action.save_statement"),
+            Action::AiExplain => t!("action.ai_explain"),
         }
     }
 
@@ -135,6 +139,7 @@ impl Action {
             Action::ZoomStatement => t!("action_brief.zoom_statement"),
             Action::TabList => t!("action_brief.tab_list"),
             Action::Settings => t!("action_brief.settings"),
+            Action::AiExplain => t!("action_brief.ai_explain"),
             _ => self.describe(),
         }
     }
@@ -158,6 +163,8 @@ impl Action {
                 | Action::NextWarning
                 | Action::SelectStatement
                 | Action::ZoomStatement
+                | Action::SaveStatement
+                | Action::AiExplain
         )
     }
 
@@ -218,6 +225,8 @@ const ACTIONS: &[(Action, &str, &[&str])] = &[
     (Action::TxMode, "transaction_mode", &["Ctrl+K x"]),
     (Action::NextWarning, "next_warning", &["Ctrl+K w"]),
     (Action::Ask, "ask", &["Ctrl+K q"]),
+    (Action::AiExplain, "ai_explain", &["Ctrl+K y"]),
+    (Action::SaveStatement, "save_statement", &[]),
     (Action::Memory, "memory", &["Ctrl+K k"]),
 ];
 
