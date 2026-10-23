@@ -45,6 +45,9 @@ Configuration](configuration.md#ai-models).
   connection, `Enter`. The SQL comes to the end of the editor under the
   question and the model's note, as comments; `F6` runs it once you've
   read it. Details in [the query screen](query-screen.md).
+- **AI explain:** `Ctrl+K y` on a statement: the model says in plain
+  words what it does, in a pop-over, shown the same tables and facts as
+  a question about it would be.
 - **From the command line:** `podelis ask prod "revenue per country last
   month"` prints the SQL (`--model` picks another model, `-p` another
   project). Details in [Without the UI](command-line.md#ask-in-plain-language-ask).

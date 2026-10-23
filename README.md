@@ -52,9 +52,11 @@ same way tools like `lazygit` do.
   its own results and **its own connection** (so one tab can be on staging
   while another is on prod); keep working in other tabs while a long read
   runs in one. Save a tab to the project's
-  library under a name and group (`reports/churn by month`), rename or move
-  it, and search everything — names, groups, SQL text and your history —
-  from one window (F3)
+  library under a name and group (`reports/churn by month`), or just the
+  statement under the cursor; rename or move it, and search everything —
+  names, groups, SQL text and your history, by date too (`@today`, `@7d`,
+  `@2026-10`) — from one window (F3) that previews the selected query.
+  `Ctrl+K g` lists every tab with its connection and what runs there
 - **Compare two connections** open in tabs (Ctrl+K, type “compare”):
   - the **schema**: tables, views, columns, indexes and foreign keys only
     on one side or different, with the SQL that makes the other side match
@@ -145,7 +147,9 @@ same way tools like `lazygit` do.
   prints it) without running it. What your team knows (`status = 3` means
   cancelled; revenue is net of refunds) goes in the project's memory
   (`podelis memory add …`) and is shown to the model with those tables. Rows never go to
-  the model, and the schema leaves your machine only if you allow it
+  the model, and the schema leaves your machine only if you allow it.
+  `Ctrl+K y` has the model **explain** the statement under the cursor in
+  plain words (and say what looks wrong in it), without running it
 - **For AI agents:** `podelis mcp` gives your coding agent the connections
   you share with it, in read-only transactions unless you allow writes, with
   no passwords and nothing destructive. Agent activity shows everything

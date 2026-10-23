@@ -196,6 +196,13 @@ OS and the server version when something is off.
 - [ ] MySQL: `select 'a' || 'b'` gets a `pipes-or` warning and returns `0`,
   as in the `mysql` client. After `set sql_mode = 'ANSI'` and a pause, no
   warning, and it returns `ab`.
+- [ ] MySQL 5.7 (`docker run -e MYSQL_ROOT_PASSWORD=pw -p 3307:3306
+  mysql:5.7`): `explain analyze select 1`, `analyze select 1`, a `WITH`
+  query, `select row_number() over (order by 1)`: the error (and the hint
+  under the editor, after a pause) ends with what it needs ("EXPLAIN
+  ANALYZE needs MySQL 8.0.18 or newer; this server is MySQL 5.7.44"). A
+  typo elsewhere in the script, or a column named `lateral`, gets no such
+  note. PostgreSQL 14: `merge …` the same way.
 - [ ] Confirmations: `with d as (delete from t returning *) select * from d`
   (PostgreSQL) asks first; `explain delete from t` doesn't;
   `alter table t alter column c drop default` doesn't;
@@ -255,6 +262,14 @@ Use two databases with the same tables, e.g. `pgbench -i -s 10 a` and
   another window: when it ends, the terminal rings and shows a desktop
   notification. Staying in the terminal: no notification.
 - [ ] Try it in each terminal below; note which show the notification.
+- [ ] `long_query = 10` (`Ctrl+K ,`): a 15-second query says once in the
+  status bar "Tab … on …: its query has run 0:10. Esc there cancels it",
+  and notifies from another window; typing meanwhile (even `y`) goes into
+  the editor and cancels nothing.
+- [ ] `query_timeout = 5`: a 15-second query on a connection without a
+  Timeout is cancelled at 5 s ("timed out"); `Ctrl+K u` shows "5 s
+  (query_timeout, for every connection)". With Timeout `0` on the
+  connection, it runs to the end.
 
 ### Schema navigator and server tools
 
@@ -305,6 +320,10 @@ With a real key (a few cents) and, if you have it, Ollama:
   SQL at the end of the editor under the question, not run; `F6` runs it.
   `Esc` while asking stops it; switching tabs meanwhile still puts the SQL
   in the tab asked from.
+- [ ] `Ctrl+K y` on a statement (one with a wrong join, too): a pop-over
+  says what it does, step by step, and what looks wrong, any query it
+  suggests indented as written; the editor isn't touched and nothing runs.
+  Closing the tab meanwhile doesn't stop it.
 - [ ] A provider's model on a project that doesn't share its schema: the
   question to send it (`y` once, `a` always; `share_schema = "all"` saved).
 - [ ] `podelis memory learn` on a real repository's migrations; a fact
@@ -331,6 +350,23 @@ With a real key (a few cents) and, if you have it, Ollama:
   from, as `Ctrl+K g` does), and the active tab
   is always in sight (Ctrl+PageUp/PageDown through them all). In a narrow
   window its name shortens too, and the `+` stays.
+- [ ] `Ctrl+K g` while a query runs in one tab, a transaction is open in
+  another and a third has no connection: each says so (`running 0:12`,
+  `transaction open`, `no connection`), the time counting up; typing
+  "open" finds tabs by name or SQL, not by that status.
+- [ ] Closing: `Ctrl+W`, a middle click on a background tab (you stay on
+  yours), *Close the tab* in the editor's menu. The last tab empties, and
+  stays empty after a restart. While a query runs, a middle click leaves
+  you where you were.
+- [ ] Right-click a statement in a script, *Save the statement to the
+  library*: only that statement is saved, the tab stays unsaved. `F3`:
+  rows show their time, the selected one's first five lines show under
+  the list; `@today`, `@7d`, `@2026-10`, `@2026-10-01..` narrow it;
+  click selects, double click opens, the wheel moves; `Ctrl+E` with no
+  `snippets` group lists everything.
+- [ ] `leader_menu = false`: `Ctrl+K` shows nothing, `Ctrl+K e` explains,
+  `Ctrl+K ?` shows the menu, `?` again every key. In kitty / WezTerm /
+  Ghostty, `Ctrl+Shift+K` shows the menu at once.
 
 ### Terminals
 

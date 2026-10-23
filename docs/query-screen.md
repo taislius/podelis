@@ -24,13 +24,23 @@ search every command by name. `F1` shows every key.
 | `b` | The statement at the cursor (or the selected lines) alone, in a taller pop-over over the editor, the results under it (also `Shift+F12`). It's the tab's own text, edited in place; moving out of the statement shows the next one, and `F5` runs the one in sight. It stays while another pane has the keys (an Explain's plan, the results under it); again, or `Esc` in the editor, shows the whole text |
 | `m` | Menu of what you can do in the focused pane (also right-click) |
 | `l` / `t` | Search saved queries and history / rename the tab |
+| `g` | Every tab, with its connection and what runs there (see *Tabs and the query library*) |
 | `o` / `d` | Pick a connection for this tab (opens a new tab if this one is connected) / disconnect this tab (asks first, and says so when that rolls back a transaction or cancels the query running here) |
 | `p` | Projects and connections (or click the project's name in the top bar): see [Projects and connections](connections.md) |
 | `u` / `s` / `h` | Connection info / the server's sessions / connection heartbeat on or off |
 | `q` | Ask in plain language: a model writes the SQL for your question (see *Asking in plain language* below) |
+| `y` | AI explain: a model says in plain words what the statement at the cursor (or the selection) does, in a pop-over; nothing runs and the editor isn't touched |
 | `k` | The project's memory: what models are told about your data. `a` adds a fact (`orders.status 3 = cancelled`), `c` confirms one a model suggested (orange), `d` forgets one |
 | `1`…`9` | Jump to a tab (the menu lists the open tabs by number; typing a tab's name finds it too) |
 | `?` | Every key |
+
+The menu shows when no letter follows `Ctrl+K` within half a second. Who
+knows the letters can turn that off (`leader_menu = false`, or *Ctrl+K
+shows its menu* in the settings): `Ctrl+K` then waits quietly, and `?`
+shows the menu. `Ctrl+Shift+K` shows it at once, in terminals that tell it
+apart from `Ctrl+K` (kitty, WezTerm, Ghostty, foot, and others with the
+kitty keyboard protocol). In the menu, `/` or `Enter` searches every
+command by name.
 
 Keys that work directly:
 
@@ -60,13 +70,14 @@ From any pane:
 
 | Key | Action |
 |---|---|
-| `Ctrl+T` / `Ctrl+W` | New tab on the same connection / close tab (asks if it has unsaved changes) |
+| `Ctrl+T` / `Ctrl+W` | New tab on the same connection / close the tab, and its text with it (asks if it has unsaved changes); also a middle click on the tab, or *Close the tab* in the editor's menu. The last tab is emptied instead |
 | `Ctrl+PgUp` / `Ctrl+PgDn`, `Ctrl+K 1…9` | Previous / next tab, or jump to one |
 | `Ctrl+S` | Save the tab to the library; the first time asks for `group/name` (e.g. `reports/churn by month`), later saves update it |
 | `Ctrl+K t` | Rename the tab and its saved query; a different `group/` moves it |
-| `Ctrl+K l` | Search saved queries (name, group and SQL) and history; `Enter` opens, `F4` renames/moves, `Ctrl+D` deletes |
+| *Save the statement to the library* | In the editor's menu (right-click): only the statement at the cursor (or the selection), under a `group/name` asked for, as a query of its own; the tab stays as it is (bind a key with `save_statement`) |
+| `Ctrl+K l` | Search saved queries (name, group and SQL) and history; `Enter` (or a double click) opens, `F4` renames/moves, `Ctrl+D` deletes. Each row says when it was saved or ran, and the selected one's first five lines show under the list. `@` words narrow it by date: `@today`, `@yesterday`, `@7d` / `@2w` / `@3m` (the last days, weeks, months), `@2026`, `@2026-10`, `@2026-10-21`, `@2026-10-01..2026-10-15` (either side may be left out). Queries saved, or run, by older versions have no date and don't match these |
 | `Ctrl+K ,` | Settings: language, theme, editor keys (vim), key hints, mouse, the checks, row limit, timeouts and the rest of `config.toml`'s general ones. `←`/`→` change one, `Enter` changes it or types a number; each change applies at once and is saved (see [Configuration](configuration.md)) |
-| `Ctrl+K g` | Every open tab in a list (the tab row only has room for so many): type to find one by its name, its connection or the SQL in it; `↑`/`↓` and `Enter` go there |
+| `Ctrl+K g` | Every open tab in a list, with its connection and how that is: the query running there and for how long (`running 3:12`, `cancelling…`), a transaction left open, a lost connection, or no connection. Type to find one by its name, its connection or the SQL in it; `↑`/`↓` and `Enter` go there |
 
 A tab's `SQL` label is orange while the tab isn't saved to the library
 (its text is still kept as a draft), and a `●` on a saved query's tab means
@@ -198,6 +209,23 @@ notes, and takes the same keys: moving, `s` sort, `/` filter, `x` / `X`,
 `y` / `Y` / `C` / `Ctrl+C` copy, `e` / `J` export, `|` and `o`. Editing, adding,
 deleting, following a foreign key and loading more are for query results
 only.
+
+**Long queries.** A query running 10 minutes says so once in the status
+bar, with how to cancel it (`Esc` in its tab), and in a notification while
+you're in another window. It never asks a question that would take the
+keys you're typing. `long_query` in the settings sets when, `0` never. `query_timeout` cancels any query after that many seconds, on
+connections without a Timeout of their own. A query that fails on
+something the server is too old for says so after the server's error
+(`EXPLAIN ANALYZE needs MySQL 8.0.18 or newer; this server is MySQL
+5.7.44`), and so does the syntax check under the editor: MySQL's CTEs,
+window functions, `LATERAL`, `JSON_TABLE`, `INTERSECT`, MariaDB's `ANALYZE
+SELECT`; PostgreSQL's `MERGE`, `JSON_TABLE`, `ANY_VALUE`, `WITH TIES` and
+others.
+
+**AI explain.** `Ctrl+K y` sends the statement at the cursor (or the
+selection) to a model with the tables it uses, as asking does; what it
+says the statement does, step by step, and what looks wrong in it (with
+the query it would write instead) shows in a pop-over. Nothing runs.
 
 **Asking in plain language.** `Ctrl+K q` asks for a question about the
 tab's connection ("revenue per country last month"); a model you've set

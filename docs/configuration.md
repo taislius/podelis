@@ -22,6 +22,9 @@ restore_session = true      # reopen the last project's tabs and connections
 mouse = true                # clicks and the wheel (false: terminal selection without Shift)
 keepalive = 0               # seconds between checks of an idle connection (0: off)
 leader_double_space = false # Space twice quickly in the editor opens the Ctrl+K menu
+leader_menu = true          # Ctrl+K shows its menu after half a second without a letter (false: only `?` or Ctrl+Shift+K show it)
+long_query = 600            # a query running this many seconds says, once, how to cancel it (0: never)
+query_timeout = 0           # cancel any query after this many seconds, on connections without a Timeout of their own (0: off)
 notify_after = 10           # a query running this many seconds rings and notifies when done (0: off)
 guard_rows = 1000000        # on production, a read of a whole table this big asks first, agents' is refused (0: off)
 gateway_idle = 30           # minutes the gateway waits with no client before it stops (0: keeps running)
@@ -56,7 +59,11 @@ F9), `palette` (Ctrl+K), `explain_analyze` (Shift+F7, Ctrl+K a),
 (Ctrl+K h), `insert_snippet` (Ctrl+K i, Ctrl+E), `menu` (Ctrl+K m,
 Shift+F10, F10), `zoom` (Ctrl+K z, F12), `zoom_statement` (Ctrl+K b,
 Shift+F12), `select_statement` (Ctrl+K v), `projects` (Ctrl+K p),
-`transaction_mode` (Ctrl+K x), `next_warning` (Ctrl+K w). Keys are written like `F5`, `Ctrl+R`,
+`transaction_mode` (Ctrl+K x), `next_warning` (Ctrl+K w), `ask` (Ctrl+K q),
+`ai_explain` (Ctrl+K y), `memory` (Ctrl+K k), `tab_list` (Ctrl+K g),
+`settings` (Ctrl+K ,), `save_statement` (none; in the editor's menu). To
+have AI explain on `F8`, move commit off it: `commit = "Ctrl+K c"`,
+`ai_explain = ["F8", "Ctrl+K y"]`. Keys are written like `F5`, `Ctrl+R`,
 `Ctrl+Shift+PageUp`, `Ctrl+Space`; `Ctrl+K x` is a letter in the Ctrl+K
 menu. Unknown actions or keys are reported at startup, and the help screen
 (`F1`) shows the keys in use.
@@ -134,11 +141,14 @@ characters long):
   parsed, it is moved aside to `connections.toml.bak-<timestamp>` rather
   than overwritten.
 - `history/<project-id>.jsonl` — each project's query history: the last
-  500 queries, up to 16 MB in all (a query over 1 MB isn't kept).
+  500 queries, up to 16 MB in all (a query over 1 MB isn't kept), each
+  with when it ran (on a line of its own before it, which older versions
+  skip).
 - `drafts/<project-id>.json` — each project's open tabs, their text,
   connections and cursors, and the rest of the session (written a moment
   after you stop typing, so a crash loses little).
-- `queries/<project-id>.json` — each project's saved-query library.
+- `queries/<project-id>.json` — each project's saved-query library, each
+  query with when it was saved or its SQL last changed.
 - `agents/<project-id>.jsonl` — what AI agents ran in the project through
   `podelis mcp` (see [For AI agents](agents.md)), up to about 5 MB; and
   `agents/<project-id>.seen`, when you last looked at it.

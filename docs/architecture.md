@@ -150,7 +150,11 @@ Three concerns are kept apart:
   with no I/O — identifier quoting and string literals, lexer rules
   (comment styles, quoting, dollar quotes), placeholders (`$1`, `?`), the
   sqlparser and formatter dialects, EXPLAIN statements and plan formatting,
-  type names, how its errors read, hidden columns, container images.
+  type names, how its errors read, hidden columns, container images, and
+  what the server's version lacks (`too_new`: the engine folder's
+  `versions.rs`, a table of features and the version that brought each,
+  looked for in the code words of the statement that failed; the app adds
+  it to a syntax or unknown-function error, and to the syntax check's).
 - **Capabilities** (`engine.capabilities()`): what an engine supports —
   file-based, cancel (and so timeouts), activity monitor, schemas, routines,
   server-side transaction state, DDL that commits, CREATE statements in the
@@ -281,7 +285,11 @@ block, checks its names with `names.rs`, and sends what's wrong back in
 the same conversation, at most twice. It returns the SQL, what the model
 said and the names still unknown; it never runs anything. `FACT:` lines
 at the end of the model's note (its assumptions) are taken out and kept
-as facts that aren't confirmed, `source = "model:<name>"`.
+as facts that aren't confirmed, `source = "model:<name>"`. With `explain`
+(the app's `Ctrl+K y`), `question` is SQL: the same context is built for
+it, the model is asked what it does instead, and its words come back
+whole as `said` (no SQL taken out or checked, no facts kept); the app
+shows them in a pop-over (`ask::show_explanation`).
 
 The first request on a connection must be `hello`, with the client's
 name and the protocol version (`PROTOCOL`); anything else, or another
