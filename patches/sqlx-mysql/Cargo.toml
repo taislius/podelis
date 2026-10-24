@@ -56,10 +56,7 @@ offline = [
     "serde/derive",
     "bitflags/serde",
 ]
-rsa = [
-    "dep:rand",
-    "dep:rsa",
-]
+rsa = ["dep:aws-lc-rs", "dep:rustls-pki-types"]
 rust_decimal = [
     "dep:rust_decimal",
     "rust_decimal/maths",
@@ -148,10 +145,13 @@ features = ["thread_rng"]
 optional = true
 default-features = false
 
-[dependencies.rsa]
-version = "0.10.0-rc.18"
+[dependencies.aws-lc-rs]
+version = "1.18"
 optional = true
 
+[dependencies.rustls-pki-types]
+version = "1.15"
+optional = true
 [dependencies.rust_decimal]
 version = "1.36.0"
 features = ["std"]

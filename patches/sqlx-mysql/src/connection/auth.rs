@@ -182,28 +182,66 @@ fn to_asciz(s: &str) -> Vec<u8> {
     z.into_bytes()
 }
 
+// Podėlis patch: RSA-OAEP (SHA-1) through aws-lc-rs, which Podėlis already
+// has through rustls, instead of the `rsa` crate (RUSTSEC-2023-0071, the
+// Marvin attack, still open there). Only the server's public key is used.
 #[cfg(feature = "rsa")]
 mod rsa_backend {
-    use rsa::{pkcs8::DecodePublicKey, Oaep, RsaPublicKey};
+    use aws_lc_rs::rsa::{OaepPublicEncryptingKey, PublicEncryptingKey, OAEP_SHA1_MGF1SHA1};
 
     use super::Error;
 
     pub(super) fn encrypt(rsa_pub_key: &[u8], pass: &[u8]) -> Result<Vec<u8>, Error> {
-        let pkey = parse_rsa_pub_key(rsa_pub_key)?;
-        let padding = Oaep::<sha1::Sha1>::new();
-        pkey.encrypt(&mut rand::rng(), padding, pass)
-            .map_err(Error::protocol)
+        let der = pem_to_der(rsa_pub_key)?;
+        let key = PublicEncryptingKey::from_der(&der).map_err(|e| Error::Protocol(format!("server's RSA key: {e}")))?;
+        let key = OaepPublicEncryptingKey::new(key).map_err(|_| Error::Protocol("server's RSA key".into()))?;
+        let mut out = vec![0u8; key.ciphertext_size()];
+        let sealed = key
+            .encrypt(&OAEP_SHA1_MGF1SHA1, pass, &mut out, None)
+            .map_err(|_| Error::Protocol("RSA encryption of the password failed".into()))?;
+        Ok(sealed.to_vec())
     }
 
-    // https://docs.rs/rsa/0.3.0/rsa/struct.RSAPublicKey.html?search=#example-1
-    fn parse_rsa_pub_key(key: &[u8]) -> Result<RsaPublicKey, Error> {
-        let pem = std::str::from_utf8(key).map_err(Error::protocol)?;
+    /// The DER inside the PEM MySQL sends (`-----BEGIN PUBLIC KEY-----`, a
+    /// PKCS#8 SubjectPublicKeyInfo), read by rustls' own PEM parser.
+    pub(super) fn pem_to_der(pem: &[u8]) -> Result<Vec<u8>, Error> {
+        use rustls_pki_types::{pem::PemObject, SubjectPublicKeyInfoDer};
+        let der = SubjectPublicKeyInfoDer::from_pem_slice(pem)
+            .map_err(|e| Error::Protocol(format!("server's RSA key isn't a PEM public key: {e}")))?;
+        Ok(der.as_ref().to_vec())
+    }
 
-        // This takes advantage of the knowledge that we know
-        // we are receiving a PKCS#8 RSA Public Key at all
-        // times from MySQL
+    #[cfg(test)]
+    mod tests {
+        use aws_lc_rs::encoding::AsDer;
+        use aws_lc_rs::rsa::{KeySize, OaepPrivateDecryptingKey, PrivateDecryptingKey, OAEP_SHA1_MGF1SHA1};
 
-        RsaPublicKey::from_public_key_pem(pem).map_err(Error::protocol)
+        #[test]
+        fn a_password_encrypted_with_the_servers_pem_key_decrypts() {
+            let private = PrivateDecryptingKey::generate(KeySize::Rsa2048).unwrap();
+            let der = private.public_key().as_der().unwrap();
+            let b64 = base64(der.as_ref());
+            let lines: Vec<String> =
+                b64.as_bytes().chunks(64).map(|c| String::from_utf8(c.to_vec()).unwrap()).collect();
+            let pem = format!("-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----\n", lines.join("\n"));
+            let sealed = super::encrypt(pem.as_bytes(), b"secret\0").unwrap();
+            let private = OaepPrivateDecryptingKey::new(private).unwrap();
+            let mut out = vec![0u8; private.min_output_size()];
+            let opened = private.decrypt(&OAEP_SHA1_MGF1SHA1, &sealed, &mut out, None).unwrap();
+            assert_eq!(opened, b"secret\0");
+        }
+
+        fn base64(bytes: &[u8]) -> String {
+            const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut out = String::new();
+            for chunk in bytes.chunks(3) {
+                let n = chunk.iter().fold(0u32, |n, &b| (n << 8) | u32::from(b)) << (8 * (3 - chunk.len()));
+                for i in 0..4 {
+                    out.push(if i <= chunk.len() { A[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+                }
+            }
+            out
+        }
     }
 }
 

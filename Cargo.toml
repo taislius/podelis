@@ -46,7 +46,10 @@ uuid = { version = "1.27.0", features = ["v4"] }
 # fewer with `--no-default-features --features postgres`, say.
 default = ["postgres", "mysql", "sqlite"]
 postgres = ["sqlx/postgres"]
-mysql = ["sqlx/mysql"]
+# With RSA: MySQL 8's login sends the password RSA-encrypted when there's no
+# TLS and the server hasn't cached the user's login (after a restart). The
+# patched sqlx-mysql (patches/) does it with aws-lc-rs, not the `rsa` crate.
+mysql = ["sqlx/mysql", "sqlx/mysql-rsa"]
 sqlite = []
 
 [dev-dependencies]
@@ -82,9 +85,9 @@ unimplemented = "warn"
 print_stdout = "warn"              # the TUI owns the terminal; see parse_args for the exception
 print_stderr = "warn"
 
-# sqlx-mysql 0.9.0 with one fix: a user without a password gets an empty
+# sqlx-mysql 0.9.0 with two fixes: a user without a password gets an empty
 # auth response, not a scramble of "" (public servers that switch the auth
-# plugin, such as Rfam's, refuse that). Drop once sqlx releases the fix;
-# see patches/README.md.
+# plugin, such as Rfam's, refuse that); and RSA through aws-lc-rs instead of
+# the `rsa` crate (RUSTSEC-2023-0071). See patches/README.md.
 [patch.crates-io]
 sqlx-mysql = { path = "patches/sqlx-mysql" }
