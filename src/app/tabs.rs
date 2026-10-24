@@ -659,9 +659,9 @@ impl App {
     /// queries, then matching history (newest first, without duplicates).
     pub fn library_items(&self) -> Vec<LibraryItem> {
         let query = self.library_view.as_ref().map_or("", |v| v.query.text());
-        let mut items: Vec<LibraryItem> =
-            self.library.search(query).into_iter().map(|q| LibraryItem::Saved(q.id.clone())).collect();
         let (words, when) = library::split_dates(query, chrono::Local::now());
+        let mut items: Vec<LibraryItem> =
+            self.library.search_in(&words, when).into_iter().map(|q| LibraryItem::Saved(q.id.clone())).collect();
         let mut seen = std::collections::HashSet::new();
         let mut from_history = 0;
         for (i, sql) in self.history.entries().iter().enumerate().rev() {
@@ -675,14 +675,6 @@ impl App {
             }
         }
         items
-    }
-
-    /// When a library row's query was saved (or last changed) or ran.
-    pub fn library_item_time(&self, item: &LibraryItem) -> Option<i64> {
-        match item {
-            LibraryItem::Saved(id) => self.library.get(id).and_then(|q| q.changed),
-            LibraryItem::History(_, at) => *at,
-        }
     }
 
     /// A library row's SQL.

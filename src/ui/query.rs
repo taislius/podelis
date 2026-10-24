@@ -184,13 +184,20 @@ fn draw_library(f: &mut Frame, app: &mut App, area: Rect) {
 
     let width = list.width as usize;
     let now = chrono::Local::now();
+    // Each saved query by id, once: not a search of the library per row.
+    let saved: std::collections::HashMap<&str, &crate::config::library::SavedQuery> =
+        app.library.queries.iter().map(|q| (q.id.as_str(), q)).collect();
     let rows: Vec<ListItem> = items
         .iter()
         .map(|item| {
-            let when = app.library_item_time(item).map(|at| when_label(at, now)).unwrap_or_default();
+            let at = match item {
+                LibraryItem::Saved(id) => saved.get(id.as_str()).and_then(|q| q.changed),
+                LibraryItem::History(_, at) => *at,
+            };
+            let when = at.map(|at| when_label(at, now)).unwrap_or_default();
             let (icon, icon_style, group, name, sql) = match item {
                 LibraryItem::Saved(id) => {
-                    let Some(q) = app.library.get(id) else { return ListItem::new("") };
+                    let Some(q) = saved.get(id.as_str()) else { return ListItem::new("") };
                     let group = if q.group.is_empty() { String::new() } else { format!("{}/", q.group) };
                     ("★ ", fg(t.warn), group, q.name.clone(), q.sql.clone())
                 }

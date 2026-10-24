@@ -279,6 +279,7 @@ mod tests {
         let project = store.add_project("p").unwrap();
         let path = dir.path().join("gone.db");
         let profile = crate::config::store::ConnectionProfile {
+            unknown: crate::config::store::Unknown::default(),
             name: "gone".into(),
             engine: crate::db::tests::file_engine(),
             host: path.to_string_lossy().into_owned(),

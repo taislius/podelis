@@ -218,6 +218,7 @@ pub(crate) fn file_params(path: &std::path::Path, read_only: bool) -> ConnectPar
 /// A saved connection `name` to the file database at `path`.
 pub(crate) fn file_profile(name: &str, path: &std::path::Path) -> crate::config::store::ConnectionProfile {
     crate::config::store::ConnectionProfile {
+        unknown: crate::config::store::Unknown::default(),
         name: name.into(),
         engine: file_engine(),
         host: path.to_string_lossy().into_owned(),
@@ -254,16 +255,22 @@ async fn live_ssh_tunnel() {
 /// Checks that a statement is judged by the server without running it.
 pub(in crate::db) async fn live_check(db: &Database) {
     assert_eq!(db.check_statement("SELECT 1").await.unwrap(), CheckOutcome::Ok);
-    let CheckOutcome::Problem { syntax, position, .. } = db.check_statement("SELECT * FRO t").await.unwrap() else {
+    let CheckOutcome::Problem { syntax, position, missing_feature, .. } =
+        db.check_statement("SELECT * FRO t").await.unwrap()
+    else {
         panic!("syntax error not reported");
     };
     assert!(syntax);
+    // By its code: maybe a feature the server lacks (not on SQLite, whose
+    // version is the one built in).
+    assert_eq!(missing_feature, db.engine() != crate::db::Engine::Sqlite);
     assert!(position.is_some(), "position for syntax errors");
-    let CheckOutcome::Problem { syntax, .. } = db.check_statement("SELECT * FROM podelis_no_such_table").await.unwrap()
+    let CheckOutcome::Problem { syntax, missing_feature, .. } =
+        db.check_statement("SELECT * FROM podelis_no_such_table").await.unwrap()
     else {
         panic!("unknown table not reported");
     };
-    assert!(!syntax);
+    assert!(!syntax && !missing_feature);
     // Preparing doesn't execute.
     db.run("CREATE TABLE IF NOT EXISTS podelis_chk (id INT PRIMARY KEY, note TEXT)", DEFAULT_ROW_LIMIT).await.unwrap();
     let catalog = db.catalog(false).await.unwrap();

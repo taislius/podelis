@@ -353,7 +353,9 @@ enum DbEventKind {
     /// "Export all rows" finished: the file, and how many rows (or why not).
     ExportDone(PathBuf, Result<u64, String>),
     MoreFailed(String),
-    QueryFailed(String, Option<ErrorPos>, Option<TxnState>),
+    /// Why, where, the transaction after it, and whether it's a syntax
+    /// error or unknown function (maybe a feature the server lacks).
+    QueryFailed(String, Option<ErrorPos>, Option<TxnState>, bool),
     /// Why not, and whether the server couldn't be reached at all.
     CancelFailed(String, bool),
     Catalog(Result<Vec<(TableInfo, Vec<ColumnInfo>)>, String>),
@@ -385,6 +387,9 @@ enum DbEventKind {
     PipeDone(String, Result<String, String>),
     /// Characters of an answer being written, for ask `n`.
     AskProgress(u64, usize),
+    /// Ask `n`'s key is slow to come: the keychain (or a password
+    /// manager) is asking the user.
+    AskWaitingKey(u64),
     /// Ask `n`'s answer: the SQL and what the model said, or why not.
     AskDone(u64, Box<Result<serde_json::Value, ask::AskFailure>>),
     /// A gateway call's answer (the memory window's).
@@ -557,6 +562,9 @@ pub struct Run {
     /// The SQL running: a failure says if it uses what the server is too
     /// old for.
     sql: String,
+    /// The failure that came is a syntax error or an unknown function
+    /// (`db::missing_feature`), for `on_query_failed`.
+    missing_feature: bool,
 }
 
 /// Extra state of the running query.
@@ -618,8 +626,9 @@ pub struct CellEdit {
 pub enum ServerCheck {
     /// The session stayed busy; fall back to the local parser.
     Busy,
-    /// Checked: the first problem, if any.
-    Done(Option<SyntaxHint>),
+    /// Checked: the first problem, if any, and whether it's a syntax error
+    /// or unknown function (maybe a feature the server lacks).
+    Done(Option<(SyntaxHint, bool)>),
 }
 
 /// Something to do once the user answers "y".

@@ -7,7 +7,7 @@ description = "A terminal UI SQL client for PostgreSQL, MySQL and SQLite"
 license = "AGPL-3.0-only"
 repository = "https://github.com/taislius/podelis"
 readme = "README.md"
-exclude = [".github/", ".githooks/", "docs/demo.gif", "packaging/"]
+exclude = [".github/", ".githooks/", "docs/demo.gif", "packaging/", "patches/"]
 keywords = ["sql", "tui", "postgres", "mysql", "database"]
 categories = ["command-line-utilities", "database"]
 
@@ -81,3 +81,10 @@ todo = "warn"
 unimplemented = "warn"
 print_stdout = "warn"              # the TUI owns the terminal; see parse_args for the exception
 print_stderr = "warn"
+
+# sqlx-mysql 0.9.0 with one fix: a user without a password gets an empty
+# auth response, not a scramble of "" (public servers that switch the auth
+# plugin, such as Rfam's, refuse that). Drop once sqlx releases the fix;
+# see patches/README.md.
+[patch.crates-io]
+sqlx-mysql = { path = "patches/sqlx-mysql" }

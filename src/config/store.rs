@@ -43,6 +43,10 @@ pub struct ConnectionProfile {
     /// under the bare connection name. Cleared the next time it's saved.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub legacy_keychain: bool,
+    /// Settings this version doesn't know (a newer one's), kept as they
+    /// were so saving doesn't drop them.
+    #[serde(flatten)]
+    pub unknown: Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +61,9 @@ pub struct Project {
     /// column names, comments) when asking in plain language.
     #[serde(default, skip_serializing_if = "ShareSchema::is_default")]
     pub share_schema: ShareSchema,
+    /// Settings this version doesn't know, kept (see `ConnectionProfile`).
+    #[serde(flatten)]
+    pub unknown: Unknown,
 }
 
 /// `profile` as opened from `dir`: a SQLite file with a relative path is
@@ -93,6 +100,16 @@ impl ShareSchema {
     }
 }
 
+/// Settings in `connections.toml` that this version doesn't know (written
+/// by a newer one): kept as they were and written back, so opening an
+/// older Podėlis by mistake doesn't lose them.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Unknown(toml::Table);
+
+// Settings hold no NaN, so equality is total.
+impl Eq for Unknown {}
+
 #[derive(Default, Serialize, Deserialize)]
 struct ConnectionsFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -102,6 +119,9 @@ struct ConnectionsFile {
     /// The pre-projects format; migrated into `DEFAULT_PROJECT` on load.
     #[serde(default, skip_serializing)]
     connections: Vec<ConnectionProfile>,
+    /// Settings this version doesn't know, kept (see `ConnectionProfile`).
+    #[serde(flatten)]
+    unknown: Unknown,
 }
 
 pub struct ConnectionStore {
@@ -114,6 +134,8 @@ pub struct ConnectionStore {
     save_blocked: bool,
     /// Id of a project created by migrating the old format on this load.
     pub migrated_project: Option<String>,
+    /// The file's own settings this version doesn't know, written back.
+    unknown: Unknown,
 }
 
 impl ConnectionStore {
@@ -124,7 +146,14 @@ impl ConnectionStore {
     }
 
     fn empty(path: PathBuf, save_blocked: bool) -> Self {
-        Self { path, projects: vec![], last_project: None, save_blocked, migrated_project: None }
+        Self {
+            path,
+            projects: vec![],
+            last_project: None,
+            save_blocked,
+            migrated_project: None,
+            unknown: Unknown::default(),
+        }
     }
 
     /// Reads the store without changing anything: a file that can't be
@@ -144,6 +173,7 @@ impl ConnectionStore {
             Ok(file) => {
                 let store = Self {
                     path,
+                    unknown: file.unknown,
                     projects: file.projects,
                     last_project: file.last_project,
                     save_blocked: true,
@@ -195,6 +225,7 @@ impl ConnectionStore {
             last_project: file.last_project,
             save_blocked: false,
             migrated_project: None,
+            unknown: file.unknown,
         };
         if !file.connections.is_empty() {
             let id = match store.projects.iter().position(|p| p.name == DEFAULT_PROJECT) {
@@ -225,6 +256,7 @@ impl ConnectionStore {
             last_project: self.last_project.clone(),
             projects: self.projects.clone(),
             connections: vec![],
+            unknown: self.unknown.clone(),
         };
         let text = toml::to_string_pretty(&file).context("failed to serialize connections")?;
         write_atomic(&self.path, &text).context("failed to write connections file")
@@ -259,6 +291,7 @@ impl ConnectionStore {
     fn add_project_unsaved(&mut self, name: &str) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.projects.push(Project {
+            unknown: Unknown::default(),
             id: id.clone(),
             name: name.to_string(),
             connections: vec![],
@@ -325,7 +358,9 @@ impl ConnectionStore {
         let project = self.project_or_err(project_id)?;
         let key = original.unwrap_or(&profile.name).to_string();
         if let Some(existing) = project.connections.iter_mut().find(|c| c.name == key) {
-            *existing = profile;
+            // Edited here: what a newer version set stays.
+            let unknown = std::mem::take(&mut existing.unknown);
+            *existing = ConnectionProfile { unknown, ..profile };
         } else {
             project.connections.push(profile);
         }
@@ -482,6 +517,7 @@ mod tests {
 
     fn profile(name: &str) -> ConnectionProfile {
         ConnectionProfile {
+            unknown: Unknown::default(),
             name: name.to_string(),
             engine: Engine::Postgres,
             host: "localhost".to_string(),
@@ -513,6 +549,39 @@ mod tests {
     /// Opt-in (`PODELIS_TEST_KEYCHAIN=1`): writes, reads, moves and deletes
     /// real OS keychain entries under throwaway accounts, the way saving,
     /// moving and deleting connections does. macOS may ask for permission.
+    #[test]
+    fn settings_a_newer_version_wrote_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("connections.toml");
+        let id = uuid::Uuid::new_v4().to_string();
+        let text = format!(
+            "last_project = \"{id}\"\nfuture_top = 1\n\n[[projects]]\nid = \"{id}\"\nname = \"p\"\nshare_schema = \"all\"\n\
+             future_project = [\"a\", \"b\"]\n\n[[projects.connections]]\nname = \"db\"\nengine = \"Sqlite\"\nhost = \"x.db\"\n\
+             port = \"\"\nuser = \"\"\ndatabase = \"\"\nfuture_connection = {{ k = true }}\n"
+        );
+        fs::write(&path, text).unwrap();
+        let (mut store, warning) = ConnectionStore::load_from(path.clone());
+        assert!(warning.is_none(), "{warning:?}");
+        // Edited here, as the connection form does (it knows nothing of them).
+        let mut edited = store.projects[0].connections[0].clone();
+        edited.unknown = Unknown::default();
+        edited.database = "main".into();
+        store.upsert(&id, Some("db"), edited).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+        for kept in [
+            "future_top = 1",
+            "future_project = [",
+            "future_connection",
+            "share_schema = \"all\"",
+            "database = \"main\"",
+        ] {
+            assert!(saved.contains(kept), "{kept} in:\n{saved}");
+        }
+        // A setting this version knows, set back to its default, stays gone.
+        store.set_share_schema(&id, ShareSchema::Local).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("share_schema"));
+    }
+
     #[test]
     fn live_keychain_round_trip() {
         if std::env::var("PODELIS_TEST_KEYCHAIN").as_deref() != Ok("1") {

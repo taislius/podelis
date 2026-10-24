@@ -137,6 +137,8 @@ impl App {
                             if method == "ask.delta" {
                                 let chars = note["text"].as_str().map_or(0, |t| t.chars().count());
                                 send(DbEventKind::AskProgress(id, chars));
+                            } else if method == "key.waiting" {
+                                send(DbEventKind::AskWaitingKey(id));
                             }
                         })
                         .await
@@ -198,6 +200,13 @@ impl App {
         if let Some(asking) = self.asking.take() {
             asking.task.abort();
             self.set_status(t!("ask.stopped").into(), false);
+        }
+    }
+
+    /// The key for the model is slow: most likely a dialog to answer.
+    pub(super) fn ask_waiting_key(&mut self, id: u64) {
+        if self.asking.as_ref().is_some_and(|a| a.id == id) {
+            self.say_asking(t!("ask.waiting_key").to_string());
         }
     }
 

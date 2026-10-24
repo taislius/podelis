@@ -148,6 +148,7 @@ impl ConnectForm {
 
     pub(super) fn to_profile(&self) -> ConnectionProfile {
         ConnectionProfile {
+            unknown: crate::config::store::Unknown::default(),
             name: self.name.trim().to_string(),
             engine: self.engine,
             host: self.host.clone(),

@@ -297,14 +297,14 @@ pub async fn ask(config_dir: &Path, project: Option<&str>, model: Option<&str>, 
         params["model"] = json!(model);
     }
     let _ = writeln!(err, "Asking…");
-    let mut answer = client.call("ask", params.clone()).await;
+    let mut answer = client.call_streaming("ask", params.clone(), |method, _| waiting_key(method)).await;
     if let Err(CallError::Rpc(e)) = &answer
         && e.code == super::protocol::code::NOT_SHARED
     {
         match allow(&e.message, e.data.as_ref()) {
             Some(()) => {
                 params["share_once"] = json!(true);
-                answer = client.call("ask", params).await;
+                answer = client.call_streaming("ask", params, |method, _| waiting_key(method)).await;
             }
             None => return 3,
         }
@@ -482,4 +482,12 @@ pub async fn memory(config_dir: &Path, project: Option<&str>, words: &[String]) 
         }
     }
     0
+}
+
+/// A key slow to come (`key.waiting`): said on stderr, as the app's status
+/// bar says it.
+fn waiting_key(method: &str) {
+    if method == "key.waiting" {
+        let _ = writeln!(std::io::stderr(), "{}", t!("ask.waiting_key"));
+    }
 }

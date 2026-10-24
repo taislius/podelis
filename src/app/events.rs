@@ -19,6 +19,7 @@ impl App {
             DbEventKind::ExportProgress(rows) => return self.export_progress(rows),
             DbEventKind::ExportDone(path, result) => return self.export_done(&path, result),
             DbEventKind::AskProgress(id, chars) => return self.ask_progress(id, chars),
+            DbEventKind::AskWaitingKey(id) => return self.ask_waiting_key(id),
             DbEventKind::AskDone(id, result) => return self.ask_done(id, *result),
             DbEventKind::GatewayDone(purpose, result) => return self.gateway_done(purpose, *result),
             _ => {}
@@ -135,7 +136,8 @@ impl App {
                 self.on_query_done(outcome, txn, stream);
                 self.run_queued_plan();
             }
-            DbEventKind::QueryFailed(err, position, txn) => {
+            DbEventKind::QueryFailed(err, position, txn, missing_feature) => {
+                self.run.missing_feature = missing_feature;
                 self.on_query_failed(&err, position, txn);
                 self.drop_queued_plan();
             }
@@ -163,6 +165,7 @@ impl App {
             DbEventKind::Restored { .. }
             | DbEventKind::ContainersFound(..)
             | DbEventKind::AskProgress(..)
+            | DbEventKind::AskWaitingKey(..)
             | DbEventKind::AskDone(..)
             | DbEventKind::GatewayDone(..) => {}
             DbEventKind::Pinged(result) => self.pinged(result),
@@ -380,13 +383,14 @@ impl App {
         // A syntax error that is really a feature this server hasn't got:
         // in the statement that failed (where the error was, or the only one).
         let ran = std::mem::take(&mut self.run.sql);
+        let missing = std::mem::take(&mut self.run.missing_feature);
         let shown = failed_at.map(|_| self.tab.editor.text());
         // Where the error is in the editor; else what was sent (an EXPLAIN
         // around the statement, say), if it's one statement.
         let note = |db: &Database| {
             let at_error =
-                shown.as_deref().and_then(|text| version_note(db.engine(), db.version(), text, failed_at, err));
-            at_error.or_else(|| version_note(db.engine(), db.version(), &ran, None, err))
+                shown.as_deref().and_then(|text| version_note(db.engine(), db.version(), text, failed_at, missing));
+            at_error.or_else(|| version_note(db.engine(), db.version(), &ran, None, missing))
         };
         if let Some(said) = ran_on.filter(|_| prefix.is_empty()).as_ref().and_then(note) {
             let _ = write!(status, " · {said}");
@@ -549,8 +553,8 @@ impl App {
                 Some(db) => match server_syntax_hint(&db, &text, engine).await {
                     // A syntax error that is really a feature the server
                     // hasn't got says so.
-                    ServerCheck::Done(Some(mut hint)) => {
-                        if let Some(said) = version_note(engine, db.version(), &text, hint.offset, &hint.message) {
+                    ServerCheck::Done(Some((mut hint, missing))) => {
+                        if let Some(said) = version_note(engine, db.version(), &text, hint.offset, missing) {
                             hint.message = format!("{} · {said}", hint.message);
                         }
                         Some(hint)
@@ -673,29 +677,31 @@ async fn server_syntax_hint(db: &Database, text: &str, engine: Engine) -> Server
         match outcome {
             CheckOutcome::Ok | CheckOutcome::Unsupported => {}
             CheckOutcome::Problem { syntax: false, .. } if creates_objects => {}
-            CheckOutcome::Problem { message, position, .. } => {
+            CheckOutcome::Problem { message, position, missing_feature, .. } => {
                 let range = position.and_then(|p| analyze::error_range(stmt, &p));
-                return ServerCheck::Done(Some(SyntaxHint {
-                    message,
-                    offset: Some(base + range.map_or(0, |r| r.0)),
-                    len: range.map(|r| r.1),
-                    source: HintSource::Server,
-                    nth: None,
-                }));
+                return ServerCheck::Done(Some((
+                    SyntaxHint {
+                        message,
+                        offset: Some(base + range.map_or(0, |r| r.0)),
+                        len: range.map(|r| r.1),
+                        source: HintSource::Server,
+                        nth: None,
+                    },
+                    missing_feature,
+                )));
             }
         }
     }
     ServerCheck::Done(None)
 }
 
-/// What to add to `error` (from running, or checking, `text` on a server
-/// of `version`) when it's a syntax error or an unknown function because of
-/// a feature the server is too old for: looked for in the statement at
-/// `at` (where the error is), else in `text` if it's one statement.
-fn version_note(engine: Engine, version: &str, text: &str, at: Option<usize>, error: &str) -> Option<String> {
-    let lower = error.to_lowercase();
-    let unknown = lower.contains("syntax") || (lower.contains("function") && lower.contains("does not exist"));
-    if !unknown {
+/// What to add to an error from running, or checking, `text` on a server
+/// of `version`, when it's a syntax error or an unknown function
+/// (`missing`, by its code) because of a feature the server is too old
+/// for: looked for in the statement at `at` (where the error is), else in
+/// `text` if it's one statement.
+fn version_note(engine: Engine, version: &str, text: &str, at: Option<usize>, missing: bool) -> Option<String> {
+    if !missing {
         return None;
     }
     let range = match at {
@@ -715,11 +721,11 @@ mod tests {
 
     #[test]
     fn a_version_note_is_about_the_statement_that_failed() {
-        let syntax = "You have an error in your SQL syntax; check the manual";
+        let syntax = true;
         let one = "explain analyze select * from t";
         assert!(version_note(Engine::MySql, "5.7.44", one, None, syntax).unwrap().contains("EXPLAIN ANALYZE"));
-        // Not for errors that aren't about syntax.
-        assert!(version_note(Engine::MySql, "5.7.44", one, None, "Table 't' doesn't exist").is_none());
+        // Not for errors that aren't about syntax (an unknown table).
+        assert!(version_note(Engine::MySql, "5.7.44", one, None, false).is_none());
         // In a script: the statement where the error is, else nothing.
         let script = "with c as (select 1) select * from c;\nselct 1;";
         assert!(version_note(Engine::MySql, "5.7.44", script, None, syntax).is_none());

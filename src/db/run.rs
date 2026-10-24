@@ -346,9 +346,10 @@ impl Database {
         let problem = on_driver!(self.0.engine, engine::queries::prepare_problem(db));
         let Some(syntax) = problem else { return Ok(CheckOutcome::Unsupported) };
         let err = anyhow::Error::from(err);
+        let missing_feature = missing_feature(&err);
         let message = error_message(&err);
         let position = error_position(&err).or_else(|| self.0.engine.dialect().position_in_message(&message));
-        Ok(CheckOutcome::Problem { message, position, syntax })
+        Ok(CheckOutcome::Problem { message, position, syntax, missing_feature })
     }
 
     /// Runs `sql`, cancelling it once `time_limit` passes. A cancelled query

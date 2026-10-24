@@ -466,7 +466,7 @@ fn the_library_finds_by_date() {
     let items = app.library_items();
     assert_eq!(items.len(), 2, "{items:?}");
     assert!(items.iter().any(|i| matches!(i, LibraryItem::History(sql, Some(_)) if sql == "select 3")));
-    assert!(app.library_item_time(&items[0]).is_some());
+    assert!(matches!(&items[0], LibraryItem::Saved(id) if app.library.get(id).is_some_and(|q| q.changed.is_some())));
     app.library_view = None;
     app.open_library();
     type_text(&mut app, "@2020-09 select");

@@ -304,21 +304,14 @@ impl App {
         let sql = if self.run.extra.vertical { sql::without_vertical(&sql, self.engine()) } else { sql };
         self.task = Some(tokio::spawn(async move {
             if check_first && let Err(e) = db.answers_within(ANSWER_WITHIN).await {
-                return send(DbEventKind::QueryFailed(crate::db::error_message(&e), None, None));
+                return send(DbEventKind::QueryFailed(crate::db::error_message(&e), None, None, false));
             }
             if stream {
                 // No transaction probe: the open stream holds the session,
                 // and a single read can't change the transaction state.
                 match db.run_streaming(&sql, row_limit).await {
                     Ok((outcome, rows)) => send(DbEventKind::QueryDone(outcome, None, rows)),
-                    Err(e) => {
-                        let txn = after_error(&db, &e).await;
-                        send(DbEventKind::QueryFailed(
-                            crate::db::error_message(&e),
-                            crate::db::error_position(&e),
-                            txn,
-                        ));
-                    }
+                    Err(e) => send(failed(&e, after_error(&db, &e).await)),
                 }
                 return;
             }
@@ -327,10 +320,7 @@ impl App {
                     let txn = db.transaction_state().await;
                     send(DbEventKind::QueryDone(outcome, txn, None));
                 }
-                Err(e) => {
-                    let txn = after_error(&db, &e).await;
-                    send(DbEventKind::QueryFailed(crate::db::error_message(&e), crate::db::error_position(&e), txn));
-                }
+                Err(e) => send(failed(&e, after_error(&db, &e).await)),
             }
         }));
     }
@@ -473,6 +463,13 @@ impl App {
             offer_transaction: false,
         });
     }
+}
+
+/// A run's failure as the app is told it: what, where, the transaction
+/// after it, and whether it's a syntax error or unknown function.
+fn failed(e: &anyhow::Error, txn: Option<TxnState>) -> DbEventKind {
+    let (message, position) = (crate::db::error_message(e), crate::db::error_position(e));
+    DbEventKind::QueryFailed(message, position, txn, crate::db::missing_feature(e))
 }
 
 /// The transaction state after a failed run: none once the session was

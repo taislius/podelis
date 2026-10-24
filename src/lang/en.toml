@@ -188,6 +188,7 @@ not_sent = "Not sent"
 quit_rollback = "A transaction is open. Quit and roll it back?"
 
 [ask]
+waiting_key = "Waiting for the model's key: answer the macOS keychain's Allow dialog (or your password manager)"
 explained = "Explained by {model} ({tokens_in} tokens in, {tokens_out} out); nothing ran"
 explained_by = "WHAT IT DOES · {model}"
 no_explanation = "it said nothing about it"

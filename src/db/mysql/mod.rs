@@ -130,6 +130,11 @@ impl Dialect for MySql {
     /// "… at line N", and "near 'rest of the statement' at line N": the
     /// quoted text is what follows the error, which pins down the column.
     #[cfg(feature = "mysql")]
+    fn missing_feature_error(&self, err: &dyn sqlx::error::DatabaseError) -> bool {
+        // a syntax error, FUNCTION … does not exist
+        err.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>().is_some_and(|e| matches!(e.number(), 1064 | 1305))
+    }
+    #[cfg(feature = "mysql")]
     fn database_error_position(&self, err: &dyn sqlx::error::DatabaseError) -> Option<super::ErrorPos> {
         use super::ErrorPos;
         let msg = err.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>()?.message();

@@ -28,6 +28,9 @@ pub enum CheckOutcome {
         /// A syntax error, as opposed to e.g. an unknown table (which may
         /// just not exist *yet* when a script creates it first).
         syntax: bool,
+        /// A syntax error or unknown function: maybe a feature the server
+        /// is too old for ([`missing_feature`]).
+        missing_feature: bool,
     },
     /// The server couldn't judge it (e.g. statements MySQL can't prepare).
     Unsupported,
@@ -127,6 +130,13 @@ pub fn error_message(err: &anyhow::Error) -> String {
     let context: Vec<String> =
         err.chain().take_while(|e| e.downcast_ref::<sqlx::Error>().is_none()).map(ToString::to_string).collect();
     if context.is_empty() { msg } else { format!("{}: {msg}", context.join(": ")) }
+}
+
+/// Whether `err` is a server's syntax error or unknown function (by its
+/// code): what a feature the server's version lacks looks like.
+pub fn missing_feature(err: &anyhow::Error) -> bool {
+    let Some(sqlx::Error::Database(db)) = err.downcast_ref::<sqlx::Error>() else { return false };
+    Engine::ALL.iter().any(|e| e.dialect().missing_feature_error(db.as_ref()))
 }
 
 pub fn error_position(err: &anyhow::Error) -> Option<ErrorPos> {

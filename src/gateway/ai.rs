@@ -42,11 +42,19 @@ pub async fn models(config_dir: &Path) -> Result<Value, RpcError> {
     Ok(json!({ "models": listed }))
 }
 
-/// The model named (the default when `None`) and its key.
+/// How long a key may take before the client is told it's waiting (for
+/// the macOS keychain's Allow dialog, or a password manager).
+const KEY_PATIENCE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The model named (the default when `None`) and its key. A key that
+/// takes longer than [`KEY_PATIENCE`] sends `key.waiting` (`{ id, model }`)
+/// to the client first, so it can say what it's waiting for.
 async fn model_and_key(
     config_dir: &Path,
     caches: &Caches,
     name: Option<&str>,
+    id: &Value,
+    write: &mut OwnedWriteHalf,
 ) -> Result<(ModelConfig, Option<String>), RpcError> {
     let configs = configured(config_dir)?;
     let config = models::pick(&configs, name).map_err(|e| RpcError::new(code::MODEL, e.message))?.clone();
@@ -68,7 +76,16 @@ async fn model_and_key(
             Ok(key)
         })
     });
-    match found.await {
+    tokio::pin!(found);
+    let found = tokio::select! {
+        found = &mut found => found,
+        () = tokio::time::sleep(KEY_PATIENCE) => {
+            let line = protocol::notification("key.waiting", &json!({ "id": id, "model": config.name }));
+            let _ = write.write_all(line.as_bytes()).await;
+            found.await
+        }
+    };
+    match found {
         Ok(Ok((key, _))) => Ok((config, key)),
         Ok(Err(e)) => Err(RpcError::new(code::MODEL, e.message)),
         Err(e) => Err(RpcError::new(code::MODEL, e.to_string())),
@@ -122,7 +139,7 @@ pub async fn complete(
     if prompt.messages.is_empty() {
         return (Err(RpcError::new(code::INVALID_PARAMS, "complete needs at least one message")), Value::Null);
     }
-    let (config, key) = match model_and_key(config_dir, caches, name).await {
+    let (config, key) = match model_and_key(config_dir, caches, name, id, write).await {
         Ok(found) => found,
         Err(e) => return (Err(e), json!({ "model": name })),
     };
@@ -447,7 +464,7 @@ pub async fn ask(
         let data = json!({ "project": source.project, "project_id": source.project_id, "model": config.name, "url": config.url() });
         return (Err(RpcError::with_data(code::NOT_SHARED, message, data)), about);
     }
-    let (config, key) = match model_and_key(config_dir, caches, Some(&config.name)).await {
+    let (config, key) = match model_and_key(config_dir, caches, Some(&config.name), id, write).await {
         Ok(found) => found,
         Err(e) => return (Err(e), about),
     };

@@ -134,11 +134,17 @@ impl Library {
 
     /// Saved queries matching `query` (its words, and its `@` dates), in
     /// library order.
+    #[cfg(test)]
     pub fn search(&self, query: &str) -> Vec<&SavedQuery> {
         let (words, when) = split_dates(query, chrono::Local::now());
+        self.search_in(&words, when)
+    }
+
+    /// Saved queries with every one of `words`, changed within `when`.
+    pub fn search_in(&self, words: &str, when: Option<Span>) -> Vec<&SavedQuery> {
         self.queries
             .iter()
-            .filter(|q| when.is_none_or(|w| w.holds(q.changed)) && matches(&words, &[&q.name, &q.group, &q.sql]))
+            .filter(|q| when.is_none_or(|w| w.holds(q.changed)) && matches(words, &[&q.name, &q.group, &q.sql]))
             .collect()
     }
 }

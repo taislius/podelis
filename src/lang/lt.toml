@@ -195,6 +195,7 @@ not_sent = "Neišsiųsta"
 quit_rollback = "Atvira transakcija. Išeiti ir ją atšaukti?"
 
 [ask]
+waiting_key = "Laukiama modelio rakto: atsakykite į macOS raktinės leidimo langą (ar slaptažodžių tvarkyklės)"
 explained = "Paaiškino {model} (žetonų: {tokens_in} įvesta, {tokens_out} gauta); niekas nevykdyta"
 explained_by = "KĄ JI DARO · {model}"
 no_explanation = "jis nieko apie ją nepasakė"

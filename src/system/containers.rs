@@ -144,6 +144,7 @@ impl Ps {
                 None => Vec::new(),
             };
             ConnectionProfile {
+                unknown: crate::config::store::Unknown::default(),
                 name: self.name.clone(),
                 engine,
                 host,

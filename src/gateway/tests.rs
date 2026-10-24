@@ -326,6 +326,7 @@ pub(crate) async fn saved_shop(dir: &Path) {
     let (mut store, _) = crate::config::store::ConnectionStore::load_from(dir.join("connections.toml"));
     let project = store.add_project("p").unwrap();
     let profile = crate::config::store::ConnectionProfile {
+        unknown: crate::config::store::Unknown::default(),
         name: "shop".into(),
         engine: crate::db::tests::file_engine(),
         host: file.to_string_lossy().into_owned(),
@@ -621,6 +622,29 @@ async fn a_key_command_runs_once_for_many_questions() {
     assert_eq!(std::fs::read_to_string(&runs).unwrap().lines().count(), 1, "the password manager was asked once");
     let requests = server.await.unwrap();
     assert!(requests.iter().all(|r| r.to_lowercase().contains("x-api-key: sk-from-command")));
+}
+
+/// A key slow to come (a keychain dialog, a password manager) is said to
+/// the client while it waits; a quick one isn't.
+#[tokio::test]
+async fn a_slow_key_is_said_while_waiting() {
+    let (url, server) = fake_model(vec![(200, claude_answer("OK")), (200, claude_answer("OK"))]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = format!(
+        "[[models]]\nname = \"slow\"\napi = \"anthropic\"\nurl = \"{url}\"\nmodel = \"claude-opus-5-5\"\nkey_command = \"sh -c 'sleep 3; echo sk-slow'\"\n"
+    );
+    std::fs::write(dir.path().join("config.toml"), config).unwrap();
+    let _gateway = start(dir.path(), None);
+    let mut client = connect(dir.path()).await;
+    let ask = json!({ "messages": [{ "role": "user", "content": "hi" }] });
+    let mut notes = Vec::new();
+    client.call_streaming("complete", ask.clone(), |m, p| notes.push((m.to_string(), p.clone()))).await.unwrap();
+    assert!(notes.iter().any(|(m, p)| m == "key.waiting" && p["model"] == json!("slow")), "{notes:?}");
+    // Kept for a while: the next one doesn't wait, and says nothing.
+    notes.clear();
+    client.call_streaming("complete", ask, |m, p| notes.push((m.to_string(), p.clone()))).await.unwrap();
+    assert!(!notes.iter().any(|(m, _)| m == "key.waiting"), "{notes:?}");
+    drop(server);
 }
 
 /// A gateway as version 1 was: refuses other protocols with its message

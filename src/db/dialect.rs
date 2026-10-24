@@ -254,6 +254,13 @@ pub trait Dialect: Sync {
     fn database_error_message(&self, _err: &dyn sqlx::error::DatabaseError) -> Option<String> {
         None
     }
+    /// Whether `err` (this engine's) is a syntax error or an unknown
+    /// function: what a feature newer than the server looks like (see
+    /// [`Dialect::too_new`]). By its code, whatever language the server
+    /// speaks.
+    fn missing_feature_error(&self, _err: &dyn sqlx::error::DatabaseError) -> bool {
+        false
+    }
     /// Where in the submitted SQL `err` says it is, if it's this engine's.
     fn database_error_position(&self, _err: &dyn sqlx::error::DatabaseError) -> Option<super::ErrorPos> {
         None

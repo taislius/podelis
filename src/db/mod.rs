@@ -42,8 +42,8 @@ pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint
 pub use dialect::PlanNote;
 pub use dialect::{ContainerLogin, ContainerSecret, Dialect, LexerRules, Plan, human_rows};
 pub use errors::{
-    CheckOutcome, ErrorPos, error_message, error_position, is_broken, is_reconnected, is_unreachable, sql_literal,
-    value_literal,
+    CheckOutcome, ErrorPos, error_message, error_position, is_broken, is_reconnected, is_unreachable, missing_feature,
+    sql_literal, value_literal,
 };
 pub use options::{AgentAccess, ConnectParams, ConnectionMode, PasswordSource, SslMode, TxMode};
 pub use run::RunError;

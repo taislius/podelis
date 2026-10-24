@@ -820,6 +820,7 @@ pub(crate) mod tests {
         mode: ConnectionMode,
     ) -> ConnectionProfile {
         ConnectionProfile {
+            unknown: crate::config::store::Unknown::default(),
             name: name.into(),
             engine: crate::db::tests::file_engine(),
             host: path.to_string_lossy().into_owned(),

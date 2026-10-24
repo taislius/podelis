@@ -75,6 +75,7 @@ async fn picking_a_database_container_fills_in_a_new_connection() {
     app.handle_key(key(KeyCode::Char('c')));
     assert!(app.manager.containers.as_ref().is_some_and(|p| p.loading));
     let profile = ConnectionProfile {
+        unknown: crate::config::store::Unknown::default(),
         name: "shop-db".into(),
         engine: Engine::Postgres,
         host: "localhost".into(),

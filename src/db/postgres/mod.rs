@@ -112,6 +112,12 @@ impl Dialect for Postgres {
     }
 
     #[cfg(feature = "postgres")]
+    fn missing_feature_error(&self, err: &dyn sqlx::error::DatabaseError) -> bool {
+        // syntax_error, undefined_function
+        err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>().is_some_and(|pg| matches!(pg.code(), "42601" | "42883"))
+    }
+
+    #[cfg(feature = "postgres")]
     fn database_error_position(&self, err: &dyn sqlx::error::DatabaseError) -> Option<super::ErrorPos> {
         let pg = err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()?;
         match pg.position() {
