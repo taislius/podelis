@@ -90,13 +90,16 @@ tabs are before it and `›2` after it; a click on either lists every tab, to
 search by name and pick from (as `Ctrl+K g` does).
 
 While a query that reads runs, other tabs can be used: switch to one, open
-a new one, read its results. The running tab's name gets a green `…`, its
-outcome lands in it when it's done (the status bar says so), and the rows a
-streamed result hadn't sent yet are loaded with `M`. One query runs at a
-time, even on another tab's connection: the other tabs say which tab, on
-which connection, is running it, and `Esc` stops it only in its own tab. A
-write, a review or a comparison keeps every tab where it is until it's
-done.
+a new one, read its results, and **run queries there too**: each tab has
+its own query, so tabs on different connections run at the same time.
+A running tab's name gets a green `…` (`Ctrl+K g` lists them, with how
+long each has run), its outcome lands in it when it's done (the status bar
+says so), its timeout and long-query notice count on while it's hidden,
+and the rows a streamed result hadn't sent yet are loaded with `M`. `Esc`
+stops a tab's query only in that tab. A connection runs one query at a
+time, so a tab on the same connection as a running one waits: `F5` and
+`Esc` there say which tab is running it and how to get there. A write, a
+review or a comparison keeps every tab where it is until it's done.
 
 **Query parameters.** Running SQL with placeholders — `:name` in any
 engine, `$1` on Postgres, `?` on MySQL/SQLite, and SQLite's `?2`, `@name`

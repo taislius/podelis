@@ -50,8 +50,8 @@ same way tools like `lazygit` do.
   optional **vim keys**, **rebindable keys** and **mouse** support
 - **Tabs and a query library:** several query tabs per project, each with
   its own results and **its own connection** (so one tab can be on staging
-  while another is on prod); keep working in other tabs while a long read
-  runs in one. Save a tab to the project's
+  while another is on prod), and **queries running in several tabs at
+  once**. Save a tab to the project's
   library under a name and group (`reports/churn by month`), or just the
   statement under the cursor; rename or move it, and search everything —
   names, groups, SQL text and your history, by date too (`@today`, `@7d`,

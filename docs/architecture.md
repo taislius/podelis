@@ -81,16 +81,21 @@ everywhere:
   results pane's footer. They last until the next key (a run's until it
   ends). The MESSAGES tab is a list (`messages.rs`): one can be selected,
   opened whole and copied.
-- **Runs and tabs** (`query/`, `tabs.rs`, `events.rs`): one query runs
-  at a time; its state is `App::run` (`Run`: `executing`, its id, owner
-  tab, connection, purpose, stream…). A read records its tab (`run.owner`),
-  and other tabs can then be shown; a write, a review or a comparison
-  leaves it `None`, which keeps every tab in place (`blocks_tabs`). A run's
-  events carry its id rather than the connection's `generation`, so they
-  outlive connection switches (not a disconnect), and `in_tab` applies
-  them to the owner tab, swapping its state and connection in and back
-  out. F7 meanwhile plans on a pool connection (`Database::run_aside`)
-  where that sees what the session does.
+- **Runs and tabs** (`query/`, `tabs.rs`, `events.rs`): each tab has its
+  own query state, `TabState::run` (`Run`: `executing`, its id, task,
+  connection, purpose, stream, timeout…), swapped in and out with the tab,
+  so tabs on different connections run at once. A write, a review or a
+  comparison sets `holds_tabs`, which keeps every tab in place
+  (`blocks_tabs`). A connection's session runs one statement at a time,
+  and a cancel stops whatever runs on it, so a tab whose connection is
+  busy with another tab's query doesn't start one (`busy_conn_tab`,
+  `conn_busy`). Run ids are unique across the tabs (`next_run_id`): a
+  run's events carry its id rather than the connection's `generation`, so
+  they outlive connection switches (not a disconnect), and find their tab
+  by it; `in_tab` applies them there, swapping its state and connection in
+  and back out. The tick does the same for each running tab's timeout and
+  long-query notice. F7 meanwhile plans on a pool connection
+  (`Database::run_aside`) where that sees what the session does.
 
 ## Databases: ports and adapters
 
