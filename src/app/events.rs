@@ -20,6 +20,7 @@ impl App {
             DbEventKind::ExportDone(path, result) => return self.export_done(&path, result),
             DbEventKind::AskProgress(id, chars) => return self.ask_progress(id, chars),
             DbEventKind::AskWaitingKey(id) => return self.ask_waiting_key(id),
+            DbEventKind::SandboxLocks(said) => return self.sandbox_locks(said),
             DbEventKind::AskDone(id, result) => return self.ask_done(id, *result),
             DbEventKind::GatewayDone(purpose, result) => return self.gateway_done(purpose, *result),
             _ => {}
@@ -66,7 +67,9 @@ impl App {
             return self.apply_shown(kind);
         }
         let before = self.notes.status.clone();
+        self.hidden_tab = Some(i);
         self.in_tab(i, |app| app.apply_shown(kind));
+        self.hidden_tab = None;
         if self.notes.status != before && !self.notes.status.is_empty() {
             self.notes.status = format!("{}: {}", self.tabs[i].name, self.notes.status);
             self.notes.status_in_results = false;
@@ -169,9 +172,11 @@ impl App {
             | DbEventKind::ContainersFound(..)
             | DbEventKind::AskProgress(..)
             | DbEventKind::AskWaitingKey(..)
+            | DbEventKind::SandboxLocks(..)
             | DbEventKind::AskDone(..)
             | DbEventKind::GatewayDone(..) => {}
             DbEventKind::Pinged(result) => self.pinged(result),
+            DbEventKind::SandboxCopied(copied) => self.sandbox_copied(copied),
             DbEventKind::ActivityLoaded(result) => self.activity_loaded(result),
             DbEventKind::SessionStopped(result) => self.session_stopped(result),
             DbEventKind::Diagnosed(title, report) => {
@@ -489,6 +494,7 @@ impl App {
             self.agents_tick();
         }
         self.share_tick();
+        self.sandbox_tick();
         // Each running tab's query: the shown one's, and those in other tabs.
         self.run_tick();
         let shown = self.active_tab;

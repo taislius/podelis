@@ -193,6 +193,12 @@ impl Dialect for Postgres {
             path.to_string()
         }
     }
+    fn locks_held_query(&self) -> Option<&'static str> {
+        Some(
+            "SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid() AND granted \
+             AND locktype IN ('relation', 'tuple', 'transactionid')",
+        )
+    }
     fn version_query(&self) -> &'static str {
         "SHOW server_version"
     }

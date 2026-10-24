@@ -484,3 +484,37 @@ fn the_library_finds_by_date() {
     let items = app.library_items();
     assert_eq!(items, [LibraryItem::Saved(old)]);
 }
+
+/// A query that ends in a hidden tab is announced (a bell and a desktop
+/// notification), with the tab's name, even with the terminal in front.
+#[tokio::test]
+async fn a_hidden_tabs_finished_query_is_announced() {
+    let (mut app, dir) = test_app();
+    app.data_dir = Some(dir.path().to_path_buf());
+    let project = project_id(&app);
+    let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
+    app.store.upsert(&project, None, a.clone()).unwrap();
+    app.store.upsert(&project, None, b.clone()).unwrap();
+    app.load_tabs(&project);
+    connect_profile(&mut app, &a).await;
+    app.handle_key(ctrl('o'));
+    connect_profile(&mut app, &b).await;
+    app.set_terminal_focus(true);
+    app.settings.notify_after = 1;
+    app.handle_key(alt('1'));
+    app.tab.editor.set_text("select 1");
+    app.handle_key(key(KeyCode::F(5)));
+    // As if it had run a while.
+    app.tab.run.extra.started = Instant::now().checked_sub(Duration::from_secs(5));
+    app.handle_key(alt('2'));
+    finish(&mut app).await;
+    let said = app.take_notification().expect("announced");
+    assert!(said.starts_with("Query 1: "), "{said}");
+    // Its own tab, shown, with the terminal in front: not announced.
+    app.handle_key(alt('1'));
+    app.tab.editor.set_text("select 2");
+    app.handle_key(key(KeyCode::F(5)));
+    app.tab.run.extra.started = Instant::now().checked_sub(Duration::from_secs(5));
+    finish(&mut app).await;
+    assert!(app.take_notification().is_none());
+}

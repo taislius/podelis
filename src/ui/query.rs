@@ -724,6 +724,9 @@ fn draw_sandbox(f: &mut Frame, app: &App, area: Rect) {
         format!(" {}", t!("sandbox.open_for", time = format!("{}:{:02}", age / 60, age % 60))),
         dim(),
     )));
+    if let Some(locks) = &view.locks {
+        lines.push(Line::from(Span::styled(format!(" {locks}"), dim())));
+    }
     let key = |k: &str, what: &str, bg| {
         [Span::styled(format!(" {k} "), bold(t.on_accent).bg(bg)), Span::styled(format!(" {what}  "), fg(t.text))]
     };

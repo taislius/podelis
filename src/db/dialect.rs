@@ -218,6 +218,11 @@ pub trait Dialect: Sync {
     fn tables_without_rollback(&self) -> Option<&'static str> {
         None
     }
+    /// A query counting the locks this session holds (for a sandbox's
+    /// window), as one number; `None` where there's no such view.
+    fn locks_held_query(&self) -> Option<&'static str> {
+        None
+    }
     /// Columns every table has without listing them (`ctid`, `rowid`).
     fn hidden_columns(&self) -> &'static [&'static str] {
         &[]

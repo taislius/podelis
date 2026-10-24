@@ -44,6 +44,11 @@ impl Dialect for MySql {
         )
     }
 
+    fn locks_held_query(&self) -> Option<&'static str> {
+        // MySQL 8's InnoDB locks (it needs performance_schema access).
+        Some("SELECT COUNT(*) FROM performance_schema.data_locks WHERE thread_id = PS_CURRENT_THREAD_ID()")
+    }
+
     fn password_files_note(&self) -> &'static str {
         " (or ~/.my.cnf)"
     }

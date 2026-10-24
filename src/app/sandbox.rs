@@ -12,11 +12,28 @@ use crate::sql::TokenKind;
 use crate::sql::params::Filled;
 
 /// A sandbox open on a connection.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Sandbox {
     pub steps: Vec<Step>,
     pub started: Option<Instant>,
+    /// It was said it's getting old or big (once).
+    warned: bool,
+    /// A SQLite file's sandbox works on a copy of the file (the original
+    /// isn't locked meanwhile): the original connection, and the copy's
+    /// file, put back and deleted when it ends.
+    pub copy: Option<FileCopy>,
 }
+
+/// The original connection of a sandbox working on a file's copy.
+pub struct FileCopy {
+    pub original: Database,
+    pub path: std::path::PathBuf,
+}
+
+/// A sandbox open this long is said to be holding its locks too long.
+const OLD: Duration = Duration::from_mins(15);
+/// A sandbox that changed this many rows is said to be getting big.
+const BIG: u64 = 100_000;
 
 /// One run in the sandbox: what ran, the tables it wrote, the rows it
 /// changed.
@@ -49,6 +66,9 @@ pub(super) enum Then {
 #[derive(Debug, Default)]
 pub struct SandboxView {
     pub scroll: u16,
+    /// What it holds: the locks the session has (asked when the window
+    /// opens), or why that can't be seen.
+    pub locks: Option<String>,
 }
 
 impl Sandbox {
@@ -133,6 +153,10 @@ impl App {
     /// Runs `sql` as the sandbox's next step: in its transaction (begun by
     /// the first), after a savepoint of its own.
     pub(super) fn run_sandbox_step(&mut self, sql: &str, offset: usize, filled: Option<Filled>, purpose: RunPurpose) {
+        // A SQLite file: its first step makes a copy to work on, then goes on.
+        if self.connection.sandbox.is_none() && self.connection.txn == TxnState::Idle && self.copies_file() {
+            return self.copy_for_sandbox(sql.to_string(), offset, filled, purpose);
+        }
         let number = self.connection.sandbox.as_ref().map_or(0, |s| s.steps.len()) + 1;
         let begin = if self.connection.txn == TxnState::Idle { "BEGIN;\n" } else { "" };
         let original = filled.as_ref().map_or_else(|| sql.to_string(), |f| f.original.clone());
@@ -147,6 +171,56 @@ impl App {
         };
         self.tab.run.extra.sandbox_step = Some(PendingStep { number, step });
         self.run_now(wrapped.sql.clone(), offset, infos, purpose, Some(wrapped));
+    }
+
+    /// Whether a sandbox here works on a copy: a SQLite file (not one in
+    /// memory, which has no file to copy).
+    fn copies_file(&self) -> bool {
+        let host = self.connection.form.host.trim();
+        self.engine().is_file_based() && !host.is_empty() && host != ":memory:" && self.connection.database.is_some()
+    }
+
+    /// Copies the file (`VACUUM INTO`, consistent even in WAL mode) into the
+    /// sandbox folder and opens the copy; the step waits meanwhile.
+    fn copy_for_sandbox(&mut self, sql: String, offset: usize, filled: Option<Filled>, purpose: RunPurpose) {
+        let (Some(db), Ok(mut params)) = (self.connection.database.clone(), self.connection.form.params()) else {
+            return;
+        };
+        let dir = self.data_dir.clone().unwrap_or_else(crate::config::store::config_dir).join("sandbox");
+        let path = dir.join(format!("{}.db", uuid::Uuid::new_v4().simple()));
+        params.host = path.to_string_lossy().into_owned();
+        self.sandbox_waiting = Some((sql, offset, filled, purpose));
+        self.set_result_status(t!("sandbox.copying").to_string(), false);
+        let send = self.sender();
+        tokio::spawn(async move {
+            let copied = async {
+                // Copies left by a sandbox that never ended (a crash) go first.
+                let _ = std::fs::remove_dir_all(&dir);
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                let target = crate::db::sql_literal(&path.to_string_lossy(), crate::db::Engine::Sqlite);
+                db.run_once(&format!("VACUUM INTO {target}"), 1).await.map_err(|e| crate::db::error_message(&e))?;
+                let copy = Database::connect(params).await.map_err(|e| crate::db::error_message(&e))?;
+                Ok::<_, String>((copy, path))
+            };
+            send(DbEventKind::SandboxCopied(copied.await));
+        });
+    }
+
+    /// The copy is ready: the connection works on it now, and the step that
+    /// waited runs.
+    pub(super) fn sandbox_copied(&mut self, copied: Result<(Database, std::path::PathBuf), String>) {
+        let Some((sql, offset, filled, purpose)) = self.sandbox_waiting.take() else { return };
+        let (copy, path) = match copied {
+            Ok(copied) => copied,
+            Err(e) => return self.set_status(t!("sandbox.copy_failed", e = e), true),
+        };
+        let Some(original) = self.connection.database.replace(copy) else { return };
+        self.connection.sandbox = Some(Sandbox {
+            copy: Some(FileCopy { original, path }),
+            started: Some(Instant::now()),
+            ..Sandbox::default()
+        });
+        self.run_sandbox_step(&sql, offset, filled, purpose);
     }
 
     /// A step ran: it's in the sandbox now.
@@ -195,9 +269,59 @@ impl App {
         }
     }
 
-    /// Ctrl+K x while a sandbox is open: its window.
+    /// Ctrl+K x while a sandbox is open: its window, and (asked of the
+    /// server meanwhile) the locks it holds.
     pub(super) fn open_sandbox_view(&mut self) {
         self.sandbox_view = Some(SandboxView::default());
+        let engine = self.engine();
+        if engine.is_file_based() {
+            let copied = self.connection.sandbox.as_ref().is_some_and(|s| s.copy.is_some());
+            let locks = if copied { t!("sandbox.on_a_copy") } else { t!("sandbox.file_lock") };
+            return self.sandbox_locks(locks.to_string());
+        }
+        let (Some(db), Some(query)) = (self.connection.database.clone(), engine.dialect().locks_held_query()) else {
+            return;
+        };
+        // (Not while a query runs on the session: the window says nothing.)
+        if self.conn_busy() {
+            return;
+        }
+        let send = self.sender();
+        tokio::spawn(async move {
+            let said = match db.run_once(query, 1).await {
+                Ok(o) => {
+                    let n = o.rows.first().and_then(|r| r.first().cloned().flatten()).unwrap_or_default();
+                    tn!("sandbox.locks", n.parse::<u64>().unwrap_or(0))
+                }
+                Err(e) => t!("sandbox.locks_unseen", e = crate::db::error_message(&e)),
+            };
+            send(DbEventKind::SandboxLocks(said));
+        });
+    }
+
+    /// What the sandbox holds, for its window.
+    pub(super) fn sandbox_locks(&mut self, said: String) {
+        if let Some(view) = &mut self.sandbox_view {
+            view.locks = Some(said);
+        }
+    }
+
+    /// Once a second while a sandbox is open: said once when it's been open
+    /// long or changed many rows (its locks block others; on PostgreSQL a
+    /// long transaction holds back vacuum), with how to end it.
+    pub(super) fn sandbox_tick(&mut self) {
+        let Some(sandbox) = &mut self.connection.sandbox else { return };
+        let rows: u64 = sandbox.steps.iter().map(|s| s.rows).sum();
+        let old = sandbox.started.is_some_and(|s| s.elapsed() >= OLD);
+        if sandbox.warned || !(old || rows >= BIG) {
+            return;
+        }
+        sandbox.warned = true;
+        let age = sandbox.started.map_or(0, |s| s.elapsed().as_secs());
+        let key = self.keymap.label(crate::config::keys::Action::TxMode);
+        let said = t!("sandbox.getting_big", time = mm_ss(age), rows = rows, key = key);
+        self.set_status(said.clone(), true);
+        self.notification = Some(said);
     }
 
     pub(super) fn handle_sandbox_key(&mut self, key: KeyEvent) {
@@ -253,7 +377,19 @@ impl App {
     /// The sandbox's transaction ended: the sandbox with it; its script
     /// goes where it was asked to now.
     pub(super) fn sandbox_ended(&mut self) {
-        self.connection.sandbox = None;
+        // Working on a file's copy: the original back, the copy deleted.
+        if let Some(FileCopy { original, path }) = self.connection.sandbox.take().and_then(|s| s.copy) {
+            if let Some(copy) = self.connection.database.replace(original) {
+                tokio::spawn(async move {
+                    copy.close().await;
+                    for end in ["", "-wal", "-shm", "-journal"] {
+                        let _ = std::fs::remove_file(format!("{}{end}", path.display()));
+                    }
+                });
+            }
+            // Its schema changes were the copy's.
+            self.load_catalog();
+        }
         match self.sandbox_then.take() {
             Some(Then::Tab(script)) => {
                 self.new_tab(Some(t!("sandbox.script_tab").to_string()), &script, None);

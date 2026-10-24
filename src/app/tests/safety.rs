@@ -319,9 +319,19 @@ async fn a_sandbox_keeps_steps_until_it_is_ended() {
     assert!(app.notes.status.contains("step 3 failed"), "{}", app.notes.status);
     assert_eq!(app.connection.sandbox.as_ref().unwrap().steps.len(), 2);
     assert_eq!(app.connection.txn, TxnState::Open);
-    // Ctrl+K x shows it; `u` undoes the last step.
+    // Open long, it says so once (its locks hold up others).
+    app.connection.sandbox.as_mut().unwrap().started = Instant::now().checked_sub(Duration::from_mins(16));
+    app.tick_running();
+    assert!(app.notes.status.contains("has been open 16:00"), "{}", app.notes.status);
+    assert!(app.take_notification().is_some());
+    app.notes.status.clear();
+    app.tick_running();
+    assert!(app.notes.status.is_empty(), "once");
+    // Ctrl+K x shows it, with what it holds; `u` undoes the last step.
     app.run_action(Action::TxMode);
     assert!(app.sandbox_view.is_some());
+    let locks = app.sandbox_view.as_ref().unwrap().locks.clone().unwrap_or_default();
+    assert!(locks.contains("write lock"), "{locks}");
     app.handle_key(key(KeyCode::Char('u')));
     finish(&mut app).await;
     assert_eq!(app.connection.sandbox.as_ref().unwrap().steps.len(), 1);
@@ -374,7 +384,15 @@ async fn a_sandbox_on_the_servers() {
             app.handle_key(key(KeyCode::F(5)));
             assert!(said(&app).contains("saves schema changes at once"), "{engine:?}: {}", said(&app));
         }
+        // Its window says what locks the session holds (MySQL: if it may
+        // read performance_schema).
         app.run_action(Action::TxMode);
+        until_event(&mut app, |k| matches!(k, DbEventKind::SandboxLocks(_))).await;
+        let locks = app.sandbox_view.as_ref().unwrap().locks.clone().unwrap();
+        assert!(locks.contains("holds") || locks.contains("can't be seen"), "{engine:?}: {locks}");
+        if engine == Engine::Postgres {
+            assert!(!locks.contains("holds 0"), "{locks}");
+        }
         app.handle_key(key(KeyCode::Char('d')));
         finish(&mut app).await;
         assert_eq!(app.connection.txn, TxnState::Idle);
@@ -382,4 +400,50 @@ async fn a_sandbox_on_the_servers() {
         run_sql(&mut app, "select count(*) from podelis_sb").await;
         assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][0].as_deref(), Some("0"), "{engine:?}: discarded");
     }
+}
+
+/// A SQLite file's sandbox works on a copy: the original isn't touched
+/// (nor locked) meanwhile, the copy goes when it ends, and run for real
+/// writes the original.
+#[tokio::test]
+async fn a_sqlite_files_sandbox_works_on_a_copy() {
+    let (mut app, dir) = test_app();
+    app.data_dir = Some(dir.path().to_path_buf());
+    let project = project_id(&app);
+    let file = dir.path().join("shop.db");
+    let profile = file_profile("shop", &file);
+    app.store.upsert(&project, None, profile.clone()).unwrap();
+    connect_profile(&mut app, &profile).await;
+    run_sql(&mut app, "create table t (id integer)").await;
+    app.connection.tx_mode = TxMode::Sandbox;
+    app.tab.editor.set_text("insert into t values (1)");
+    app.handle_key(key(KeyCode::F(5)));
+    // The copy is made first, then the step runs on it.
+    until_event(&mut app, |k| matches!(k, DbEventKind::SandboxCopied(_))).await;
+    finish(&mut app).await;
+    let copy = app.connection.sandbox.as_ref().unwrap().copy.as_ref().unwrap().path.clone();
+    assert!(copy.exists() && copy.starts_with(dir.path().join("sandbox")));
+    run_sql(&mut app, "select count(*) from t").await;
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][0].as_deref(), Some("1"));
+    // The original, from outside: untouched, and writable meanwhile.
+    let outside = crate::db::Database::connect(ConnectForm::from_profile(&profile, String::new()).params().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(outside.run("select count(*) from t", 1).await.unwrap().rows[0][0].as_deref(), Some("0"));
+    // Run for real: the original gets it; the copy is gone.
+    app.run_action(Action::TxMode);
+    app.handle_key(key(KeyCode::Char('r')));
+    finish(&mut app).await;
+    assert!(app.connection.sandbox.is_none());
+    assert!(app.review.is_some(), "commit or roll back?");
+    app.handle_key(key(KeyCode::Char('c')));
+    finish(&mut app).await;
+    assert_eq!(outside.run("select count(*) from t", 1).await.unwrap().rows[0][0].as_deref(), Some("1"));
+    for _ in 0..50 {
+        if !copy.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!copy.exists(), "the copy is deleted");
 }

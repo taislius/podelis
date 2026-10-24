@@ -85,6 +85,8 @@ impl App {
     pub fn wants_ticks(&self) -> bool {
         !self.running_tabs().is_empty()
             || self.activity.is_some()
+            // An open sandbox's age, said once it's long.
+            || self.connection.sandbox.is_some()
             || (self.settings.keepalive > 0 && self.connection.database.is_some())
             // A lost connection, checked again until it's back.
             || (self.connection_lost && self.connection.database.is_some())

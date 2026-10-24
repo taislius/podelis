@@ -392,6 +392,10 @@ enum DbEventKind {
     /// Ask `n`'s key is slow to come: the keychain (or a password
     /// manager) is asking the user.
     AskWaitingKey(u64),
+    /// The locks a sandbox's session holds (or why that can't be seen).
+    SandboxLocks(String),
+    /// A SQLite file's copy for a sandbox, opened (or why not).
+    SandboxCopied(Result<(Database, PathBuf), String>),
     /// Ask `n`'s answer: the SQL and what the model said, or why not.
     AskDone(u64, Box<Result<serde_json::Value, ask::AskFailure>>),
     /// A gateway call's answer (the memory window's).
@@ -770,6 +774,8 @@ pub struct App {
     pub sandbox_view: Option<sandbox::SandboxView>,
     /// Where a sandbox's script goes once it's rolled back.
     sandbox_then: Option<sandbox::Then>,
+    /// A sandbox's first step, waiting for the file's copy to be made.
+    sandbox_waiting: Option<(String, usize, Option<Filled>, RunPurpose)>,
     /// The find/replace bar (Ctrl+F).
     pub find: Option<find::FindBar>,
     /// A pop-up menu of what can be done in the focused pane.
@@ -849,6 +855,9 @@ pub struct App {
     export_task: Option<(tokio::sync::oneshot::Sender<()>, PathBuf)>,
     /// The last run id handed out ([`App::next_run_id`]).
     run_ids: u64,
+    /// While a hidden tab's event is applied (`apply_in_tab`): that tab,
+    /// whose run ending is announced even with the terminal in front.
+    hidden_tab: Option<usize>,
     pub completion: Option<Completion>,
     /// Row limit for the next run only.
     next_row_limit: Option<usize>,
@@ -916,6 +925,7 @@ impl App {
             review: None,
             sandbox_view: None,
             sandbox_then: None,
+            sandbox_waiting: None,
             param_form: None,
             param_values: HashMap::new(),
             drafts: tabs::Drafts::default(),
@@ -945,6 +955,7 @@ impl App {
             same_result: false,
             export_task: None,
             run_ids: 0,
+            hidden_tab: None,
             completion: None,
             next_row_limit: None,
             hits: Hits::default(),
@@ -1009,14 +1020,21 @@ impl App {
     }
 
     /// Announces the end of a run that took at least `notify_after`, unless
-    /// the terminal is known to have focus (then you saw it end).
+    /// the terminal is known to have focus and its tab is shown (then you
+    /// saw it end). A hidden tab's run is announced with its tab's name.
     fn notify_if_long(&mut self, what: impl FnOnce(Duration) -> String) {
         let Some(started) = self.tab.run.extra.started.take() else { return };
         let after = self.settings.notify_after;
-        if after == 0 || started.elapsed() < Duration::from_secs(after) || self.terminal_focused == Some(true) {
+        let seen = self.terminal_focused == Some(true) && self.hidden_tab.is_none();
+        if after == 0 || started.elapsed() < Duration::from_secs(after) || seen {
             return;
         }
-        self.notification = Some(what(started.elapsed()));
+        let said = what(started.elapsed());
+        let name = self.hidden_tab.and_then(|i| self.tabs.get(i)).map(|t| t.name.clone());
+        self.notification = Some(match name {
+            Some(name) => format!("{name}: {said}"),
+            None => said,
+        });
     }
 
     pub fn engine(&self) -> Engine {

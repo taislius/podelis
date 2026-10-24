@@ -1312,6 +1312,12 @@ pane = "Išdidinta: Tab – tarp langų; {key} arba Esc grąžina"
 statement = "Tik sakinys: {key} arba Esc grąžina"
 
 [sandbox]
+copy_failed = "Nepavyko nukopijuoti failo smėlio dėžei: {e}"
+copying = "Kopijuojamas failas smėlio dėžei…"
+on_a_copy = "ji dirba su failo kopija: originalas nepaliestas (ir neužrakintas), kol nevykdysite iš tikrųjų"
+file_lock = "ji laiko failo rašymo užraktą: kita programa tuo metu negali į jį rašyti"
+getting_big = "Ši smėlio dėžė atvira {time} ir pakeitė {rows} eilučių: jos užraktai trukdo kitiems (o PostgreSQL – ir vacuum). {key} ją baigia"
+locks_unseen = "jos užraktų čia nematyti: {e}"
 discard = "išmesti"
 esc = "Esc uždaro · smėlio dėžė lieka atvira"
 keep_script = "išsaugoti kaip scenarijų"
@@ -1330,6 +1336,11 @@ summary = "PAKEISTA, PAGAL LENTELĘ"
 title = "SMĖLIO DĖŽĖ"
 undo = "atšaukti paskutinį žingsnį"
 undone = "Atšauktas smėlio dėžės {n} žingsnis"
+
+[sandbox.locks]
+few = "sesija laiko {n} užraktus"
+one = "sesija laiko {n} užraktą"
+other = "sesija laiko {n} užraktų"
 
 [sandbox.rows]
 few = "{n} eilutės"

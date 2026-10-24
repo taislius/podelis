@@ -1282,6 +1282,12 @@ pane = "Zoomed: Tab moves between panes; {key} or Esc returns"
 statement = "The statement alone: {key} or Esc returns"
 
 [sandbox]
+copy_failed = "Couldn't copy the file for the sandbox: {e}"
+copying = "Copying the file for the sandbox…"
+on_a_copy = "it works on a copy of the file: the original is untouched (and not locked) until you run it for real"
+file_lock = "it holds the file's write lock: no other program can write to it meanwhile"
+getting_big = "This sandbox has been open {time} and changed {rows} rows: its locks hold up others (and, on PostgreSQL, vacuum). {key} ends it"
+locks_unseen = "its locks can't be seen here: {e}"
 discard = "discard"
 esc = "Esc closes · the sandbox stays open"
 keep_script = "keep as a script"
@@ -1300,6 +1306,10 @@ summary = "CHANGED, PER TABLE"
 title = "SANDBOX"
 undo = "undo the last step"
 undone = "Undid sandbox step {n}"
+
+[sandbox.locks]
+one = "the session holds {n} lock"
+other = "the session holds {n} locks"
 
 [sandbox.rows]
 one = "{n} row"
