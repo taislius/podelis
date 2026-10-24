@@ -351,6 +351,12 @@ With a real key (a few cents) and, if you have it, Ollama:
 - [ ] An agent through `podelis mcp` (Claude Code): the tools work, a
   write is approved in the app, Agent activity shows the session. With the
   gateway stopped first, the agent's first call starts it.
+- [ ] A PostgreSQL connection shared as *write in a sandbox*: have an
+  agent insert rows, update them, and read them back; from `psql` meanwhile
+  nothing shows. One failing call (a duplicate key) leaves the rest. In
+  `Ctrl+K a` its calls say "in the sandbox", and `s` in its session gives
+  the script. Close the agent: the transaction is gone (`pg_stat_activity`
+  shows no idle-in-transaction session).
 - [ ] Refusals say why, engine by engine: `PRAGMA table_info(t)` on SQLite
   ("describe_table tells…"), `SELECT load_file('/etc/passwd')` on MySQL
   ("reads a file on the server"), `SET …` anywhere (its own transaction),

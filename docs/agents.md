@@ -19,6 +19,7 @@ settings (Ctrl+K p, or click the project's name in the top bar), set
 | read | Read. Each call runs in a read-only transaction on the server, so even a write hidden in a function is refused |
 | read and write | Write too, but never `DROP`, `TRUNCATE` or `UPDATE`/`DELETE` without `WHERE`. On a **production** connection every call is rolled back: a write only runs as a dry run (reporting how many rows it would change), and schema changes not even that |
 | write when you approve | Write too, never anything destructive, but each write waits for your answer in Podėlis, production included (see below) |
+| write in a sandbox | Write too, never anything destructive, but nothing is ever committed: its writes build on each other in one transaction, and its reads see them, until it's rolled back (see below) |
 
 A read-only connection stays read-only for agents too. A change to the
 setting applies at once, also to an agent that's already running.
@@ -44,6 +45,24 @@ refusal says which and what it does. That list is a safety net, not a boundary:
 **connect as a database user with only the rights agents should have**
 (for reading, `GRANT SELECT` on what they need, no superuser or `FILE`
 privilege). Podėlis's rules then sit on top.
+
+## A sandbox for agents
+
+With **write in a sandbox**, an agent can do a whole job (insert test
+rows, change them, run the report on them) and you judge the result once,
+not each write. Its first write begins a transaction that stays open
+between its calls; each call runs after a savepoint of its own, so one
+that fails is rolled back alone and the rest stay; its reads, and its
+`explain`, see what it wrote. Nobody else sees any of it, and it's never
+committed, production included. It's rolled back when the agent goes, or
+after ten idle minutes (its row locks would otherwise be held).
+
+In the agent activity (`Ctrl+K a`) its calls say "in the sandbox", and in
+a session, `s` puts what it wrote (the writes that ran, in order) in a new
+tab as a script: read it, then run it yourself if you want it. MySQL
+commits schema changes at once, so there an agent's DDL is refused in a
+sandbox; so are writes on a MySQL database with tables a rollback can't
+undo.
 
 ## Approve each write
 
