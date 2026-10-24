@@ -90,6 +90,16 @@ GitHub Actions, kept small to save minutes:
   checksums: cancel that run (`gh run cancel <id>`) unless that's wanted.
   The release itself is made first, once; each build then uploads to it,
   trying again a few times when GitHub's API times out.
+- **Signing on macOS.** The keychain ties a stored key or password to
+  the program that stored it, so an unsigned build (each `cargo build`,
+  each update) is a stranger to it and its Allow dialog comes again.
+  `scripts/sign-macos.sh` signs a build with a code-signing identity of
+  yours (a self-signed one from Keychain Access will do; the script says
+  how) under the identifier `lt.taislius.podelis`, and the release builds
+  are signed the same way when the `MACOS_SIGN_P12` (the certificate and
+  its key as a base64 `.p12`) and `MACOS_SIGN_PASSWORD` secrets are set;
+  without them they're left as built. The first signed build asks once
+  more: choose Always Allow.
 - `retry.yml` — when a Release or Platforms run fails, runs its failed
   jobs once more (a macOS runner never picked up, an API timeout: GitHub's
   own trouble). Jobs that never got a runner at all are run again up to

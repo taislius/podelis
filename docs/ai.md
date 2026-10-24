@@ -97,14 +97,18 @@ with those tables from then on:
 podelis memory add orders.status 3 = cancelled
 podelis memory add customer also called client          # another name: "clients" finds customer
 podelis memory add revenue defined as sum(payment.amount)  # a term's formula: used whenever it's asked for
+podelis memory add customer excluded by default active = false   # rows left out unless the question asks for them
 podelis memory learn db/migrations    # each table's history, and the comments in your migrations
 ```
 
 A fact whose words match a question brings in the tables it names, so
 "revenue per store" finds `payment` through the definition, and "how many
 clients" finds `customer` through the other name (words match by their
-stems: "clients" finds "client"). A model that had to define a term or
-read another name suggests such a fact itself, for you to confirm.
+stems: "clients" finds "client"). A model that had to define a term, read
+another name or leave rows out suggests such a fact itself, for you to
+confirm. A fact about a column of a table the database doesn't have (since
+dropped or renamed) isn't shown to the model; `podelis gateway context`
+lists such facts as maybe stale, to fix or forget.
 
 In the app, `Ctrl+K k` lists them: `a` adds, `d` forgets. When a model had
 to assume what something means, it's kept as a suggestion (orange, `-- assumed:`

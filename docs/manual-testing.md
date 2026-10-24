@@ -239,6 +239,12 @@ OS and the server version when something is off.
   table with a primary key.
 - [ ] A connection's query timeout cancels a long query on the server.
 
+- [ ] Sandbox on a SQLite file: the first write says it copies the file;
+  meanwhile `sqlite3 file 'insert …'` from a shell works (not locked) and
+  the original doesn't have the sandbox's rows; *run it for real* writes
+  them there; `sandbox/` in the config folder is empty afterwards.
+  `Ctrl+K x` on PostgreSQL shows the locks it holds; left open 15 minutes,
+  it says so once.
 - [ ] Sandbox (`Ctrl+K x s`) on PostgreSQL: three inserts, one failing
   (a duplicate key) in between: the footer counts the steps, the failed
   one is said and the others stay. From `psql` meanwhile the rows aren't
@@ -351,6 +357,9 @@ With a real key (a few cents) and, if you have it, Ollama:
 - [ ] An agent through `podelis mcp` (Claude Code): the tools work, a
   write is approved in the app, Agent activity shows the session. With the
   gateway stopped first, the agent's first call starts it.
+- [ ] `podelis memory add customer excluded by default active = false`:
+  "how many customers" leaves them out. A fact about
+  `gone_table.col`: `podelis gateway context` lists it as maybe stale.
 - [ ] A PostgreSQL connection shared as *write in a sandbox*: have an
   agent insert rows, update them, and read them back; from `psql` meanwhile
   nothing shows. One failing call (a duplicate key) leaves the rest. In
@@ -368,6 +377,8 @@ With a real key (a few cents) and, if you have it, Ollama:
 
 ### Tabs
 
+- [ ] A 15-second query in one tab, another tab shown, the terminal in
+  front: when it ends, a bell and a notification "Query 1: …".
 - [ ] Two tabs on different connections (a PostgreSQL and a MySQL one):
   `select pg_sleep(20)` in one, `select sleep(20)` in the other, both at
   once; each tab's name gets the green `…`, `Ctrl+K g` shows both

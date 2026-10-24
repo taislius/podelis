@@ -130,6 +130,7 @@ podelis memory add orders.status 3 = cancelled
 podelis memory add revenue is orders.total minus refunds    # is / are / means / equals say how it relates
 podelis memory add customer also called client              # another name (also: aka); "clients" finds customer
 podelis memory add revenue defined as sum(payment.amount)   # a business term's formula or filter
+podelis memory add customer excluded by default deleted_at is not null   # rows left out unless asked for
 podelis memory add -p shop customers.tier gold spends over 1000 a year
 podelis memory                       # every fact, numbered (podelis memory list refunds: those matching)
 podelis memory forget 2

@@ -94,7 +94,8 @@ a new one, read its results, and **run queries there too**: each tab has
 its own query, so tabs on different connections run at the same time.
 A running tab's name gets a green `…` (`Ctrl+K g` lists them, with how
 long each has run), its outcome lands in it when it's done (the status bar
-says so), its timeout and long-query notice count on while it's hidden,
+says so, and one that ran at least `notify_after` seconds rings and
+notifies, with the tab's name, even while you're in the terminal), its timeout and long-query notice count on while it's hidden,
 and the rows a streamed result hadn't sent yet are loaded with `M`. `Esc`
 stops a tab's query only in that tab. A connection runs one query at a
 time, so a tab on the same connection as a running one waits: `F5` and
@@ -220,8 +221,11 @@ sees what the steps before it did. A step that fails is rolled back alone
 and the sandbox goes on (on PostgreSQL a failed statement would otherwise
 spoil the whole transaction). The editor's footer says `SANDBOX · N steps`
 in orange. `Ctrl+K x` then shows its steps, the rows each changed and,
-per table, what changed, with how long it's been open (its row locks are
-held until it ends), and its keys:
+per table, what changed, how long it's been open and the locks its session
+holds (its row locks are held until it ends: others wait on them), and its
+keys. Open 15 minutes, or past 100,000 rows changed, it says so once, in
+orange and with a notification (on PostgreSQL a long transaction also holds
+back vacuum). The keys:
 
 | Key | Action |
 |---|---|
@@ -232,8 +236,12 @@ held until it ends), and its keys:
 
 MySQL saves schema changes at once (they commit the transaction), so in a
 sandbox there it runs data changes only and refuses DDL with the reason.
-On SQLite the sandbox's transaction holds the file's write lock: another
-program can't write to it meanwhile.
+On a SQLite file the sandbox works on a copy of it (`VACUUM INTO`, made at
+its first write, in the config folder's `sandbox/`): the original isn't
+touched or locked meanwhile, schema changes are allowed, and the copy is
+deleted when the sandbox ends; *run it for real* writes the original. A
+database in memory has no file to copy: there the sandbox's transaction
+holds its write lock.
 
 **Long queries.** A query running 10 minutes says so once in the status
 bar, with how to cancel it (`Esc` in its tab), and in a notification while

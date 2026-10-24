@@ -25,7 +25,7 @@ leader_double_space = false # Space twice quickly in the editor opens the Ctrl+K
 leader_menu = true          # Ctrl+K shows its menu after half a second without a letter (false: only `?` or Ctrl+Shift+K show it)
 long_query = 600            # a query running this many seconds says, once, how to cancel it (0: never)
 query_timeout = 0           # cancel any query after this many seconds, on connections without a Timeout of their own (0: off)
-notify_after = 10           # a query running this many seconds rings and notifies when done (0: off)
+notify_after = 10           # a query running this many seconds rings and notifies when done (0: off); a hidden tab's too, with the terminal in front
 guard_rows = 1000000        # on production, a read of a whole table this big asks first, agents' is refused (0: off)
 gateway_idle = 30           # minutes the gateway waits with no client before it stops (0: keeps running)
 
