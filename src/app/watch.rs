@@ -93,7 +93,7 @@ impl App {
     /// Runs the query again when it's time and the last run is done.
     pub(super) fn watch_tick(&mut self) {
         let due = self.watch.as_ref().is_some_and(|w| Instant::now() >= w.next);
-        if !due || self.run.executing {
+        if !due || self.tab.run.executing {
             return;
         }
         let Some((sql, offset)) = self.tab.last_sql.clone() else { return self.stop_watch("") };

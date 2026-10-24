@@ -31,7 +31,7 @@ impl App {
         let path = self.export_path(format);
         let table = self.insert_table();
         let Some(results) = &self.tab.grid.results else { return };
-        let truncated = results.truncated() || self.run.stream.is_some();
+        let truncated = results.truncated() || self.tab.run.stream.is_some();
         let rows = self.tab.grid.view.len();
         let engine = self.engine();
         let text = match format {
@@ -42,7 +42,7 @@ impl App {
         };
         match std::fs::write(&path, text) {
             Ok(()) => {
-                let said = if truncated && self.run.stream.is_some() {
+                let said = if truncated && self.tab.run.stream.is_some() {
                     t!("export.rows_loaded", rows = rows)
                 } else if truncated {
                     t!("export.rows_of", rows = rows, total = results.total_rows)
@@ -82,16 +82,16 @@ impl App {
             return self.set_status(t!("export.already_running").to_string(), true);
         }
         let Some(results) = &self.tab.grid.results else { return };
-        if self.run.stream.is_none() {
+        if self.tab.run.stream.is_none() {
             if results.truncated() {
                 return self.set_status(t!("export.not_in_full").to_string(), true);
             }
             return self.export(format);
         }
-        if self.run.fetching_more {
+        if self.tab.run.fetching_more {
             return self.set_status(t!("export.still_loading").to_string(), true);
         }
-        let Some(stream) = self.run.stream.take() else { return };
+        let Some(stream) = self.tab.run.stream.take() else { return };
         let path = self.export_path(format);
         let paged = match paged {
             PagedFormat::Csv => crate::transfer::export::Paged::Csv,

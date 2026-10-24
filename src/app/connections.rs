@@ -926,7 +926,7 @@ impl App {
         self.connection.form.error = None;
         self.connection.form.info = None;
         let send = self.sender();
-        self.task = Some(tokio::spawn(async move {
+        self.tab.run.task = Some(tokio::spawn(async move {
             match Database::connect(params).await {
                 Ok(db) => send(DbEventKind::Connected(db)),
                 Err(e) => send(DbEventKind::ConnectFailed(crate::db::error_message(&e))),

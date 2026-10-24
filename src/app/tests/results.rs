@@ -261,7 +261,7 @@ async fn results_filter_sort_view_and_load_more() {
     run_sql(&mut app, "create table t (n int); insert into t values (1),(2),(3); select n from t").await;
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Char('M')));
-    assert!(!app.run.executing && said_error(&app));
+    assert!(!app.tab.run.executing && said_error(&app));
 }
 
 /// "Export all rows" writes every row of a streamed result, not just those
@@ -304,7 +304,7 @@ async fn export_all_rows_of_a_streamed_result() {
     assert_eq!((lines.len(), lines[0], lines[1], lines[25000]), (25001, "n", "1", "25000"));
     // The grid kept what it had; nothing more streams.
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows.len(), 10);
-    assert!(app.run.stream.is_none());
+    assert!(app.tab.run.stream.is_none());
 
     // Stopped part-way: the unfinished file goes.
     std::fs::remove_file(&exports()[0]).unwrap();
@@ -414,12 +414,12 @@ async fn copying_names_rows_as_csv_and_where_messages_show() {
     );
     // A run shows how long it's been going.
     assert_eq!(app.running_label(), None);
-    app.run.executing = true;
-    app.run.since = Instant::now().checked_sub(Duration::from_secs(75));
+    app.tab.run.executing = true;
+    app.tab.run.since = Instant::now().checked_sub(Duration::from_secs(75));
     assert_eq!(app.running_label().as_deref(), Some("running… 1:15"));
-    app.run.since = Instant::now().checked_sub(Duration::from_secs(3));
+    app.tab.run.since = Instant::now().checked_sub(Duration::from_secs(3));
     assert_eq!(app.running_label().as_deref(), Some("running… 3 s"));
-    app.run.executing = false;
+    app.tab.run.executing = false;
 }
 
 #[tokio::test]
@@ -473,14 +473,14 @@ async fn m_while_a_page_comes_follows_it_and_finds_new_rows_when_sorted() {
     app.focus = Focus::Results;
     // A page is coming (from scrolling); M then waits for it, then fetches.
     app.handle_key(key(KeyCode::End));
-    assert!(app.run.fetching_more);
+    assert!(app.tab.run.fetching_more);
     app.handle_key(key(KeyCode::Char('M')));
     let note = app.notes.results_note.as_ref().map(|(n, _)| n.as_str());
     assert!(note.is_some_and(|n| n.contains("on its way")), "{note:?}");
     let event = app.poll_db_event().await.unwrap();
     app.handle_db_event(event);
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows.len(), 20);
-    assert!(app.run.fetching_more, "M's rows asked for");
+    assert!(app.tab.run.fetching_more, "M's rows asked for");
     let event = app.poll_db_event().await.unwrap();
     app.handle_db_event(event);
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows.len(), 120);
@@ -504,7 +504,7 @@ async fn m_waiting_on_the_last_page_shows_its_rows() {
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Up));
     app.handle_key(key(KeyCode::End));
-    assert!(app.run.fetching_more);
+    assert!(app.tab.run.fetching_more);
     app.handle_key(key(KeyCode::Home));
     app.handle_key(key(KeyCode::Char('M')));
     let event = app.poll_db_event().await.unwrap();
@@ -512,7 +512,7 @@ async fn m_waiting_on_the_last_page_shows_its_rows() {
     // The stream ended with that page: nothing more to fetch, and M's rows
     // are those, selected.
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows.len(), 15);
-    assert!(app.run.stream.is_none() && !app.run.fetching_more);
+    assert!(app.tab.run.stream.is_none() && !app.tab.run.fetching_more);
     assert_eq!(app.tab.grid.table_state.selected(), Some(10));
 }
 
@@ -523,12 +523,12 @@ async fn large_results_stream_in_as_you_scroll() {
     let rows = "WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 125) SELECT n FROM s";
     run_sql(&mut app, rows).await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows.len(), 10);
-    assert!(app.run.stream.is_some(), "more rows to come");
+    assert!(app.tab.run.stream.is_some(), "more rows to come");
 
     // Moving near the end fetches the next page.
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::End));
-    assert!(app.run.fetching_more);
+    assert!(app.tab.run.fetching_more);
     let event = app.poll_db_event().await.unwrap();
     app.handle_db_event(event);
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows.len(), 20);
@@ -543,18 +543,18 @@ async fn large_results_stream_in_as_you_scroll() {
     let event = app.poll_db_event().await.unwrap();
     app.handle_db_event(event);
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows.len(), 125);
-    assert!(app.run.stream.is_none());
+    assert!(app.tab.run.stream.is_none());
 
     // A new query while a stream is open closes it and runs normally.
     run_sql(&mut app, rows).await;
-    assert!(app.run.stream.is_some());
+    assert!(app.tab.run.stream.is_some());
     run_sql(&mut app, "select 42").await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("42".to_string())]]);
-    assert!(app.run.stream.is_none());
+    assert!(app.tab.run.stream.is_none());
 
     // Scripts and writes don't stream.
     run_sql(&mut app, &format!("select 1; {rows}")).await;
-    assert!(app.run.stream.is_none() && app.tab.grid.results.as_ref().unwrap().truncated());
+    assert!(app.tab.run.stream.is_none() && app.tab.grid.results.as_ref().unwrap().truncated());
 }
 
 #[tokio::test]

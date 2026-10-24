@@ -295,7 +295,7 @@ fn clicking_the_editor_tabs_focuses_the_editor() {
     let click = |kind, x, y| MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::NONE };
     let (mut app, _dir) = query_app();
     // Even while a query runs (the tab can't be switched then).
-    app.run.executing = true;
+    app.tab.run.executing = true;
     let _ = render(&mut app, 110, 26);
     let (tab, y) = (app.hits.tabs[0].0 + 2, app.hits.tabs_y);
     app.focus = Focus::Results;

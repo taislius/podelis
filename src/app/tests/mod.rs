@@ -74,9 +74,10 @@ pub(super) async fn run_sql(app: &mut App, sql: &str) {
     finish(app).await;
 }
 
-/// Handles events (catalog loads etc.) until the running query is done.
+/// Handles events (catalog loads etc.) until every tab's running query is
+/// done.
 pub(super) async fn finish(app: &mut App) {
-    while app.run.executing {
+    while !app.running_tabs().is_empty() {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
@@ -156,7 +157,7 @@ pub(super) async fn connect_profile(app: &mut App, profile: &ConnectionProfile) 
 }
 
 pub(super) async fn finish_catalog(app: &mut App) {
-    while app.connection.schema.as_ref().is_none_or(|s| s.loading) || app.run.executing {
+    while app.connection.schema.as_ref().is_none_or(|s| s.loading) || app.tab.run.executing {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }

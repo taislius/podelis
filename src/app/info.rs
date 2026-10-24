@@ -83,7 +83,7 @@ impl App {
     /// Whether the main loop should tick every second (a query is running,
     /// keep-alive checks are on, the connection is lost…).
     pub fn wants_ticks(&self) -> bool {
-        self.run.executing
+        !self.running_tabs().is_empty()
             || self.activity.is_some()
             || (self.settings.keepalive > 0 && self.connection.database.is_some())
             // A lost connection, checked again until it's back.
@@ -104,7 +104,7 @@ impl App {
         // A lost connection is checked again every few seconds, heartbeat
         // or not, so it's said as soon as it's back (and reconnected).
         let every = if self.connection_lost { LOST_RECHECK } else { Duration::from_secs(self.settings.keepalive) };
-        if every.is_zero() || self.run.executing || self.pinging || self.last_activity.elapsed() < every {
+        if every.is_zero() || self.conn_busy() || self.pinging || self.last_activity.elapsed() < every {
             return;
         }
         self.ping();
@@ -114,7 +114,7 @@ impl App {
     /// checks it again now rather than at the next tick, once in a while.
     pub(super) fn recheck_lost_connection(&mut self) {
         if self.connection_lost
-            && !self.run.executing
+            && !self.conn_busy()
             && !self.pinging
             && self.last_activity.elapsed() >= LOST_RECHECK_AFTER_INPUT
         {
@@ -172,7 +172,7 @@ impl App {
         // stalled once only says so.
         if matches!(result, Err((_, Ping::NoAnswer)))
             && was_lost
-            && !self.run.executing
+            && !self.conn_busy()
             && self.connection.txn == TxnState::Idle
             && let Some(db) = &self.connection.database
         {

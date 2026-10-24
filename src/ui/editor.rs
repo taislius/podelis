@@ -424,7 +424,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Vec<Cols>, Optio
         if tab.saved_id.is_some() && app.tab_dirty(i) {
             spans.push(Span::styled(" ●", fg(t.warn).bg(bg)));
         }
-        if !active && app.run.executing && app.run_owner() == Some(i) {
+        if !active && app.tab_running(i) {
             spans.push(Span::styled(" …", fg(t.accent).bg(bg)));
         }
         spans.push(Span::styled(" ", Style::default().bg(bg)));

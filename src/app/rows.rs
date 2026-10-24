@@ -159,7 +159,7 @@ impl App {
 
     /// INSERT with the filled-in fields; empty ones get their default.
     fn submit_row_insert(&mut self) {
-        if self.run.executing {
+        if self.conn_busy() {
             return self.set_status(t!("rows.wait_for_query").to_string(), true);
         }
         let Some(form) = self.row_form.take() else { return };
@@ -232,7 +232,7 @@ impl App {
         if let (true, Some((sql, offset))) = (refresh, self.tab.last_sql.clone()) {
             let infos = self.tab.last_query_infos.clone();
             self.rerun_shown(sql, offset, infos);
-            self.run.extra.status_prefix = Some(msg);
+            self.tab.run.extra.status_prefix = Some(msg);
         }
     }
 

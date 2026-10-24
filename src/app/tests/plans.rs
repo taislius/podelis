@@ -32,8 +32,8 @@ async fn f7_during_a_slow_query_shows_the_plan_at_once() {
             let event = app.poll_db_event().await.unwrap();
             app.handle_db_event(event);
         }
-        assert!(app.run.executing && app.tab.result_tab == ResultTab::Plan, "{engine:?}");
-        assert!(app.queued_plan.is_none(), "{engine:?}");
+        assert!(app.tab.run.executing && app.tab.result_tab == ResultTab::Plan, "{engine:?}");
+        assert!(app.tab.run.queued_plan.is_none(), "{engine:?}");
         // The query's result doesn't take the plan out of view.
         finish(&mut app).await;
         assert_eq!(app.tab.result_tab, ResultTab::Plan, "{engine:?}");
@@ -57,12 +57,12 @@ async fn explain_moves_focus_to_the_plan() {
 #[test]
 fn a_plan_remembers_its_statement_and_time() {
     let (mut app, _dir) = test_app();
-    app.plan_request = Some(("select * from users where id = 1".into(), true, 0));
+    app.tab.run.plan_request = Some(("select * from users where id = 1".into(), true, 0));
     app.show_plan(outcome(&["QUERY PLAN"], &[&[Some("[]")]]));
     let source = app.tab.plan_source.clone().unwrap();
     assert_eq!((source.sql.as_str(), source.analyzed), ("select * from users where id = 1", true));
     assert!((chrono::Local::now() - source.at).num_seconds() < 5);
-    assert!(app.plan_request.is_none());
+    assert!(app.tab.run.plan_request.is_none());
 }
 
 #[test]

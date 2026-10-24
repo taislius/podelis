@@ -38,7 +38,7 @@ impl App {
     /// Runs the lookup on the tab's connection (it sees what the tab sees,
     /// its open transaction too) and shows the row when it comes.
     fn look_up(&mut self, found: Followed) {
-        if self.run.executing {
+        if self.conn_busy() {
             return self.set_status(t!("follow.wait_for_query").into(), true);
         }
         let Some(db) = self.connection.database.clone() else { return };

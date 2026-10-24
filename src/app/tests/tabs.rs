@@ -32,7 +32,7 @@ fn drafts_survive_project_switches_and_restarts() {
 }
 
 #[tokio::test]
-async fn esc_stops_only_its_own_tabs_query_and_others_say_whose_runs() {
+async fn tabs_on_different_connections_run_at_once_and_esc_stops_only_its_own() {
     let (mut app, dir) = test_app();
     app.data_dir = Some(dir.path().to_path_buf());
     let project = project_id(&app);
@@ -43,33 +43,44 @@ async fn esc_stops_only_its_own_tabs_query_and_others_say_whose_runs() {
     connect_profile(&mut app, &a).await;
     app.handle_key(ctrl('o'));
     connect_profile(&mut app, &b).await;
-    // A read that never ends, in alpha's tab: the other tabs stay free.
+    // A read that never ends, in alpha's tab.
     app.handle_key(alt('1'));
     app.tab.editor.set_text("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n");
     app.handle_key(key(KeyCode::F(5)));
-    assert!(app.run.executing);
+    assert!(app.tab.run.executing);
+    // Beta's tab runs its own meanwhile, to the end.
     app.handle_key(alt('2'));
     assert_eq!((app.active_tab, app.connection.form.name.as_str()), (1, "beta"));
-    // Esc here doesn't stop it: it says whose it is, and how to get there.
+    app.tab.editor.set_text("select 42");
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(app.tab.run.executing && app.tab_running(0), "both run");
+    while app.tab.run.executing {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("42".to_string())]]);
+    assert!(app.tab_running(0), "alpha's still runs");
+    // Esc here stops nothing of alpha's.
     app.focus = Focus::Editor;
     app.handle_key(key(KeyCode::Esc));
-    assert!(!app.run.cancelling && app.run.executing);
-    assert_eq!(said(&app), "Tab “Query 1” on alpha is running a query: Alt+1 goes to it, Esc there stops it");
-    // A connection without a saved name (from a URL) is named by its address.
+    assert!(app.tab_running(0) && !app.tab_run(0).unwrap().cancelling);
+    // A tab on alpha's connection waits for it: F5 and Esc there say whose
+    // query holds the connection, and how to get there.
     app.handle_key(alt('1'));
-    app.connection.form.name.clear();
-    app.handle_key(alt('2'));
+    app.new_tab(None, "select 1", None);
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(!app.tab.run.executing, "not started on a busy session");
     app.focus = Focus::Editor;
     app.handle_key(key(KeyCode::Esc));
-    assert!(said(&app).starts_with("Tab “Query 1” on ") && said(&app).contains("a.db"), "{}", said(&app));
+    assert_eq!(said(&app), "Tab “Query 1” on alpha is running a query: Alt+1 goes to it, Esc there stops it");
     // (Once it's under way: a cancel before the run starts is cleared by it.)
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     // In its own tab, Esc stops it on its own connection.
     app.handle_key(alt('1'));
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.run.cancelling);
+    assert!(app.tab.run.cancelling);
     tokio::time::timeout(std::time::Duration::from_secs(5), finish(&mut app)).await.expect("stopped");
-    assert!(!app.run.executing && !app.run.cancel_failed);
+    assert!(!app.tab.run.executing && !app.tab.run.cancel_failed);
     assert!(!app.notes.status.contains("Couldn't cancel"), "{}", app.notes.status);
 }
 
@@ -80,12 +91,12 @@ async fn runs_show_their_tab_at_once_and_f7_waits_for_a_running_query() {
     // F7 shows QUERY PLAN as it starts, F5 the RESULT tab.
     app.tab.editor.set_text("select * from t");
     app.handle_key(key(KeyCode::F(7)));
-    assert!(app.run.executing && app.tab.result_tab == ResultTab::Plan);
+    assert!(app.tab.run.executing && app.tab.result_tab == ResultTab::Plan);
     finish(&mut app).await;
     // (Showing the plan moved to the results; back to typing.)
     app.focus = Focus::Editor;
     app.handle_key(key(KeyCode::F(5)));
-    assert!(app.run.executing && app.tab.result_tab == ResultTab::Rows);
+    assert!(app.tab.run.executing && app.tab.result_tab == ResultTab::Rows);
     // While it runs, F5 says why it does nothing, and F7 waits for it.
     app.handle_key(key(KeyCode::F(5)));
     assert!(app.notes.editor_note_is_error && said(&app).starts_with("A query is running"), "{}", said(&app));
@@ -111,14 +122,14 @@ async fn runs_show_their_tab_at_once_and_f7_waits_for_a_running_query() {
         "{}",
         app.notes.status
     );
-    assert!(app.queued_plan.is_none() && app.tab.result_tab != ResultTab::Plan);
+    assert!(app.tab.run.queued_plan.is_none() && app.tab.result_tab != ResultTab::Plan);
     // Esc stops both the query and the plan waiting for it.
     app.tab.editor.set_text("select * from t");
     app.handle_key(key(KeyCode::F(5)));
     app.handle_key(key(KeyCode::F(7)));
-    assert!(app.queued_plan.is_some());
+    assert!(app.tab.run.queued_plan.is_some());
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.queued_plan.is_none());
+    assert!(app.tab.run.queued_plan.is_none());
     finish(&mut app).await;
 }
 
@@ -130,7 +141,7 @@ async fn other_tabs_can_be_used_while_a_read_runs() {
     app.settings.row_limit = 1;
     app.tab.editor.set_text("select id from t");
     app.handle_key(key(KeyCode::F(5)));
-    assert!(app.run.executing && app.run_owner() == Some(0));
+    assert!(app.tab.run.executing && app.tab_running(0) && !app.tab.run.holds_tabs);
     // A new tab opens meanwhile; there, the run is another tab's.
     app.new_tab(None, "select 2", None);
     assert_eq!(app.active_tab, 1);
@@ -148,7 +159,7 @@ async fn other_tabs_can_be_used_while_a_read_runs() {
     assert!(app.tab.grid.results.is_none());
     assert!(app.notes.status.starts_with("Query 1: "), "{}", app.notes.status);
     // Its stream was closed while hidden: M runs it again for the rest.
-    assert!(app.run.stream.is_none());
+    assert!(app.tab.run.stream.is_none());
     app.switch_tab(0);
     assert!(app.tab.grid.cut_short && app.tab.grid.results.as_ref().unwrap().rows.len() == 1);
     app.focus = Focus::Results;
@@ -159,7 +170,7 @@ async fn other_tabs_can_be_used_while_a_read_runs() {
     // A write keeps every tab where it is.
     app.tab.editor.set_text("insert into t values (3)");
     app.handle_key(key(KeyCode::F(5)));
-    assert!(app.run.executing && app.run_owner().is_none());
+    assert!(app.tab.run.executing && app.tab.run.holds_tabs);
     app.switch_tab(1);
     assert_eq!(app.active_tab, 0);
     finish(&mut app).await;

@@ -120,9 +120,9 @@ impl App {
             // else to do here (the zooms, cancelling a query, watch mode,
             // a filter, vim's modes, a selection come first).
             KeyCode::Esc if self.asking.is_some() && !self.esc_has_a_job() => return self.stop_asking(),
-            // Another tab's query isn't stopped from here: Esc says whose it
-            // is (tab and connection) and how to get there.
-            KeyCode::Esc if self.run.executing && !self.running_here() && !self.esc_has_a_job() => {
+            // Another tab's query on this connection isn't stopped from
+            // here: Esc says whose it is and how to get there.
+            KeyCode::Esc if self.busy_conn_tab().is_some() && !self.esc_has_a_job() => {
                 return self.set_status(self.running_elsewhere(t!("run.esc_there")), false);
             }
             KeyCode::Tab => return self.cycle_focus(true),

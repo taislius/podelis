@@ -192,7 +192,7 @@ async fn rebound_keys_take_effect() {
     app.keymap = crate::config::keys::KeyMap::new(&overrides).0;
     app.tab.editor.set_text("select 7");
     app.handle_key(key(KeyCode::F(5)));
-    assert!(!app.run.executing, "F5 is no longer bound to run");
+    assert!(!app.tab.run.executing, "F5 is no longer bound to run");
     app.handle_key(ctrl('g'));
     finish(&mut app).await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("7".to_string())]]);
@@ -303,7 +303,7 @@ async fn following_a_foreign_key_shows_the_referenced_row() {
     )
     .await;
     run_sql(&mut app, "select * from child").await;
-    assert!(app.run.stream.is_some(), "still streaming");
+    assert!(app.tab.run.stream.is_some(), "still streaming");
     app.focus = Focus::Results;
     app.tab.grid.selected_col = 1;
     app.cell_view = None;
@@ -316,7 +316,7 @@ async fn following_a_foreign_key_shows_the_referenced_row() {
     })
     .await;
     assert!(shown.is_ok(), "the lookup waited for the stream");
-    assert!(app.run.stream.is_none());
+    assert!(app.tab.run.stream.is_none());
 
     // From a join too: the column is a foreign key in one of its tables.
     app.cell_view = None;

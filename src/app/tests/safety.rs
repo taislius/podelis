@@ -16,7 +16,7 @@ fn delete_requires_confirmation() {
 async fn read_only_mode_refuses_writes() {
     let (mut app, _dir) = connected_app(ConnectionMode::ReadOnly).await;
     run_sql(&mut app, "select 1; delete from t where id = 1").await;
-    assert!(!app.run.executing && app.confirm.is_none());
+    assert!(!app.tab.run.executing && app.confirm.is_none());
     assert!(app.notes.editor_note_is_error && said(&app).contains("Read-only"), "{}", said(&app));
     run_sql(&mut app, "select 42").await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("42".to_string())]]);
@@ -32,7 +32,7 @@ async fn destructive_statements_need_confirmation() {
     let confirm = app.confirm.as_ref().expect("asks first");
     assert!(confirm.details[0].starts_with("DELETE without WHERE"));
     app.handle_key(key(KeyCode::Char('n')));
-    assert!(app.confirm.is_none() && !app.run.executing);
+    assert!(app.confirm.is_none() && !app.tab.run.executing);
 
     run_sql(&mut app, "delete from t").await;
     app.handle_key(key(KeyCode::Char('y')));

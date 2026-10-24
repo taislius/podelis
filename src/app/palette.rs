@@ -220,13 +220,12 @@ impl App {
     /// connection, or none.
     fn tab_status(&self, i: usize) -> Option<String> {
         let tab = self.tabs.get(i)?;
-        // A write or a check holds every tab: it's the shown tab's.
-        let runs_here = self.run_tab() == Some(i);
-        if runs_here {
-            if self.run.cancelling {
+        // Its own query (each tab has one; several may run at once).
+        if let Some(run) = self.tab_run(i).filter(|r| r.executing) {
+            if run.cancelling {
                 return Some(t!("tab_list.cancelling").to_string());
             }
-            let secs = self.run.since.map_or(0, |s| s.elapsed().as_secs());
+            let secs = run.since.map_or(0, |s| s.elapsed().as_secs());
             return Some(t!("tab_list.running", time = mm_ss(secs)));
         }
         let Some(id) = tab.conn else { return Some(t!("tab_list.no_connection").to_string()) };

@@ -62,7 +62,7 @@ impl App {
 
     /// Compares this tab's schema with another connection's.
     pub(super) fn compare_schema(&mut self, id: Option<u64>) {
-        if self.run.executing {
+        if self.tab.run.executing {
             return;
         }
         let Some(db) = self.connection.database.clone() else {
@@ -70,7 +70,7 @@ impl App {
         };
         let Some((there, other)) = self.compare_target(id) else { return };
         // An open stream holds this side's session.
-        self.run.set_stream(None);
+        self.tab.run.set_stream(None);
         self.set_status(t!("compare.comparing_schema", name = other.name), false);
         let send = self.sender();
         tokio::spawn(async move {
@@ -130,7 +130,7 @@ impl App {
         let (Some(dir), Some(id)) = (&self.data_dir, &self.current_project) else { return };
         let dir = crate::transfer::snapshots::dir(dir, id);
         let connection = self.connection.form.short_name();
-        self.run.set_stream(None);
+        self.tab.run.set_stream(None);
         self.set_status(t!("compare.saving_snapshot", connection = connection), false);
         let send = self.sender();
         tokio::spawn(async move {
@@ -165,7 +165,7 @@ impl App {
             return self.set_status(self.not_connected_message(), true);
         };
         let Some(saved) = self.snapshots().into_iter().nth(index) else { return };
-        self.run.set_stream(None);
+        self.tab.run.set_stream(None);
         self.set_status(t!("compare.comparing_snapshot", connection = saved.connection, taken = saved.taken), false);
         let send = self.sender();
         tokio::spawn(async move {
@@ -214,7 +214,7 @@ impl App {
     /// Runs the selection, or the statement at the cursor, on this and
     /// another connection and shows the rows that differ.
     pub(super) fn compare_rows(&mut self, id: Option<u64>) {
-        if self.run.executing {
+        if self.tab.run.executing {
             return;
         }
         let Some(db) = self.connection.database.clone() else {
@@ -228,14 +228,14 @@ impl App {
             return self.set_status(t!("compare.reads_only").into(), true);
         }
         let Some((there, other)) = self.compare_target(id) else { return };
-        self.run.set_stream(None);
-        self.run.executing = true;
-        self.run.since = Some(Instant::now());
-        self.run.owner = None;
+        self.tab.run.set_stream(None);
+        self.tab.run.executing = true;
+        self.tab.run.since = Some(Instant::now());
+        self.tab.run.holds_tabs = true;
         self.set_result_status(t!("compare.running_both", name = other.name), false);
         let send = self.sender();
         let limit = self.settings.row_limit;
-        self.task = Some(tokio::spawn(async move {
+        self.tab.run.task = Some(tokio::spawn(async move {
             let (a, b) = tokio::join!(db.run(&sql, limit), there.run(&sql, limit));
             let result = match (a, b) {
                 (Ok(a), Ok(b)) => Ok((a, b)),
@@ -247,10 +247,10 @@ impl App {
     }
 
     pub(super) fn rows_compared(&mut self, other: &Other, result: Result<(QueryOutcome, QueryOutcome), String>) {
-        self.run.executing = false;
-        self.task = None;
+        self.tab.run.executing = false;
+        self.tab.run.task = None;
         // A plan asked for meanwhile: the comparison is shown instead.
-        self.queued_plan = None;
+        self.tab.run.queued_plan = None;
         let compared = result.and_then(|(here, there)| {
             let truncated = here.truncated() || there.truncated();
             diff::row_diff(&here, &there).map(|d| (d, truncated, here.rows.len()))

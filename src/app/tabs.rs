@@ -53,6 +53,9 @@ pub struct TabState {
     pub run_error: Option<String>,
     /// The parameters the shown result's query ran with, to run it again.
     pub(super) last_filled: Option<Filled>,
+    /// Its query: running, or the last one's state. Each tab has its own,
+    /// so tabs on different connections run at the same time.
+    pub run: Run,
 }
 
 /// The statement a plan or a result was made for.
@@ -410,11 +413,11 @@ impl App {
     /// Closes an open stream (which holds the session) as its tab is
     /// hidden; the rows left can be loaded again with `M`.
     pub(super) fn close_stream(&mut self) {
-        if self.run.stream.is_some() {
+        if self.tab.run.stream.is_some() {
             self.tab.grid.cut_short = true;
         }
-        self.run.set_stream(None);
-        self.run.fetching_more = false;
+        self.tab.run.set_stream(None);
+        self.tab.run.fetching_more = false;
     }
 
     pub(super) fn switch_tab(&mut self, i: usize) {
@@ -439,7 +442,7 @@ impl App {
         // A query running in one tab: said in its results, else in the bar.
         if self.running_here() {
             self.set_result_status(t!("tabs.running").to_string(), false);
-        } else if self.run.executing {
+        } else if self.busy_conn_tab().is_some() {
             self.notes.status = self.running_elsewhere(t!("tabs.outcome_here"));
             (self.notes.status_is_error, self.notes.status_in_results) = (false, false);
         }
@@ -497,7 +500,7 @@ impl App {
     }
 
     pub(super) fn close_tab(&mut self) {
-        if self.run.executing {
+        if self.tab.run.executing {
             return self.set_status(t!("tabs.wait_close").into(), true);
         }
         let closing = self.active_tab;
@@ -509,7 +512,7 @@ impl App {
             self.tabs[0] = TabMeta { name: default_tab_name(1), saved_id: None, conn: self.tabs[0].conn };
             let mut fresh = TabState::default();
             swap_tab(self, &mut fresh);
-            self.run.set_stream(None);
+            self.tab.run.set_stream(None);
             // Its text goes from the tabs file too: it mustn't come back
             // on the next start.
             self.save_draft();

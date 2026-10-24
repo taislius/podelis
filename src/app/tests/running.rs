@@ -19,10 +19,10 @@ fn params_validation() {
 fn stale_events_are_ignored() {
     let (mut app, _dir) = test_app();
     app.screen = Screen::Query;
-    app.run.executing = true;
+    app.tab.run.executing = true;
     let stale_generation = app.generation;
     app.disconnect();
-    assert!(!app.run.executing);
+    assert!(!app.tab.run.executing);
     app.handle_db_event(DbEvent {
         generation: stale_generation,
         run: None,
@@ -50,19 +50,19 @@ async fn long_queries_announce_their_end_unless_you_are_watching() {
     run_sql(&mut app, "select 1").await;
     assert_eq!(app.take_notification(), None);
 
-    app.run.extra.started = long_ago();
+    app.tab.run.extra.started = long_ago();
     app.notify_if_long(|took| format!("took {}", took.as_secs()));
     assert_eq!(app.take_notification().as_deref(), Some("took 30"));
 
     // Looking at the terminal: you saw it end.
     app.set_terminal_focus(true);
-    app.run.extra.started = long_ago();
+    app.tab.run.extra.started = long_ago();
     app.notify_if_long(|_| "x".into());
     assert_eq!(app.take_notification(), None);
 
     app.set_terminal_focus(false);
     app.settings.notify_after = 0;
-    app.run.extra.started = long_ago();
+    app.tab.run.extra.started = long_ago();
     app.notify_if_long(|_| "x".into());
     assert_eq!(app.take_notification(), None);
 }
@@ -122,7 +122,7 @@ async fn parameters_are_asked_for_and_remembered() {
     run_sql(&mut app, "create table t (id integer, name text); insert into t values (1, 'a'), (2, 'b')").await;
     app.tab.editor.set_text("select name from t where id = :id or name = :name");
     app.handle_key(key(KeyCode::F(5)));
-    assert!(!app.run.executing);
+    assert!(!app.tab.run.executing);
     let form = app.param_form.as_ref().unwrap();
     assert_eq!(form.params.len(), 2);
     type_text(&mut app, "2");
@@ -138,7 +138,7 @@ async fn parameters_are_asked_for_and_remembered() {
     app.handle_key(key(KeyCode::F(5)));
     assert_eq!(app.param_form.as_ref().unwrap().values, ["2", "O'Brien"]);
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.param_form.is_none() && !app.run.executing);
+    assert!(app.param_form.is_none() && !app.tab.run.executing);
 
     // An error in the filled SQL is marked at the right place in the editor.
     app.tab.editor.set_text("select :v from nope");
@@ -206,7 +206,7 @@ async fn watch_mode_marks_what_changed() {
     app.tab.last_sql = Some(("delete from jobs where id = 1".into(), 0));
     app.watch.as_mut().unwrap().next = std::time::Instant::now();
     app.tick_running();
-    assert!(app.watch.is_none() && !app.run.executing, "{}", app.notes.status);
+    assert!(app.watch.is_none() && !app.tab.run.executing, "{}", app.notes.status);
 }
 
 #[tokio::test]
@@ -214,19 +214,19 @@ async fn esc_leaves_a_zoom_before_it_cancels_the_query() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
     app.tab.editor.set_text("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n");
     app.handle_key(key(KeyCode::F(5)));
-    assert!(app.run.executing);
+    assert!(app.tab.run.executing);
     app.focus = Focus::Editor;
     for zoom in [Action::Zoom, Action::ZoomStatement] {
         app.run_action(zoom);
         assert!(app.panes.zoomed || app.panes.statement_zoom, "{zoom:?}");
         app.handle_key(key(KeyCode::Esc));
         assert!(!app.panes.zoomed && !app.panes.statement_zoom, "{zoom:?}: the zoom left");
-        assert!(app.run.executing && !app.run.cancelling, "{zoom:?}: the query still runs");
+        assert!(app.tab.run.executing && !app.tab.run.cancelling, "{zoom:?}: the query still runs");
         assert!(app.notes.status.contains("Esc again"), "{zoom:?}: says so: {}", app.notes.status);
     }
     // Then Esc cancels it.
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.run.cancelling || !app.run.executing);
+    assert!(app.tab.run.cancelling || !app.tab.run.executing);
 }
 
 #[tokio::test]
@@ -234,7 +234,7 @@ async fn disconnecting_while_a_query_runs_says_it_is_cancelled() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
     app.tab.editor.set_text("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n");
     app.handle_key(key(KeyCode::F(5)));
-    assert!(app.run.executing);
+    assert!(app.tab.run.executing);
     app.request_disconnect();
     let confirm = app.confirm.as_ref().expect("asks first");
     assert!(confirm.danger && confirm.details.iter().any(|d| d.contains("cancelled")), "{:?}", confirm.details);
@@ -249,17 +249,17 @@ async fn a_long_query_says_how_to_cancel_it() {
     app.settings.long_query = 1;
     app.tab.editor.set_text("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n");
     app.handle_key(key(KeyCode::F(5)));
-    assert!(app.run.executing);
+    assert!(app.tab.run.executing);
     app.tick_running();
     assert!(!app.notes.status.contains("Esc there cancels it"), "not yet");
-    app.run.since = Instant::now().checked_sub(Duration::from_secs(2));
+    app.tab.run.since = Instant::now().checked_sub(Duration::from_secs(2));
     app.tick_running();
     assert!(app.notes.status.contains("its query has run 0:02. Esc there cancels it"), "{}", app.notes.status);
     assert!(app.confirm.is_none(), "no question");
     // Typing goes on into the editor; a `y` cancels nothing.
     app.focus = Focus::Editor;
     app.handle_key(key(KeyCode::Char('y')));
-    assert!(app.run.executing && !app.run.cancelling);
+    assert!(app.tab.run.executing && !app.tab.run.cancelling);
     // Said once per run.
     app.notes.status.clear();
     app.tick_running();
@@ -273,11 +273,11 @@ async fn the_query_timeout_for_every_connection() {
     app.settings.query_timeout = 7;
     app.tab.editor.set_text("select 1");
     app.handle_key(key(KeyCode::F(5)));
-    assert_eq!(app.run.extra.deadline.map(|(_, limit)| limit), Some(Duration::from_secs(7)));
+    assert_eq!(app.tab.run.extra.deadline.map(|(_, limit)| limit), Some(Duration::from_secs(7)));
     finish(&mut app).await;
     // A Timeout of 0 on the connection lets its queries run.
     app.connection.form.timeout = "0".into();
     app.handle_key(key(KeyCode::F(5)));
-    assert!(app.run.extra.deadline.is_none());
+    assert!(app.tab.run.extra.deadline.is_none());
     finish(&mut app).await;
 }

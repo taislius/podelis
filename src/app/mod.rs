@@ -535,8 +535,9 @@ pub struct Run {
     id: u64,
     /// When the running query (or check, or comparison) started.
     since: Option<Instant>,
-    /// The tab a read is running for, while other tabs can be shown.
-    owner: Option<usize>,
+    /// A write, a check or a comparison: every tab stays where it is until
+    /// it ends. (A read leaves the others free, and runs on in its tab.)
+    holds_tabs: bool,
     /// The connection the running query runs on: cancelled there, whichever
     /// tab (and connection) is shown meanwhile.
     db: Option<Database>,
@@ -565,6 +566,13 @@ pub struct Run {
     /// The failure that came is a syntax error or an unknown function
     /// (`db::missing_feature`), for `on_query_failed`.
     missing_feature: bool,
+    /// The running connect or query task, aborted on cancel/disconnect.
+    task: Option<JoinHandle<()>>,
+    /// The statement of the EXPLAIN on its way, and whether it's ANALYZE.
+    /// And the editor line it starts on.
+    plan_request: Option<(String, bool, usize)>,
+    /// F7 while a query ran: the statement to plan (and its line) next.
+    queued_plan: Option<(String, usize)>,
 }
 
 /// Extra state of the running query.
@@ -727,8 +735,6 @@ pub struct Confirm {
 }
 
 pub struct App {
-    /// The query running (one at a time across the tabs): its state.
-    pub run: Run,
     /// What's said to the user.
     pub notes: messages::Notes,
     /// The panes' layout.
@@ -830,16 +836,13 @@ pub struct App {
     same_result: bool,
     /// "Export all rows" in progress: what stops it, and the file it writes.
     export_task: Option<(tokio::sync::oneshot::Sender<()>, PathBuf)>,
+    /// The last run id handed out ([`App::next_run_id`]).
+    run_ids: u64,
     pub completion: Option<Completion>,
     /// Row limit for the next run only.
     next_row_limit: Option<usize>,
     /// A function's definition on its way is for the navigator's popup.
     routine_definition_pending: bool,
-    /// The statement of the EXPLAIN on its way, and whether it's ANALYZE.
-    /// And the editor line it starts on.
-    plan_request: Option<(String, bool, usize)>,
-    /// F7 while a query ran: the statement to plan (and its line) next.
-    queued_plan: Option<(String, usize)>,
     /// Clickable areas from the last frame.
     pub hits: Hits,
     /// When the connection was last used (for keep-alive checks), and
@@ -865,8 +868,6 @@ pub struct App {
     /// Bumped whenever in-flight work should be ignored (disconnect, cancelled
     /// connect). Every task's event carries the value it was started under.
     generation: u64,
-    /// The running connect or query task, aborted on cancel/disconnect.
-    task: Option<JoinHandle<()>>,
     db_tx: mpsc::UnboundedSender<DbEvent>,
     db_rx: mpsc::UnboundedReceiver<DbEvent>,
 }
@@ -930,6 +931,7 @@ impl App {
             watch_rerun: false,
             same_result: false,
             export_task: None,
+            run_ids: 0,
             completion: None,
             next_row_limit: None,
             hits: Hits::default(),
@@ -939,8 +941,6 @@ impl App {
             pinging: false,
             pending_follow: false,
             routine_definition_pending: false,
-            plan_request: None,
-            queued_plan: None,
             tx_picker: None,
             confirm: None,
             should_quit: false,
@@ -948,7 +948,6 @@ impl App {
             notification: None,
             terminal_focused: None,
             generation: 0,
-            run: Run::default(),
             notes: messages::Notes::default(),
             panes: panes::Panes { editor_percent: 40, editor_height: 1, ..panes::Panes::default() },
             settings_view: None,
@@ -966,7 +965,6 @@ impl App {
             },
             agents: Agents::default(),
             pending_share: None,
-            task: None,
             db_tx,
             db_rx,
         }
@@ -1000,7 +998,7 @@ impl App {
     /// Announces the end of a run that took at least `notify_after`, unless
     /// the terminal is known to have focus (then you saw it end).
     fn notify_if_long(&mut self, what: impl FnOnce(Duration) -> String) {
-        let Some(started) = self.run.extra.started.take() else { return };
+        let Some(started) = self.tab.run.extra.started.take() else { return };
         let after = self.settings.notify_after;
         if after == 0 || started.elapsed() < Duration::from_secs(after) || self.terminal_focused == Some(true) {
             return;
@@ -1094,37 +1092,73 @@ impl App {
     /// For the running query's outcome (see [`DbEvent::run`]).
     fn run_sender(&self) -> impl Fn(DbEventKind) + Send + 'static {
         let tx = self.db_tx.clone();
-        let (generation, run) = (self.generation, Some(self.run.id));
+        let (generation, run) = (self.generation, Some(self.tab.run.id));
         move |kind| {
             let _ = tx.send(DbEvent { generation, run, kind });
         }
     }
 
-    /// The tab a read is running for, while other tabs can be shown.
-    pub fn run_owner(&self) -> Option<usize> {
-        self.run.owner.filter(|_| self.run.executing)
+    /// Tab `i`'s run: the shown tab's, or a parked one's.
+    pub fn tab_run(&self, i: usize) -> Option<&Run> {
+        if i == self.active_tab { Some(&self.tab.run) } else { self.parked.get(i)?.as_ref().map(|t| &t.run) }
     }
 
-    /// The run is this tab's (or one no tab can be left during).
+    /// Whether tab `i`'s query is running.
+    pub fn tab_running(&self, i: usize) -> bool {
+        self.tab_run(i).is_some_and(|r| r.executing)
+    }
+
+    /// The tabs whose queries are running, the shown one's too.
+    pub fn running_tabs(&self) -> Vec<usize> {
+        (0..self.tabs.len()).filter(|&i| self.tab_running(i)).collect()
+    }
+
+    /// The shown tab's query is running.
     pub(super) fn running_here(&self) -> bool {
-        self.run.executing && self.run.owner.is_none_or(|t| t == self.active_tab)
+        self.tab.run.executing
+    }
+
+    /// This tab's connection is running a query: its own, or another
+    /// tab's on the same connection (a session runs one at a time).
+    pub(super) fn conn_busy(&self) -> bool {
+        self.tab.run.executing || self.busy_conn_tab().is_some()
     }
 
     /// A run that keeps every tab where it is: a write, a check, a comparison.
     pub(super) fn blocks_tabs(&self) -> bool {
-        self.run.executing && self.run.owner.is_none()
+        self.tab.run.executing && self.tab.run.holds_tabs
+    }
+
+    /// A fresh run id, unique across the tabs (events find their tab by it).
+    pub(super) fn next_run_id(&mut self) -> u64 {
+        self.run_ids += 1;
+        self.run_ids
     }
 
     fn invalidate_tasks(&mut self) {
-        self.run.db = None;
+        self.tab.run.db = None;
         // A check on its way is for the connection before: its answer will
         // be dropped (another generation), so it's no longer awaited.
         self.pinging = false;
         self.generation += 1;
-        self.run.id += 1;
-        self.queued_plan = None;
-        if let Some(task) = self.task.take() {
+        self.tab.run.id = self.next_run_id();
+        self.tab.run.queued_plan = None;
+        if let Some(task) = self.tab.run.task.take() {
             task.abort();
+        }
+    }
+
+    /// Stops every tab's query (the project's tabs are being replaced):
+    /// their tasks end, and anything they still send finds no tab.
+    pub(super) fn stop_all_runs(&mut self) {
+        self.invalidate_tasks();
+        for tab in self.parked.iter_mut().flatten() {
+            if let Some(task) = tab.run.task.take() {
+                task.abort();
+            }
+            tab.run.set_stream(None);
+            tab.run.executing = false;
+            tab.run.db = None;
         }
     }
 
@@ -1235,7 +1269,7 @@ impl App {
         if !self.running_here() {
             return None;
         }
-        let secs = self.run.since.map_or(0, |since| since.elapsed().as_secs());
+        let secs = self.tab.run.since.map_or(0, |since| since.elapsed().as_secs());
         Some(match secs {
             0 => t!("run.running_label").to_string(),
             1..60 => format!("{} {secs} s", t!("run.running_label")),
@@ -1246,7 +1280,7 @@ impl App {
     /// The tab the running query (or check) is for: its own, or for a run
     /// that holds every tab (a write, a check) the shown one.
     pub(super) fn run_tab(&self) -> Option<usize> {
-        self.run.executing.then(|| self.run.owner.unwrap_or(self.active_tab))
+        self.tab.run.executing.then_some(self.active_tab)
     }
 
     /// A run's progress or outcome, in the results pane's footer.
@@ -1441,7 +1475,7 @@ impl App {
             }
         }
         if !yes {
-            self.queued_plan = None;
+            self.tab.run.queued_plan = None;
             self.set_status("Cancelled".to_string(), false);
             return;
         }
@@ -1468,7 +1502,7 @@ impl App {
 
     fn key(&mut self, key: KeyEvent) {
         // Messages last until the next key; the MESSAGES tab keeps outcomes.
-        if !self.run.executing {
+        if !self.tab.run.executing {
             self.notes.status.clear();
             self.notes.status_is_error = false;
         }

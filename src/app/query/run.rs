@@ -41,7 +41,7 @@ impl App {
     }
 
     pub(in crate::app) fn execute_with(&mut self, sql: String, offset: usize, purpose: RunPurpose) {
-        if self.run.executing {
+        if self.tab.run.executing || self.busy_conn_tab().is_some() {
             return self.set_status(self.running_elsewhere(t!("run.wait_or_esc_there")), true);
         }
         if self.connection.database.is_none() {
@@ -115,9 +115,9 @@ impl App {
             self.set_result_status(t!("run.checking_plan").to_string(), false);
             // Running, as far as the rest of the app goes: nothing else
             // starts, and Esc stops it.
-            self.run.executing = true;
-            self.run.since = Some(Instant::now());
-            self.run.owner = None;
+            self.tab.run.executing = true;
+            self.tab.run.since = Some(Instant::now());
+            self.tab.run.holds_tabs = true;
             let send = self.sender();
             tokio::spawn(async move {
                 let scans = db.full_scans(&sql).await.unwrap_or_default();
@@ -138,8 +138,8 @@ impl App {
         filled: Option<Filled>,
         scans: &[(String, f64)],
     ) {
-        self.run.executing = false;
-        if std::mem::take(&mut self.run.cancelling) {
+        self.tab.run.executing = false;
+        if std::mem::take(&mut self.tab.run.cancelling) {
             return self.set_status("Cancelled".to_string(), false);
         }
         #[allow(clippy::cast_precision_loss)] // a threshold
@@ -165,12 +165,12 @@ impl App {
     /// Re-runs the last query with a larger row limit (read-only queries only,
     /// since it executes them again).
     pub(in crate::app) fn load_more(&mut self) {
-        if self.run.executing {
+        if self.tab.run.executing || self.busy_conn_tab().is_some() {
             return self.set_status(self.running_elsewhere(t!("run.load_more_after")), true);
         }
-        if self.run.stream.is_some() {
-            if self.run.fetching_more {
-                self.run.more_wanted = true;
+        if self.tab.run.stream.is_some() {
+            if self.tab.run.fetching_more {
+                self.tab.run.more_wanted = true;
                 return self.set_status(t!("run.page_coming").to_string(), false);
             }
             return self.fetch_more(self.settings.row_limit * 10, true);
@@ -188,11 +188,19 @@ impl App {
         self.rerun_shown(sql, offset, infos);
     }
 
-    /// "A query is running", naming its tab when that isn't this one.
-    /// Says which tab, on which connection, runs the query (one at a time
-    /// across the tabs), how to get there, then `then`.
+    /// Another tab whose query runs on this tab's connection: a session
+    /// runs one statement at a time (and a cancel stops whatever runs on
+    /// it), so this tab waits for it.
+    pub(in crate::app) fn busy_conn_tab(&self) -> Option<usize> {
+        let conn = self.tabs.get(self.active_tab)?.conn?;
+        self.running_tabs().into_iter().find(|&i| i != self.active_tab && self.tabs[i].conn == Some(conn))
+    }
+
+    /// "A query is running", naming its tab when that isn't this one (one
+    /// on this tab's connection): which tab, on which connection, how to
+    /// get there, then `then`.
     pub(in crate::app) fn running_elsewhere(&self, then: &str) -> String {
-        let Some(t) = self.run.owner.filter(|&t| t != self.active_tab) else {
+        let Some(t) = self.busy_conn_tab().filter(|_| !self.tab.run.executing) else {
             return t!("run.running", then = then);
         };
         let Some(tab) = self.tabs.get(t) else { return t!("run.running", then = then) };
@@ -204,7 +212,7 @@ impl App {
     /// Settings changed by the last run (`USE`, `SET`…) are the session's
     /// alone: from then on plans aren't made on another connection.
     pub(in crate::app) fn note_session_changes(&mut self) {
-        if self.run.infos.iter().any(|i| i.kind == Kind::Session)
+        if self.tab.run.infos.iter().any(|i| i.kind == Kind::Session)
             && let Some(db) = &self.connection.database
         {
             db.mark_session_changed();
@@ -241,11 +249,11 @@ impl App {
         self.completion = None;
         // One read-only statement can be streamed page by page.
         let stream = matches!(purpose, RunPurpose::Query) && infos.len() == 1 && infos[0].kind == Kind::Read;
-        self.run.infos = infos;
-        self.run.purpose = purpose;
-        self.run.extra.vertical = false;
-        if matches!(self.run.purpose, RunPurpose::Query) {
-            self.run.extra.vertical = sql::ends_vertical(&sql, self.engine());
+        self.tab.run.infos = infos;
+        self.tab.run.purpose = purpose;
+        self.tab.run.extra.vertical = false;
+        if matches!(self.tab.run.purpose, RunPurpose::Query) {
+            self.tab.run.extra.vertical = sql::ends_vertical(&sql, self.engine());
             let original = filled.as_ref().map_or(&sql, |f| &f.original);
             if new_result {
                 self.open_run(Some((original, offset)));
@@ -254,7 +262,7 @@ impl App {
             // (EXPLAIN, cell edits) don't replace them.
             self.tab.last_sql = Some((sql.clone(), offset));
             self.tab.last_filled.clone_from(&filled);
-            self.tab.last_query_infos.clone_from(&self.run.infos);
+            self.tab.last_query_infos.clone_from(&self.tab.run.infos);
             // History keeps the placeholders, not the values, and no
             // statement that sets a password.
             if !sql::sets_password(original, self.engine()) {
@@ -265,15 +273,15 @@ impl App {
             self.tab.last_run_text.clear();
         }
         self.tab.last_run_offset = offset;
-        self.run.filled = filled;
-        self.run.sql.clone_from(&sql);
+        self.tab.run.filled = filled;
+        self.tab.run.sql.clone_from(&sql);
         // After a quiet while (or a lost connection), the server is asked
         // to answer first: a link that died meanwhile fails in seconds
         // rather than leaving the run waiting.
         let check_first = self.connection_lost || self.last_activity.elapsed() >= CHECK_AFTER_IDLE;
         self.last_activity = Instant::now();
-        self.run.extra.timed_out = None;
-        self.run.extra.started = Some(Instant::now());
+        self.tab.run.extra.timed_out = None;
+        self.tab.run.extra.started = Some(Instant::now());
         // The connection's own timeout (0 there lets its queries run), else
         // the one for every connection.
         let timeout = if self.connection.form.timeout.trim().is_empty() {
@@ -281,28 +289,28 @@ impl App {
         } else {
             self.connection.form.query_timeout().ok().flatten()
         };
-        self.run.extra.deadline = timeout.and_then(|limit| Some((Instant::now().checked_add(limit)?, limit)));
-        self.run.extra.offered_cancel = false;
+        self.tab.run.extra.deadline = timeout.and_then(|limit| Some((Instant::now().checked_add(limit)?, limit)));
+        self.tab.run.extra.offered_cancel = false;
         self.tab.error_marker = None;
-        self.run.executing = true;
-        self.run.db = Some(db.clone());
-        self.run.since = Some(Instant::now());
+        self.tab.run.executing = true;
+        self.tab.run.db = Some(db.clone());
+        self.tab.run.since = Some(Instant::now());
         // A read leaves the other tabs free meanwhile (see `in_tab`).
-        self.run.id += 1;
-        let reads = !self.run.infos.is_empty() && self.run.infos.iter().all(|i| i.kind == Kind::Read);
-        let plan = self.plan_request.as_ref().is_some_and(|(_, analyzed, _)| !analyzed);
-        let free = match self.run.purpose {
+        self.tab.run.id = self.next_run_id();
+        let reads = !self.tab.run.infos.is_empty() && self.tab.run.infos.iter().all(|i| i.kind == Kind::Read);
+        let plan = self.tab.run.plan_request.as_ref().is_some_and(|(_, analyzed, _)| !analyzed);
+        let free = match self.tab.run.purpose {
             RunPurpose::Query => reads,
             RunPurpose::Explain => plan,
             _ => false,
         };
-        self.run.owner = free.then_some(self.active_tab);
+        self.tab.run.holds_tabs = !free;
         self.set_result_status(t!("tabs.running").to_string(), false);
         let send = self.run_sender();
         let row_limit = self.next_row_limit.take().unwrap_or(self.settings.row_limit);
-        tracing::debug!(statements = self.run.infos.len(), stream, row_limit, "run");
-        let sql = if self.run.extra.vertical { sql::without_vertical(&sql, self.engine()) } else { sql };
-        self.task = Some(tokio::spawn(async move {
+        tracing::debug!(statements = self.tab.run.infos.len(), stream, row_limit, "run");
+        let sql = if self.tab.run.extra.vertical { sql::without_vertical(&sql, self.engine()) } else { sql };
+        self.tab.run.task = Some(tokio::spawn(async move {
             if check_first && let Err(e) = db.answers_within(ANSWER_WITHIN).await {
                 return send(DbEventKind::QueryFailed(crate::db::error_message(&e), None, None, false));
             }
@@ -328,11 +336,11 @@ impl App {
     /// Asks the open stream for `rows` more rows (once at a time).
     /// `shown`: asked for with `M` (see [`DbEventKind::MoreRows`]).
     pub(in crate::app) fn fetch_more(&mut self, rows: usize, shown: bool) {
-        let Some(stream) = self.run.stream.clone() else { return };
-        if self.run.fetching_more {
+        let Some(stream) = self.tab.run.stream.clone() else { return };
+        if self.tab.run.fetching_more {
             return;
         }
-        self.run.fetching_more = true;
+        self.tab.run.fetching_more = true;
         let send = self.sender();
         tokio::spawn(async move {
             match stream.next_page(rows).await {
@@ -345,10 +353,10 @@ impl App {
     /// Adds a fetched page to the results, keeping the selection.
     /// `show`: asked for with `M`, so the first new row is selected.
     pub(in crate::app) fn append_rows(&mut self, page: Page, show: bool) {
-        self.run.fetching_more = false;
+        self.tab.run.fetching_more = false;
         // `M` pressed while this page came: before the stream may end with
         // it (then these were the last rows, and they're what it shows).
-        let wanted = std::mem::take(&mut self.run.more_wanted);
+        let wanted = std::mem::take(&mut self.tab.run.more_wanted);
         let show = show || (wanted && page.done);
         let Some(results) = &mut self.tab.grid.results else { return };
         let start = results.rows.len();
@@ -356,7 +364,7 @@ impl App {
         self.tab.grid.col_widths = widen_columns(std::mem::take(&mut self.tab.grid.col_widths), &page.rows);
         results.rows.extend(page.rows);
         if page.done {
-            self.run.set_stream(None);
+            self.tab.run.set_stream(None);
         }
         let loaded = results.rows.len();
         if self.tab.grid.sort.is_some() || !self.tab.grid.filter.is_empty() {
@@ -373,7 +381,7 @@ impl App {
                 self.tab.grid.table_state.select(Some(start));
             }
         }
-        let more = if self.run.stream.is_some() { t!("run.more_as_you_scroll") } else { t!("run.all_rows_loaded") };
+        let more = if self.tab.run.stream.is_some() { t!("run.more_as_you_scroll") } else { t!("run.all_rows_loaded") };
         self.set_status(format!("{} · {more}", t!("run.rows_loaded", n = loaded)), false);
         // `M`'s own rows, now that this page is in.
         if wanted && !page.done {
@@ -397,16 +405,16 @@ impl App {
     pub(in crate::app) fn cancel_query(&mut self) {
         // Cancelling failed (the server can't be reached to be told): Esc
         // again stops waiting here.
-        if self.run.cancel_failed {
+        if self.tab.run.cancel_failed {
             return self.stop_waiting();
         }
-        if self.run.cancelling {
+        if self.tab.run.cancelling {
             return;
         }
         // The run's own connection: another tab's may be shown now.
-        let Some(db) = self.run.db.clone().or_else(|| self.connection.database.clone()) else { return };
-        self.run.cancelling = true;
-        self.queued_plan = None;
+        let Some(db) = self.tab.run.db.clone().or_else(|| self.connection.database.clone()) else { return };
+        self.tab.run.cancelling = true;
+        self.tab.run.queued_plan = None;
         self.set_result_status("Cancelling...".to_string(), false);
         let send = self.sender();
         tokio::spawn(async move {
@@ -420,12 +428,12 @@ impl App {
     /// dropped, and the session with it (the next run opens a new one). The
     /// query may still run on the server until it notices.
     pub(in crate::app) fn stop_waiting(&mut self) {
-        self.run.cancel_failed = false;
-        self.run.cancelling = false;
-        if let Some(task) = self.task.take() {
+        self.tab.run.cancel_failed = false;
+        self.tab.run.cancelling = false;
+        if let Some(task) = self.tab.run.task.take() {
             task.abort();
         }
-        if let Some(db) = self.run.db.as_ref().or(self.connection.database.as_ref()) {
+        if let Some(db) = self.tab.run.db.as_ref().or(self.connection.database.as_ref()) {
             db.abandon_session();
         }
         self.on_query_failed(
@@ -440,10 +448,6 @@ impl App {
     /// navigator's "definition"): that a transaction would be rolled back,
     /// when one is open.
     pub(in crate::app) fn request_disconnect(&mut self) {
-        // (In its own tab, disconnecting stops it.)
-        if self.run.executing && !self.running_here() {
-            return self.set_status(self.running_elsewhere(t!("run.disconnect_after")), true);
-        }
         if !self.connected() {
             return self.disconnect();
         }

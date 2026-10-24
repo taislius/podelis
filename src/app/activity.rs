@@ -141,7 +141,7 @@ impl App {
     /// times and rows. Writes run in a transaction (or savepoint) that's
     /// rolled back, after a confirmation.
     pub(super) fn explain_analyze_current(&mut self) {
-        if self.run.executing || self.connection.database.is_none() {
+        if self.tab.run.executing || self.connection.database.is_none() {
             return;
         }
         let engine = self.engine();
@@ -158,7 +158,7 @@ impl App {
         // like the user's own transaction ending.
         let infos = analyze::analyze(&parse(&explain, engine));
         let writes = analyze::analyze(&parse(&stmt, engine)).iter().any(StatementInfo::modifies);
-        self.plan_request = Some((stmt.clone(), true, line));
+        self.tab.run.plan_request = Some((stmt.clone(), true, line));
         if !writes {
             return self.run_now(explain, 0, infos, RunPurpose::Explain, None);
         }

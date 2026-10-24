@@ -128,7 +128,8 @@ impl App {
     /// asking first if a transaction would be rolled back. With `panes`,
     /// `target`'s connections take the keys rather than its tabs.
     pub(super) fn switch_project(&mut self, target: Option<String>, panes: bool) {
-        if self.run.executing {
+        // Leaving stops every tab's query: each has to end first.
+        if !self.running_tabs().is_empty() {
             return self.set_status(t!("session.wait").to_string(), true);
         }
         if self.any_open_transaction() {
@@ -263,9 +264,9 @@ impl App {
 
     /// Closes every connection (when the project's tabs are replaced).
     pub(super) fn close_all_connections(&mut self) {
-        self.invalidate_tasks();
-        self.run.set_stream(None);
-        self.run.executing = false;
+        self.stop_all_runs();
+        self.tab.run.set_stream(None);
+        self.tab.run.executing = false;
         let mut current = Connection::default();
         swap_conn(self, &mut current);
         let slots = std::iter::once(current).chain(self.conns.parked.drain().map(|(_, s)| s));
@@ -298,11 +299,11 @@ impl App {
     pub(super) fn disconnect(&mut self) {
         self.invalidate_tasks();
         // Closing the stream first lets close() take the session.
-        self.run.set_stream(None);
-        self.run.fetching_more = false;
-        self.run.executing = false;
-        self.run.cancelling = false;
-        self.run.cancel_failed = false;
+        self.tab.run.set_stream(None);
+        self.tab.run.fetching_more = false;
+        self.tab.run.executing = false;
+        self.tab.run.cancelling = false;
+        self.tab.run.cancel_failed = false;
         self.tab.grid.results = None;
         self.tab.grid.result_sets.clear();
         self.tabs[self.active_tab].conn = None;
@@ -322,7 +323,7 @@ impl App {
     /// Ctrl+O: picks a connection for this tab, or for a new tab if this
     /// one is connected.
     pub(super) fn open_connection(&mut self) {
-        if self.run.executing {
+        if self.tab.run.executing {
             return self.set_status(t!("session.wait").into(), true);
         }
         self.open_manager(Screen::Connections);

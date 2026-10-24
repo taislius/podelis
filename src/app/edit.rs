@@ -107,7 +107,7 @@ impl App {
 
     /// Runs the UPDATE through the normal safety checks (production asks).
     fn save_cell_edit(&mut self, value: Option<String>) {
-        if self.run.executing {
+        if self.conn_busy() {
             return self.set_status(t!("edit.wait_for_query").to_string(), true);
         }
         let Some(edit) = self.cell_edit.take() else { return };

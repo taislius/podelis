@@ -335,38 +335,38 @@ async fn an_address_on_the_first_run_opens_a_default_project_that_keeps_the_tabs
 async fn a_cancel_the_server_cant_be_told_lets_esc_stop_waiting() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
     // A run that never ends (as on a link that died), and Esc.
-    app.run.executing = true;
-    app.task = Some(tokio::spawn(std::future::pending()));
+    app.tab.run.executing = true;
+    app.tab.run.task = Some(tokio::spawn(std::future::pending()));
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.run.cancelling);
+    assert!(app.tab.run.cancelling);
     let generation = app.generation;
     // A server that answers and refuses (no privilege): just said.
     let refused = DbEventKind::CancelFailed("Access denied; you need the PROCESS privilege".into(), false);
     app.handle_db_event(DbEvent { generation, run: None, kind: refused });
-    assert!(!app.run.cancel_failed && !app.connection_lost && app.run.executing);
+    assert!(!app.tab.run.cancel_failed && !app.connection_lost && app.tab.run.executing);
     app.handle_key(key(KeyCode::Esc));
     let failed = DbEventKind::CancelFailed("pool timed out while waiting for an open connection".into(), true);
     app.handle_db_event(DbEvent { generation, run: None, kind: failed });
-    assert!(app.run.cancel_failed && app.connection_lost && app.run.executing);
+    assert!(app.tab.run.cancel_failed && app.connection_lost && app.tab.run.executing);
     assert!(said(&app).starts_with("Couldn't cancel: Esc again stops waiting"), "{}", said(&app));
     // Esc again: no longer waiting; the next run checks the server first.
     app.handle_key(key(KeyCode::Esc));
-    assert!(!app.run.executing && app.task.is_none() && !app.run.cancel_failed);
+    assert!(!app.tab.run.executing && app.tab.run.task.is_none() && !app.tab.run.cancel_failed);
     assert!(app.tab.run_error.as_ref().is_some_and(|e| e.contains("stopped waiting")));
     assert!(app.connection_lost);
     run_sql(&mut app, "select 7").await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("7".to_string())]]);
     assert!(!app.connection_lost);
     // A query that ends after a failed cancel leaves nothing armed.
-    app.run.executing = true;
-    app.task = Some(tokio::spawn(std::future::pending()));
+    app.tab.run.executing = true;
+    app.tab.run.task = Some(tokio::spawn(std::future::pending()));
     app.handle_key(key(KeyCode::Esc));
     let failed = DbEventKind::CancelFailed("pool timed out".into(), true);
     app.handle_db_event(DbEvent { generation: app.generation, run: None, kind: failed });
-    app.task = None;
-    app.run.executing = false;
+    app.tab.run.task = None;
+    app.tab.run.executing = false;
     run_sql(&mut app, "select 8").await;
-    assert!(!app.run.cancel_failed, "the next Esc asks the server again");
+    assert!(!app.tab.run.cancel_failed, "the next Esc asks the server again");
 }
 
 #[tokio::test]
@@ -393,7 +393,7 @@ async fn sqlite_queries_time_out() {
     app.connection.form.timeout = "1".into();
     app.tab.editor.set_text("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n");
     app.handle_key(key(KeyCode::F(5)));
-    assert!(app.run.executing);
+    assert!(app.tab.run.executing);
     tokio::time::sleep(Duration::from_millis(1100)).await;
     app.tick_running();
     tokio::time::timeout(Duration::from_secs(5), finish(&mut app)).await.expect("the query was stopped");
@@ -724,7 +724,7 @@ async fn queries_are_cancelled_at_the_connection_timeout() {
         app.tab.editor.set_text(&sleep.replace("{s}", "10"));
         app.handle_key(key(KeyCode::F(5)));
         let started = Instant::now();
-        while app.run.executing {
+        while app.tab.run.executing {
             tokio::select! {
                 event = app.poll_db_event() => app.handle_db_event(event.unwrap()),
                 () = tokio::time::sleep(std::time::Duration::from_millis(200)) => app.tick_running(),

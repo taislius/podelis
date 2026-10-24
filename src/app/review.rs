@@ -30,9 +30,9 @@ impl App {
         let wrapped = Filled::prefixed(filled, &original, "BEGIN;\n");
         let infos = analyze::analyze(&parse(&wrapped.sql, self.engine()));
         if self.connection.tx_mode == TxMode::RollbackOnly {
-            self.run.extra.dry_run = Some(DryRun::Running);
+            self.tab.run.extra.dry_run = Some(DryRun::Running);
         } else {
-            self.run.extra.reviewing = true;
+            self.tab.run.extra.reviewing = true;
         }
         self.run_now(wrapped.sql.clone(), offset, infos, purpose, Some(wrapped));
     }
@@ -183,7 +183,7 @@ impl App {
 
     /// Commits or rolls back the open transaction, keeping the results.
     pub(super) fn end_transaction(&mut self, command: &'static str) {
-        if self.run.executing || self.connection.database.is_none() {
+        if self.tab.run.executing || self.connection.database.is_none() {
             return;
         }
         if self.connection.txn == TxnState::Idle {
@@ -195,17 +195,17 @@ impl App {
 
     /// A dry run finished: roll it back.
     pub(super) fn end_dry_run(&mut self, outcome: DryRun) {
-        self.run.extra.dry_run = Some(outcome);
+        self.tab.run.extra.dry_run = Some(outcome);
         if self.connection.txn == TxnState::Idle {
             // Nothing to roll back (e.g. the connection was reopened).
-            self.run.extra.dry_run = None;
+            self.tab.run.extra.dry_run = None;
             return;
         }
         self.end_transaction("ROLLBACK");
     }
 
     pub(super) fn transaction_ended(&mut self, command: &str) {
-        if let Some(dry_run) = self.run.extra.dry_run.take() {
+        if let Some(dry_run) = self.tab.run.extra.dry_run.take() {
             self.tab.grid.result_note = Some(t!("run.rolled_back").to_string());
             return match dry_run {
                 DryRun::Failed(error) => self.set_status(error, true),

@@ -214,7 +214,7 @@ async fn a_question_puts_the_models_sql_in_the_editor_without_running_it() {
          SELECT c.country, count(*) AS orders FROM orders o JOIN customers c ON c.id = o.customer_id GROUP BY c.country;"
     );
     assert!(said(&app).contains("nothing ran"), "{}", said(&app));
-    assert!(!app.run.executing && app.tab.grid.results.is_none(), "nothing ran");
+    assert!(!app.tab.run.executing && app.tab.grid.results.is_none(), "nothing ran");
     assert_eq!(app.focus, Focus::Editor);
 }
 

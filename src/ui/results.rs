@@ -129,7 +129,7 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     let rows = result_grid.and_then(|g| g.results.as_ref()).map(|r| {
         if r.columns.is_empty() {
             t!("results.affected", n = r.rows_affected.unwrap_or(0))
-        } else if app.run.stream.is_some() || result_grid.is_some_and(|g| g.cut_short) {
+        } else if app.tab.run.stream.is_some() || result_grid.is_some_and(|g| g.cut_short) {
             t!("results.rows_more", n = r.total_rows)
         } else {
             t!("results.rows", n = r.total_rows)
@@ -266,7 +266,7 @@ fn draw_no_result(f: &mut Frame, app: &App, area: Rect) {
         // "running… 12 s", as the pane's title has it, capitalised.
         let mut chars = running.chars();
         let running: String = chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default();
-        if app.run.cancel_failed {
+        if app.tab.run.cancel_failed {
             // Orange: it needs the user (see `stop_waiting`).
             Paragraph::new(format!(" {running} · {}", t!("results.cancel_failed"))).style(fg(t.warn))
         } else {
@@ -781,11 +781,11 @@ fn draw_rows_footer(f: &mut Frame, app: &App, footer: Rect, offset: usize, count
         Span::styled(format!("   NULL AS {NULL_SYMBOL}"), dim()),
     ]);
     let shown = app.tab.grid.view.len();
-    let plus = if app.run.stream.is_some() || app.tab.grid.cut_short { "+" } else { "" };
+    let plus = if app.tab.run.stream.is_some() || app.tab.grid.cut_short { "+" } else { "" };
     let mut right = vec![Span::styled(format!("1–{shown} / {}{plus}", results.total_rows), bold(t.text))];
-    if app.run.fetching_more {
+    if app.tab.run.fetching_more {
         right.push(Span::styled(format!("  · {}", t!("results.loading")), fg(t.warn)));
-    } else if app.run.stream.is_some() {
+    } else if app.tab.run.stream.is_some() {
         right.push(Span::styled(format!("  · {}", t!("results.scroll_for_more")), dim()));
     } else if results.truncated() || app.tab.grid.cut_short {
         right.push(Span::styled(format!("  · {}", t!("results.m_loads_more")), dim()));

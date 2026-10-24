@@ -17,7 +17,7 @@ impl App {
         if stmt.to_ascii_uppercase().starts_with("EXPLAIN") {
             return self.set_status(t!("plan.already_explain").to_string(), true);
         }
-        if self.run.executing {
+        if self.tab.run.executing {
             return self.explain_aside(stmt, line);
         }
         self.explain_statement(stmt, line);
@@ -51,7 +51,7 @@ impl App {
         if !self.running_here() {
             return self.set_status(self.running_elsewhere(t!("plan.f7_after")), true);
         }
-        self.queued_plan = Some((stmt, line));
+        self.tab.run.queued_plan = Some((stmt, line));
         self.set_status(t!("plan.queued").into(), false);
     }
 
@@ -60,10 +60,10 @@ impl App {
     pub(in crate::app) fn plan_aside(&mut self, stmt: String, line: usize, plan: Option<QueryOutcome>) {
         match plan {
             Some(outcome) => {
-                self.plan_request = Some((stmt, false, line));
+                self.tab.run.plan_request = Some((stmt, false, line));
                 self.show_plan(outcome);
             }
-            None if self.run.executing => self.queue_plan(stmt, line),
+            None if self.tab.run.executing => self.queue_plan(stmt, line),
             None => self.explain_statement(stmt, line),
         }
     }
@@ -72,10 +72,10 @@ impl App {
     /// Not while something still runs (the plan waits) or asks the user
     /// something (a review, a confirmation: the plan is dropped).
     pub(in crate::app) fn run_queued_plan(&mut self) {
-        if self.run.executing {
+        if self.tab.run.executing {
             return;
         }
-        let Some((stmt, line)) = self.queued_plan.take() else { return };
+        let Some((stmt, line)) = self.tab.run.queued_plan.take() else { return };
         if !self.popup_open() {
             self.explain_statement(stmt, line);
         }
@@ -83,7 +83,7 @@ impl App {
 
     /// After a failed run, the queued plan isn't made: the error stays in view.
     pub(in crate::app) fn drop_queued_plan(&mut self) {
-        if self.queued_plan.take().is_some() {
+        if self.tab.run.queued_plan.take().is_some() {
             let _ = write!(self.notes.status, " · {}", t!("plan.not_made"));
         }
     }
@@ -91,7 +91,7 @@ impl App {
     pub(in crate::app) fn explain_statement(&mut self, stmt: String, line: usize) {
         let version = self.connection.database.as_ref().map_or("", |db| db.version());
         let explain = self.engine().dialect().explain(&stmt, version);
-        self.plan_request = Some((stmt, false, line));
+        self.tab.run.plan_request = Some((stmt, false, line));
         if self.ask_for_params(&explain, 0, true) {
             return;
         }
@@ -194,7 +194,7 @@ impl App {
         self.tab.plan = Some(plan);
         self.tab.plan_selected = None;
         self.tab.plan_source =
-            self.plan_request.take().map(|(sql, analyzed, line)| PlanSource::new(sql, analyzed, line));
+            self.tab.run.plan_request.take().map(|(sql, analyzed, line)| PlanSource::new(sql, analyzed, line));
         // A plan with columns (MySQL's classic EXPLAIN) is a grid too.
         self.unswap_plan_grid();
         self.tab.plan_grid = (outcome.columns.len() > 1 && self.engine().capabilities().plan_as_grid).then(|| {
