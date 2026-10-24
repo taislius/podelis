@@ -13,7 +13,7 @@ search every command by name. `F1` shows every key.
 
 | `Ctrl+K`, then | Action |
 |---|---|
-| `x`, then `a` / `m` / `r` | Transaction mode: *auto-commit* (each statement is committed as it runs), *manual commit* (changes wait for `F8` COMMIT / `Shift+F8` ROLLBACK) or *rollback-only* (statements run, then are always rolled back). Clicking the modes in the editor's footer cycles them |
+| `x`, then `a` / `m` / `r` / `s` | Transaction mode: *auto-commit* (each statement is committed as it runs), *manual commit* (changes wait for `F8` COMMIT / `Shift+F8` ROLLBACK), *rollback-only* (statements run, then are always rolled back) or *sandbox* (see *The sandbox* below). Clicking the modes in the editor's footer cycles them. With a sandbox open, `Ctrl+K x` shows it |
 | `c` / `r` | Commit / roll back the open transaction (also `F8` / `Shift+F8`) |
 | `e` / `a` | Explain / explain analyze (also `F7` / `Shift+F7`) |
 | `f` / `-` | Format the selection, or everything / comment or uncomment lines |
@@ -212,6 +212,28 @@ notes, and takes the same keys: moving, `s` sort, `/` filter, `x` / `X`,
 `y` / `Y` / `C` / `Ctrl+C` copy, `e` / `J` export, `|` and `o`. Editing, adding,
 deleting, following a foreign key and loading more are for query results
 only.
+
+**The sandbox.** In the sandbox mode (`Ctrl+K x s`) writes build on each
+other: the first starts one transaction, kept open between runs, and each
+write runs after a savepoint of its own, so the next step (and every read)
+sees what the steps before it did. A step that fails is rolled back alone
+and the sandbox goes on (on PostgreSQL a failed statement would otherwise
+spoil the whole transaction). The editor's footer says `SANDBOX · N steps`
+in orange. `Ctrl+K x` then shows its steps, the rows each changed and,
+per table, what changed, with how long it's been open (its row locks are
+held until it ends), and its keys:
+
+| Key | Action |
+|---|---|
+| `u` | Undo the last step (`ROLLBACK TO SAVEPOINT`), one at a time |
+| `d` | Discard it all (`ROLLBACK`); quitting or disconnecting asks, then does the same |
+| `s` | Keep its steps as a script in a new tab (a comment says where it came from: `now()`, sequences and random values differ when it runs again), then discard it |
+| `r` | Run it for real: discard it, then run the script again in manual commit, through the usual checks (production asks, destructive statements ask), and commit or roll back at the end |
+
+MySQL saves schema changes at once (they commit the transaction), so in a
+sandbox there it runs data changes only and refuses DDL with the reason.
+On SQLite the sandbox's transaction holds the file's write lock: another
+program can't write to it meanwhile.
 
 **Long queries.** A query running 10 minutes says so once in the status
 bar, with how to cancel it (`Esc` in its tab), and in a notification while

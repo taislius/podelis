@@ -105,7 +105,7 @@ While editing or adding a connection:
   `default_transaction_read_only` on Postgres, `SET SESSION TRANSACTION
   READ ONLY` on MySQL, a read-only open on SQLite.
 - **Transaction:** the transaction mode the connection starts in:
-  `auto-commit`, `manual commit` or `rollback-only`. Unless you pick one,
+  `auto-commit`, `manual commit`, `rollback-only` or `sandbox`. Unless you pick one,
   production connections start in manual commit and others in
   auto-commit. `Ctrl+K x` switches it while connected.
 - **Timeout:** optional, in seconds. A query running longer is cancelled:

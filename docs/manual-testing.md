@@ -239,6 +239,14 @@ OS and the server version when something is off.
   table with a primary key.
 - [ ] A connection's query timeout cancels a long query on the server.
 
+- [ ] Sandbox (`Ctrl+K x s`) on PostgreSQL: three inserts, one failing
+  (a duplicate key) in between: the footer counts the steps, the failed
+  one is said and the others stay. From `psql` meanwhile the rows aren't
+  there and an UPDATE of one waits (a row lock). `Ctrl+K x`: `u` undoes the
+  last, `s` puts the script in a tab, `r` runs it again in manual commit
+  and asks to commit. Quitting with a sandbox open asks first. MySQL: an
+  `ALTER TABLE` in a sandbox is refused with the reason.
+
 ### Comparing connections
 
 Use two databases with the same tables, e.g. `pgbench -i -s 10 a` and
@@ -320,6 +328,16 @@ With a real key (a few cents) and, if you have it, Ollama:
   SQL at the end of the editor under the question, not run; `F6` runs it.
   `Esc` while asking stops it; switching tabs meanwhile still puts the SQL
   in the tab asked from.
+- [ ] A provider's model with a question the words can't link to a table
+  ("how much did the stores earn" on Pagila, no memory facts): it looks up
+  `payment` itself, and the SQL's comment says "it also looked at:
+  payment". `tools = false` on the model: it says what's missing instead.
+- [ ] `podelis memory add customer also called client`, then ask "how
+  many clients": `customer` is chosen (`podelis gateway context` shows
+  why). `revenue defined as sum(payment.amount)`: "revenue per store"
+  uses it.
+- [ ] A fresh build (or a Homebrew update) on macOS, then `Ctrl+K q`: while
+  the keychain's Allow dialog waits, the status bar says so.
 - [ ] `Ctrl+K y` on a statement (one with a wrong join, too): a pop-over
   says what it does, step by step, and what looks wrong, any query it
   suggests indented as written; the editor isn't touched and nothing runs.
@@ -343,6 +361,12 @@ With a real key (a few cents) and, if you have it, Ollama:
   models` shows the parse error, not "no models are set up".
 
 ### Tabs
+
+- [ ] Two tabs on different connections (a PostgreSQL and a MySQL one):
+  `select pg_sleep(20)` in one, `select sleep(20)` in the other, both at
+  once; each tab's name gets the green `…`, `Ctrl+K g` shows both
+  running, `Esc` in one stops only it. A third tab on the first one's
+  connection: `F5` there says which tab holds the connection.
 
 - [ ] A dozen tabs with long names: the active one shows its whole name (up
   to 40 characters), the others shortened; `‹N` and `›N` say how many
