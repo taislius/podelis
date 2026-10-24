@@ -268,3 +268,31 @@ fn neighbours_of_tables_matched_only_by_a_column_dont_pull_each_other_in() {
     let c = build(&s, "colour");
     assert_eq!(names(&c), ["public.x", "public.y"]);
 }
+
+#[test]
+fn facts_about_missing_tables_are_left_out_as_stale() {
+    let fact = |subject: &str, relation: &str, value: &str| super::super::memory::Fact {
+        id: 1,
+        subject: subject.into(),
+        relation: relation.into(),
+        value: value.into(),
+        source: "user".into(),
+        confirmed: true,
+        at: String::new(),
+    };
+    let schema = shop();
+    let facts = [
+        fact("customers", "excluded by default", "email like '%@test.example'"),
+        fact("orders.status", "means", "3 = cancelled"),
+        fact("invoices.state", "means", "2 = paid"),
+        fact("revenue", "defined as", "sum(orders.total)"),
+    ];
+    let built = build(&schema, "orders per customer").with_facts(&facts, &schema);
+    assert!(built.text.contains("customers excluded by default email like"), "{}", built.text);
+    assert!(built.text.contains("excluded by default W`: leave out"), "the model is told what it means");
+    // `invoices` isn't in this database: left out, said as stale.
+    assert_eq!(built.stale, ["invoices.state means 2 = paid"]);
+    assert!(!built.text.contains("invoices"));
+    // A word that names no table (a term) isn't stale.
+    assert!(built.facts.iter().any(|f| f.starts_with("revenue defined as")), "{:?}", built.facts);
+}

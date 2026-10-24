@@ -59,6 +59,10 @@ fn facts_are_read_as_typed() {
         Some("churned | defined as | no rental in 90 days")
     );
     assert_eq!(fact("x also called").as_deref(), Some("x | means | also called"));
+    assert_eq!(
+        fact("customer excluded by default deleted_at is not null").as_deref(),
+        Some("customer | excluded by default | deleted_at is not null")
+    );
     assert_eq!(fact("lonely"), None);
 }
 

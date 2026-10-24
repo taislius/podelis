@@ -60,18 +60,28 @@ pub struct Context {
     pub left_out: usize,
     /// The team's facts it shows (their lines).
     pub facts: Vec<String>,
+    /// Facts left out because the table they name isn't in this database
+    /// (dropped or renamed since: stale?), their lines.
+    pub stale: Vec<String>,
 }
 
 impl Context {
     /// Adds what the team has said about these tables (confirmed facts),
     /// as long as they fit the budget.
-    pub fn with_facts(mut self, facts: &[super::memory::Fact]) -> Self {
+    pub fn with_facts(mut self, facts: &[super::memory::Fact], schema: &Schema) -> Self {
+        // A fact about a column of a table this database doesn't have: not
+        // shown, said as maybe stale.
+        let known = |table: &str| schema.tables.iter().any(|(t, _)| t.name.eq_ignore_ascii_case(table));
+        let (facts, stale): (Vec<&super::memory::Fact>, Vec<&super::memory::Fact>) =
+            facts.iter().partition(|f| f.table_named().is_none_or(known));
+        self.stale = stale.iter().map(|f| f.line()).collect();
         if facts.is_empty() || self.tables.is_empty() {
             return self;
         }
         let mut section = String::from(
             "\nWhat this team has said about its data (confirmed; follow it over guesses; `X also called Y`: \
-             the user may say Y for X; `X defined as E`: when the question says X, use E):\n",
+             the user may say Y for X; `X defined as E`: when the question says X, use E; `X excluded by \
+             default W`: leave out X's rows where W unless the question asks for them):\n",
         );
         for f in facts {
             let line = format!("- {}\n", f.line());
@@ -423,7 +433,7 @@ pub fn build(schema: &Schema, question: &str) -> Context {
             tables.len()
         );
     }
-    Context { text, tables: listed, left_out, facts: Vec::new() }
+    Context { text, tables: listed, left_out, facts: Vec::new(), stale: Vec::new() }
 }
 
 /// The model looking for itself (`ask`'s `find_tables`): the tables whose

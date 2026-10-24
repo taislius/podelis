@@ -92,6 +92,13 @@ async fn context(config_dir: &Path, project: Option<&str>, words: &[String]) -> 
             "  ({n} more qualified, left out: at most {MAX_ENTRY} tables by their words and {MAX_TABLES} in all, within about {tokens} tokens)"
         );
     }
+    let stale: Vec<&str> = built["stale_facts"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    if !stale.is_empty() {
+        let _ = writeln!(out, "Left out, the table they name isn't in this database (stale?):");
+        for f in stale {
+            let _ = writeln!(out, "  {f}");
+        }
+    }
     let chars = built["chars"].as_u64().unwrap_or(0);
     let _ = writeln!(
         out,

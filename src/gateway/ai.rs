@@ -250,6 +250,7 @@ pub async fn context(config_dir: &Path, caches: &Caches, params: &Value) -> (Res
         "tables": tables,
         "left_out": built.left_out,
         "facts": built.facts,
+        "stale_facts": built.stale,
         "chars": built.text.len(),
     });
     (Ok(result), about)
@@ -303,7 +304,7 @@ async fn built_for(
     let built = super::context::build(schema, &format!("{question}{}", memory.words()));
     let tables: Vec<String> = built.tables.iter().map(|t| t.name.clone()).collect();
     let facts = memory.about(&tables);
-    built.with_facts(&facts)
+    built.with_facts(&facts, schema)
 }
 
 /// A connection's schema, and its project's name and setting for
@@ -388,7 +389,8 @@ fn ask_system(engine: &str, context: &str) -> String {
          means and nothing below says it, end with each assumption on a line of its own, as \
          `FACT: subject | relation | value` (for example `FACT: orders.status | means | 3 = cancelled`, \
          `FACT: customer | also called | client` for another name the question used, or \
-         `FACT: revenue | defined as | sum(payment.amount)` for a business term you had to define), \
+         `FACT: revenue | defined as | sum(payment.amount)` for a business term you had to define, or \
+         `FACT: customer | excluded by default | active = false` for rows you left out), \
          at most three: the user will confirm or correct them.\n\n{context}"
     )
 }
@@ -644,6 +646,7 @@ pub async fn ask(
         "tables": tables,
         "looked_at": looked_at,
         "facts": built.facts,
+        "stale_facts": built.stale,
         "model": config.name,
         "provider_model": reply.model,
         "stop_reason": reply.stop_reason,

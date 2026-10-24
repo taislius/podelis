@@ -51,6 +51,16 @@ impl Fact {
         format!("{} {} {}", self.subject, self.relation, self.value)
     }
 
+    /// The table it names, if its subject is a column (`table.column`,
+    /// `schema.table.column`): what can go missing from a schema.
+    pub fn table_named(&self) -> Option<&str> {
+        let parts: Vec<&str> = self.subject.trim().split('.').collect();
+        match parts.as_slice() {
+            [table, _] | [_, table, _] if !table.is_empty() => Some(table),
+            _ => None,
+        }
+    }
+
     /// Whether it's about `table` (as the context names it, `schema.table`
     /// or `table`) or one of its columns: `orders`, `orders.status`,
     /// `public.orders`, `public.orders.status`.
@@ -69,7 +79,10 @@ impl Fact {
 /// - `also called` / `aka`: another name people use for it (`customer also
 ///   called client`): a question saying "clients" finds `customer`;
 /// - `defined as`: a business term's formula or filter (`revenue defined as
-///   sum(payment.amount) minus refunds`), used for that term.
+///   sum(payment.amount) minus refunds`), used for that term;
+/// - `excluded by default`: rows left out unless asked for (`customer
+///   excluded by default deleted_at is not null`: soft deletes, test
+///   accounts).
 pub fn parse_fact(text: &str) -> Option<(String, String, String)> {
     let mut words = text.split_whitespace();
     let subject = words.next()?;
@@ -84,6 +97,8 @@ pub fn parse_fact(text: &str) -> Option<(String, String, String)> {
         (DEFINED_AS, &rest[3..])
     } else if starts(&["defined", "as"]) {
         (DEFINED_AS, &rest[2..])
+    } else if starts(&["excluded", "by", "default"]) {
+        (EXCLUDED_BY_DEFAULT, &rest[3..])
     } else {
         match rest.split_first() {
             Some((first @ &("is" | "are" | "means" | "equals"), value)) if !value.is_empty() => (*first, value),
@@ -97,6 +112,8 @@ pub fn parse_fact(text: &str) -> Option<(String, String, String)> {
 pub const ALSO_CALLED: &str = "also called";
 /// A business term's formula or filter.
 pub const DEFINED_AS: &str = "defined as";
+/// Rows of a table left out unless the question asks for them.
+pub const EXCLUDED_BY_DEFAULT: &str = "excluded by default";
 
 pub fn path(config_dir: &Path, project_id: &str) -> PathBuf {
     config_dir.join("memory").join(format!("{project_id}.db"))
