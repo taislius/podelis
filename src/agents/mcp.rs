@@ -115,8 +115,31 @@ pub struct Server {
     guard_rows: u64,
     /// How long a write waits for the user's answer.
     approval_wait: Duration,
+    /// The connections' open sandboxes, by name (`AgentAccess::Sandbox`).
+    sandboxes: Arc<std::sync::Mutex<HashMap<String, AgentSandbox>>>,
+    /// The last sandbox number handed out in this session.
+    sandbox_count: Arc<std::sync::atomic::AtomicU32>,
+    /// A sandbox idle this long is rolled back (its locks let go).
+    sandbox_idle: Duration,
     tool_router: ToolRouter<Self>,
 }
+
+/// A sandbox open on a connection: its number in this session (the log
+/// and the script group calls by it), the connection and server session it
+/// lives in (another after a reconnect, or settings changed: then it's
+/// gone), how many calls ran in it (each after its own savepoint), and
+/// when the last did.
+#[derive(Clone)]
+struct AgentSandbox {
+    number: u32,
+    db: Database,
+    session: i64,
+    calls: usize,
+    last: Instant,
+}
+
+/// How long an agent's sandbox may sit idle before it's rolled back.
+const SANDBOX_IDLE: Duration = Duration::from_mins(10);
 
 // The tools return these.
 #[allow(clippy::unnecessary_wraps)]
@@ -145,6 +168,9 @@ impl Server {
             name: None,
             guard_rows: 1_000_000,
             approval_wait: APPROVAL_WAIT,
+            sandboxes: Arc::default(),
+            sandbox_count: Arc::default(),
+            sandbox_idle: SANDBOX_IDLE,
             tool_router: Self::tool_router(),
         }
     }
@@ -158,6 +184,12 @@ impl Server {
     #[cfg(test)]
     fn waiting(mut self, wait: Duration) -> Self {
         self.approval_wait = wait;
+        self
+    }
+
+    #[cfg(test)]
+    fn idling(mut self, idle: Duration) -> Self {
+        self.sandbox_idle = idle;
         self
     }
 
@@ -210,6 +242,10 @@ impl Server {
             };
             let may = match c.agents {
                 AgentAccess::Approve => "read, and write once the user approves each write",
+                AgentAccess::Sandbox => {
+                    "read, and write in a sandbox: your writes build on each other and your reads see them, \
+                     but nothing is kept until the user says so"
+                }
                 access => access.label(),
             };
             let _ = writeln!(out, "- {} ({}{mode}): agents may {may}", c.name, c.engine.label());
@@ -362,7 +398,17 @@ impl Server {
         };
         let limit = args.limit.unwrap_or(DEFAULT_ROWS).clamp(1, MAX_ROWS);
         let started = Instant::now();
-        let result = run_wrapped(&db, &profile, wrap, &args.sql, limit).await;
+        let result = if wrap == Wrap::Sandbox {
+            let result = self.run_sandboxed(&db, &profile, &turn, &args.sql, limit).await;
+            // Its sandbox: the one it ran in, or (failed) the one still open.
+            entry.sandbox = match &result {
+                Ok((_, number)) => Some(*number),
+                Err(_) => self.sandboxes.lock().ok().and_then(|s| s.get(&profile.name).map(|s| s.number)),
+            };
+            result.map(|(outcome, _)| outcome)
+        } else {
+            run_wrapped(&db, &profile, wrap, &args.sql, limit).await
+        };
         entry.ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         entry.dry_run = wrap == Wrap::DryRun;
         match result {
@@ -404,7 +450,15 @@ impl Server {
         let dialect = engine.dialect();
         let explain = dialect.explain(args.sql.trim().trim_end_matches(';'), db.version());
         let started = Instant::now();
-        let result = run_wrapped(&db, &profile, Wrap::ReadOnly, &explain, 10_000).await;
+        // In an open sandbox: planned in its transaction, which sees its
+        // writes (a BEGIN would end it on MySQL).
+        // (Its own savepoint too: a failing EXPLAIN mustn't spoil it.)
+        let in_sandbox = self.sandboxes.lock().is_ok_and(|s| s.contains_key(&profile.name));
+        let result = if in_sandbox {
+            self.run_sandboxed(&db, &profile, &turn, &explain, 10_000).await.map(|(outcome, _)| outcome)
+        } else {
+            run_wrapped(&db, &profile, Wrap::ReadOnly, &explain, 10_000).await
+        };
         entry.ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let outcome = match result {
             Ok(o) => o,
@@ -454,7 +508,7 @@ impl Server {
         // gateway runs elsewhere).
         let opened = store::opened_from(&profile, self.dir.as_deref());
         let mut params = ConnectForm::from_profile(&opened, password).params()?;
-        params.read_only |= !matches!(profile.agents, AgentAccess::Write | AgentAccess::Approve)
+        params.read_only |= !matches!(profile.agents, AgentAccess::Write | AgentAccess::Approve | AgentAccess::Sandbox)
             || profile.mode == ConnectionMode::ReadOnly;
         let db = Database::connect(params).await.map_err(|e| crate::db::with_hint(&crate::db::error_message(&e)))?;
         let mut open = self.open.lock().await;
@@ -490,6 +544,122 @@ impl Server {
             sql: sql.trim().to_string(),
             ..Entry::default()
         }
+    }
+
+    /// Runs `sql` in the connection's sandbox: its transaction, begun by
+    /// the first call, then a savepoint for this one, rolled back to if it
+    /// fails (on PostgreSQL a failed statement spoils the transaction until
+    /// then). Nothing is committed. Returns the outcome and the sandbox's
+    /// number.
+    ///
+    /// A sandbox that's gone (a reconnect, the connection opened again
+    /// with changed settings, the server rolling the transaction back) is
+    /// never written into: each call checks it's the same connection and
+    /// server session, and on MySQL the session's autocommit is off for the
+    /// sandbox's life, so a transaction lost on the server can't let a
+    /// later write commit.
+    async fn run_sandboxed(
+        &self,
+        db: &Database,
+        profile: &ConnectionProfile,
+        turn: &Arc<tokio::sync::Mutex<()>>,
+        sql: &str,
+        limit: usize,
+    ) -> Result<(QueryOutcome, u32), String> {
+        let open = self.sandboxes.lock().ok().and_then(|s| s.get(&profile.name).cloned());
+        let failed = |e: anyhow::Error| crate::db::error_message(&e);
+        let open = match open {
+            Some(s) if s.db.same(db) && s.session == db.session_id() => Some(s),
+            Some(_) => {
+                self.forget_sandbox(db, &profile.name).await;
+                return Err(LOST.to_string());
+            }
+            None => None,
+        };
+        let open = if let Some(open) = open {
+            open
+        } else {
+            // Writes a rollback wouldn't undo: checked once, as it begins.
+            if let Some(why) = unrollable(db).await {
+                return Err(why);
+            }
+            if db.engine() == crate::db::Engine::MySql {
+                db.run_once("SET autocommit = 0", 1).await.map_err(failed)?;
+            }
+            db.run_once(db.engine().dialect().begin(false), 1).await.map_err(failed)?;
+            let number = self.sandbox_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            let open =
+                AgentSandbox { number, db: db.clone(), session: db.session_id(), calls: 0, last: Instant::now() };
+            if let Ok(mut sandboxes) = self.sandboxes.lock() {
+                sandboxes.insert(profile.name.clone(), open.clone());
+            }
+            self.watch_sandbox(db.clone(), profile.name.clone(), number, Arc::clone(turn));
+            open
+        };
+        let n = open.calls + 1;
+        // No savepoint: the transaction is gone.
+        if let Err(e) = db.run_once(&format!("SAVEPOINT podelis_{n}"), 1).await {
+            self.forget_sandbox(db, &profile.name).await;
+            return Err(format!("{} ({LOST})", failed(e)));
+        }
+        let result = db.run_within(sql, limit, Some(call_timeout(profile)), false).await.map_err(|e| ran_error(&e));
+        // A failed call goes back to before it; if even that fails, the
+        // transaction is gone (a deadlock rolls all of it back on MySQL).
+        if let Err(e) = &result
+            && db.run_once(&format!("ROLLBACK TO SAVEPOINT podelis_{n}"), 1).await.is_err()
+        {
+            self.forget_sandbox(db, &profile.name).await;
+            return Err(format!("{e} ({LOST})"));
+        }
+        if let Ok(mut sandboxes) = self.sandboxes.lock() {
+            sandboxes.insert(profile.name.clone(), AgentSandbox { calls: n, last: Instant::now(), ..open.clone() });
+        }
+        Ok((result?, open.number))
+    }
+
+    /// A sandbox found gone: forgotten (its watch rolls its own connection
+    /// back), and `db`'s session left with no transaction of it.
+    async fn forget_sandbox(&self, db: &Database, name: &str) {
+        if let Ok(mut sandboxes) = self.sandboxes.lock() {
+            sandboxes.remove(name);
+        }
+        end_sandbox(db).await;
+    }
+
+    /// Rolls sandbox `number` back once it's been idle for `sandbox_idle`,
+    /// once another has taken its place, or once the agent's session has
+    /// ended (every handle to the server dropped), so a forgotten one
+    /// doesn't hold its locks.
+    fn watch_sandbox(&self, db: Database, name: String, number: u32, turn: Arc<tokio::sync::Mutex<()>>) {
+        let sandboxes = Arc::downgrade(&self.sandboxes);
+        let idle = self.sandbox_idle;
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(idle.min(Duration::from_secs(30))).await;
+                // Its turn first: a call in progress finishes, and none
+                // starts while it's judged (and rolled back).
+                let _turn = turn.lock().await;
+                let ended = match sandboxes.upgrade() {
+                    None => true,
+                    Some(open) => match open.lock() {
+                        Ok(mut open) => {
+                            let ours = open.get(&name).filter(|s| s.number == number);
+                            let stale = ours.is_none_or(|s| s.last.elapsed() >= idle);
+                            if stale && ours.is_some() {
+                                open.remove(&name);
+                            }
+                            stale
+                        }
+                        Err(_) => true,
+                    },
+                };
+                if ended {
+                    end_sandbox(&db).await;
+                    tracing::info!(connection = %name, "agent sandbox rolled back (idle, replaced, or the agent went)");
+                    return;
+                }
+            }
+        });
     }
 
     /// Why `sql` is too heavy for production, if it reads a whole table of
@@ -591,7 +761,8 @@ impl Server {
 /// stay while the agent is told nothing changed.
 async fn unrollable(db: &Database) -> Option<String> {
     let sql = db.engine().dialect().tables_without_rollback()?;
-    let outcome = match db.run(sql, 1).await {
+    // (Not run again on a new session: inside a sandbox that would leave it.)
+    let outcome = match db.run_once(sql, 1).await {
         Ok(outcome) => outcome,
         Err(e) => {
             return Some(format!("couldn't check that a dry run can be rolled back: {}", crate::db::error_message(&e)));
@@ -630,20 +801,40 @@ async fn run_wrapped(
 ) -> Result<QueryOutcome, String> {
     let begin = db.engine().dialect().begin(wrap == Wrap::ReadOnly);
     db.run_once(begin, 1).await.map_err(|e| crate::db::error_message(&e))?;
-    let timeout =
-        ConnectForm::from_profile(profile, String::new()).query_timeout().ok().flatten().unwrap_or(DEFAULT_TIMEOUT);
-    let result = db.run_within(sql, limit, Some(timeout), false).await.map_err(|e| match e {
-        RunError::TimedOut(limit) => format!(
-            "stopped after {} s (the connection's time limit): narrow the query, or check its plan with `explain`",
-            limit.as_secs()
-        ),
-        RunError::Failed(e) => crate::db::error_message(&e),
-    });
+    let result = db.run_within(sql, limit, Some(call_timeout(profile)), false).await.map_err(|e| ran_error(&e));
     let end = if wrap == Wrap::Commit && result.is_ok() { "COMMIT" } else { "ROLLBACK" };
     let ended = db.run_once(end, 1).await;
     let outcome = result?;
     ended.map_err(|e| format!("couldn't {}: {}", end.to_lowercase(), crate::db::error_message(&e)))?;
     Ok(outcome)
+}
+
+/// What an agent is told when its sandbox turned out to be gone.
+const LOST: &str = "the sandbox was lost (the connection was opened again, or the server rolled it back): \
+    what it held is gone; the next call starts a new one";
+
+/// A sandbox's end on `db`: rolled back, and MySQL's autocommit on again.
+async fn end_sandbox(db: &Database) {
+    let _ = db.run_once("ROLLBACK", 1).await;
+    if db.engine() == crate::db::Engine::MySql {
+        let _ = db.run_once("SET autocommit = 1", 1).await;
+    }
+}
+
+/// How long one call may run: the connection's Timeout, else 30 s.
+fn call_timeout(profile: &ConnectionProfile) -> Duration {
+    ConnectForm::from_profile(profile, String::new()).query_timeout().ok().flatten().unwrap_or(DEFAULT_TIMEOUT)
+}
+
+/// Why a call's SQL didn't run, for the agent.
+fn ran_error(e: &RunError) -> String {
+    match e {
+        RunError::TimedOut(limit) => format!(
+            "stopped after {} s (the connection's time limit): narrow the query, or check its plan with `explain`",
+            limit.as_secs()
+        ),
+        RunError::Failed(e) => crate::db::error_message(e),
+    }
 }
 
 /// A result as JSON for the agent: the columns, the rows (values cut at
@@ -876,6 +1067,100 @@ pub(crate) mod tests {
         let rows =
             call(&client, "query", serde_json::json!({ "connection": "shop", "sql": "select id from here" })).await;
         assert!(rows.contains("\"7\""), "{rows}");
+    }
+
+    /// A sandbox: the agent's writes build on each other and its reads see
+    /// them, a failed call doesn't spoil it, nobody else sees anything, and
+    /// idle it's rolled back.
+    #[tokio::test]
+    async fn an_agents_sandbox_keeps_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.db");
+        make_file_db(&path, "CREATE TABLE t (id INTEGER PRIMARY KEY, x INT); INSERT INTO t (x) VALUES (1), (2), (3)");
+        let log = dir.path().join("agents.jsonl");
+        let sandbox = file_connection("box", &path, AgentAccess::Sandbox, ConnectionMode::Production);
+        let server = Server::new("p1".into(), "shop".into(), vec![sandbox], log.clone()).idling(Duration::from_secs(1));
+        let client = connect(server).await;
+        let q = |sql: &str| serde_json::json!({ "connection": "box", "sql": sql });
+        let listed = call(&client, "connections", serde_json::json!({})).await;
+        assert!(listed.contains("write in a sandbox"), "{listed}");
+        assert!(!call(&client, "query", q("insert into t (x) values (4)")).await.starts_with("ERROR"));
+        assert!(call(&client, "query", q("select count(*) from t")).await.contains("\"4\""), "sees its write");
+        // A failed call: back to before it, the sandbox goes on.
+        assert!(call(&client, "query", q("insert into nope values (1)")).await.starts_with("ERROR"));
+        assert!(call(&client, "query", q("select count(*) from t")).await.contains("\"4\""));
+        assert!(!call(&client, "explain", q("select * from t where x = 4")).await.starts_with("ERROR"));
+        // Never anything destructive, sandbox or not.
+        assert!(call(&client, "query", q("delete from t")).await.contains("destructive"));
+        // Nobody else sees it.
+        let look = file_connection("look", &path, AgentAccess::Read, ConnectionMode::Normal);
+        let reader = connect(Server::new("p1".into(), "shop".into(), vec![look], dir.path().join("r.jsonl"))).await;
+        let count = |text: String| text.contains("\"3\"");
+        let look_q = serde_json::json!({ "connection": "look", "sql": "select count(*) from t" });
+        assert!(count(call(&reader, "query", look_q.clone()).await), "not committed");
+        // Idle, it's rolled back; the next call starts a new one.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(count(call(&client, "query", q("select count(*) from t")).await), "rolled back");
+        assert!(count(call(&reader, "query", look_q).await));
+        let text = std::fs::read_to_string(&log).unwrap();
+        let entries: Vec<serde_json::Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert!(entries.iter().filter(|e| e["sandbox"] == serde_json::json!(1)).count() >= 4, "{text}");
+        // The one after the idle rollback is a new sandbox.
+        assert_eq!(entries.last().unwrap()["sandbox"], serde_json::json!(2), "{text}");
+    }
+
+    /// On the servers: a sandbox whose session is killed is never written
+    /// into after it (the next call says it was lost, and nothing from the
+    /// sandbox, before or after, is committed).
+    #[tokio::test]
+    async fn a_killed_sandbox_session_commits_nothing() {
+        for engine in [crate::db::Engine::Postgres, crate::db::Engine::MySql] {
+            let Some((admin, params)) = crate::db::tests::own_live_db(engine, "podelis_agent_sandbox").await else {
+                continue;
+            };
+            admin.run("CREATE TABLE sb (id INT PRIMARY KEY)", 1).await.unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let profile = ConnectionProfile {
+                unknown: crate::config::store::Unknown::default(),
+                name: "box".into(),
+                engine,
+                host: params.host.clone(),
+                port: params.port.to_string(),
+                user: params.user.clone(),
+                database: params.database.clone(),
+                ssl_mode: crate::db::SslMode::Disable,
+                mode: ConnectionMode::Normal,
+                transaction: None,
+                ssh: String::new(),
+                timeout: String::new(),
+                agents: AgentAccess::Sandbox,
+                password_command: vec!["echo".into(), params.password.clone()],
+                legacy_keychain: false,
+            };
+            let server = Server::new("p1".into(), "shop".into(), vec![profile], dir.path().join("a.jsonl"));
+            let client = connect(server).await;
+            let q = |sql: &str| serde_json::json!({ "connection": "box", "sql": sql });
+            assert!(!call(&client, "query", q("insert into sb values (1)")).await.starts_with("ERROR"), "{engine:?}");
+            // Its session, from the agent's own view, then killed from outside.
+            let who = if engine == crate::db::Engine::Postgres {
+                "select pg_backend_pid()"
+            } else {
+                "select connection_id()"
+            };
+            let id_text = call(&client, "query", q(who)).await;
+            let id: String = id_text.chars().filter(char::is_ascii_digit).collect();
+            let kill = if engine == crate::db::Engine::Postgres {
+                format!("select pg_terminate_backend({id})")
+            } else {
+                format!("kill {id}")
+            };
+            admin.run(&kill, 1).await.unwrap();
+            let after = call(&client, "query", q("insert into sb values (2)")).await;
+            assert!(after.starts_with("ERROR") && after.contains("lost"), "{engine:?}: {after}");
+            // Nothing committed: not the write before, not the one after.
+            let count = admin.run("select count(*) from sb", 1).await.unwrap();
+            assert_eq!(count.rows[0][0].as_deref(), Some("0"), "{engine:?}");
+        }
     }
 
     #[tokio::test]

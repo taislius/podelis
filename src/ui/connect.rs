@@ -168,6 +168,7 @@ pub(super) fn form_message(form: &ConnectForm) -> (String, Style) {
             AgentAccess::Approve => {
                 t!("form.help_agents_approve")
             }
+            AgentAccess::Sandbox => t!("form.help_agents_sandbox"),
         },
         ConnectField::Transaction => match form.tx_mode() {
             TxMode::AutoCommit => t!("form.help_autocommit"),

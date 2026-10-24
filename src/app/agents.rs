@@ -30,6 +30,8 @@ impl AgentQuery {
             Some(t!("agent_log.failed", e = e))
         } else if entry.dry_run {
             Some(tn!("agent_log.dry_run", entry.changed.unwrap_or(0)))
+        } else if entry.sandbox.is_some() && entry.changed.is_some_and(|n| n > 0) {
+            Some(tn!("agent_log.in_sandbox", entry.changed.unwrap_or(0)))
         } else if entry.approved {
             Some(tn!("agent_log.approved", entry.changed.unwrap_or(0)))
         } else if entry.changed.is_some_and(|n| n > 0) {
@@ -378,6 +380,17 @@ impl App {
                 self.open_sql_in_tab(Some(name.clone()), &sql, None);
                 self.set_status(t!("agent_log.ran_on", name = name, ran_on = ran_on), false);
             }
+            // The session's sandbox writes as a script in a tab: what it did,
+            // never committed, to read and run if it's wanted.
+            KeyCode::Char('s') if view.session.is_some() => {
+                let Some(i) = row else { return };
+                let Some(script) = self.sandbox_script(i) else {
+                    return self.set_status(t!("agent_log.no_sandbox").to_string(), true);
+                };
+                self.agents.view = None;
+                self.open_sql_in_tab(Some(t!("agent_log.sandbox_tab").to_string()), &script, None);
+                self.set_status(t!("agent_log.sandbox_kept").to_string(), false);
+            }
             KeyCode::Char('y') if view.session.is_some() => {
                 if let Some(q) = row.and_then(|i| self.agents.log.get(i)) {
                     let sql = q.entry.sql.clone();
@@ -386,6 +399,42 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// What one sandbox wrote, as a script: the sandbox of call `i` (on
+    /// its connection), else its session's last one; the writes that ran,
+    /// in the order they ran, with where they came from. `None` if none.
+    fn sandbox_script(&self, i: usize) -> Option<String> {
+        let log = &self.agents.log;
+        let picked = log.get(i)?;
+        let session = &picked.entry.session;
+        // The call's sandbox, else the session's newest (the log is newest
+        // first).
+        let (connection, number) = if let Some(n) = picked.entry.sandbox {
+            (picked.entry.connection.clone(), n)
+        } else {
+            let q = log.iter().find(|q| &q.entry.session == session && q.entry.sandbox.is_some())?;
+            (q.entry.connection.clone(), q.entry.sandbox?)
+        };
+        // In the order they ran: the log's, backwards.
+        let calls: Vec<&AgentQuery> = log
+            .iter()
+            .rev()
+            .filter(|q| &q.entry.session == session && q.entry.connection == connection)
+            .filter(|q| q.entry.sandbox == Some(number) && q.entry.tool == "query")
+            .filter(|q| q.entry.error.is_none() && q.entry.refused.is_none())
+            .filter(|q| analyze::analyze(&parse(&q.entry.sql, q.engine)).iter().any(StatementInfo::modifies))
+            .collect();
+        let first = calls.first()?;
+        let who = first.entry.name.clone().unwrap_or_else(|| first.entry.agent.clone());
+        let mut script = format!(
+            "-- {}\n",
+            t!("agent_log.sandbox_header", agent = who, connection = connection, at = first.entry.at)
+        );
+        for q in calls {
+            let _ = writeln!(script, "{};", q.entry.sql.trim().trim_end_matches(';'));
+        }
+        Some(script)
     }
 
     /// One call in full, for the text view.

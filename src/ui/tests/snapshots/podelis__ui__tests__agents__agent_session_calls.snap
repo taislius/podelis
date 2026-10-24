@@ -1,5 +1,6 @@
 ---
 source: src/ui/tests/agents.rs
+assertion_line: 64
 expression: "render(&mut app, 120, 14)"
 ---
 " >_  PODĖLIS v0.0.0   │  project  shop ▼                                                                                "
@@ -13,6 +14,6 @@ expression: "render(&mut app, 120, 14)"
 "│  │                                                                                                                │  │"
 "│  │                                                                                                                │  │"
 "│ V│                                                                                                                │  │"
-"│  └─────────────────────────────── ↵ details · o open in a tab · y copy SQL · / search · ! worth a look · Esc back ┘s │"
+"│  └─────── ↵ details · o open in a tab · y copy SQL · s sandbox as a script · / search · ! worth a look · Esc back ┘s │"
 "└────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────┘"
 " ● prod  db.internal:3306 · MySQL  3 rows in 4 ms                                                                       "

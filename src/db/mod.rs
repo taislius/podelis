@@ -350,6 +350,18 @@ impl Database {
         &self.0.version
     }
 
+    /// Which server session the connection's session is (PostgreSQL's
+    /// backend pid, MySQL's connection id; 0 for SQLite): another one after
+    /// a reconnect, and with it any transaction is gone.
+    pub fn session_id(&self) -> i64 {
+        self.0.backend_id.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Whether `other` is this same connection (not one opened again).
+    pub fn same(&self, other: &Database) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
     /// The session's `sql_mode` when last read (empty for other engines).
     pub fn sql_mode(&self) -> String {
         self.0.sql_mode.lock().map(|m| m.clone()).unwrap_or_default()

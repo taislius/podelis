@@ -114,9 +114,14 @@ seconds = "prieš {n} s"
 approve = "rašyti, kai patvirtinate"
 none = "neleidžiama"
 read = "skaityti"
+sandbox = "rašyti smėlio dėžėje"
 write = "skaityti ir rašyti"
 
 [agent_log]
+no_sandbox = "Ši sesija smėlio dėžėje nieko nerašė"
+sandbox_header = "Ką {agent} rašė smėlio dėžėje ryšyje {connection} (nuo {at}): niekada nepatvirtinta; smėlio dėžė atšaukta"
+sandbox_kept = "Sesijos smėlio dėžės rašymai naujoje kortelėje: perskaitykite, tada vykdykite, jei jų reikia"
+sandbox_tab = "Agento smėlio dėžė"
 agent = "Agentas"
 agents = "agentai"
 approved_write = "Leista {agent} rašyti į {connection}"
@@ -150,6 +155,11 @@ few = "pakeistos {n} eilutės"
 one = "pakeista {n} eilutė"
 other = "pakeista {n} eilučių"
 
+[agent_log.in_sandbox]
+few = "smėlio dėžėje: pakeitė {n} eilutes"
+one = "smėlio dėžėje: pakeitė {n} eilutę"
+other = "smėlio dėžėje: pakeitė {n} eilučių"
+
 [agent_log.dry_run]
 few = "bandomasis: pakeistų {n} eilutes"
 one = "bandomasis: pakeistų {n} eilutę"
@@ -166,7 +176,7 @@ one = "pakeista {n} eilutė"
 other = "pakeista {n} eilučių"
 
 [agents]
-call_keys = "↵ išsamiau · o atverti kortelėje · y kopijuoti SQL · / ieškoti · ! verta dėmesio · Esc atgal"
+call_keys = "↵ išsamiau · o atverti kortelėje · y kopijuoti SQL · / ieškoti · ! verta dėmesio · s smėlio dėžė kaip scenarijus · Esc atgal"
 calls_of = "kvietimų: {shown} iš {total}"
 earlier = "anksčiau"
 failed = "nepavyko: {n}"
@@ -452,6 +462,7 @@ engine = "Variklis"
 file = "Failas"
 from_command = "iš slaptažodžio komandos"
 help_agents_approve = "DI agentai gali rašyti, kai čia patvirtinate kiekvieną rašymą (su bandomuoju vykdymu): niekada DROP ar TRUNCATE"
+help_agents_sandbox = "DI agentai rašo smėlio dėžėje: viena atvira transakcija, niekada nepatvirtinama; Ctrl+K a, tada s išsaugo, ką jie padarė, kaip scenarijų"
 help_agents_none = "Nepasiekiama DI agentams (podelis mcp); ←/→ – leisti"
 help_agents_read = "DI agentai gali skaityti, sesijoje, kurią serveris laiko tik skaitymo"
 help_agents_write = "DI agentai gali ir rašyti: niekada DROP ar TRUNCATE, o gamybinėje – tik bandomasis vykdymas"

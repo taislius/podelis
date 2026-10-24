@@ -27,6 +27,9 @@ pub enum Wrap {
     Commit,
     /// Shown to the user with its dry run, then committed if they approve.
     Ask,
+    /// In the connection's sandbox: its transaction (begun by the first
+    /// call), after a savepoint of its own; never committed.
+    Sandbox,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,7 +50,8 @@ pub fn verdict(access: AgentAccess, mode: ConnectionMode, sql: &str, engine: Eng
         Err(why) => return Verdict::Refuse(why),
     };
     let write = infos.iter().find(|i| i.modifies());
-    let may_write = matches!(access, AgentAccess::Write | AgentAccess::Approve) && mode != ConnectionMode::ReadOnly;
+    let may_write = matches!(access, AgentAccess::Write | AgentAccess::Approve | AgentAccess::Sandbox)
+        && mode != ConnectionMode::ReadOnly;
     if let Some(write) = write
         && !may_write
     {
@@ -65,6 +69,21 @@ pub fn verdict(access: AgentAccess, mode: ConnectionMode, sql: &str, engine: Eng
     }
     if access == AgentAccess::Approve {
         return Verdict::Run(if write.is_some() { Wrap::Ask } else { Wrap::ReadOnly });
+    }
+    // In a sandbox everything runs in its transaction (reads see its
+    // writes); nothing is committed, so production too. Schema changes
+    // only where they can be rolled back.
+    if access == AgentAccess::Sandbox && may_write {
+        if engine.capabilities().ddl_commits
+            && let Some(ddl) = infos.iter().find(|i| i.kind == Kind::Ddl)
+        {
+            return Verdict::Refuse(format!(
+                "“{}” changes the schema, which {} commits at once: not in a sandbox",
+                ddl.summary,
+                engine.label()
+            ));
+        }
+        return Verdict::Run(Wrap::Sandbox);
     }
     if mode == ConnectionMode::Production {
         if let Some(ddl) = infos.iter().find(|i| i.kind == Kind::Ddl) {

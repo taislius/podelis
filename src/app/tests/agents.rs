@@ -391,3 +391,49 @@ async fn closing_another_tab_while_asking_keeps_the_question() {
     app.close_tab();
     assert!(app.asking.is_none());
 }
+
+/// What an agent wrote in its sandbox comes back as a script: its writes
+/// that ran, in order, never its reads or failures.
+#[test]
+fn an_agents_sandbox_writes_become_a_script() {
+    use crate::agents::{Entry, append, log_path};
+    let (mut app, dir) = test_app();
+    app.set_data_dir(dir.path().to_path_buf());
+    let shared = ConnectForm { name: "dev".into(), agents: crate::db::AgentAccess::Sandbox, ..ConnectForm::new() };
+    app.store.upsert(&project_id(&app), None, shared.to_profile()).unwrap();
+    let log = log_path(dir.path(), &project_id(&app));
+    let call = |at: &str, sql: &str| Entry {
+        session: "s1".into(),
+        at: format!("2026-10-24T{at}:00+03:00"),
+        agent: "claude-code".into(),
+        connection: "dev".into(),
+        tool: "query".into(),
+        sql: sql.into(),
+        sandbox: Some(1),
+        ..Entry::default()
+    };
+    append(&log, Entry { changed: Some(1), ..call("09:00", "insert into t values (1)") }).unwrap();
+    append(&log, call("09:01", "select * from t")).unwrap();
+    append(&log, Entry { error: Some("no such table".into()), ..call("09:02", "insert into nope values (1)") })
+        .unwrap();
+    // In the same second as the insert before it: still after it.
+    append(&log, Entry { changed: Some(2), ..call("09:00", "update t set x = 2 where id < 3;") }).unwrap();
+    // Another connection's, and a later sandbox's: not in this script.
+    append(&log, Entry { connection: "shop".into(), changed: Some(1), ..call("09:04", "insert into s values (9)") })
+        .unwrap();
+    append(&log, Entry { sandbox: Some(2), changed: Some(1), ..call("09:05", "insert into t values (5)") }).unwrap();
+    app.open_agents();
+    app.handle_agents_key(key(KeyCode::Enter));
+    // Marked in the session's calls.
+    let flags: Vec<Option<String>> = app.agents_rows().iter().map(|&i| app.agents.log[i].flag.clone()).collect();
+    assert!(flags.contains(&Some("in the sandbox: changed 2 rows".into())), "{flags:?}");
+    // On a call of the first sandbox (the newest is the second's, then
+    // shop's): its script.
+    app.handle_agents_key(key(KeyCode::Down));
+    app.handle_agents_key(key(KeyCode::Down));
+    app.handle_agents_key(key(KeyCode::Char('s')));
+    let script = app.tab.editor.text();
+    assert!(script.starts_with("-- What claude-code wrote in its sandbox on dev"), "{script}");
+    assert!(script.ends_with("insert into t values (1);\nupdate t set x = 2 where id < 3;\n"), "{script}");
+    assert_eq!(app.tabs[app.active_tab].name, "Agent sandbox");
+}

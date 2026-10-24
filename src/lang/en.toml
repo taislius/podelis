@@ -114,9 +114,14 @@ seconds = "{n} s ago"
 approve = "write when you approve"
 none = "not shared"
 read = "read"
+sandbox = "write in a sandbox"
 write = "read and write"
 
 [agent_log]
+no_sandbox = "This session wrote nothing in a sandbox"
+sandbox_header = "What {agent} wrote in its sandbox on {connection} (from {at}): never committed; the sandbox was rolled back"
+sandbox_kept = "The session's sandbox writes are in a new tab: read them, then run them if they're wanted"
+sandbox_tab = "Agent sandbox"
 agent = "Agent"
 agents = "agents"
 approved_write = "Approved {agent}'s write on {connection}"
@@ -148,6 +153,10 @@ other = "approved by you: changed {n} rows"
 one = "changed {n} row"
 other = "changed {n} rows"
 
+[agent_log.in_sandbox]
+one = "in the sandbox: changed {n} row"
+other = "in the sandbox: changed {n} rows"
+
 [agent_log.dry_run]
 one = "dry run: would change {n} row"
 other = "dry run: would change {n} rows"
@@ -161,7 +170,7 @@ one = "{n} row changed"
 other = "{n} rows changed"
 
 [agents]
-call_keys = "↵ details · o open in a tab · y copy SQL · / search · ! worth a look · Esc back"
+call_keys = "↵ details · o open in a tab · y copy SQL · s sandbox as a script · / search · ! worth a look · Esc back"
 calls_of = "{shown} of {total} calls"
 earlier = "earlier"
 failed = "{n} failed"
@@ -437,6 +446,7 @@ engine = "Engine"
 file = "File"
 from_command = "from Passwd cmd"
 help_agents_approve = "AI agents can write once you approve each write here (with its dry run): never DROP or TRUNCATE"
+help_agents_sandbox = "AI agents write in a sandbox: one transaction kept open, never committed; Ctrl+K a then s keeps what they did as a script"
 help_agents_none = "Not shared with AI agents (podelis mcp); ←/→ to share it"
 help_agents_read = "AI agents can read, in a session the server keeps read-only"
 help_agents_write = "AI agents can write too: never DROP or TRUNCATE, and on production only a dry run"

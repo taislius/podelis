@@ -104,9 +104,15 @@ pub enum AgentAccess {
     /// Writes once the user approves each one in Podėlis (shown with its
     /// dry run), production included; never anything destructive.
     Approve,
+    /// Writes in a sandbox: one transaction kept open between the agent's
+    /// calls, a savepoint before each, never committed; rolled back when
+    /// the agent goes (or after a while idle). The user keeps what it did
+    /// as a script, from the agent log. Never anything destructive.
+    Sandbox,
 }
 
-const AGENT_ACCESS: [AgentAccess; 4] = [AgentAccess::None, AgentAccess::Read, AgentAccess::Write, AgentAccess::Approve];
+const AGENT_ACCESS: [AgentAccess; 5] =
+    [AgentAccess::None, AgentAccess::Read, AgentAccess::Write, AgentAccess::Approve, AgentAccess::Sandbox];
 
 impl AgentAccess {
     pub fn label(self) -> &'static str {
@@ -115,6 +121,7 @@ impl AgentAccess {
             AgentAccess::Read => t!("agent_access.read"),
             AgentAccess::Write => t!("agent_access.write"),
             AgentAccess::Approve => t!("agent_access.approve"),
+            AgentAccess::Sandbox => t!("agent_access.sandbox"),
         }
     }
 

@@ -61,6 +61,10 @@ pub struct Entry {
     /// The user approved it in Podėlis.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub approved: bool,
+    /// It ran in the connection's sandbox (`AgentAccess::Sandbox`), this
+    /// one in the session: kept only as long as it, never committed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<u32>,
 }
 
 impl Entry {
