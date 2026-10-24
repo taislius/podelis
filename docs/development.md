@@ -78,15 +78,25 @@ GitHub Actions, kept small to save minutes:
   building on the newest Ubuntu would leave out older systems.
 - `release.yml` — on a `v*` tag, builds binaries for Linux and macOS and
   attaches them to the release; `packaging/homebrew/podelis.rb`
-  is a formula template for a Homebrew tap. Pushing a moved tag runs it
+  is a formula template for a Homebrew tap. Its last job points
+  taislius/homebrew-tap at the release, but only with a
+  `HOMEBREW_TAP_TOKEN` secret in taislius/podelis (a fine-grained token
+  with Contents read and write on homebrew-tap); without it, or for a
+  pre-release tag, it says so and skips. By hand:
+  `scripts/homebrew-formula.sh <version> <folder of the .sha256 files>`
+  writes the formula, committed in the tap as Taislius (a fresh clone
+  takes the global git identity: give `-c user.name=… -c user.email=…`). Pushing a moved tag runs it
   again and replaces the release's files, which breaks the tap's
   checksums: cancel that run (`gh run cancel <id>`) unless that's wanted.
   The release itself is made first, once; each build then uploads to it,
   trying again a few times when GitHub's API times out.
 - `retry.yml` — when a Release or Platforms run fails, runs its failed
   jobs once more (a macOS runner never picked up, an API timeout: GitHub's
-  own trouble). A second failure stays failed for a person to look at:
-  `gh run rerun <id> --failed --repo taislius/podelis`.
+  own trouble). Jobs that never got a runner at all are run again up to
+  three times (v0.6.0's macOS tests needed three attempts). Any other
+  second failure stays failed for a person to look at:
+  `gh run rerun <id> --failed --repo taislius/podelis` (it needs admin
+  rights on the repository).
 
 What the automated tests can't cover (real terminals, remote servers, big
 tables) is in [manual-testing.md](manual-testing.md): data sets
