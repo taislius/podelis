@@ -204,6 +204,7 @@ asking_progress = "Klausiama… parašyta simbolių: {chars}, {secs} s (Esc sust
 assumed = "spėta: {fact} (Ctrl+K k: patvirtinti ar pamiršti)"
 busy = "Atsakoma į klausimą: palaukite arba Esc sustabdo"
 check = "PATIKRINKITE"
+looked_at = "dar peržiūrėjo: {tables}"
 check_it = "SQL iš {model}: patikrinkite – {problems}"
 failed = "Nepavyko paklausti: {e}"
 gateway_unreachable = "nepavyko pasiekti tarpininko: {e}"

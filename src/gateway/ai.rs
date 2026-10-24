@@ -386,7 +386,9 @@ fn ask_system(engine: &str, context: &str) -> String {
          read-only query (SELECT or WITH); never change data. If these tables can't answer the \
          question, say so instead of writing a query. If you had to assume what a column or a value \
          means and nothing below says it, end with each assumption on a line of its own, as \
-         `FACT: subject | relation | value` (for example `FACT: orders.status | means | 3 = cancelled`), \
+         `FACT: subject | relation | value` (for example `FACT: orders.status | means | 3 = cancelled`, \
+         `FACT: customer | also called | client` for another name the question used, or \
+         `FACT: revenue | defined as | sum(payment.amount)` for a business term you had to define), \
          at most three: the user will confirm or correct them.\n\n{context}"
     )
 }
@@ -410,6 +412,136 @@ fn ask_or_explain(explain: bool, engine: &str, context: &str, question: &str) ->
         (explain_system(engine, context), format!("What does this query do?\n\n```sql\n{question}\n```"))
     } else {
         (ask_system(engine, context), question.to_string())
+    }
+}
+
+/// The most rounds of lookups (`find_tables`, `describe_table`) before the
+/// model must answer, and the most tables it may describe.
+const LOOKUP_ROUNDS: usize = 2;
+const LOOKUP_TABLES: usize = 8;
+
+/// Added to the system prompt when the model may look for itself.
+const LOOKUP_NOTE: &str = "\n\nIf the question needs a table that isn't below, look for it: `find_tables` with \
+    words for it (its name, a column, what it holds), then `describe_table` for the ones that fit. At most \
+    two rounds of lookups; then write the query, or say what's missing.";
+
+/// The tools a model asked for SQL may call: they read the schema the
+/// context comes from (names, columns, keys, comments), never rows.
+fn lookup_tools() -> Vec<models::Tool> {
+    vec![
+        models::Tool {
+            name: "find_tables",
+            description: "Find tables in this database whose names, columns or comments match the words, \
+                          for what the tables you were shown don't cover. Returns each table's name and what matched.",
+            input: json!({
+                "type": "object",
+                "properties": { "words": { "type": "string", "description": "words for what's needed, e.g. \"payments revenue\"" } },
+                "required": ["words"],
+            }),
+        },
+        models::Tool {
+            name: "describe_table",
+            description: "Show one table's columns, keys, where its foreign keys point and its comments, \
+                          as the tables you were shown are listed.",
+            input: json!({
+                "type": "object",
+                "properties": { "name": { "type": "string", "description": "the table, as `schema.table` or `table`" } },
+                "required": ["name"],
+            }),
+        },
+    ]
+}
+
+/// What came of a conversation: the SQL (if any) and the model's words,
+/// names still unknown, its last reply, how many answers it took, the
+/// tokens, and the tables it looked up.
+struct Answered {
+    sql: Option<String>,
+    said: String,
+    problems: Vec<String>,
+    reply: models::Reply,
+    attempts: usize,
+    input_tokens: u64,
+    output_tokens: u64,
+    looked_at: Vec<String>,
+}
+
+/// Asks until there's an answer: lookups the model makes are answered (two
+/// rounds at most), and SQL with names not in the schema goes back to it
+/// ([`NAME_RETRIES`] times at most).
+async fn converse(
+    config: &ModelConfig,
+    key: Option<&str>,
+    prompt: &mut Prompt,
+    id: &Value,
+    write: &mut OwnedWriteHalf,
+    schema: &Schema,
+    explain: bool,
+) -> Result<Answered, models::ModelError> {
+    let (mut input_tokens, mut output_tokens, mut attempts, mut rounds) = (0, 0, 0, 0);
+    let mut looked_at = Vec::new();
+    loop {
+        let reply = streamed(config, key, prompt, id, "ask.delta", write).await?;
+        input_tokens += reply.input_tokens;
+        output_tokens += reply.output_tokens;
+        // Lookups: answered from the schema, then the model goes on.
+        if !reply.calls.is_empty() && !prompt.tools.is_empty() && !prompt.no_more_calls {
+            rounds += 1;
+            prompt.messages.push(models::Message {
+                calls: reply.calls.clone(),
+                ..models::Message::new("assistant", reply.text.clone())
+            });
+            for call in &reply.calls {
+                let answer = look_up(schema, call, &mut looked_at);
+                prompt.messages.push(models::Message::tool_answer(&call.id, answer));
+            }
+            prompt.no_more_calls = rounds >= LOOKUP_ROUNDS || looked_at.len() >= LOOKUP_TABLES;
+            continue;
+        }
+        attempts += 1;
+        // An explanation is words (its blocks quoted): no SQL to check.
+        let (sql, said) =
+            if explain { (None, reply.text.trim().to_string()) } else { super::names::split_answer(&reply.text) };
+        let problems =
+            sql.as_deref().map(|sql| super::names::problems(sql, schema.dialect, schema)).unwrap_or_default();
+        if problems.is_empty() || attempts > NAME_RETRIES {
+            return Ok(Answered { sql, said, problems, reply, attempts, input_tokens, output_tokens, looked_at });
+        }
+        // Back to the model, in the same conversation.
+        prompt.messages.push(models::Message::new("assistant", reply.text.clone()));
+        let feedback = format!(
+            "That doesn't fit the schema: {}. Use only the tables and columns given, and write the query again.",
+            problems.join("; ")
+        );
+        prompt.messages.push(models::Message::new("user", feedback));
+    }
+}
+
+/// A lookup the model asked for, answered from the schema; the tables it
+/// describes are noted in `looked_at` (at most [`LOOKUP_TABLES`]).
+fn look_up(schema: &Schema, call: &models::ToolCall, looked_at: &mut Vec<String>) -> String {
+    let arg = |name: &str| call.input.get(name).and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    match call.name.as_str() {
+        "find_tables" => {
+            let found = super::context::find(schema, &arg("words"));
+            if found.is_empty() {
+                return "No table matches those words.".into();
+            }
+            found.iter().map(|t| format!("{} ({})", t.name, t.why)).collect::<Vec<_>>().join("\n")
+        }
+        "describe_table" if looked_at.len() >= LOOKUP_TABLES => {
+            "Enough tables looked up: write the query with what you have.".into()
+        }
+        "describe_table" => match super::context::describe(schema, &arg("name")) {
+            Some((name, text)) => {
+                if !looked_at.contains(&name) {
+                    looked_at.push(name);
+                }
+                text
+            }
+            None => format!("There's no table named {}: find_tables looks for one by words.", arg("name")),
+        },
+        other => format!("There's no tool named {other}."),
     }
 }
 
@@ -473,39 +605,27 @@ pub async fn ask(
     let (system, content) = ask_or_explain(explain, &source.schema.engine, &built.text, question);
     let mut prompt = Prompt {
         system: Some(system),
-        messages: vec![models::Message { role: "user".into(), content }],
+        messages: vec![models::Message::new("user", content)],
         max_tokens: None,
+        tools: Vec::new(),
+        no_more_calls: false,
     };
-    let (mut input_tokens, mut output_tokens, mut attempts) = (0, 0, 0);
-    let (sql, said, problems, reply) = loop {
-        attempts += 1;
-        let reply = match streamed(&config, key.as_deref(), &prompt, id, "ask.delta", write).await {
-            Ok(reply) => reply,
-            Err(e) => {
-                refused_key(caches, &config, &e);
-                return (Err(RpcError::new(code::MODEL, e.message)), about);
-            }
-        };
-        input_tokens += reply.input_tokens;
-        output_tokens += reply.output_tokens;
-        // An explanation is words (its blocks quoted): no SQL to check.
-        let (sql, said) =
-            if explain { (None, reply.text.trim().to_string()) } else { super::names::split_answer(&reply.text) };
-        let problems = sql
-            .as_deref()
-            .map(|sql| super::names::problems(sql, source.schema.dialect, &source.schema))
-            .unwrap_or_default();
-        if problems.is_empty() || attempts > NAME_RETRIES {
-            break (sql, said, problems, reply);
+    // A model that may look for more tables, when it's asked for SQL.
+    if config.uses_tools() && !explain {
+        prompt.tools = lookup_tools();
+        if let Some(system) = &mut prompt.system {
+            system.push_str(LOOKUP_NOTE);
         }
-        // Back to the model, in the same conversation.
-        prompt.messages.push(models::Message { role: "assistant".into(), content: reply.text.clone() });
-        let feedback = format!(
-            "That doesn't fit the schema: {}. Use only the tables and columns given, and write the query again.",
-            problems.join("; ")
-        );
-        prompt.messages.push(models::Message { role: "user".into(), content: feedback });
+    }
+    let answered = match converse(&config, key.as_deref(), &mut prompt, id, write, &source.schema, explain).await {
+        Ok(answered) => answered,
+        Err(e) => {
+            refused_key(caches, &config, &e);
+            return (Err(RpcError::new(code::MODEL, e.message)), about);
+        }
     };
+    let Answered { sql, said, problems, reply, attempts, input_tokens, output_tokens, looked_at } = answered;
+    about["looked_up"] = json!(looked_at.len());
     about["tables"] = json!(built.tables.len());
     about["attempts"] = json!(attempts);
     about["input_tokens"] = json!(input_tokens);
@@ -522,6 +642,7 @@ pub async fn ask(
         "suggested": suggested.iter().map(super::memory::Fact::to_json).collect::<Vec<_>>(),
         "problems": problems,
         "tables": tables,
+        "looked_at": looked_at,
         "facts": built.facts,
         "model": config.name,
         "provider_model": reply.model,

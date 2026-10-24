@@ -63,18 +63,40 @@ impl Fact {
 }
 
 /// A fact as typed (`orders.status 3 = cancelled`, `revenue is orders.total
-/// minus refunds`): what it's about, then what's said; a first word `is`,
-/// `are`, `means` or `equals` says how it relates (else `means`).
+/// minus refunds`): what it's about, then what's said; first words say how
+/// it relates (else `means`):
+/// - `is`, `are`, `means`, `equals`;
+/// - `also called` / `aka`: another name people use for it (`customer also
+///   called client`): a question saying "clients" finds `customer`;
+/// - `defined as`: a business term's formula or filter (`revenue defined as
+///   sum(payment.amount) minus refunds`), used for that term.
 pub fn parse_fact(text: &str) -> Option<(String, String, String)> {
     let mut words = text.split_whitespace();
     let subject = words.next()?;
     let rest: Vec<&str> = words.collect();
-    let (relation, value) = match rest.split_first() {
-        Some((first @ &("is" | "are" | "means" | "equals"), value)) if !value.is_empty() => (*first, value),
-        _ => ("means", rest.as_slice()),
+    let lower: Vec<String> = rest.iter().map(|w| w.to_lowercase()).collect();
+    let starts = |seq: &[&str]| lower.len() > seq.len() && lower.iter().zip(seq).all(|(a, b)| a == b);
+    let (relation, value) = if starts(&["also", "called"]) {
+        (ALSO_CALLED, &rest[2..])
+    } else if starts(&["aka"]) || starts(&["a.k.a."]) {
+        (ALSO_CALLED, &rest[1..])
+    } else if starts(&["is", "defined", "as"]) {
+        (DEFINED_AS, &rest[3..])
+    } else if starts(&["defined", "as"]) {
+        (DEFINED_AS, &rest[2..])
+    } else {
+        match rest.split_first() {
+            Some((first @ &("is" | "are" | "means" | "equals"), value)) if !value.is_empty() => (*first, value),
+            _ => ("means", rest.as_slice()),
+        }
     };
     (!value.is_empty()).then(|| (subject.to_string(), relation.to_string(), value.join(" ")))
 }
+
+/// Another name people use for a table, column or term.
+pub const ALSO_CALLED: &str = "also called";
+/// A business term's formula or filter.
+pub const DEFINED_AS: &str = "defined as";
 
 pub fn path(config_dir: &Path, project_id: &str) -> PathBuf {
     config_dir.join("memory").join(format!("{project_id}.db"))
@@ -255,9 +277,26 @@ fn fts_query(text: &str) -> String {
     let words: Vec<String> = text
         .split(|c: char| !c.is_alphanumeric() && c != '_')
         .filter(|w| w.chars().count() >= 2)
-        .map(|w| format!("\"{}\"", w.to_lowercase()))
+        .map(|w| {
+            let w = w.to_lowercase();
+            // The word, and its stem as a prefix: "clients" finds a fact
+            // about a "client", "rented" one about "rental".
+            match stem(&w) {
+                Some(stem) => format!("\"{w}\" OR \"{stem}\"*"),
+                None => format!("\"{w}\""),
+            }
+        })
         .collect();
     words.join(" OR ")
+}
+
+/// `w` without a plural ending, `-ed`, `-ing` or `-al`, if what's left is
+/// still a word (four letters or more).
+fn stem(w: &str) -> Option<String> {
+    ["ies", "es", "s", "ed", "ing", "al"]
+        .iter()
+        .find_map(|end| w.strip_suffix(end).filter(|rest| rest.chars().count() >= 4))
+        .map(str::to_string)
 }
 
 /// The confirmed facts for one question, read once: all of them, and

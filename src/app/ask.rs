@@ -342,6 +342,12 @@ impl App {
         if !problems.is_empty() {
             let _ = writeln!(block, "-- {}: {}", t!("ask.check"), problems.join("; "));
         }
+        // The tables it looked up itself, beyond those it was shown.
+        let looked: Vec<&str> =
+            answer["looked_at"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str).collect();
+        if !looked.is_empty() {
+            let _ = writeln!(block, "-- {}", t!("ask.looked_at", tables = looked.join(", ")));
+        }
         let assumed: Vec<String> = answer["suggested"]
             .as_array()
             .into_iter()

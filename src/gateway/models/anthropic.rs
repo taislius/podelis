@@ -38,8 +38,7 @@ fn uses_fallbacks(config: &ModelConfig) -> bool {
 /// The request's body.
 pub(super) fn body(config: &ModelConfig, prompt: &Prompt) -> Value {
     let max_tokens = prompt.max_tokens.or(config.max_tokens).unwrap_or(DEFAULT_MAX_TOKENS);
-    let messages: Vec<Value> =
-        prompt.messages.iter().map(|m| json!({ "role": m.role, "content": m.content })).collect();
+    let messages = messages(prompt);
     let mut body = json!({
         "model": config.model,
         "max_tokens": max_tokens,
@@ -58,7 +57,50 @@ pub(super) fn body(config: &ModelConfig, prompt: &Prompt) -> Value {
     if uses_fallbacks(config) {
         body["fallbacks"] = json!("default");
     }
+    if !prompt.tools.is_empty() {
+        let tools: Vec<Value> = prompt
+            .tools
+            .iter()
+            .map(|t| json!({ "name": t.name, "description": t.description, "input_schema": t.input }))
+            .collect();
+        body["tools"] = json!(tools);
+        if prompt.no_more_calls {
+            body["tool_choice"] = json!({ "type": "none" });
+        }
+    }
     body
+}
+
+/// The conversation in the API's terms: a turn with tool calls is text and
+/// `tool_use` blocks; tools' answers to one turn go together in the next
+/// user turn, as `tool_result` blocks.
+fn messages(prompt: &Prompt) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for m in &prompt.messages {
+        if let Some(id) = &m.answers {
+            let block = json!({ "type": "tool_result", "tool_use_id": id, "content": m.content });
+            match out.last_mut() {
+                Some(last) if last["role"] == "user" && last["content"].is_array() => {
+                    if let Some(blocks) = last["content"].as_array_mut() {
+                        blocks.push(block);
+                    }
+                }
+                _ => out.push(json!({ "role": "user", "content": [block] })),
+            }
+        } else if !m.calls.is_empty() {
+            let mut blocks = Vec::new();
+            if !m.content.is_empty() {
+                blocks.push(json!({ "type": "text", "text": m.content }));
+            }
+            blocks.extend(
+                m.calls.iter().map(|c| json!({ "type": "tool_use", "id": c.id, "name": c.name, "input": c.input })),
+            );
+            out.push(json!({ "role": m.role, "content": blocks }));
+        } else {
+            out.push(json!({ "role": m.role, "content": m.content }));
+        }
+    }
+    out
 }
 
 pub(super) async fn send(
@@ -90,6 +132,8 @@ pub(super) async fn send(
 #[derive(Default)]
 pub(super) struct Answer {
     pub reply: Reply,
+    /// The tool call being streamed: its input's JSON so far.
+    call_input: String,
 }
 
 impl Answer {
@@ -110,6 +154,27 @@ impl Answer {
                 let text = data.pointer("/delta/text").and_then(Value::as_str).unwrap_or_default();
                 self.reply.text.push_str(text);
                 on_text(text);
+            }
+            // A tool call: its id and name, then its input in pieces.
+            "content_block_start" if data.pointer("/content_block/type") == Some(&json!("tool_use")) => {
+                let field = |name: &str| {
+                    data.pointer(&format!("/content_block/{name}"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                self.reply.calls.push(super::ToolCall { id: field("id"), name: field("name"), input: json!({}) });
+                self.call_input.clear();
+            }
+            "content_block_delta" if data.pointer("/delta/type") == Some(&json!("input_json_delta")) => {
+                self.call_input
+                    .push_str(data.pointer("/delta/partial_json").and_then(Value::as_str).unwrap_or_default());
+            }
+            "content_block_stop" if !self.call_input.is_empty() => {
+                if let Some(call) = self.reply.calls.last_mut() {
+                    call.input = serde_json::from_str(&self.call_input).unwrap_or_else(|_| json!({}));
+                }
+                self.call_input.clear();
             }
             "message_delta" => {
                 if let Some(reason) = data.pointer("/delta/stop_reason").and_then(Value::as_str) {

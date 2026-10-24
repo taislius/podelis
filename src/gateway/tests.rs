@@ -430,6 +430,8 @@ async fn ask_checks_the_models_sql_against_the_schema_and_never_runs_it() {
             && !requests[0].contains("secret@example.com")
     );
     assert!(!requests[0].contains("audit_log"));
+    // A model on this machine isn't offered lookups unless it's set to.
+    assert!(!requests[0].contains("find_tables"));
     assert!(requests[1].contains("no table it reads has a column `price`"), "{}", requests[1]);
     // Nothing ran: the orders table is as it was (empty).
     let log = std::fs::read_to_string(super::log_path(dir.path())).unwrap();
@@ -437,6 +439,48 @@ async fn ask_checks_the_models_sql_against_the_schema_and_never_runs_it() {
         log.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).find(|l| l["method"] == "ask").unwrap();
     assert_eq!((entry["attempts"].clone(), entry["model"].clone()), (json!(2), json!("near")));
     assert!(!log.contains("products sold") && !log.contains("SELECT"), "{log}");
+}
+
+/// A model that may look for itself asks for a table it wasn't shown;
+/// it gets the table's columns (never rows), and says what it looked at.
+#[tokio::test]
+async fn ask_lets_the_model_look_up_a_table_it_was_not_shown() {
+    let lookup = sse(&[
+        json!({"type":"message_start","message":{"model":"claude-opus-5-5","usage":{"input_tokens":100}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"describe_table","input":{}}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"name\": "}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"audit_log\"}"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":10}}),
+        json!({"type":"message_stop"}),
+    ]);
+    let answer = claude_answer("```sql\nSELECT count(*) FROM audit_log\n```\nCounts the audit entries.");
+    let (url, server) = fake_model(vec![(200, lookup), (200, answer)]).await;
+    let dir = tempfile::tempdir().unwrap();
+    saved_shop(dir.path()).await;
+    let config = format!(
+        "[[models]]\nname = \"near\"\napi = \"anthropic\"\nurl = \"{url}\"\nmodel = \"claude-opus-5-5\"\ntools = true\n"
+    );
+    std::fs::write(dir.path().join("config.toml"), config).unwrap();
+    let _gateway = start(dir.path(), None);
+    let mut client = connect(dir.path()).await;
+    let ask = json!({ "project": "p", "connection": "shop", "question": "products sold per product name" });
+    let answer = client.call("ask", ask).await.unwrap();
+    assert!(answer["sql"].as_str().unwrap().contains("FROM audit_log"), "{answer}");
+    assert_eq!(answer["problems"], json!([]), "its SQL is checked against the whole schema");
+    assert!(
+        answer["looked_at"].as_array().unwrap().iter().any(|t| t.as_str().unwrap().ends_with("audit_log")),
+        "{answer}"
+    );
+    let requests = server.await.unwrap();
+    assert!(requests[0].contains("find_tables") && requests[0].contains("describe_table"));
+    // The second request answers the call with the table, not its rows.
+    assert!(requests[1].contains("tool_result") && requests[1].contains("toolu_1"), "{}", requests[1]);
+    assert!(requests[1].contains("audit_log") && !requests[1].contains("secret@example.com"));
+    let log = std::fs::read_to_string(super::log_path(dir.path())).unwrap();
+    let entry: Value =
+        log.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).find(|l| l["method"] == "ask").unwrap();
+    assert_eq!(entry["looked_up"], json!(1));
 }
 
 #[tokio::test]

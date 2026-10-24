@@ -197,6 +197,7 @@ asking_progress = "Asking… {chars} characters written, {secs} s (Esc stops it)
 assumed = "assumed: {fact} (Ctrl+K k: confirm or forget)"
 busy = "A question is being answered: wait for it, or Esc stops it"
 check = "CHECK"
+looked_at = "it also looked at: {tables}"
 check_it = "SQL from {model}: check it — {problems}"
 failed = "Couldn't ask: {e}"
 gateway_unreachable = "the gateway couldn't be reached: {e}"

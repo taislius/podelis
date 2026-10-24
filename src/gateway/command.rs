@@ -328,6 +328,10 @@ pub async fn ask(config_dir: &Path, project: Option<&str>, model: Option<&str>, 
             _ => String::new(),
         },
     );
+    let looked: Vec<&str> = answer["looked_at"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    if !looked.is_empty() {
+        let _ = writeln!(err, "It also looked at: {}", looked.join(", "));
+    }
     if let Some(said) = answer["said"].as_str().filter(|s| !s.is_empty()) {
         let _ = writeln!(err, "{said}");
     }

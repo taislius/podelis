@@ -96,11 +96,21 @@ pub struct ModelConfig {
     /// The most an answer may be, in tokens.
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// Whether `ask` lets it look for more tables itself (`find_tables`,
+    /// `describe_table`). Default: on for a provider's models, off for one
+    /// on this machine (small models follow tool calls badly).
+    #[serde(default)]
+    pub tools: Option<bool>,
 }
 
 impl ModelConfig {
     pub fn url(&self) -> &str {
         self.url.as_deref().unwrap_or_else(|| self.api.default_url()).trim_end_matches('/')
+    }
+
+    /// Whether it may call tools (see `tools`).
+    pub fn uses_tools(&self) -> bool {
+        self.tools.unwrap_or_else(|| !on_this_machine(self))
     }
 
     /// The keychain account holding its key.
@@ -117,13 +127,54 @@ pub struct Prompt {
     pub messages: Vec<Message>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// Tools the model may call (the gateway's own; never from a client).
+    #[serde(skip)]
+    pub tools: Vec<Tool>,
+    /// The tools stay declared (the conversation has calls of theirs), but
+    /// the model must answer now, without another call.
+    #[serde(skip)]
+    pub no_more_calls: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct Message {
     /// `user` or `assistant`.
     pub role: String,
     pub content: String,
+    /// An assistant's turn: the tools it called.
+    #[serde(skip)]
+    pub calls: Vec<ToolCall>,
+    /// A tool's answer: the id of the call it answers (`content` is it).
+    #[serde(skip)]
+    pub answers: Option<String>,
+}
+
+impl Message {
+    pub fn new(role: &str, content: impl Into<String>) -> Self {
+        Message { role: role.to_string(), content: content.into(), ..Message::default() }
+    }
+
+    /// A tool's answer to call `id`.
+    pub fn tool_answer(id: &str, content: impl Into<String>) -> Self {
+        Message { role: "user".into(), content: content.into(), answers: Some(id.to_string()), ..Message::default() }
+    }
+}
+
+/// A tool the model may call: its name, what it's for, its input as a
+/// JSON schema.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tool {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub input: Value,
+}
+
+/// A call the model made: the provider's id for it, the tool, its input.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub input: Value,
 }
 
 /// A model's answer.
@@ -137,6 +188,8 @@ pub struct Reply {
     pub stop_reason: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// The tools it called (it waits for their answers).
+    pub calls: Vec<ToolCall>,
 }
 
 impl Reply {

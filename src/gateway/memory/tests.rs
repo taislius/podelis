@@ -48,6 +48,17 @@ fn facts_are_read_as_typed() {
     );
     assert_eq!(fact("quotes.side means ask").as_deref(), Some("quotes.side | means | ask"));
     assert_eq!(fact("flag is").as_deref(), Some("flag | means | is"));
+    assert_eq!(fact("customer also called client").as_deref(), Some("customer | also called | client"));
+    assert_eq!(fact("film aka movie").as_deref(), Some("film | also called | movie"));
+    assert_eq!(
+        fact("revenue defined as sum(payment.amount)").as_deref(),
+        Some("revenue | defined as | sum(payment.amount)")
+    );
+    assert_eq!(
+        fact("churned is defined as no rental in 90 days").as_deref(),
+        Some("churned | defined as | no rental in 90 days")
+    );
+    assert_eq!(fact("x also called").as_deref(), Some("x | means | also called"));
     assert_eq!(fact("lonely"), None);
 }
 
@@ -109,4 +120,18 @@ async fn a_questions_facts_give_words_for_choosing_tables_not_histories() {
     let lines: Vec<String> = memory.about(&[]).iter().map(Fact::line).collect();
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(lines[1].starts_with("revenue_report history"), "{lines:?}");
+}
+
+#[tokio::test]
+async fn another_name_and_a_defined_term_bring_their_tables() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut conn = open(dir.path(), "p1").await.unwrap();
+    add(&mut conn, "customer", ALSO_CALLED, "client", "user", true).await.unwrap();
+    add(&mut conn, "revenue", DEFINED_AS, "sum(payment.amount)", "user", true).await.unwrap();
+    // "clients": the stem finds the other name, and its table's name comes
+    // with it for choosing tables.
+    let memory = for_question(&mut conn, "how many clients rented").await.unwrap();
+    assert_eq!(memory.words(), " customer client");
+    let memory = for_question(&mut conn, "revenue per store").await.unwrap();
+    assert_eq!(memory.words(), " revenue sum(payment.amount)");
 }

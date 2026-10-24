@@ -69,8 +69,10 @@ impl Context {
         if facts.is_empty() || self.tables.is_empty() {
             return self;
         }
-        let mut section =
-            String::from("\nWhat this team has said about its data (confirmed; follow it over guesses):\n");
+        let mut section = String::from(
+            "\nWhat this team has said about its data (confirmed; follow it over guesses; `X also called Y`: \
+             the user may say Y for X; `X defined as E`: when the question says X, use E):\n",
+        );
         for f in facts {
             let line = format!("- {}\n", f.line());
             if self.text.len() + section.len() + line.len() > MAX_CHARS + MAX_CHARS / 4 {
@@ -422,6 +424,72 @@ pub fn build(schema: &Schema, question: &str) -> Context {
         );
     }
     Context { text, tables: listed, left_out, facts: Vec::new() }
+}
+
+/// The model looking for itself (`ask`'s `find_tables`): the tables whose
+/// names, columns or comments match `words`, best first, at most
+/// [`MAX_ENTRY`], with why; none of their neighbours.
+pub fn find(schema: &Schema, words: &str) -> Vec<Chosen> {
+    let question = self::words(words);
+    let roots = roots(schema);
+    let links = parents_links(schema, &roots);
+    let keys = Keys::of_links(&links);
+    let mut scored: Vec<(u32, &TableInfo, Vec<String>)> = schema
+        .tables
+        .iter()
+        .filter(|(t, _)| !t.system && t.partition_of.is_none())
+        .map(|(t, cols)| {
+            let comments: Vec<&Comment> =
+                schema.comments.iter().filter(|c| key(&c.schema, &c.table) == key(&t.schema, &t.name)).collect();
+            let (score, why) = score(&question, t, cols, &comments, &keys);
+            (score, t, why)
+        })
+        .filter(|(score, _, _)| *score > 0)
+        .collect();
+    scored.sort_by_key(|s| std::cmp::Reverse(s.0));
+    scored
+        .into_iter()
+        .take(MAX_ENTRY)
+        .map(|(_, t, why)| Chosen { name: qualified(t), why: format!("matches {}", why.join("; ")) })
+        .collect()
+}
+
+/// One table as the context shows it (`ask`'s `describe_table`): by its
+/// name, `schema.table` or the table alone (any case); a partition is its
+/// top table. `None` when there's no such table.
+pub fn describe(schema: &Schema, name: &str) -> Option<(String, String)> {
+    let wanted = name.trim().trim_matches('"').trim_matches('`').to_lowercase();
+    let (want_schema, want_table) = match wanted.rsplit_once('.') {
+        Some((s, t)) => {
+            (Some(s.trim_matches('"').trim_matches('`').to_string()), t.trim_matches('"').trim_matches('`').to_string())
+        }
+        None => (None, wanted.clone()),
+    };
+    let roots = roots(schema);
+    let matches = |t: &TableInfo| {
+        t.name.to_lowercase() == want_table && want_schema.as_ref().is_none_or(|s| t.schema.to_lowercase() == *s)
+    };
+    let found = schema.tables.iter().find(|(t, _)| !t.system && matches(t))?;
+    // A partition: its top table, which the queries read.
+    let (t, cols) = match roots.get(&key(&found.0.schema, &found.0.name)) {
+        Some((s, top)) => schema.tables.iter().find(|(p, _)| key(&p.schema, &p.name) == key(s, top))?,
+        None => found,
+    };
+    let links = parents_links(schema, &roots);
+    let keys = Keys::of_links(&links);
+    let comments: Vec<&Comment> =
+        schema.comments.iter().filter(|c| key(&c.schema, &c.table) == key(&t.schema, &t.name)).collect();
+    let rows: i64 = schema
+        .tables
+        .iter()
+        .filter(|(p, _)| {
+            roots.get(&key(&p.schema, &p.name)).is_some_and(|(s, top)| key(s, top) == key(&t.schema, &t.name))
+        })
+        .filter_map(|(p, _)| p.rows)
+        .map(|r| r.max(0))
+        .sum();
+    let rows = if rows > 0 { Some(rows + t.rows.unwrap_or(0).max(0)) } else { t.rows };
+    Some((qualified(t), render(t, rows, cols, &comments, &keys)))
 }
 
 /// One table: its name, size (`rows`), comment, then a column a line.

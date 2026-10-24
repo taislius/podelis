@@ -14,14 +14,17 @@ fn config(api: Api, model: &str, url: Option<&str>) -> ModelConfig {
         key_command: None,
         effort: None,
         max_tokens: None,
+        tools: None,
     }
 }
 
 fn prompt(text: &str) -> Prompt {
     Prompt {
         system: Some("Be brief.".into()),
-        messages: vec![Message { role: "user".into(), content: text.into() }],
+        messages: vec![Message::new("user", text)],
         max_tokens: None,
+        tools: Vec::new(),
+        no_more_calls: false,
     }
 }
 
@@ -134,6 +137,55 @@ fn an_openai_stream_becomes_the_answer() {
     let body = openai::body(&config(Api::OpenAi, "qwen3:8b", None), &prompt("hi"));
     assert_eq!(body["messages"][0], json!({ "role": "system", "content": "Be brief." }));
     assert!(body.get("max_tokens").is_none());
+}
+
+#[test]
+fn tool_calls_go_out_and_come_back_in_both_formats() {
+    let tool = Tool { name: "describe_table", description: "d", input: json!({"type":"object"}) };
+    let call = ToolCall { id: "c1".into(), name: "describe_table".into(), input: json!({"name": "t"}) };
+    let mut p = prompt("hi");
+    p.tools = vec![tool];
+    p.messages.push(Message { calls: vec![call], ..Message::new("assistant", "") });
+    p.messages.push(Message::tool_answer("c1", "t (id)"));
+    // OpenAI's: a function, the call's arguments as a string, a `tool` turn.
+    let body = openai::body(&config(Api::OpenAi, "gpt-5", None), &p);
+    assert_eq!(body["tools"][0]["function"]["name"], json!("describe_table"));
+    assert_eq!(body["messages"][2]["tool_calls"][0]["function"]["arguments"], json!("{\"name\":\"t\"}"));
+    assert_eq!(body["messages"][3], json!({ "role": "tool", "tool_call_id": "c1", "content": "t (id)" }));
+    assert!(body.get("tool_choice").is_none());
+    // Anthropic's: `tool_use` and `tool_result` blocks; no more calls: none.
+    p.no_more_calls = true;
+    let body = anthropic::body(&config(Api::Anthropic, "claude-opus-5-5", None), &p);
+    assert_eq!(body["messages"][1]["content"][0]["type"], json!("tool_use"));
+    assert_eq!(
+        body["messages"][2]["content"][0],
+        json!({ "type": "tool_result", "tool_use_id": "c1", "content": "t (id)" })
+    );
+    assert_eq!(body["tool_choice"], json!({ "type": "none" }));
+    // A streamed OpenAI call, in pieces.
+    let lines = [
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_9","function":{"name":"find_tables","arguments":"{\"wo"}}]}}]}).to_string(),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"rds\": \"pay\"}"}}]},"finish_reason":"tool_calls"}]}).to_string(),
+        "[DONE]".to_string(),
+    ];
+    let mut answer = openai::Answer::default();
+    for data in lines {
+        answer.take(&Event { name: String::new(), data }, &mut |_: &str| {}).unwrap();
+    }
+    answer.finish_calls();
+    assert_eq!(
+        answer.reply.calls,
+        [ToolCall { id: "call_9".into(), name: "find_tables".into(), input: json!({"words": "pay"}) }]
+    );
+}
+
+#[test]
+fn a_model_on_this_machine_looks_up_nothing_unless_set_to() {
+    let mut local = config(Api::OpenAi, "qwen3:8b", Some("http://localhost:11434/v1"));
+    assert!(!local.uses_tools());
+    local.tools = Some(true);
+    assert!(local.uses_tools());
+    assert!(config(Api::Anthropic, "claude-opus-5-5", None).uses_tools());
 }
 
 #[test]
