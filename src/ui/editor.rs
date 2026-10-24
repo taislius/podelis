@@ -657,6 +657,14 @@ fn tx_status(app: &App, width: u16) -> Vec<Span<'static>> {
     let t = theme();
     let key = |a: Action| app.keymap.short_label(a);
     let mut spans = match app.connection.txn {
+        // A sandbox: its steps, in orange, and how to see and end it.
+        TxnState::Open if app.connection.sandbox.is_some() => {
+            let steps = app.connection.sandbox.as_ref().map_or(0, |s| s.steps.len());
+            vec![Span::styled(
+                format!("● {}", t!("tx.sandbox", steps = steps, key = key(Action::TxMode))),
+                bold(t.warn),
+            )]
+        }
         TxnState::Open => vec![Span::styled(
             format!("● {}", t!("tx.uncommitted", commit = key(Action::Commit), rollback = key(Action::Rollback))),
             bold(t.warn),
@@ -667,11 +675,11 @@ fn tx_status(app: &App, width: u16) -> Vec<Span<'static>> {
         TxnState::Idle if app.connection.mode == ConnectionMode::ReadOnly => {
             vec![Span::styled(t!("tx.label"), muted()), Span::styled(format!(" {}", t!("tx.read_only")), dim())]
         }
-        // All three modes when there's room next to the run key, else the current one.
+        // All four modes when there's room next to the run key, else the current one.
         TxnState::Idle => {
             let mut spans = vec![Span::styled(t!("tx.label"), muted())];
-            let all = width >= 72;
-            for mode in [TxMode::AutoCommit, TxMode::Manual, TxMode::RollbackOnly] {
+            let all = width >= 100 && app.tab.syntax_hint.is_none();
+            for mode in TxMode::ALL {
                 if mode == app.connection.tx_mode {
                     spans.push(Span::raw(" "));
                     // The current mode in bold orange, without a filled background.

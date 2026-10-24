@@ -451,6 +451,7 @@ help_password_unused = "Not used: the password command supplies the password (cl
 help_production = "Shown in red; asks before running anything that changes data"
 help_read_only = "Refuses statements that change data; the server enforces it too"
 help_rollback_only = "Statements run, then are always rolled back (switch any time: Ctrl+K x)"
+help_sandbox = "Writes build on each other in one transaction kept open; nothing is kept until you end it (Ctrl+K x)"
 help_ssh = "Optional: user@host[:port] or an ~/.ssh/config alias. Uses your ssh keys/agent; no password prompts"
 help_timeout = "Optional: seconds a query may run before it's cancelled, e.g. 30"
 help_tip = "Tip: paste a connection URL to fill the form · Ctrl+T tests the connection step by step"
@@ -966,6 +967,8 @@ rolled_back_note = "rolled back"
 set_autocommit = "Auto-commit: each statement is committed as it runs"
 set_manual = "Manual commit: changes wait for COMMIT ({commit}) or ROLLBACK ({rollback})"
 set_rollback_only = "Rollback-only: statements run, show what they change, and are always rolled back"
+sandbox = "Sandbox"
+set_sandbox = "Sandbox: writes build on each other in one transaction, kept open; Ctrl+K x shows the steps, undoes the last, and ends it"
 title = "REVIEW"
 
 [review.changed]
@@ -1230,6 +1233,7 @@ failed = "transaction failed · {rollback} roll back"
 label = "Transaction:"
 read_only = "read-only"
 uncommitted = "uncommitted · {commit} commit · {rollback} undo"
+sandbox = "SANDBOX · {steps} steps · {key} to see, undo or end it"
 
 [tx_mode]
 autocommit = "auto-commit"
@@ -1239,6 +1243,8 @@ manual_about = "changes wait for COMMIT or ROLLBACK"
 manual_short = "manual"
 rollback_only = "rollback-only"
 rollback_only_about = "statements run, then are always rolled back"
+sandbox = "sandbox"
+sandbox_about = "writes build on each other in one open transaction"
 
 [tx_picker]
 help = "● current · Esc keeps it"
@@ -1264,3 +1270,28 @@ title = "Welcome"
 [zoom]
 pane = "Zoomed: Tab moves between panes; {key} or Esc returns"
 statement = "The statement alone: {key} or Esc returns"
+
+[sandbox]
+discard = "discard"
+esc = "Esc closes · the sandbox stays open"
+keep_script = "keep as a script"
+kept_as_script = "The sandbox's steps are in a new tab; nothing was kept in the database"
+nothing_to_undo = "No sandbox step to undo"
+open_for = "open for {time}: its row locks are held until it ends"
+run_for_real = "run for real"
+running_for_real = "Sandbox discarded; its script runs again for real, in manual commit (commit or roll back at the end)"
+schema_changed = "schema changed"
+script_header = "From a sandbox on {connection}: now(), sequences and random values differ when it runs again"
+script_tab = "Sandbox"
+step_failed = "step {n} failed: back to before it, the sandbox goes on"
+step_kept = "sandbox step {n} ({key}: undo, end)"
+steps = "STEPS"
+summary = "CHANGED, PER TABLE"
+title = "SANDBOX"
+undo = "undo the last step"
+undone = "Undid sandbox step {n}"
+
+[sandbox.rows]
+one = "{n} row"
+other = "{n} rows"
+

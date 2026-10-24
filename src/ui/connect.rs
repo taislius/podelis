@@ -173,6 +173,7 @@ pub(super) fn form_message(form: &ConnectForm) -> (String, Style) {
             TxMode::AutoCommit => t!("form.help_autocommit"),
             TxMode::Manual => t!("form.help_manual"),
             TxMode::RollbackOnly => t!("form.help_rollback_only"),
+            TxMode::Sandbox => t!("form.help_sandbox"),
         },
         ConnectField::Password if !form.password_command.trim().is_empty() => {
             t!("form.help_password_unused")

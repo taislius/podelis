@@ -18,24 +18,8 @@ impl App {
     pub(in crate::app) fn handle_query_key(&mut self, key: KeyEvent) {
         let after_esc = std::mem::take(&mut self.esc_then_tab);
         self.esc_then_tab = key.code == KeyCode::Esc && self.focus == Focus::Editor;
-        // The popup in front takes the keys; the text view and completion
-        // let tab keys through, so they're handled further down.
-        match self.top_overlay() {
-            Some(Overlay::Menu) => return self.handle_menu_key(key),
-            Some(Overlay::PipePrompt) => return self.handle_pipe_prompt_key(key),
-            Some(Overlay::AskPrompt) => return self.handle_ask_prompt_key(key),
-            Some(Overlay::Memory) => return self.handle_memory_key(key),
-            Some(Overlay::RowForm) => return self.handle_row_form_key(key),
-            Some(Overlay::Palette) => return self.handle_palette_key(key),
-            Some(Overlay::Activity) => return self.handle_activity_key(key),
-            Some(Overlay::Agents) => return self.handle_agents_key(key),
-            Some(Overlay::TxPicker) => return self.handle_tx_picker_key(key),
-            Some(Overlay::Review) => return self.handle_review_key(key),
-            Some(Overlay::ParamForm) => return self.handle_param_key(key),
-            Some(Overlay::TabPrompt) => return self.handle_tab_prompt_key(key),
-            Some(Overlay::Library) => return self.handle_library_key(key),
-            Some(Overlay::Settings) => return self.handle_settings_key(key),
-            Some(Overlay::Confirm | Overlay::CellView | Overlay::Completion) | None => {}
+        if self.overlay_key(key) {
+            return;
         }
         // Ctrl+U and Ctrl+W edit the input being typed in, before any key
         // binding (Ctrl+W also closes the tab).
@@ -225,6 +209,7 @@ impl App {
                 | Overlay::Activity
                 | Overlay::Agents
                 | Overlay::TxPicker
+                | Overlay::Sandbox
                 | Overlay::Review,
             ) => {}
             Some(Overlay::Completion) | None => self.paste_into_pane(text),
@@ -343,6 +328,30 @@ impl App {
             }
             _ => false,
         }
+    }
+
+    /// The popup in front takes the keys; true if one did. The text view
+    /// and completion let tab keys through, so they're handled further on.
+    fn overlay_key(&mut self, key: KeyEvent) -> bool {
+        match self.top_overlay() {
+            Some(Overlay::Menu) => self.handle_menu_key(key),
+            Some(Overlay::PipePrompt) => self.handle_pipe_prompt_key(key),
+            Some(Overlay::AskPrompt) => self.handle_ask_prompt_key(key),
+            Some(Overlay::Memory) => self.handle_memory_key(key),
+            Some(Overlay::RowForm) => self.handle_row_form_key(key),
+            Some(Overlay::Palette) => self.handle_palette_key(key),
+            Some(Overlay::Activity) => self.handle_activity_key(key),
+            Some(Overlay::Agents) => self.handle_agents_key(key),
+            Some(Overlay::TxPicker) => self.handle_tx_picker_key(key),
+            Some(Overlay::Sandbox) => self.handle_sandbox_key(key),
+            Some(Overlay::Review) => self.handle_review_key(key),
+            Some(Overlay::ParamForm) => self.handle_param_key(key),
+            Some(Overlay::TabPrompt) => self.handle_tab_prompt_key(key),
+            Some(Overlay::Library) => self.handle_library_key(key),
+            Some(Overlay::Settings) => self.handle_settings_key(key),
+            Some(Overlay::Confirm | Overlay::CellView | Overlay::Completion) | None => return false,
+        }
+        true
     }
 
     /// What `key`, bound to `action`, does: the action, except that

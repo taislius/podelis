@@ -1,6 +1,5 @@
 ---
 source: src/ui/tests/editor.rs
-assertion_line: 90
 expression: "render(&mut app, 80, 20)"
 ---
 " >_  PODĖLIS v0.0.0   │  project  shop ▼                                        "
@@ -9,7 +8,7 @@ expression: "render(&mut app, 80, 20)"
 "│  1  select em                                                                │"
 "│            ┌──────────────────────────────┐                                  │"
 "│            │email        text · users     │                                  │"
-"│            │employee_id  integer · orders │-commit   manual   rollback-only  │"
+"│            │employee_id  integer · orders │       Transaction:  auto-commit  │"
 "└────────────│employees    table            │──────────────────────────────────┘"
 "┌ QUERY RESUL└──────────────────────────────┘──────────────────────────────────┐"
 "│ RESULT 3 rows │ MESSAGES │ QUERY PLAN │                     export ▾  menu ▾ │"

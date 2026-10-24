@@ -1,13 +1,12 @@
 ---
 source: src/ui/tests/editor.rs
-assertion_line: 52
 expression: "render(&mut app, 160, 14)"
 ---
 " >_  PODĖLIS v0.0.0   │  project  shop ▼                                                                                                                        "
 "┌ NAVIGATOR ──────────────── 3 objects ┐┎ QUERY ──────┰────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│ / filter by name…                    │┃ SQL Query 1 ┃ +                                                                 ▶ F5 Run   F6 Statement   F7 Explain │"
 "│ ▼ (default database)                 ││  2  where note = null;                                                                                               │"
-"│ TABLES                             2 ││ LINT line 2  = NULL is never true: use IS NULL · null-compare    Transaction:  auto-commit   manual   rollback-only  │"
+"│ TABLES                             2 ││ LINT line 2  = NULL is never true: use IS NULL · null-compare                             Transaction:  auto-commit  │"
 "│  ▶ orders                     942.0k │└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
 "│  ▼ users                       24.8k │┌ QUERY RESULT ────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│      ◇ id                 integer PK ││ RESULT 3 rows │ MESSAGES │ QUERY PLAN │                                                             export ▾  menu ▾ │"

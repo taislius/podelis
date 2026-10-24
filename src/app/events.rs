@@ -326,6 +326,14 @@ impl App {
             RunPurpose::CellEdit { row, col, value } => self.apply_cell_edit(&outcome, row, col, value),
             RunPurpose::TxControl(command) => self.transaction_ended(command),
             RunPurpose::RowChange(what) => self.rows_changed(what, &outcome),
+            RunPurpose::SandboxBack { number, undo } => self.sandbox_went_back(number, undo),
+        }
+        if let Some(step) = self.tab.run.extra.sandbox_step.take() {
+            self.sandbox_step_done(step, rows_affected);
+        }
+        // The transaction gone (a reconnect): a sandbox with it.
+        if self.connection.txn == TxnState::Idle && self.sandbox_then.is_none() {
+            self.connection.sandbox = None;
         }
         if reconnected {
             let _ = write!(self.notes.status, " · {}", t!("run.reconnected"));
@@ -348,6 +356,7 @@ impl App {
         self.notes.status_in_results = true;
         let status = self.notes.status.clone();
         self.notify_if_long(|took| t!("run.finished_in", took = format_elapsed(took), status = status));
+        self.run_sandbox_script();
     }
 
     pub(super) fn on_query_failed(&mut self, err: &str, position: Option<ErrorPos>, txn: Option<TxnState>) {
@@ -421,6 +430,10 @@ impl App {
         self.notify_if_long(|took| t!("run.failed_after", took = format_elapsed(took), status = status));
         if dry_run {
             self.end_dry_run(review::DryRun::Failed(status));
+        }
+        // A sandbox step that failed: back to before it, the sandbox goes on.
+        if let Some(step) = self.tab.run.extra.sandbox_step.take() {
+            self.sandbox_step_failed(&step);
         }
     }
 

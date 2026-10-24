@@ -47,10 +47,13 @@ impl App {
         purpose: RunPurpose,
         filled: Option<Filled>,
     ) {
-        let wrap = self.connection.tx_mode != TxMode::AutoCommit
-            && self.connection.txn == TxnState::Idle
-            && infos.iter().any(StatementInfo::modifies)
+        let writes = infos.iter().any(StatementInfo::modifies)
             && matches!(purpose, RunPurpose::Query | RunPurpose::RowChange(_) | RunPurpose::CellEdit { .. });
+        // In a sandbox every write is a step of its one transaction.
+        if writes && self.connection.tx_mode == TxMode::Sandbox {
+            return self.run_sandbox_step(&sql, offset, filled, purpose);
+        }
+        let wrap = self.connection.tx_mode != TxMode::AutoCommit && self.connection.txn == TxnState::Idle && writes;
         if wrap {
             self.run_in_transaction(&sql, offset, filled, purpose);
         } else {
@@ -61,14 +64,19 @@ impl App {
     /// Why the write mode can't run `infos` (None: it can).
     pub(super) fn tx_mode_refusal(&self, infos: &[StatementInfo], purpose: &RunPurpose) -> Option<String> {
         let mode = self.connection.tx_mode;
+        // (A sandbox's transaction is its own: its rules hold while it's open.)
         if mode == TxMode::AutoCommit
-            || self.connection.txn != TxnState::Idle
+            || (self.connection.txn != TxnState::Idle && mode != TxMode::Sandbox)
             || !infos.iter().any(StatementInfo::modifies)
         {
             return None;
         }
         let switch = self.keymap.label(Action::TxMode);
-        let label = if mode == TxMode::RollbackOnly { t!("review.rollback_only") } else { t!("review.manual") };
+        let label = match mode {
+            TxMode::RollbackOnly => t!("review.rollback_only"),
+            TxMode::Sandbox => t!("review.sandbox"),
+            _ => t!("review.manual"),
+        };
         if infos.iter().any(|i| matches!(i.kind, Kind::Transaction(_))) {
             return Some(t!("review.own_begin", label = label, switch = switch));
         }
@@ -101,8 +109,12 @@ impl App {
         false
     }
 
-    /// Ctrl+K x: pick auto-commit, manual commit or rollback-only.
+    /// Ctrl+K x: pick auto-commit, manual commit, rollback-only or the
+    /// sandbox; with a sandbox open, its window.
     pub(super) fn open_tx_picker(&mut self) {
+        if self.connection.sandbox.is_some() && self.connection.txn != TxnState::Idle {
+            return self.open_sandbox_view();
+        }
         if self.tx_mode_changeable() {
             self.tx_picker = Some(self.connection.tx_mode);
         }
@@ -147,6 +159,7 @@ impl App {
                 rollback = self.keymap.label(Action::Rollback)
             ),
             TxMode::RollbackOnly => t!("review.set_rollback_only").to_string(),
+            TxMode::Sandbox => t!("review.set_sandbox").to_string(),
         };
         self.set_status(msg, false);
     }
@@ -205,6 +218,14 @@ impl App {
     }
 
     pub(super) fn transaction_ended(&mut self, command: &str) {
+        if self.connection.sandbox.is_some() || self.sandbox_then.is_some() {
+            self.transaction_ended_plainly(command);
+            return self.sandbox_ended();
+        }
+        self.transaction_ended_plainly(command);
+    }
+
+    fn transaction_ended_plainly(&mut self, command: &str) {
         if let Some(dry_run) = self.tab.run.extra.dry_run.take() {
             self.tab.grid.result_note = Some(t!("run.rolled_back").to_string());
             return match dry_run {

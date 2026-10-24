@@ -90,6 +90,7 @@ pub(super) fn draw_query(f: &mut Frame, app: &mut App, body: Rect) {
             Overlay::ParamForm => draw_param_form(f, app, area),
             Overlay::Review => draw_review(f, app, area),
             Overlay::TxPicker => draw_tx_picker(f, app, area),
+            Overlay::Sandbox => draw_sandbox(f, app, area),
             Overlay::Activity => draw_activity(f, app, area),
             Overlay::Agents => super::agents::draw_agents(f, app, area),
             Overlay::Palette => draw_palette(f, app, area),
@@ -692,6 +693,55 @@ fn draw_tx_picker(f: &mut Frame, app: &App, area: Rect) {
     let rect = centered_box(area, width, lines.len() as u16 + 2);
     f.render_widget(Clear, rect);
     f.render_widget(Paragraph::new(lines).block(popup(t!("tx_picker.title"), t.accent)), rect);
+}
+
+/// The sandbox: its steps, what they changed per table, and how to end it.
+fn draw_sandbox(f: &mut Frame, app: &App, area: Rect) {
+    let t = theme();
+    let (Some(view), Some(sandbox)) = (&app.sandbox_view, &app.connection.sandbox) else { return };
+    let width = fit(area.width.saturating_sub(8).min(100), 40, area.width);
+    let w = usize::from(width.saturating_sub(4));
+    let mut lines = vec![Line::from(Span::styled(format!(" {}", t!("sandbox.steps")), bold(t.accent)))];
+    for (i, step) in sandbox.steps.iter().enumerate() {
+        let rows = tn!("sandbox.rows", step.rows);
+        let head = format!(" {:>2}. ", i + 1);
+        let sql = truncate(&one_line(&step.sql), w.saturating_sub(head.len() + rows.chars().count() + 3));
+        lines.push(Line::from(vec![
+            Span::styled(head, bold(t.text)),
+            Span::styled(sql, fg(t.text)),
+            Span::styled(format!("  {rows}"), dim()),
+        ]));
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(format!(" {}", t!("sandbox.summary")), bold(t.accent))));
+    for (table, rows, ddl) in sandbox.summary() {
+        let what = if ddl { t!("sandbox.schema_changed").to_string() } else { tn!("sandbox.rows", rows) };
+        lines.push(Line::from(vec![Span::styled(format!(" {table}  "), bold(t.text)), Span::styled(what, muted())]));
+    }
+    let age = sandbox.started.map_or(0, |s| s.elapsed().as_secs());
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        format!(" {}", t!("sandbox.open_for", time = format!("{}:{:02}", age / 60, age % 60))),
+        dim(),
+    )));
+    let key = |k: &str, what: &str, bg| {
+        [Span::styled(format!(" {k} "), bold(t.on_accent).bg(bg)), Span::styled(format!(" {what}  "), fg(t.text))]
+    };
+    lines.push(Line::from(
+        [
+            key("u", t!("sandbox.undo"), t.accent),
+            key("d", t!("sandbox.discard"), t.error),
+            key("s", t!("sandbox.keep_script"), t.accent),
+            key("r", t!("sandbox.run_for_real"), t.ok),
+        ]
+        .concat(),
+    ));
+    let height = (lines.len() as u16 + 2).min(area.height);
+    let rect = centered_box(area, width, height);
+    f.render_widget(Clear, rect);
+    let block = popup(t!("sandbox.title"), t.warn)
+        .title_bottom(Line::from(Span::styled(format!(" {} ", t!("sandbox.esc")), dim())).right_aligned());
+    f.render_widget(Paragraph::new(lines).scroll((view.scroll, 0)).block(block), rect);
 }
 
 /// After writes ran in a transaction: commit or roll back?

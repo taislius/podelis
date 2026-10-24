@@ -26,6 +26,8 @@ pub struct Connection {
     pub summary: String,
     /// How long connecting took, for the application bar.
     pub latency: Option<Duration>,
+    /// The sandbox open on it (`TxMode::Sandbox`), while its transaction is.
+    pub sandbox: Option<super::Sandbox>,
 }
 
 fn swap_conn(app: &mut App, slot: &mut Connection) {

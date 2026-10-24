@@ -466,6 +466,7 @@ help_password_unused = "Nenaudojama: slaptažodį pateikia komanda (išvalykite 
 help_production = "Rodoma raudonai; klausia prieš vykdant bet ką, kas keičia duomenis"
 help_read_only = "Atmeta duomenis keičiančius sakinius; tai užtikrina ir serveris"
 help_rollback_only = "Sakiniai įvykdomi, paskui visada atšaukiami (keisti bet kada: Ctrl+K x)"
+help_sandbox = "Rašymai remiasi vienas kitu atviroje transakcijoje; niekas neišsaugoma, kol jos nebaigiate (Ctrl+K x)"
 help_ssh = "Neprivaloma: naudotojas@serveris[:prievadas] arba ~/.ssh/config pavadinimas. Naudojami jūsų ssh raktai / agentas; slaptažodžio neklausiama"
 help_timeout = "Neprivaloma: kiek sekundžių užklausa gali vykti, kol bus atšaukta, pvz., 30"
 help_tip = "Patarimas: įklijuokite ryšio URL – forma užsipildys · Ctrl+T tikrina ryšį žingsnis po žingsnio"
@@ -983,6 +984,8 @@ rolled_back_note = "atšaukta"
 set_autocommit = "Automatinis patvirtinimas: kiekvienas sakinys patvirtinamas jį įvykdžius"
 set_manual = "Rankinis patvirtinimas: pakeitimai laukia COMMIT ({commit}) arba ROLLBACK ({rollback})"
 set_rollback_only = "Visada atšaukti: sakiniai įvykdomi, parodo, ką keičia, ir visada atšaukiami"
+sandbox = "Smėlio dėžė"
+set_sandbox = "Smėlio dėžė: rašymai remiasi vienas kitu vienoje atviroje transakcijoje; Ctrl+K x rodo žingsnius, atšaukia paskutinį ir ją baigia"
 title = "PERŽIŪRA"
 
 [review.changed]
@@ -1259,6 +1262,7 @@ failed = "transakcija nepavyko · {rollback} atšaukti"
 label = "Transakcija:"
 read_only = "tik skaitymas"
 uncommitted = "nepatvirtinta · {commit} patvirtinti · {rollback} atšaukti"
+sandbox = "SMĖLIO DĖŽĖ · žingsnių: {steps} · {key} peržiūrėti, atšaukti ar baigti"
 
 [tx_mode]
 autocommit = "automatinis"
@@ -1268,6 +1272,8 @@ manual_about = "pakeitimai laukia COMMIT arba ROLLBACK"
 manual_short = "rankinis"
 rollback_only = "visada atšaukti"
 rollback_only_about = "sakiniai įvykdomi, paskui visada atšaukiami"
+sandbox = "smėlio dėžė"
+sandbox_about = "rašymai remiasi vienas kitu atviroje transakcijoje"
 
 [tx_picker]
 help = "● dabartinis · Esc palieka"
@@ -1293,3 +1299,29 @@ title = "Sveiki"
 [zoom]
 pane = "Išdidinta: Tab – tarp langų; {key} arba Esc grąžina"
 statement = "Tik sakinys: {key} arba Esc grąžina"
+
+[sandbox]
+discard = "išmesti"
+esc = "Esc uždaro · smėlio dėžė lieka atvira"
+keep_script = "išsaugoti kaip scenarijų"
+kept_as_script = "Smėlio dėžės žingsniai naujoje kortelėje; duomenų bazėje nieko neišsaugota"
+nothing_to_undo = "Nėra smėlio dėžės žingsnio atšaukti"
+open_for = "atvira {time}: jos eilučių užraktai laikomi, kol ji baigiama"
+run_for_real = "vykdyti iš tikrųjų"
+running_for_real = "Smėlio dėžė išmesta; jos scenarijus vykdomas iš tikrųjų, rankiniu patvirtinimu (pabaigoje patvirtinti ar atšaukti)"
+schema_changed = "pakeista schema"
+script_header = "Iš smėlio dėžės ryšyje {connection}: now(), sekos ir atsitiktinės reikšmės vykdant vėl skirsis"
+script_tab = "Smėlio dėžė"
+step_failed = "{n} žingsnis nepavyko: grįžta į būseną prieš jį, smėlio dėžė tęsiasi"
+step_kept = "smėlio dėžės {n} žingsnis ({key}: atšaukti, baigti)"
+steps = "ŽINGSNIAI"
+summary = "PAKEISTA, PAGAL LENTELĘ"
+title = "SMĖLIO DĖŽĖ"
+undo = "atšaukti paskutinį žingsnį"
+undone = "Atšauktas smėlio dėžės {n} žingsnis"
+
+[sandbox.rows]
+few = "{n} eilutės"
+one = "{n} eilutė"
+other = "{n} eilučių"
+

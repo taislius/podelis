@@ -22,6 +22,8 @@ pub enum Overlay {
     /// What AI agents did.
     Agents,
     TxPicker,
+    /// The sandbox's steps and how to end it.
+    Sandbox,
     Review,
     ParamForm,
     TabPrompt,
@@ -56,7 +58,7 @@ impl App {
     /// Each popup and whether it's open, front first. The text view sits
     /// in front of the activity monitor (a session's full query) and
     /// behind the rest.
-    fn overlay_states(&self) -> [(Overlay, bool); 18] {
+    fn overlay_states(&self) -> [(Overlay, bool); 19] {
         // The text view shows a session's query or an agent's call in front
         // of their windows.
         let over_list = self.activity.is_some() || self.agents.view.is_some();
@@ -72,6 +74,7 @@ impl App {
             (Overlay::Activity, self.activity.is_some()),
             (Overlay::Agents, self.agents.view.is_some()),
             (Overlay::TxPicker, self.tx_picker.is_some()),
+            (Overlay::Sandbox, self.sandbox_view.is_some()),
             (Overlay::Review, self.review.is_some()),
             (Overlay::ParamForm, self.param_form.is_some()),
             (Overlay::TabPrompt, self.tab_prompt.is_some()),

@@ -296,3 +296,90 @@ async fn a_connection_starts_in_its_transaction_mode() {
     app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
     assert_eq!(app.connection.tx_mode, TxMode::RollbackOnly);
 }
+
+/// The sandbox: writes build on each other in one transaction, a failed
+/// step rolls back alone, the last step can be undone, and it ends as a
+/// script (nothing kept) or run for real (after a commit asked for).
+#[tokio::test]
+async fn a_sandbox_keeps_steps_until_it_is_ended() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    run_sql(&mut app, "create table t (id integer)").await;
+    app.connection.tx_mode = TxMode::Sandbox;
+    let count = |app: &App| app.tab.grid.results.as_ref().unwrap().rows[0][0].clone();
+    run_sql(&mut app, "insert into t values (1)").await;
+    run_sql(&mut app, "insert into t values (2)").await;
+    assert_eq!(app.connection.txn, TxnState::Open);
+    assert_eq!(app.connection.sandbox.as_ref().unwrap().steps.len(), 2);
+    // A step sees the ones before it; a read isn't a step.
+    run_sql(&mut app, "select count(*) from t").await;
+    assert_eq!(count(&app), Some("2".into()));
+    // A failed step goes back to before it; the sandbox goes on.
+    run_sql(&mut app, "insert into nope values (1)").await;
+    finish(&mut app).await;
+    assert!(app.notes.status.contains("step 3 failed"), "{}", app.notes.status);
+    assert_eq!(app.connection.sandbox.as_ref().unwrap().steps.len(), 2);
+    assert_eq!(app.connection.txn, TxnState::Open);
+    // Ctrl+K x shows it; `u` undoes the last step.
+    app.run_action(Action::TxMode);
+    assert!(app.sandbox_view.is_some());
+    app.handle_key(key(KeyCode::Char('u')));
+    finish(&mut app).await;
+    assert_eq!(app.connection.sandbox.as_ref().unwrap().steps.len(), 1);
+    run_sql(&mut app, "select count(*) from t").await;
+    assert_eq!(count(&app), Some("1".into()));
+    let summary = app.connection.sandbox.as_ref().unwrap().summary();
+    assert_eq!(summary, [("t".to_string(), 1, false)]);
+    // `s`: the steps as a script in a new tab; nothing kept.
+    app.run_action(Action::TxMode);
+    app.handle_key(key(KeyCode::Char('s')));
+    finish(&mut app).await;
+    assert!(app.connection.sandbox.is_none() && app.connection.txn == TxnState::Idle);
+    assert!(app.tab.editor.text().contains("insert into t values (1);"), "{}", app.tab.editor.text());
+    app.switch_tab(0);
+    run_sql(&mut app, "select count(*) from t").await;
+    assert_eq!(count(&app), Some("0".into()));
+    // `r`: rolled back, then run for real in manual commit, asked to commit.
+    run_sql(&mut app, "insert into t values (3)").await;
+    app.run_action(Action::TxMode);
+    app.handle_key(key(KeyCode::Char('r')));
+    finish(&mut app).await;
+    assert_eq!(app.connection.tx_mode, TxMode::Manual);
+    assert!(app.review.is_some(), "commit or roll back?");
+    app.handle_key(key(KeyCode::Char('c')));
+    finish(&mut app).await;
+    run_sql(&mut app, "select count(*) from t").await;
+    assert_eq!(count(&app), Some("1".into()));
+}
+
+/// On the servers: a failed step doesn't spoil a sandbox (PostgreSQL
+/// would refuse everything after it until rolled back to its savepoint),
+/// and MySQL refuses DDL there (it commits by itself).
+#[tokio::test]
+async fn a_sandbox_on_the_servers() {
+    for engine in [Engine::Postgres, Engine::MySql] {
+        let Some((mut app, _dir)) = live_app(engine, "podelis_sandbox").await else { continue };
+        // (A database of its own, fresh: nothing to drop first.)
+        run_sql(&mut app, "create table podelis_sb (id int primary key)").await;
+        app.connection.tx_mode = TxMode::Sandbox;
+        run_sql(&mut app, "insert into podelis_sb values (1)").await;
+        run_sql(&mut app, "insert into podelis_sb values (1)").await;
+        assert!(app.notes.status.contains("step 2 failed"), "{engine:?}: {}", app.notes.status);
+        finish(&mut app).await;
+        run_sql(&mut app, "insert into podelis_sb values (2)").await;
+        run_sql(&mut app, "select count(*) from podelis_sb").await;
+        let rows = &app.tab.grid.results.as_ref().unwrap().rows;
+        assert_eq!(rows[0][0].as_deref(), Some("2"), "{engine:?}: both steps there");
+        if engine == Engine::MySql {
+            app.tab.editor.set_text("alter table podelis_sb add c int");
+            app.handle_key(key(KeyCode::F(5)));
+            assert!(said(&app).contains("saves schema changes at once"), "{engine:?}: {}", said(&app));
+        }
+        app.run_action(Action::TxMode);
+        app.handle_key(key(KeyCode::Char('d')));
+        finish(&mut app).await;
+        assert_eq!(app.connection.txn, TxnState::Idle);
+        app.connection.tx_mode = TxMode::AutoCommit;
+        run_sql(&mut app, "select count(*) from podelis_sb").await;
+        assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][0].as_deref(), Some("0"), "{engine:?}: discarded");
+    }
+}

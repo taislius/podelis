@@ -30,6 +30,7 @@ pub use input::{InputResult, LineInput};
 use list::Nav;
 pub use overlay::Overlay;
 pub use params::ParamForm;
+pub use sandbox::Sandbox;
 pub use tabs::{LibraryItem, LibraryView, TabMeta, TabPrompt, TabPromptKind};
 pub use tabs::{PlanSource, TabState};
 use vim::Vim;
@@ -65,6 +66,7 @@ mod results;
 mod review;
 mod rows;
 mod runs;
+mod sandbox;
 mod schema;
 mod session;
 pub mod settings_view;
@@ -586,6 +588,8 @@ struct RunExtra {
     reviewing: bool,
     /// It is a dry run, rolled back when it ends.
     dry_run: Option<review::DryRun>,
+    /// It's a sandbox step: added to the sandbox when it ends well.
+    sandbox_step: Option<sandbox::PendingStep>,
     /// Said before the next result's status (what an edit just did).
     status_prefix: Option<String>,
     /// When it started, to announce a long run's end.
@@ -612,6 +616,9 @@ pub enum RunPurpose {
     /// An INSERT or DELETE from the result grid ("Added"/"Deleted"); the
     /// query runs again afterwards.
     RowChange(&'static str),
+    /// Back to before sandbox step `number`: it failed, or (`undo`) the
+    /// user undid it.
+    SandboxBack { number: usize, undo: bool },
 }
 
 /// The inline "SET column = …" prompt for editing a result cell.
@@ -759,6 +766,10 @@ pub struct App {
     pub param_form: Option<ParamForm>,
     /// Asking to commit or roll back writes run in a transaction.
     pub review: Option<review::Review>,
+    /// The sandbox's window (`Ctrl+K x` while one is open).
+    pub sandbox_view: Option<sandbox::SandboxView>,
+    /// Where a sandbox's script goes once it's rolled back.
+    sandbox_then: Option<sandbox::Then>,
     /// The find/replace bar (Ctrl+F).
     pub find: Option<find::FindBar>,
     /// A pop-up menu of what can be done in the focused pane.
@@ -903,6 +914,8 @@ impl App {
             esc_then_tab: false,
             find: None,
             review: None,
+            sandbox_view: None,
+            sandbox_then: None,
             param_form: None,
             param_values: HashMap::new(),
             drafts: tabs::Drafts::default(),

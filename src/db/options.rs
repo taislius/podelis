@@ -143,16 +143,22 @@ pub enum TxMode {
     /// Writes run in a transaction that is always rolled back, to see what
     /// they would change (a dry run).
     RollbackOnly,
+    /// Every write runs in one transaction kept open between runs, a
+    /// savepoint before each: steps build on each other, the last can be
+    /// undone, and nothing is kept until the sandbox is ended (discarded,
+    /// kept as a script, or run for real).
+    Sandbox,
 }
 
 impl TxMode {
-    pub const ALL: [TxMode; 3] = [TxMode::AutoCommit, TxMode::Manual, TxMode::RollbackOnly];
+    pub const ALL: [TxMode; 4] = [TxMode::AutoCommit, TxMode::Manual, TxMode::RollbackOnly, TxMode::Sandbox];
 
     pub fn next(self) -> Self {
         match self {
             TxMode::AutoCommit => TxMode::Manual,
             TxMode::Manual => TxMode::RollbackOnly,
-            TxMode::RollbackOnly => TxMode::AutoCommit,
+            TxMode::RollbackOnly => TxMode::Sandbox,
+            TxMode::Sandbox => TxMode::AutoCommit,
         }
     }
 
@@ -162,6 +168,7 @@ impl TxMode {
             TxMode::AutoCommit => 'a',
             TxMode::Manual => 'm',
             TxMode::RollbackOnly => 'r',
+            TxMode::Sandbox => 's',
         }
     }
 
@@ -171,6 +178,7 @@ impl TxMode {
             TxMode::AutoCommit => t!("tx_mode.autocommit_about"),
             TxMode::Manual => t!("tx_mode.manual_about"),
             TxMode::RollbackOnly => t!("tx_mode.rollback_only_about"),
+            TxMode::Sandbox => t!("tx_mode.sandbox_about"),
         }
     }
 
@@ -179,6 +187,7 @@ impl TxMode {
             TxMode::AutoCommit => t!("tx_mode.autocommit"),
             TxMode::Manual => t!("tx_mode.manual"),
             TxMode::RollbackOnly => t!("tx_mode.rollback_only"),
+            TxMode::Sandbox => t!("tx_mode.sandbox"),
         }
     }
 
