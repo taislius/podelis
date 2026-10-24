@@ -3,7 +3,9 @@ name: Retry
 # A release tag's builds and the macOS tests sometimes fail for reasons of
 # GitHub's own: a macOS runner never picked up ("not acquired… after
 # multiple attempts", arm64 capacity), an API timeout. Their failed jobs are
-# run once more by themselves; a second failure is left for a person.
+# run once more by themselves. Jobs that never got a runner at all are run
+# again up to three times (v0.6.0's macOS tests needed three attempts); any
+# other second failure is left for a person.
 on:
   workflow_run:
     workflows: [Release, Platforms]
@@ -14,11 +16,22 @@ permissions:
 
 jobs:
   retry:
-    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt == 1
+    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt < 4
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}
       RUN: ${{ github.event.workflow_run.id }}
+      ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
     steps:
-      - run: gh run rerun "$RUN" --failed --repo "$GITHUB_REPOSITORY"
+      - run: |
+          # The jobs that failed or were cancelled and did get a runner: a
+          # real failure, retried only once.
+          ran=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN/attempts/$ATTEMPT/jobs" \
+            -q '[.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled")
+                 | select((.runner_name // "") != "")] | length')
+          if [ "$ran" = 0 ] || [ "$ATTEMPT" = 1 ]; then
+            gh run rerun "$RUN" --failed --repo "$GITHUB_REPOSITORY"
+          else
+            echo "Attempt $ATTEMPT failed on a runner: left for a person."
+          fi
