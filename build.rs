@@ -64,7 +64,9 @@ fn find_engines(db: &Path) -> Vec<Found> {
 }
 
 fn main() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // Read as the script runs, not baked in when it's built: a folder
+    // that moved would otherwise be looked for where it was.
+    let root = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
     let db = root.join("src/db");
     println!("cargo::rerun-if-changed=src/db");
     let engines = find_engines(&db);
