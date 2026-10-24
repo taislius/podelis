@@ -96,6 +96,7 @@ api = "openai"
 model = "gpt-5"
 key_command = "pass show openai"   # a command that prints the key
 # max_tokens = 4000                # the longest answer
+# tools = true                     # may look for more tables when asked (default: on for providers' models, off on this machine)
 ```
 
 - **Keys** are looked for in this order: the OS keychain (stored with

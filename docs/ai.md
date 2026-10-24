@@ -56,6 +56,17 @@ Before you see it, the SQL's tables and columns are checked against the
 real schema; what isn't there goes back to the model (twice at most), and
 anything still unknown is marked `-- CHECK:`.
 
+**When the tables shown aren't enough,** a model may look for more itself
+("revenue" names no table, so `payment` isn't shown): `find_tables` with
+words for what it needs, then `describe_table` for the ones that fit,
+which lists a table as the context does (columns, keys, comments), never
+its rows. At most two rounds and eight tables, then it must answer. What
+it looked up is said with the answer (`-- it also looked at: payment`).
+On by default for a provider's models, off for one on this machine
+(small local models follow tool calls badly): `tools = true` or `false`
+in its `[[models]]` entry. The same sharing rule applies: a provider's
+model sees the schema only if the project shares it.
+
 ## What the model is shown
 
 Only what the question needs: the tables whose names, columns or comments
@@ -84,8 +95,16 @@ with those tables from then on:
 
 ```sh
 podelis memory add orders.status 3 = cancelled
+podelis memory add customer also called client          # another name: "clients" finds customer
+podelis memory add revenue defined as sum(payment.amount)  # a term's formula: used whenever it's asked for
 podelis memory learn db/migrations    # each table's history, and the comments in your migrations
 ```
+
+A fact whose words match a question brings in the tables it names, so
+"revenue per store" finds `payment` through the definition, and "how many
+clients" finds `customer` through the other name (words match by their
+stems: "clients" finds "client"). A model that had to define a term or
+read another name suggests such a fact itself, for you to confirm.
 
 In the app, `Ctrl+K k` lists them: `a` adds, `d` forgets. When a model had
 to assume what something means, it's kept as a suggestion (orange, `-- assumed:`

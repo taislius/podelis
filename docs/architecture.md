@@ -287,7 +287,12 @@ same rmcp server as before (tools, rules, approvals through files in
 project's `share_schema` is `all` (or the call says `share_once`, which
 `podelis ask` sends after asking you), asks for one query in a `sql`
 block, checks its names with `names.rs`, and sends what's wrong back in
-the same conversation, at most twice. It returns the SQL, what the model
+the same conversation, at most twice. A model with `tools` (a provider's,
+by default) may first look up tables it wasn't shown: `converse` answers
+its `find_tables` and `describe_table` calls from the same `Schema`
+(`context::find`, `context::describe`; never rows), two rounds and eight
+tables at most, then asks for the answer without more calls
+(`no_more_calls`: `tool_choice` none). It returns the SQL, what the model
 said and the names still unknown; it never runs anything. `FACT:` lines
 at the end of the model's note (its assumptions) are taken out and kept
 as facts that aren't confirmed, `source = "model:<name>"`. With `explain`
