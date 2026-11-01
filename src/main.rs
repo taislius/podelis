@@ -53,6 +53,7 @@ async fn main() -> Result<()> {
         }
     };
     let log_path = system::logging::init();
+    config::store::secure_config_dir();
     let (store, store_warning) = ConnectionStore::load();
     if args.mcp {
         let name = args.name.clone().or_else(|| std::env::var("PODELIS_AGENT").ok());
