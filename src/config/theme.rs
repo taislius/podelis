@@ -1,8 +1,7 @@
 //! Colours, named after their role in the design ("SQL operator console"
 //! in the Figma file). Chosen once at startup.
 
-// Colours are written as 0xrrggbb to match the design file.
-#![allow(clippy::unreadable_literal)]
+#![expect(clippy::unreadable_literal, reason = "colours are written as 0xrrggbb to match the design file")]
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -184,7 +183,14 @@ impl Theme {
 /// Nearest xterm-256 colour: the 6×6×6 cube or the 24-step grey ramp.
 fn nearest_256(r: u8, g: u8, b: u8) -> u8 {
     const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
-    let level = |v: u8| LEVELS.iter().enumerate().min_by_key(|(_, l)| (i32::from(**l) - i32::from(v)).abs()).unwrap().0;
+    let level = |v: u8| {
+        LEVELS
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, l)| (i32::from(**l) - i32::from(v)).abs())
+            .expect("LEVELS isn't empty")
+            .0
+    };
     let (ri, gi, bi) = (level(r), level(g), level(b));
     let cube = 16 + 36 * ri + 6 * gi + bi;
     let dist = |(x, y, z): (u8, u8, u8)| {

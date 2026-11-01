@@ -85,8 +85,7 @@ fn modifies_data(words: &[String]) -> bool {
     ["INSERT", "UPDATE", "DELETE", "MERGE"].iter().any(|w| has(words, w))
 }
 
-// One arm per kind of statement reads better than merged patterns.
-#[allow(clippy::match_same_arms)]
+#[expect(clippy::match_same_arms, reason = "one arm per kind of statement reads better than merged patterns")]
 fn classify_ast(stmt: &Statement, words: &[String]) -> (Kind, Option<&'static str>) {
     match stmt {
         // A data-modifying CTE (`WITH x AS (DELETE ...) SELECT`) writes.
@@ -125,7 +124,7 @@ fn drops_data_or_keys(op: &AlterTableOperation) -> bool {
     )
 }
 
-#[allow(clippy::match_same_arms)]
+#[expect(clippy::match_same_arms, reason = "one arm per kind of statement reads better than merged patterns")]
 fn classify_words(words: &[String]) -> (Kind, Option<&'static str>) {
     let first = words.first().map_or("", String::as_str);
     let second = words.get(1).map_or("", String::as_str);

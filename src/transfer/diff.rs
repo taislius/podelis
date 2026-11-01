@@ -98,9 +98,10 @@ struct TableChanges {
     sql: Vec<String>,
 }
 
-// Each kind of difference (columns, indexes, keys) is a few lines; split up
-// they'd need the same half-dozen arguments each.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "each kind of difference (columns, indexes, keys) is a few lines; split up they'd need the same half-dozen arguments each"
+)]
 fn table_changes(here: &TableShape, there: &TableShape, this: Side, other: Side) -> TableChanges {
     let engine = other.engine;
     let same_engine = this.engine == engine;

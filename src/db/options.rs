@@ -53,7 +53,7 @@ impl SslMode {
     }
 
     pub fn cycle(self, forward: bool) -> SslMode {
-        let idx = SSL_MODES.iter().position(|m| *m == self).unwrap();
+        let idx = SSL_MODES.iter().position(|m| *m == self).expect("SSL_MODES lists every mode");
         let n = SSL_MODES.len();
         SSL_MODES[if forward { (idx + 1) % n } else { (idx + n - 1) % n }]
     }
@@ -83,7 +83,7 @@ impl ConnectionMode {
     }
 
     pub fn cycle(self, forward: bool) -> ConnectionMode {
-        let idx = MODES.iter().position(|m| *m == self).unwrap();
+        let idx = MODES.iter().position(|m| *m == self).expect("MODES lists every mode");
         let n = MODES.len();
         MODES[if forward { (idx + 1) % n } else { (idx + n - 1) % n }]
     }
@@ -125,8 +125,7 @@ impl AgentAccess {
         }
     }
 
-    // By reference: serde's `skip_serializing_if` passes one.
-    #[allow(clippy::trivially_copy_pass_by_ref)]
+    #[expect(clippy::trivially_copy_pass_by_ref, reason = "by reference: serde's `skip_serializing_if` passes one")]
     pub fn is_none(&self) -> bool {
         *self == AgentAccess::None
     }

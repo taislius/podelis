@@ -906,8 +906,6 @@ pub enum AiState {
 }
 
 impl App {
-    // Long only because it lists every field.
-    #[allow(clippy::too_many_lines)]
     pub fn new(store: ConnectionStore, store_warning: Option<String>, data_dir: Option<PathBuf>) -> Self {
         let (db_tx, db_rx) = mpsc::unbounded_channel();
         let projects_selected =
@@ -1127,7 +1125,7 @@ impl App {
 
     /// Whether actions may reach outside the app: connect, run `ssh` or a
     /// shell command. Always, except in the random-keys test.
-    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    #[cfg_attr(not(test), expect(clippy::unused_self, reason = "the random-keys test uses self"))]
     fn may_reach_outside(&self) -> bool {
         #[cfg(test)]
         if self.sandbox {
@@ -1231,7 +1229,7 @@ impl App {
     fn copy_text(&mut self, text: String, status: &str) {
         // Over SSH the terminal carries the copy, and many drop a big one.
         let status = if crate::system::clipboard::over_ssh() && text.len() > crate::system::clipboard::OSC52_LIMIT {
-            #[allow(clippy::cast_precision_loss)] // display only
+            #[expect(clippy::cast_precision_loss, reason = "display only")]
             let kb = text.len() as f64 / 1000.0;
             format!("{status} ({kb:.0} kB: over SSH, a copy this big may not reach your clipboard; export it instead)")
         } else {

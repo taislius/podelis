@@ -141,13 +141,12 @@ struct AgentSandbox {
 /// How long an agent's sandbox may sit idle before it's rolled back.
 const SANDBOX_IDLE: Duration = Duration::from_mins(10);
 
-// The tools return these.
-#[allow(clippy::unnecessary_wraps)]
+#[expect(clippy::unnecessary_wraps, reason = "the tools return a Result, and so do these")]
 fn text(s: impl Into<String>) -> Result<CallToolResult, ErrorData> {
     Ok(CallToolResult::success(vec![ContentBlock::text(s.into())]))
 }
 
-#[allow(clippy::unnecessary_wraps)]
+#[expect(clippy::unnecessary_wraps, reason = "the tools return a Result, and so do these")]
 fn failed(s: impl Into<String>) -> Result<CallToolResult, ErrorData> {
     Ok(CallToolResult::error(vec![ContentBlock::text(s.into())]))
 }
@@ -668,7 +667,7 @@ impl Server {
         if self.guard_rows == 0 {
             return None;
         }
-        #[allow(clippy::cast_precision_loss)] // a threshold
+        #[expect(clippy::cast_precision_loss, reason = "a threshold")]
         let limit = self.guard_rows as f64;
         let scans = db.full_scans(sql).await.ok()?;
         let (table, rows) = scans.into_iter().find(|(_, rows)| *rows >= limit)?;
@@ -894,8 +893,7 @@ fn answer(outcome: &QueryOutcome, dry_run: bool) -> String {
     json.to_string()
 }
 
-// The macro's handlers are async whether or not they wait.
-#[allow(clippy::unused_async_trait_impl)]
+#[expect(clippy::unused_async_trait_impl, reason = "the macro's handlers are async whether or not they wait")]
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Server {
     fn get_info(&self) -> ServerConfig {

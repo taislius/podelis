@@ -120,7 +120,7 @@ impl Database {
         let tables = self.tables(false).await.unwrap_or_default();
         let mut out = Vec::new();
         for scan in scans {
-            #[allow(clippy::cast_precision_loss)] // an estimate
+            #[expect(clippy::cast_precision_loss, reason = "an estimate")]
             let estimate = || {
                 tables
                     .iter()

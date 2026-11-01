@@ -154,7 +154,7 @@ impl Format {
             anyhow::bail!("{file} is compressed with gzip: name it {file}.gz to import it");
         }
         let line = first.split(|&b| b == b'\n').next().unwrap_or_default();
-        #[allow(clippy::naive_bytecount)] // one line, once
+        #[expect(clippy::naive_bytecount, reason = "one line, once")]
         let count = |d: u8| line.iter().filter(|&&b| b == d).count();
         let delimiter = b";\t".iter().copied().find(|&d| count(d) > count(b',')).unwrap_or(b',');
         Ok(Format { delimiter })
@@ -251,7 +251,7 @@ pub struct Progress {
 
 /// `reading 45% · 2.7M rows`.
 impl std::fmt::Display for Progress {
-    #[allow(clippy::cast_precision_loss)] // display only, one decimal
+    #[expect(clippy::cast_precision_loss, reason = "display only, one decimal")]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let stage = match self.stage {
             Stage::Reading => "reading",

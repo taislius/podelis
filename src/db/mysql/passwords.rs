@@ -123,7 +123,7 @@ mod tests {
         let text = "[mysqld]\npassword = server\n\n[client]\n# comment\nuser = app\npassword = \"s3 \\\"cret\"\n";
         let path = file(&dir, text, 0o600);
         let pw = "s3 \"cret".to_string();
-        assert_eq!(my_cnf_password(&path, "localhost", "app"), Some((pw.clone(), None)));
+        assert_eq!(my_cnf_password(&path, "localhost", "app"), Some((pw, None)));
         // Another user than the file names: not its password.
         assert_eq!(my_cnf_password(&path, "localhost", "root"), None);
         // No host named: this machine only.

@@ -151,7 +151,7 @@ async fn retrieval_recall_holds() {
     let results = measure().await;
     let pct = |a: usize, b: usize| (a * 100).checked_div(b).map_or(100, |p| p as u32);
     let mut failed = Vec::new();
-    #[allow(clippy::print_stdout)]
+    #[expect(clippy::print_stdout, reason = "the eval's numbers, read with --nocapture")]
     for (db, t) in &results {
         let recall = pct(t.found, t.gold);
         println!(

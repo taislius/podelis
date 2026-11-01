@@ -78,7 +78,7 @@ impl App {
 
     fn export_progress(&mut self, rows: u64) {
         if self.export_task.is_some() {
-            #[allow(clippy::cast_precision_loss)] // display only, one decimal
+            #[expect(clippy::cast_precision_loss, reason = "display only, one decimal")]
             let rows = crate::db::human_rows(rows as f64);
             self.set_status(t!("run.exporting", rows = rows), false);
         }

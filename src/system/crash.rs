@@ -84,7 +84,7 @@ mod tests {
     fn panics_are_logged_with_location() {
         // The hook is global: only capture this test's own panic.
         let captured = std::sync::Arc::new(Mutex::new(String::new()));
-        let sink = captured.clone();
+        let sink = std::sync::Arc::clone(&captured);
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             if message(info).starts_with("crash-log-test") {

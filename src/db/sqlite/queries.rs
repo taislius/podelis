@@ -1,8 +1,6 @@
 //! SQLite: catalog, details and session queries.
 
-// Every engine has these functions with one signature, the generated
-// dispatch calling them alike (build.rs): some needn't wait for anything.
-#![allow(clippy::unused_async)]
+#![expect(clippy::unused_async, reason = "every engine has these functions with one signature, the generated dispatch calling them alike (build.rs): some needn't wait for anything")]
 
 use super::super::catalog::{ColumnRow, TableRow};
 use super::super::details::{ForeignKey, IndexInfo};
@@ -16,10 +14,7 @@ impl Database {
     pub(in crate::db) async fn sqlite_session(&self) -> Result<MappedMutexGuard<'_, PoolConnection<Sqlite>>> {
         let session = self.0.session.lock().await;
         self.clear_interrupt();
-        MutexGuard::try_map(session, |s| match s {
-            Session::Sqlite(c) => Some(c),
-            _ => None,
-        })
+        MutexGuard::try_map(session, |s| if let Session::Sqlite(c) = s { Some(c) } else { None })
         .map_err(|_| anyhow::anyhow!("the connection is closed"))
     }
 }

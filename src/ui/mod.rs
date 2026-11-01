@@ -204,7 +204,7 @@ pub(super) fn truncate_start(s: &str, max: usize) -> String {
 }
 
 /// A size in bytes, e.g. `12.4 MB` (powers of 1024, as `du -h`).
-#[allow(clippy::cast_precision_loss)] // display only, one decimal
+#[expect(clippy::cast_precision_loss, reason = "display only, one decimal")]
 pub(super) fn human_bytes(n: i64) -> String {
     const UNITS: [&str; 5] = ["B", "kB", "MB", "GB", "TB"];
     let mut size = n as f64;
@@ -217,7 +217,7 @@ pub(super) fn human_bytes(n: i64) -> String {
 }
 
 /// Compact counts like the design's `24.8k` / `1.1m`.
-#[allow(clippy::cast_precision_loss)] // display only, one decimal
+#[expect(clippy::cast_precision_loss, reason = "display only, one decimal")]
 pub(super) fn human_count(n: i64) -> String {
     match n {
         n if n >= 1_000_000 => format!("{:.1}m", n as f64 / 1e6),

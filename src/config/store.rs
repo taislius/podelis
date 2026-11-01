@@ -93,8 +93,7 @@ pub enum ShareSchema {
 }
 
 impl ShareSchema {
-    // serde's `skip_serializing_if` passes a reference.
-    #[allow(clippy::trivially_copy_pass_by_ref)]
+    #[expect(clippy::trivially_copy_pass_by_ref, reason = "serde's `skip_serializing_if` passes a reference")]
     fn is_default(&self) -> bool {
         *self == ShareSchema::default()
     }
@@ -232,7 +231,7 @@ impl ConnectionStore {
                 Some(i) => store.projects[i].id.clone(),
                 None => store.add_project_unsaved(DEFAULT_PROJECT),
             };
-            let project = store.project_mut(&id).unwrap();
+            let project = store.project_mut(&id).expect("the project was just found or added");
             for mut profile in file.connections {
                 if !project.connections.iter().any(|c| c.name == profile.name) {
                     profile.legacy_keychain = true;
@@ -705,7 +704,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("connections.toml");
         fs::write(&path, "this is [not toml").unwrap();
-        let (mut store, warning) = ConnectionStore::load_from(path.clone());
+        let (mut store, warning) = ConnectionStore::load_from(path);
         assert!(warning.unwrap().contains("moved it to"));
         let backups: Vec<_> = fs::read_dir(dir.path())
             .unwrap()

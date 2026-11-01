@@ -14,7 +14,7 @@ pub(in crate::db) fn live_params() -> Option<ConnectParams> {
 pub(in crate::db) async fn own_live_db(name: &str) -> Option<(Database, ConnectParams)> {
     let mut params = live_params()?;
     let server = Database::connect(params.clone()).await.expect("connect");
-    server.run(&format!("CREATE DATABASE IF NOT EXISTS {name}"), 1).await.unwrap();
+    server.run(&format!("CREATE DATABASE IF NOT EXISTS {name}"), 1).await.expect("create the test's database");
     server.close().await;
     params.database = name.to_string();
     Some((Database::connect(params.clone()).await.expect("connect"), params))

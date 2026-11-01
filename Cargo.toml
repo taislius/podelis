@@ -84,6 +84,14 @@ todo = "warn"
 unimplemented = "warn"
 print_stdout = "warn"              # the TUI owns the terminal; see parse_args for the exception
 print_stderr = "warn"
+# Every suppression says why, and goes once it isn't needed:
+# `#[expect(lint, reason = "…")]`, not `#[allow]`.
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+# No unwrap() outside tests: `?`, or expect("why it can't fail").
+unwrap_used = "warn"
+redundant_clone = "warn"
+clone_on_ref_ptr = "warn"          # Arc::clone(&x), so a cheap clone reads as one
 
 # sqlx-mysql 0.9.0 with two fixes: a user without a password gets an empty
 # auth response, not a scramble of "" (public servers that switch the auth

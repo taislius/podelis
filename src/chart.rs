@@ -34,7 +34,7 @@ pub fn chart(outcome: &QueryOutcome, view: &[usize], col: usize) -> Result<Strin
     let sum: f64 = values.iter().sum();
     let min = values.iter().copied().fold(f64::INFINITY, f64::min);
     let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    #[allow(clippy::cast_precision_loss)] // a count of rows
+    #[expect(clippy::cast_precision_loss, reason = "a count of rows")]
     let avg = sum / values.len() as f64;
 
     let mut out = format!(
@@ -66,7 +66,12 @@ fn bar(value: f64, scale: f64) -> String {
     if scale <= 0.0 {
         return String::new();
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "a bar of a few dozen eighths, from a non-negative ratio"
+    )]
     let eighths = ((value.abs() / scale) * (BAR_WIDTH * 8) as f64).round() as usize;
     let full = if value < 0.0 { '░' } else { '█' };
     let mut s: String = std::iter::repeat_n(full, eighths / 8).collect();
@@ -84,7 +89,7 @@ fn sparkline(values: &[f64]) -> String {
     let points: Vec<f64> = (0..n)
         .map(|i| {
             let (a, b) = (i * values.len() / n, ((i + 1) * values.len() / n).max(i * values.len() / n + 1));
-            #[allow(clippy::cast_precision_loss)]
+            #[expect(clippy::cast_precision_loss, reason = "a count of a few values")]
             let avg = values[a..b].iter().sum::<f64>() / (b - a) as f64;
             avg
         })
@@ -93,7 +98,7 @@ fn sparkline(values: &[f64]) -> String {
     points
         .iter()
         .map(|v| {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "a level from 0 to 7")]
             let level = if hi > lo { (((v - lo) / (hi - lo)) * 7.0).round() as usize } else { 3 };
             LEVELS[level.min(7)]
         })

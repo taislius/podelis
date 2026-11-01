@@ -2,6 +2,8 @@
 //! program, a scratch config folder and a SQLite file. What it prints, on
 //! which stream, and its exit codes (see `podelis --help`).
 
+#![expect(clippy::unwrap_used, reason = "tests: a panic is the failed assertion")]
+
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
