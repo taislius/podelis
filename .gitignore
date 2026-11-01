@@ -1,3 +1,5 @@
 /target
 # Generated for releases by scripts/third-party-licenses.sh
 /THIRD-PARTY-LICENSES.txt
+# SBOMs made by cargo cyclonedx (release.yml)
+/*.cdx.json

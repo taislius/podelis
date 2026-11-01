@@ -49,7 +49,21 @@ jobs:
       - uses: actions/checkout@v5
       # The pinned toolchain from rust-toolchain.toml, plus this target.
       - run: rustup toolchain install && rustup target add ${{ matrix.target }}
-      - run: cargo build --release --locked --target ${{ matrix.target }}
+      # `cargo auditable` puts the dependency list in the binary itself, so
+      # `cargo audit bin`, Trivy, Syft or Grype can check a downloaded
+      # podelis for vulnerable crates without its source.
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-auditable,cargo-cyclonedx
+      - run: cargo auditable build --release --locked --target ${{ matrix.target }}
+      # The SBOM (CycloneDX 1.5, JSON): every crate built into this target's
+      # binary, with versions, licences and where it came from.
+      - name: SBOM
+        shell: bash
+        run: |
+          cargo cyclonedx --format json --spec-version 1.5 --no-build-deps \
+            --target ${{ matrix.target }} --override-filename podelis.cdx
+          test -s podelis.cdx.json
       # macOS binaries signed under a fixed identity, so the keychain knows
       # each update as the same program (its Allow dialog comes once). Only
       # with the MACOS_SIGN_P12 (a base64 .p12 with the certificate and its
@@ -76,7 +90,7 @@ jobs:
             target/${{ matrix.target }}/release/podelis
           codesign --verify --verbose=1 target/${{ matrix.target }}/release/podelis
       # Licences and notices of every bundled crate, shipped with the binary.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
           tool: cargo-about
       # No prebuilt cargo-about for some targets (Intel macOS): the action's
@@ -90,12 +104,14 @@ jobs:
         run: |
           name=podelis-${GITHUB_REF_NAME}-${{ matrix.target }}
           mkdir "$name"
-          cp README.md LICENSE THIRD-PARTY-LICENSES.txt "$name"/
+          cp README.md LICENSE THIRD-PARTY-LICENSES.txt podelis.cdx.json "$name"/
           mkdir "$name"/docs
           cp docs/*.md "$name"/docs/
           cp target/${{ matrix.target }}/release/podelis docs/podelis.1 "$name"/
           tar czf "$name.tar.gz" "$name"
           echo "ASSET=$name.tar.gz" >> "$GITHUB_ENV"
+          cp podelis.cdx.json "$name.cdx.json"
+          echo "SBOM=$name.cdx.json" >> "$GITHUB_ENV"
       - name: Checksum
         shell: bash
         run: |
@@ -109,7 +125,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           for try in 1 2 3 4 5; do
-            gh release upload "$GITHUB_REF_NAME" "$ASSET" "$ASSET.sha256" --repo "$GITHUB_REPOSITORY" --clobber && exit 0
+            gh release upload "$GITHUB_REF_NAME" "$ASSET" "$ASSET.sha256" "$SBOM" --repo "$GITHUB_REPOSITORY" --clobber && exit 0
             echo "Upload $try failed; trying again in $((try * 30)) s."
             sleep $((try * 30))
           done

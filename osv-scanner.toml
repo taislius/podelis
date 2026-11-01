@@ -1,0 +1,15 @@
+# osv-scanner (OSV: RustSec and GitHub's advisories), run weekly by
+# .github/workflows/deny.yml beside cargo-deny. The same exceptions as
+# deny.toml, with the same reasons; drop them together.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0370"
+reason = "zvariant: unmaintained, merged into zbus 6; secret-service (keyring's Linux store) still on zbus 5"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0371"
+reason = "zbus_names: unmaintained, merged into zbus 6; secret-service still on zbus 5"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0372"
+reason = "zvariant_derive: unmaintained, merged into zbus 6; secret-service still on zbus 5"
