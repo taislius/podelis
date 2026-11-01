@@ -142,6 +142,24 @@ const STOP: &[&str] = &[
     "our", "id", "ids", "select", "count", "sum", "top", "last", "first", "number",
 ];
 
+/// Words for money in a question, which schemas rarely use as names: they
+/// keep it in `amount`, `price` and `total` columns, and `payment` tables.
+const MONEY: &[&str] = &[
+    "money", "revenue", "revenues", "earn", "earned", "earns", "earning", "earnings", "income", "profit", "profits",
+    "spend", "spent", "spending", "paid", "pay", "sales", "turnover", "takings", "gross",
+];
+/// What a word of [`MONEY`] also matches.
+const MONEY_NAMES: &[&str] = &["amount", "price", "total", "payment"];
+
+/// The question's words, with what money words also match ([`MONEY`]).
+fn question_words(question: &str) -> BTreeSet<String> {
+    let mut out = words(question);
+    if out.iter().any(|w| MONEY.contains(&w.as_str())) {
+        out.extend(MONEY_NAMES.iter().map(|w| (*w).to_string()));
+    }
+    out
+}
+
 /// `customers` → customer, `categories` → category, `addresses` → address.
 fn singular(w: &str) -> Option<String> {
     if w.len() > 4 && w.ends_with("ies") {
@@ -182,6 +200,18 @@ fn key(schema: &str, table: &str) -> (String, String) {
     (schema.to_lowercase(), table.to_lowercase())
 }
 
+/// The tables' names (not views'), lowercased, each also singular
+/// (`orders`, `order`).
+fn table_names(schema: &Schema) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for (t, _) in schema.tables.iter().filter(|(t, _)| !t.is_view && !t.system) {
+        let name = t.name.to_lowercase();
+        out.extend(singular(&name));
+        out.insert(name);
+    }
+    out
+}
+
 /// A table's score for the question's words, and what matched.
 /// Foreign-key columns don't count: `orders.customer_id` is about
 /// customers, and the key brings `orders` in as their neighbour anyway.
@@ -191,6 +221,7 @@ fn score(
     columns: &[ColumnInfo],
     comments: &[&Comment],
     keys: &Keys,
+    tables: &BTreeSet<String>,
 ) -> (u32, Vec<String>) {
     let mut score = 0;
     let mut matched = Vec::new();
@@ -216,6 +247,20 @@ fn score(
     if !by_comment.is_empty() {
         score += 2 * by_comment.len().min(5) as u32;
         matched.push(format!("its comments ({})", by_comment.join(", ")));
+    }
+    // A view repeats tables' rows: below the tables themselves, and not
+    // chosen for the name of a table it's built on (`film_list`, for
+    // "film", where `film` is there) or for columns alone.
+    if table.is_view {
+        if !by_name.is_empty() && by_name.iter().all(|w| tables.contains(w)) {
+            score -= 10 * by_name.len() as u32;
+            matched.retain(|m| !m.starts_with("its name"));
+        }
+        // Matched by its columns alone: a table it reads has them too.
+        if matched.iter().all(|m| m.starts_with("columns")) {
+            return (0, Vec::new());
+        }
+        score /= 2;
     }
     (score, matched)
 }
@@ -332,9 +377,78 @@ fn neighbours(
     ranked
 }
 
+/// The pairs of `entry` tables a foreign key joins directly, (smaller,
+/// larger) index first.
+fn direct_links(tables: &[&(TableInfo, Vec<ColumnInfo>)], links: &[Link], entry: &[usize]) -> BTreeSet<(usize, usize)> {
+    let index: HashMap<(String, String), usize> =
+        tables.iter().enumerate().map(|(i, (t, _))| (key(&t.schema, &t.name), i)).collect();
+    links
+        .iter()
+        .filter_map(|l| {
+            let a = *index.get(&key(&l.schema, &l.table))?;
+            let b = *index.get(&key(&l.target_schema, &l.target_table))?;
+            (a != b && entry.contains(&a) && entry.contains(&b)).then_some((a.min(b), a.max(b)))
+        })
+        .collect()
+}
+
+/// Step 2 of [`build`]: the neighbours of the entry points `chosen` holds,
+/// through foreign keys, added to it with why; returns how many qualified
+/// but didn't fit.
+fn add_neighbours(
+    tables: &[&(TableInfo, Vec<ColumnInfo>)],
+    links: &[Link],
+    scored: &[(u32, usize, Vec<String>)],
+    chosen: &mut Vec<(usize, String)>,
+) -> usize {
+    let mut left_out = 0;
+    let entry: Vec<usize> = chosen.iter().map(|(i, _)| *i).collect();
+    // Matched by name: sure enough to bring in what joins to them alone.
+    let by_name: Vec<usize> = scored
+        .iter()
+        .take(MAX_ENTRY)
+        .filter(|(_, _, why)| why.iter().any(|w| w.starts_with("its name")))
+        .map(|(_, i, _)| *i)
+        .collect();
+    let found = neighbours(tables, links, &entry, &by_name);
+    let direct = direct_links(tables, links, &entry);
+    let linked_of: HashMap<usize, &BTreeSet<usize>> = found.iter().map(|(i, l, _)| (*i, l)).collect();
+    for (i, linked, also) in &found {
+        let (i, linked, also) = (*i, linked, also);
+        // One link, to a table matched only by a column or comment: too
+        // far from the question.
+        if linked.len() == 1 && also.is_empty() && !linked.iter().any(|j| by_name.contains(j)) {
+            continue;
+        }
+        // Only another way between chosen tables that are joined
+        // directly already (`staff` between `payment` and `customer`).
+        let mut reach: BTreeSet<usize> = linked.clone();
+        for b in also {
+            reach.extend(linked_of.get(b).into_iter().flat_map(|l| l.iter().copied()));
+        }
+        if reach.len() >= 2
+            && reach.iter().all(|a| reach.iter().all(|b| a == b || direct.contains(&(*a.min(b), *a.max(b)))))
+        {
+            continue;
+        }
+        if chosen.len() >= MAX_TABLES {
+            left_out += 1;
+            continue;
+        }
+        let joined: Vec<String> = linked.iter().chain(also.iter()).map(|&j| tables[j].0.name.clone()).collect();
+        let why = if joined.len() > 1 {
+            format!("links {} and {}", joined[..joined.len() - 1].join(", "), joined[joined.len() - 1])
+        } else {
+            format!("joins {}", joined[0])
+        };
+        chosen.push((i, why));
+    }
+    left_out
+}
+
 /// The context for `question`.
 pub fn build(schema: &Schema, question: &str) -> Context {
-    let question = words(question);
+    let question = question_words(question);
     let tables: Vec<&(TableInfo, Vec<ColumnInfo>)> =
         schema.tables.iter().filter(|(t, _)| !t.system && t.partition_of.is_none()).collect();
     let roots = roots(schema);
@@ -353,13 +467,14 @@ pub fn build(schema: &Schema, question: &str) -> Context {
     let no_comments = Vec::new();
     let comments_of = |t: &TableInfo| by_table.get(&key(&t.schema, &t.name)).unwrap_or(&no_comments).as_slice();
     let keys = Keys::of_links(&links);
+    let names = table_names(schema);
 
     // 1. Entry points, best first.
     let mut scored: Vec<(u32, usize, Vec<String>)> = tables
         .iter()
         .enumerate()
         .map(|(i, (t, cols))| {
-            let (s, why) = score(&question, t, cols, comments_of(t), &keys);
+            let (s, why) = score(&question, t, cols, comments_of(t), &keys, &names);
             (s, i, why)
         })
         .filter(|(s, _, _)| *s > 0)
@@ -375,32 +490,7 @@ pub fn build(schema: &Schema, question: &str) -> Context {
         }
     } else {
         // 2. Neighbours through foreign keys.
-        let entry: Vec<usize> = chosen.iter().map(|(i, _)| *i).collect();
-        // Matched by name: sure enough to bring in what joins to them alone.
-        let by_name: Vec<usize> = scored
-            .iter()
-            .take(MAX_ENTRY)
-            .filter(|(_, _, why)| why.iter().any(|w| w.starts_with("its name")))
-            .map(|(_, i, _)| *i)
-            .collect();
-        for (i, linked, also) in neighbours(&tables, &links, &entry, &by_name) {
-            // One link, to a table matched only by a column or comment: too
-            // far from the question.
-            if linked.len() == 1 && also.is_empty() && !linked.iter().any(|j| by_name.contains(j)) {
-                continue;
-            }
-            if chosen.len() >= MAX_TABLES {
-                left_out += 1;
-                continue;
-            }
-            let joined: Vec<String> = linked.iter().chain(&also).map(|&j| tables[j].0.name.clone()).collect();
-            let why = if joined.len() > 1 {
-                format!("links {} and {}", joined[..joined.len() - 1].join(", "), joined[joined.len() - 1])
-            } else {
-                format!("joins {}", joined[0])
-            };
-            chosen.push((i, why));
-        }
+        left_out += add_neighbours(&tables, &links, &scored, &mut chosen);
     }
 
     // 3. Rendered, within the budget.
@@ -440,10 +530,11 @@ pub fn build(schema: &Schema, question: &str) -> Context {
 /// names, columns or comments match `words`, best first, at most
 /// [`MAX_ENTRY`], with why; none of their neighbours.
 pub fn find(schema: &Schema, words: &str) -> Vec<Chosen> {
-    let question = self::words(words);
+    let question = question_words(words);
     let roots = roots(schema);
     let links = parents_links(schema, &roots);
     let keys = Keys::of_links(&links);
+    let names = table_names(schema);
     let mut scored: Vec<(u32, &TableInfo, Vec<String>)> = schema
         .tables
         .iter()
@@ -451,7 +542,7 @@ pub fn find(schema: &Schema, words: &str) -> Vec<Chosen> {
         .map(|(t, cols)| {
             let comments: Vec<&Comment> =
                 schema.comments.iter().filter(|c| key(&c.schema, &c.table) == key(&t.schema, &t.name)).collect();
-            let (score, why) = score(&question, t, cols, &comments, &keys);
+            let (score, why) = score(&question, t, cols, &comments, &keys, &names);
             (score, t, why)
         })
         .filter(|(score, _, _)| *score > 0)
@@ -541,5 +632,7 @@ fn cut(text: &str) -> String {
     short
 }
 
+#[cfg(test)]
+mod eval;
 #[cfg(test)]
 mod tests;

@@ -1,0 +1,613 @@
+{
+  "engine": "SQLite",
+  "dialect": "Sqlite",
+  "tables": [
+    [
+      {
+        "schema": "main",
+        "name": "Album",
+        "is_view": false,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "AlbumId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "Title",
+          "data_type": "NVARCHAR(160)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "ArtistId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "main",
+        "name": "Artist",
+        "is_view": false,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "ArtistId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "Name",
+          "data_type": "NVARCHAR(120)",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "main",
+        "name": "Customer",
+        "is_view": false,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "CustomerId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "FirstName",
+          "data_type": "NVARCHAR(40)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "LastName",
+          "data_type": "NVARCHAR(20)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "Company",
+          "data_type": "NVARCHAR(80)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "Address",
+          "data_type": "NVARCHAR(70)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "City",
+          "data_type": "NVARCHAR(40)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "State",
+          "data_type": "NVARCHAR(40)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "Country",
+          "data_type": "NVARCHAR(40)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "PostalCode",
+          "data_type": "NVARCHAR(10)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "Phone",
+          "data_type": "NVARCHAR(24)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "Fax",
+          "data_type": "NVARCHAR(24)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "Email",
+          "data_type": "NVARCHAR(60)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "SupportRepId",
+          "data_type": "INTEGER",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "main",
+        "name": "Employee",
+        "is_view": false,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "EmployeeId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "LastName",
+          "data_type": "NVARCHAR(20)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "FirstName",
+          "data_type": "NVARCHAR(20)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "Title",
+          "data_type": "NVARCHAR(30)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "ReportsTo",
+          "data_type": "INTEGER",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "BirthDate",
+          "data_type": "DATETIME",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "HireDate",
+          "data_type": "DATETIME",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "Address",
+          "data_type": "NVARCHAR(70)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "City",
+          "data_type": "NVARCHAR(40)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "State",
+          "data_type": "NVARCHAR(40)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "Country",
+          "data_type": "NVARCHAR(40)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "PostalCode",
+          "data_type": "NVARCHAR(10)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "Phone",
+          "data_type": "NVARCHAR(24)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "Fax",
+          "data_type": "NVARCHAR(24)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "Email",
+          "data_type": "NVARCHAR(60)",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "main",
+        "name": "Genre",
+        "is_view": false,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "GenreId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "Name",
+          "data_type": "NVARCHAR(120)",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "main",
+        "name": "Invoice",
+        "is_view": false,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "InvoiceId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "CustomerId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "InvoiceDate",
+          "data_type": "DATETIME",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "BillingAddress",
+          "data_type": "NVARCHAR(70)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "BillingCity",
+          "data_type": "NVARCHAR(40)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "BillingState",
+          "data_type": "NVARCHAR(40)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "BillingCountry",
+          "data_type": "NVARCHAR(40)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "BillingPostalCode",
+          "data_type": "NVARCHAR(10)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "Total",
+          "data_type": "NUMERIC(10,2)",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "main",
+        "name": "InvoiceLine",
+        "is_view": false,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "InvoiceLineId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "InvoiceId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "TrackId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "UnitPrice",
+          "data_type": "NUMERIC(10,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "Quantity",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "main",
+        "name": "MediaType",
+        "is_view": false,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "MediaTypeId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "Name",
+          "data_type": "NVARCHAR(120)",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "main",
+        "name": "Playlist",
+        "is_view": false,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "PlaylistId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "Name",
+          "data_type": "NVARCHAR(120)",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "main",
+        "name": "PlaylistTrack",
+        "is_view": false,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "PlaylistId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "TrackId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": true
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "main",
+        "name": "Track",
+        "is_view": false,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "TrackId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "Name",
+          "data_type": "NVARCHAR(200)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "AlbumId",
+          "data_type": "INTEGER",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "MediaTypeId",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "GenreId",
+          "data_type": "INTEGER",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "Composer",
+          "data_type": "NVARCHAR(220)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "Milliseconds",
+          "data_type": "INTEGER",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "Bytes",
+          "data_type": "INTEGER",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "UnitPrice",
+          "data_type": "NUMERIC(10,2)",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ]
+  ],
+  "links": [
+    {
+      "schema": "main",
+      "table": "Album",
+      "column": "ArtistId",
+      "target_schema": "main",
+      "target_table": "Artist",
+      "target_column": "ArtistId"
+    },
+    {
+      "schema": "main",
+      "table": "Customer",
+      "column": "SupportRepId",
+      "target_schema": "main",
+      "target_table": "Employee",
+      "target_column": "EmployeeId"
+    },
+    {
+      "schema": "main",
+      "table": "Employee",
+      "column": "ReportsTo",
+      "target_schema": "main",
+      "target_table": "Employee",
+      "target_column": "EmployeeId"
+    },
+    {
+      "schema": "main",
+      "table": "Invoice",
+      "column": "CustomerId",
+      "target_schema": "main",
+      "target_table": "Customer",
+      "target_column": "CustomerId"
+    },
+    {
+      "schema": "main",
+      "table": "InvoiceLine",
+      "column": "InvoiceId",
+      "target_schema": "main",
+      "target_table": "Invoice",
+      "target_column": "InvoiceId"
+    },
+    {
+      "schema": "main",
+      "table": "InvoiceLine",
+      "column": "TrackId",
+      "target_schema": "main",
+      "target_table": "Track",
+      "target_column": "TrackId"
+    },
+    {
+      "schema": "main",
+      "table": "PlaylistTrack",
+      "column": "PlaylistId",
+      "target_schema": "main",
+      "target_table": "Playlist",
+      "target_column": "PlaylistId"
+    },
+    {
+      "schema": "main",
+      "table": "PlaylistTrack",
+      "column": "TrackId",
+      "target_schema": "main",
+      "target_table": "Track",
+      "target_column": "TrackId"
+    },
+    {
+      "schema": "main",
+      "table": "Track",
+      "column": "AlbumId",
+      "target_schema": "main",
+      "target_table": "Album",
+      "target_column": "AlbumId"
+    },
+    {
+      "schema": "main",
+      "table": "Track",
+      "column": "GenreId",
+      "target_schema": "main",
+      "target_table": "Genre",
+      "target_column": "GenreId"
+    },
+    {
+      "schema": "main",
+      "table": "Track",
+      "column": "MediaTypeId",
+      "target_schema": "main",
+      "target_table": "MediaType",
+      "target_column": "MediaTypeId"
+    }
+  ],
+  "comments": []
+}

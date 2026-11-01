@@ -1,0 +1,4587 @@
+{
+  "engine": "PostgreSQL",
+  "dialect": "Postgres",
+  "tables": [
+    [
+      {
+        "schema": "public",
+        "name": "actor",
+        "is_view": false,
+        "rows": 200,
+        "bytes": 49152,
+        "system": false
+      },
+      [
+        {
+          "name": "actor_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "first_name",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_name",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "actor_info",
+        "is_view": true,
+        "rows": null,
+        "bytes": 0,
+        "system": false
+      },
+      [
+        {
+          "name": "actor_id",
+          "data_type": "int4",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "first_name",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "last_name",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "film_info",
+          "data_type": "jsonb",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "address",
+        "is_view": false,
+        "rows": 1003,
+        "bytes": 196608,
+        "system": false
+      },
+      [
+        {
+          "name": "address_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "address",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "address2",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "district",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "city_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "postal_code",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "phone",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "category",
+        "is_view": false,
+        "rows": null,
+        "bytes": 8192,
+        "system": false
+      },
+      [
+        {
+          "name": "category_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "name",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "city",
+        "is_view": false,
+        "rows": 600,
+        "bytes": 90112,
+        "system": false
+      },
+      [
+        {
+          "name": "city_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "city",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "country_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "country",
+        "is_view": false,
+        "rows": 109,
+        "bytes": 24576,
+        "system": false
+      },
+      [
+        {
+          "name": "country_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "country",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "customer",
+        "is_view": false,
+        "rows": 999,
+        "bytes": 507904,
+        "system": false
+      },
+      [
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "store_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "first_name",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_name",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "email",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "address_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "activebool",
+          "data_type": "bool",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "create_date",
+          "data_type": "date",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamptz",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "active",
+          "data_type": "int4",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "customer_list",
+        "is_view": true,
+        "rows": null,
+        "bytes": 0,
+        "system": false
+      },
+      [
+        {
+          "name": "id",
+          "data_type": "int4",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "name",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "address",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "zip code",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "phone",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "city",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "country",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "notes",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "sid",
+          "data_type": "int4",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "film",
+        "is_view": false,
+        "rows": 1000,
+        "bytes": 737280,
+        "system": false
+      },
+      [
+        {
+          "name": "film_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "title",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "description",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "release_year",
+          "data_type": "int4",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "language_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "original_language_id",
+          "data_type": "int4",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "rental_duration",
+          "data_type": "int2",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_rate",
+          "data_type": "numeric(4,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "length",
+          "data_type": "int2",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "replacement_cost",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rating",
+          "data_type": "mpaa_rating",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "special_features",
+          "data_type": "text[]",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "fulltext",
+          "data_type": "tsvector",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "length_hours",
+          "data_type": "numeric(4,2)",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "film_actor",
+        "is_view": false,
+        "rows": 5462,
+        "bytes": 475136,
+        "system": false
+      },
+      [
+        {
+          "name": "actor_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "film_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "film_category",
+        "is_view": false,
+        "rows": 2367,
+        "bytes": 212992,
+        "system": false
+      },
+      [
+        {
+          "name": "film_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "category_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "film_embedding",
+        "is_view": false,
+        "rows": 1000,
+        "bytes": 204800,
+        "system": false
+      },
+      [
+        {
+          "name": "film_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "embedding",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "film_list",
+        "is_view": true,
+        "rows": null,
+        "bytes": 0,
+        "system": false
+      },
+      [
+        {
+          "name": "fid",
+          "data_type": "int4",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "title",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "description",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "category",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "price",
+          "data_type": "numeric(4,2)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "length",
+          "data_type": "int2",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "rating",
+          "data_type": "mpaa_rating",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "actors",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "inventory",
+        "is_view": false,
+        "rows": 4581,
+        "bytes": 483328,
+        "system": false
+      },
+      [
+        {
+          "name": "inventory_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "film_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "store_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "language",
+        "is_view": false,
+        "rows": null,
+        "bytes": 8192,
+        "system": false
+      },
+      [
+        {
+          "name": "language_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "name",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "nicer_but_slower_film_list",
+        "is_view": true,
+        "rows": null,
+        "bytes": 0,
+        "system": false
+      },
+      [
+        {
+          "name": "fid",
+          "data_type": "int4",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "title",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "description",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "category",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "price",
+          "data_type": "numeric(4,2)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "length",
+          "data_type": "int2",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "rating",
+          "data_type": "mpaa_rating",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "actors",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment",
+        "is_view": false,
+        "rows": null,
+        "bytes": 0,
+        "system": false
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2022_01",
+        "is_view": false,
+        "rows": 723,
+        "bytes": 262144,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2022_02",
+        "is_view": false,
+        "rows": 2401,
+        "bytes": 573440,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2022_03",
+        "is_view": false,
+        "rows": 2713,
+        "bytes": 671744,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2022_04",
+        "is_view": false,
+        "rows": 2547,
+        "bytes": 581632,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2022_05",
+        "is_view": false,
+        "rows": 2677,
+        "bytes": 663552,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2022_06",
+        "is_view": false,
+        "rows": 2654,
+        "bytes": 630784,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2022_07",
+        "is_view": false,
+        "rows": 2334,
+        "bytes": 393216,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2022_08",
+        "is_view": false,
+        "rows": 83,
+        "bytes": 40960,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2022_09",
+        "is_view": false,
+        "rows": 718,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2022_10",
+        "is_view": false,
+        "rows": 694,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2022_11",
+        "is_view": false,
+        "rows": 736,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2022_12",
+        "is_view": false,
+        "rows": 790,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2023_01",
+        "is_view": false,
+        "rows": 722,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2023_02",
+        "is_view": false,
+        "rows": 704,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2023_03",
+        "is_view": false,
+        "rows": 720,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2023_04",
+        "is_view": false,
+        "rows": 726,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2023_05",
+        "is_view": false,
+        "rows": 753,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2023_06",
+        "is_view": false,
+        "rows": 714,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2023_07",
+        "is_view": false,
+        "rows": 733,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2023_08",
+        "is_view": false,
+        "rows": 756,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2023_09",
+        "is_view": false,
+        "rows": 732,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2023_10",
+        "is_view": false,
+        "rows": 782,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2023_11",
+        "is_view": false,
+        "rows": 723,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2023_12",
+        "is_view": false,
+        "rows": 804,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2024_01",
+        "is_view": false,
+        "rows": 750,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2024_02",
+        "is_view": false,
+        "rows": 771,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2024_03",
+        "is_view": false,
+        "rows": 770,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2024_04",
+        "is_view": false,
+        "rows": 745,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2024_05",
+        "is_view": false,
+        "rows": 782,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2024_06",
+        "is_view": false,
+        "rows": 775,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2024_07",
+        "is_view": false,
+        "rows": 738,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2024_08",
+        "is_view": false,
+        "rows": 735,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2024_09",
+        "is_view": false,
+        "rows": 613,
+        "bytes": 131072,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2024_10",
+        "is_view": false,
+        "rows": 774,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2024_11",
+        "is_view": false,
+        "rows": 762,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2024_12",
+        "is_view": false,
+        "rows": 710,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2025_01",
+        "is_view": false,
+        "rows": 747,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2025_02",
+        "is_view": false,
+        "rows": 653,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2025_03",
+        "is_view": false,
+        "rows": 751,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2025_04",
+        "is_view": false,
+        "rows": 722,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2025_05",
+        "is_view": false,
+        "rows": 798,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2025_06",
+        "is_view": false,
+        "rows": 752,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2025_07",
+        "is_view": false,
+        "rows": 802,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2025_08",
+        "is_view": false,
+        "rows": 805,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2025_09",
+        "is_view": false,
+        "rows": 693,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2025_10",
+        "is_view": false,
+        "rows": 777,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2025_11",
+        "is_view": false,
+        "rows": 677,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2025_12",
+        "is_view": false,
+        "rows": 739,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2026_01",
+        "is_view": false,
+        "rows": 761,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2026_02",
+        "is_view": false,
+        "rows": 700,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2026_03",
+        "is_view": false,
+        "rows": 803,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2026_04",
+        "is_view": false,
+        "rows": 696,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2026_05",
+        "is_view": false,
+        "rows": 782,
+        "bytes": 204800,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2026_06",
+        "is_view": false,
+        "rows": 727,
+        "bytes": 147456,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "payment_p2026_07",
+        "is_view": false,
+        "rows": 812,
+        "bytes": 212992,
+        "system": false,
+        "partition_of": [
+          "public",
+          "payment"
+        ]
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "numeric(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "rental",
+        "is_view": false,
+        "rows": 51805,
+        "bytes": 10207232,
+        "system": false
+      },
+      [
+        {
+          "name": "rental_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "rental_date",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "inventory_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "customer_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "return_date",
+          "data_type": "timestamptz",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "uuid",
+          "data_type": "uuid",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "sales_by_film_category",
+        "is_view": true,
+        "rows": null,
+        "bytes": 0,
+        "system": false
+      },
+      [
+        {
+          "name": "category",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "total_sales",
+          "data_type": "numeric",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "sales_by_store",
+        "is_view": true,
+        "rows": null,
+        "bytes": 0,
+        "system": false
+      },
+      [
+        {
+          "name": "store",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "manager",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "total_sales",
+          "data_type": "numeric",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "staff",
+        "is_view": false,
+        "rows": 1500,
+        "bytes": 303104,
+        "system": false
+      },
+      [
+        {
+          "name": "staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "first_name",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_name",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "address_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "email",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "store_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "active",
+          "data_type": "bool",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "username",
+          "data_type": "text",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "password",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "picture",
+          "data_type": "bytea",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "staff_list",
+        "is_view": true,
+        "rows": null,
+        "bytes": 0,
+        "system": false
+      },
+      [
+        {
+          "name": "id",
+          "data_type": "int4",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "name",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "address",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "zip code",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "phone",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "city",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "country",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "sid",
+          "data_type": "int4",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "public",
+        "name": "store",
+        "is_view": false,
+        "rows": 500,
+        "bytes": 98304,
+        "system": false
+      },
+      [
+        {
+          "name": "store_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "manager_staff_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "address_id",
+          "data_type": "int4",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamptz",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ]
+  ],
+  "links": [
+    {
+      "schema": "public",
+      "table": "address",
+      "column": "city_id",
+      "target_schema": "public",
+      "target_table": "city",
+      "target_column": "city_id"
+    },
+    {
+      "schema": "public",
+      "table": "city",
+      "column": "country_id",
+      "target_schema": "public",
+      "target_table": "country",
+      "target_column": "country_id"
+    },
+    {
+      "schema": "public",
+      "table": "customer",
+      "column": "address_id",
+      "target_schema": "public",
+      "target_table": "address",
+      "target_column": "address_id"
+    },
+    {
+      "schema": "public",
+      "table": "customer",
+      "column": "store_id",
+      "target_schema": "public",
+      "target_table": "store",
+      "target_column": "store_id"
+    },
+    {
+      "schema": "public",
+      "table": "film",
+      "column": "language_id",
+      "target_schema": "public",
+      "target_table": "language",
+      "target_column": "language_id"
+    },
+    {
+      "schema": "public",
+      "table": "film",
+      "column": "original_language_id",
+      "target_schema": "public",
+      "target_table": "language",
+      "target_column": "language_id"
+    },
+    {
+      "schema": "public",
+      "table": "film_actor",
+      "column": "actor_id",
+      "target_schema": "public",
+      "target_table": "actor",
+      "target_column": "actor_id"
+    },
+    {
+      "schema": "public",
+      "table": "film_actor",
+      "column": "film_id",
+      "target_schema": "public",
+      "target_table": "film",
+      "target_column": "film_id"
+    },
+    {
+      "schema": "public",
+      "table": "film_category",
+      "column": "category_id",
+      "target_schema": "public",
+      "target_table": "category",
+      "target_column": "category_id"
+    },
+    {
+      "schema": "public",
+      "table": "film_category",
+      "column": "film_id",
+      "target_schema": "public",
+      "target_table": "film",
+      "target_column": "film_id"
+    },
+    {
+      "schema": "public",
+      "table": "film_embedding",
+      "column": "film_id",
+      "target_schema": "public",
+      "target_table": "film",
+      "target_column": "film_id"
+    },
+    {
+      "schema": "public",
+      "table": "inventory",
+      "column": "film_id",
+      "target_schema": "public",
+      "target_table": "film",
+      "target_column": "film_id"
+    },
+    {
+      "schema": "public",
+      "table": "inventory",
+      "column": "store_id",
+      "target_schema": "public",
+      "target_table": "store",
+      "target_column": "store_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_01",
+      "column": "customer_id",
+      "target_schema": "public",
+      "target_table": "customer",
+      "target_column": "customer_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_01",
+      "column": "rental_id",
+      "target_schema": "public",
+      "target_table": "rental",
+      "target_column": "rental_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_01",
+      "column": "staff_id",
+      "target_schema": "public",
+      "target_table": "staff",
+      "target_column": "staff_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_02",
+      "column": "customer_id",
+      "target_schema": "public",
+      "target_table": "customer",
+      "target_column": "customer_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_02",
+      "column": "rental_id",
+      "target_schema": "public",
+      "target_table": "rental",
+      "target_column": "rental_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_02",
+      "column": "staff_id",
+      "target_schema": "public",
+      "target_table": "staff",
+      "target_column": "staff_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_03",
+      "column": "customer_id",
+      "target_schema": "public",
+      "target_table": "customer",
+      "target_column": "customer_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_03",
+      "column": "rental_id",
+      "target_schema": "public",
+      "target_table": "rental",
+      "target_column": "rental_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_03",
+      "column": "staff_id",
+      "target_schema": "public",
+      "target_table": "staff",
+      "target_column": "staff_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_04",
+      "column": "customer_id",
+      "target_schema": "public",
+      "target_table": "customer",
+      "target_column": "customer_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_04",
+      "column": "rental_id",
+      "target_schema": "public",
+      "target_table": "rental",
+      "target_column": "rental_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_04",
+      "column": "staff_id",
+      "target_schema": "public",
+      "target_table": "staff",
+      "target_column": "staff_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_05",
+      "column": "customer_id",
+      "target_schema": "public",
+      "target_table": "customer",
+      "target_column": "customer_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_05",
+      "column": "rental_id",
+      "target_schema": "public",
+      "target_table": "rental",
+      "target_column": "rental_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_05",
+      "column": "staff_id",
+      "target_schema": "public",
+      "target_table": "staff",
+      "target_column": "staff_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_06",
+      "column": "customer_id",
+      "target_schema": "public",
+      "target_table": "customer",
+      "target_column": "customer_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_06",
+      "column": "rental_id",
+      "target_schema": "public",
+      "target_table": "rental",
+      "target_column": "rental_id"
+    },
+    {
+      "schema": "public",
+      "table": "payment_p2022_06",
+      "column": "staff_id",
+      "target_schema": "public",
+      "target_table": "staff",
+      "target_column": "staff_id"
+    },
+    {
+      "schema": "public",
+      "table": "rental",
+      "column": "customer_id",
+      "target_schema": "public",
+      "target_table": "customer",
+      "target_column": "customer_id"
+    },
+    {
+      "schema": "public",
+      "table": "rental",
+      "column": "inventory_id",
+      "target_schema": "public",
+      "target_table": "inventory",
+      "target_column": "inventory_id"
+    },
+    {
+      "schema": "public",
+      "table": "rental",
+      "column": "staff_id",
+      "target_schema": "public",
+      "target_table": "staff",
+      "target_column": "staff_id"
+    },
+    {
+      "schema": "public",
+      "table": "staff",
+      "column": "address_id",
+      "target_schema": "public",
+      "target_table": "address",
+      "target_column": "address_id"
+    },
+    {
+      "schema": "public",
+      "table": "staff",
+      "column": "store_id",
+      "target_schema": "public",
+      "target_table": "store",
+      "target_column": "store_id"
+    },
+    {
+      "schema": "public",
+      "table": "store",
+      "column": "address_id",
+      "target_schema": "public",
+      "target_table": "address",
+      "target_column": "address_id"
+    }
+  ],
+  "comments": []
+}

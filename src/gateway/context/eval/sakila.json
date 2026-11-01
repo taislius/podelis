@@ -1,0 +1,1253 @@
+{
+  "engine": "MySQL",
+  "dialect": "MySql",
+  "tables": [
+    [
+      {
+        "schema": "sakila",
+        "name": "actor",
+        "is_view": false,
+        "rows": 200,
+        "bytes": 32768,
+        "system": false
+      },
+      [
+        {
+          "name": "actor_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "first_name",
+          "data_type": "varchar(45)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_name",
+          "data_type": "varchar(45)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamp",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "actor_info",
+        "is_view": true,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "actor_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "first_name",
+          "data_type": "varchar(45)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_name",
+          "data_type": "varchar(45)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "film_info",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "address",
+        "is_view": false,
+        "rows": 603,
+        "bytes": 114688,
+        "system": false
+      },
+      [
+        {
+          "name": "address_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "address",
+          "data_type": "varchar(50)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "address2",
+          "data_type": "varchar(50)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "district",
+          "data_type": "varchar(20)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "city_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "postal_code",
+          "data_type": "varchar(10)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "phone",
+          "data_type": "varchar(20)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "location",
+          "data_type": "geometry",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamp",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "category",
+        "is_view": false,
+        "rows": 16,
+        "bytes": 16384,
+        "system": false
+      },
+      [
+        {
+          "name": "category_id",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "name",
+          "data_type": "varchar(25)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamp",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "city",
+        "is_view": false,
+        "rows": 600,
+        "bytes": 65536,
+        "system": false
+      },
+      [
+        {
+          "name": "city_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "city",
+          "data_type": "varchar(50)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "country_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamp",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "country",
+        "is_view": false,
+        "rows": 109,
+        "bytes": 16384,
+        "system": false
+      },
+      [
+        {
+          "name": "country_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "country",
+          "data_type": "varchar(50)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamp",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "customer",
+        "is_view": false,
+        "rows": 599,
+        "bytes": 131072,
+        "system": false
+      },
+      [
+        {
+          "name": "customer_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "store_id",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "first_name",
+          "data_type": "varchar(45)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_name",
+          "data_type": "varchar(45)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "email",
+          "data_type": "varchar(50)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "address_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "active",
+          "data_type": "tinyint(1)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "create_date",
+          "data_type": "datetime",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamp",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "customer_list",
+        "is_view": true,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "ID",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "name",
+          "data_type": "varchar(91)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "address",
+          "data_type": "varchar(50)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "zip code",
+          "data_type": "varchar(10)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "phone",
+          "data_type": "varchar(20)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "city",
+          "data_type": "varchar(50)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "country",
+          "data_type": "varchar(50)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "notes",
+          "data_type": "varchar(6)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "SID",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "film",
+        "is_view": false,
+        "rows": 1000,
+        "bytes": 278528,
+        "system": false
+      },
+      [
+        {
+          "name": "film_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "title",
+          "data_type": "varchar(128)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "description",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "release_year",
+          "data_type": "year",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "language_id",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "original_language_id",
+          "data_type": "tinyint unsigned",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "rental_duration",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_rate",
+          "data_type": "decimal(4,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "length",
+          "data_type": "smallint unsigned",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "replacement_cost",
+          "data_type": "decimal(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rating",
+          "data_type": "enum('G','PG','PG-13','R','NC-17')",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "special_features",
+          "data_type": "set('Trailers','Commentaries','Deleted Scenes','Behind the Scenes')",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamp",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "film_actor",
+        "is_view": false,
+        "rows": 5462,
+        "bytes": 278528,
+        "system": false
+      },
+      [
+        {
+          "name": "actor_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "film_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamp",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "film_category",
+        "is_view": false,
+        "rows": 1000,
+        "bytes": 81920,
+        "system": false
+      },
+      [
+        {
+          "name": "film_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "category_id",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamp",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "film_list",
+        "is_view": true,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "FID",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "title",
+          "data_type": "varchar(128)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "description",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "category",
+          "data_type": "varchar(25)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "price",
+          "data_type": "decimal(4,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "length",
+          "data_type": "smallint unsigned",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "rating",
+          "data_type": "enum('G','PG','PG-13','R','NC-17')",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "actors",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "film_text",
+        "is_view": false,
+        "rows": 1000,
+        "bytes": 196608,
+        "system": false
+      },
+      [
+        {
+          "name": "film_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "title",
+          "data_type": "varchar(255)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "description",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "inventory",
+        "is_view": false,
+        "rows": 4581,
+        "bytes": 376832,
+        "system": false
+      },
+      [
+        {
+          "name": "inventory_id",
+          "data_type": "mediumint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "film_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "store_id",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamp",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "language",
+        "is_view": false,
+        "rows": 6,
+        "bytes": 16384,
+        "system": false
+      },
+      [
+        {
+          "name": "language_id",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "name",
+          "data_type": "char(20)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamp",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "nicer_but_slower_film_list",
+        "is_view": true,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "FID",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "title",
+          "data_type": "varchar(128)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "description",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "category",
+          "data_type": "varchar(25)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "price",
+          "data_type": "decimal(4,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "length",
+          "data_type": "smallint unsigned",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "rating",
+          "data_type": "enum('G','PG','PG-13','R','NC-17')",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "actors",
+          "data_type": "text",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "payment",
+        "is_view": false,
+        "rows": 16500,
+        "bytes": 2228224,
+        "system": false
+      },
+      [
+        {
+          "name": "payment_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "customer_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "rental_id",
+          "data_type": "int",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "amount",
+          "data_type": "decimal(5,2)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "payment_date",
+          "data_type": "datetime",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamp",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "rental",
+        "is_view": false,
+        "rows": 15423,
+        "bytes": 2785280,
+        "system": false
+      },
+      [
+        {
+          "name": "rental_id",
+          "data_type": "int",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "rental_date",
+          "data_type": "datetime",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "inventory_id",
+          "data_type": "mediumint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "customer_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "return_date",
+          "data_type": "datetime",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "staff_id",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamp",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "sales_by_film_category",
+        "is_view": true,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "category",
+          "data_type": "varchar(25)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "total_sales",
+          "data_type": "decimal(27,2)",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "sales_by_store",
+        "is_view": true,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "store",
+          "data_type": "varchar(101)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "manager",
+          "data_type": "varchar(91)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "total_sales",
+          "data_type": "decimal(27,2)",
+          "nullable": true,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "staff",
+        "is_view": false,
+        "rows": 2,
+        "bytes": 98304,
+        "system": false
+      },
+      [
+        {
+          "name": "staff_id",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "first_name",
+          "data_type": "varchar(45)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_name",
+          "data_type": "varchar(45)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "address_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "picture",
+          "data_type": "blob",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "email",
+          "data_type": "varchar(50)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "store_id",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "active",
+          "data_type": "tinyint(1)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "username",
+          "data_type": "varchar(16)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "password",
+          "data_type": "varchar(40)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamp",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "staff_list",
+        "is_view": true,
+        "rows": null,
+        "bytes": null,
+        "system": false
+      },
+      [
+        {
+          "name": "ID",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "name",
+          "data_type": "varchar(91)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "address",
+          "data_type": "varchar(50)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "zip code",
+          "data_type": "varchar(10)",
+          "nullable": true,
+          "primary_key": false
+        },
+        {
+          "name": "phone",
+          "data_type": "varchar(20)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "city",
+          "data_type": "varchar(50)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "country",
+          "data_type": "varchar(50)",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "SID",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ],
+    [
+      {
+        "schema": "sakila",
+        "name": "store",
+        "is_view": false,
+        "rows": 2,
+        "bytes": 49152,
+        "system": false
+      },
+      [
+        {
+          "name": "store_id",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": true
+        },
+        {
+          "name": "manager_staff_id",
+          "data_type": "tinyint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "address_id",
+          "data_type": "smallint unsigned",
+          "nullable": false,
+          "primary_key": false
+        },
+        {
+          "name": "last_update",
+          "data_type": "timestamp",
+          "nullable": false,
+          "primary_key": false
+        }
+      ]
+    ]
+  ],
+  "links": [
+    {
+      "schema": "sakila",
+      "table": "address",
+      "column": "city_id",
+      "target_schema": "sakila",
+      "target_table": "city",
+      "target_column": "city_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "city",
+      "column": "country_id",
+      "target_schema": "sakila",
+      "target_table": "country",
+      "target_column": "country_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "customer",
+      "column": "address_id",
+      "target_schema": "sakila",
+      "target_table": "address",
+      "target_column": "address_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "customer",
+      "column": "store_id",
+      "target_schema": "sakila",
+      "target_table": "store",
+      "target_column": "store_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "film",
+      "column": "language_id",
+      "target_schema": "sakila",
+      "target_table": "language",
+      "target_column": "language_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "film",
+      "column": "original_language_id",
+      "target_schema": "sakila",
+      "target_table": "language",
+      "target_column": "language_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "film_actor",
+      "column": "actor_id",
+      "target_schema": "sakila",
+      "target_table": "actor",
+      "target_column": "actor_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "film_actor",
+      "column": "film_id",
+      "target_schema": "sakila",
+      "target_table": "film",
+      "target_column": "film_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "film_category",
+      "column": "category_id",
+      "target_schema": "sakila",
+      "target_table": "category",
+      "target_column": "category_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "film_category",
+      "column": "film_id",
+      "target_schema": "sakila",
+      "target_table": "film",
+      "target_column": "film_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "inventory",
+      "column": "film_id",
+      "target_schema": "sakila",
+      "target_table": "film",
+      "target_column": "film_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "inventory",
+      "column": "store_id",
+      "target_schema": "sakila",
+      "target_table": "store",
+      "target_column": "store_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "payment",
+      "column": "customer_id",
+      "target_schema": "sakila",
+      "target_table": "customer",
+      "target_column": "customer_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "payment",
+      "column": "rental_id",
+      "target_schema": "sakila",
+      "target_table": "rental",
+      "target_column": "rental_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "payment",
+      "column": "staff_id",
+      "target_schema": "sakila",
+      "target_table": "staff",
+      "target_column": "staff_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "rental",
+      "column": "customer_id",
+      "target_schema": "sakila",
+      "target_table": "customer",
+      "target_column": "customer_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "rental",
+      "column": "inventory_id",
+      "target_schema": "sakila",
+      "target_table": "inventory",
+      "target_column": "inventory_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "rental",
+      "column": "staff_id",
+      "target_schema": "sakila",
+      "target_table": "staff",
+      "target_column": "staff_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "staff",
+      "column": "address_id",
+      "target_schema": "sakila",
+      "target_table": "address",
+      "target_column": "address_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "staff",
+      "column": "store_id",
+      "target_schema": "sakila",
+      "target_table": "store",
+      "target_column": "store_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "store",
+      "column": "address_id",
+      "target_schema": "sakila",
+      "target_table": "address",
+      "target_column": "address_id"
+    },
+    {
+      "schema": "sakila",
+      "table": "store",
+      "column": "manager_staff_id",
+      "target_schema": "sakila",
+      "target_table": "staff",
+      "target_column": "staff_id"
+    }
+  ],
+  "comments": []
+}

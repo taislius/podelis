@@ -47,7 +47,7 @@ pub struct RoutineInfo {
 
 /// A comment the database keeps on a table or view (`column` is `None`)
 /// or on one of its columns: what the schema's authors said it means.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Comment {
     pub schema: String,
     pub table: String,
@@ -57,7 +57,7 @@ pub struct Comment {
 
 /// A foreign key's column and what it points to: one row of the whole
 /// database's links, for showing related tables.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Link {
     pub schema: String,
     pub table: String,
