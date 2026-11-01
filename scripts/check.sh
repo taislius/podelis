@@ -17,4 +17,13 @@ echo "==> tests"
 cargo test --locked
 echo "==> cargo-deny"
 cargo deny check
+# The scripts are POSIX sh (Debian's /bin/sh is dash, not bash): checked
+# where shellcheck or dash is installed.
+if command -v shellcheck > /dev/null; then
+    echo "==> shellcheck"
+    shellcheck -s sh scripts/*.sh .githooks/*
+elif command -v dash > /dev/null; then
+    echo "==> dash -n"
+    for f in scripts/*.sh .githooks/*; do dash -n "$f"; done
+fi
 echo "All checks passed."

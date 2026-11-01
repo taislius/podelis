@@ -440,8 +440,11 @@ fn restrict(path: &Path, mode: u32) {
 fn keyring_entry(account: &str) -> Result<keyring::Entry> {
     keyring::Entry::new(KEYRING_SERVICE, account).map_err(|e| match e {
         // keyring's wording for "there's no Secret Service to talk to".
-        keyring::Error::NoDefaultStore if cfg!(target_os = "linux") => {
-            anyhow::anyhow!("there's no OS keychain here: on Linux, no Secret Service is running")
+        // Every Unix but macOS (Linux, the BSDs) uses the Secret Service.
+        keyring::Error::NoDefaultStore if !cfg!(target_os = "macos") => {
+            anyhow::anyhow!(
+                "there's no OS keychain here: no Secret Service is running (GNOME Keyring, KeePassXC, KWallet)"
+            )
         }
         keyring::Error::NoDefaultStore => anyhow::anyhow!("there's no OS keychain here"),
         e => anyhow::Error::new(e).context("failed to access OS keychain"),
