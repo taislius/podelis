@@ -72,6 +72,20 @@ elsewhere. The scripts are POSIX `sh` (Debian's `/bin/sh` is dash):
 `check.sh` runs shellcheck on them, or `dash -n` where only dash is
 installed. Windows isn't supported.
 
+**The context's eval.** `cargo test retrieval -- --nocapture` prints
+recall, precision and the context's size per database for the gold set
+in `src/gateway/context/eval/questions.txt` (`PODELIS_EVAL_ALL=1` also
+lists each question's extra tables and why they came); it fails under
+the floors in `eval.rs`, to raise as the builder improves. The schemas
+are snapshots (`eval/<database>.json`, no rows); to make them again from
+live databases:
+
+```sh
+PODELIS_EVAL_DUMP="pagila=postgres://postgres:…@127.0.0.1:55433/pagila?sslmode=disable \
+  sakila=mysql://root:…@127.0.0.1:53385/sakila?ssl-mode=disabled \
+  chinook=$HOME/podelis-test/Chinook.sqlite" cargo test dump_schemas -- --ignored
+```
+
 GitHub Actions, kept small to save minutes:
 
 - `ci.yml` — on pushes to master (not docs-only ones): format,

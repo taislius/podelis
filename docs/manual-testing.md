@@ -108,6 +108,14 @@ OS and the server version when something is off.
 - [ ] Quit with tabs on two connections and start again: tabs, connections,
   cursor positions and expanded tables come back.
 - [ ] `podelis doctor`.
+- [ ] A Supabase project: the dashboard's session-pooler URL (port 5432,
+  user `postgres.<ref>`) connects over TLS (`podelis --test` says so);
+  `storage`, `realtime`, `vault`… are under the navigator's system
+  section, `auth.users` reads. The transaction pooler's URL (port 6543)
+  is refused at once, saying to use 5432 on the same host.
+- [ ] Start Podėlis with its config folder `chmod 755`: it's `700`
+  afterwards (`ls -ld ~/Library/Application\ Support/podelis`), the files
+  in it `600`.
 
 ### Big results
 
@@ -369,9 +377,24 @@ With a real key (a few cents) and, if you have it, Ollama:
 - [ ] Refusals say why, engine by engine: `PRAGMA table_info(t)` on SQLite
   ("describe_table tells…"), `SELECT load_file('/etc/passwd')` on MySQL
   ("reads a file on the server"), `SET …` anywhere (its own transaction),
-  while a PostgreSQL column called `attach` reads fine.
+  while a PostgreSQL column called `attach` reads fine. On MySQL, as a
+  read-only agent: `SELECT 1 /*! INTO OUTFILE '/var/lib/mysql-files/x' */`
+  is refused as an executable comment, and no file appears on the server;
+  `SELECT 'it\'s'` is refused (write `'it''s'`). On PostgreSQL
+  `SELECT set_config('standard_conforming_strings', 'off', false)` is
+  refused.
 - [ ] `podelis gateway status` after 30 min with nothing connected: not
   running.
+- [ ] The status bar's right end: `AI off` with no `[[models]]`; `AI
+  claude` with one; `AI claude · asks to share` on a project that keeps
+  its schema to local models; gone while a message shows, back after.
+- [ ] `Ctrl+K k`, `e` on a fact: it opens whole, filled in; change its
+  value and `↵`: the list shows it changed (and confirmed, if it was a
+  model's guess), `podelis gateway context` uses the new wording, and
+  `podelis memory list <new word>` finds it. `Esc` while changing keeps it.
+  `podelis memory edit <n> …` does the same from the command line.
+- [ ] `cargo test retrieval -- --nocapture`: a line per database
+  (recall 100%, precision over 30%).
 - [ ] A typo in a `[[models]]` entry (`api = "ollama"`): `podelis gateway
   models` shows the parse error, not "no models are set up".
 
@@ -384,6 +407,16 @@ With a real key (a few cents) and, if you have it, Ollama:
   once; each tab's name gets the green `…`, `Ctrl+K g` shows both
   running, `Esc` in one stops only it. A third tab on the first one's
   connection: `F5` there says which tab holds the connection.
+
+- [ ] `Ctrl+K j` with three tabs on two connections (two on one): both
+  listed with their tabs, the shown one marked `(this one)`; typing a
+  tab's name finds its connection, `Enter` goes there. `Ctrl+D` on the
+  other one asks (naming its tabs), `y` closes it: its tab stays,
+  unconnected, and `F5` there doesn't reconnect by itself. With a
+  transaction open the question says it's rolled back; with a query
+  running it says to stop it first.
+- [ ] Renaming a tab (`F4` or `Ctrl+K t`): `Ctrl+C` copies the name,
+  `Ctrl+U` then `Ctrl+V` (and the terminal's own paste) puts text in.
 
 - [ ] A dozen tabs with long names: the active one shows its whole name (up
   to 40 characters), the others shortened; `‹N` and `›N` say how many

@@ -21,7 +21,8 @@ same way tools like `lazygit` do.
 ## Features
 
 - **Engines:** PostgreSQL and MySQL over TCP (hostname, IPv4/IPv6), a Unix
-  socket, or an **SSH tunnel**; SQLite files. Selectable SSL mode
+  socket, or an **SSH tunnel**; SQLite files; Supabase (TLS required, its
+  own schemas kept aside, its transaction pooler pointed to session mode). Selectable SSL mode
 - **Projects:** group connections per project (e.g. `shop-backend` with its
   local/staging/prod databases). Each project has its own query history and
   editor draft, and two projects can each have a connection with the same
@@ -56,6 +57,7 @@ same way tools like `lazygit` do.
   statement under the cursor; rename or move it, and search everything —
   names, groups, SQL text and your history, by date too (`@today`, `@7d`,
   `@2026-10`) — from one window (F3) that previews the selected query.
+  `Ctrl+K j` lists the open connections, to go to or close one;
   `Ctrl+K g` lists every tab with its connection and what runs there
 - **Compare two connections** open in tabs (Ctrl+K, type “compare”):
   - the **schema**: tables, views, columns, indexes and foreign keys only
@@ -217,7 +219,7 @@ file is needed — the first run starts with a welcome screen.
 
 - [Projects and connections](docs/connections.md): projects, connection
   settings, passwords (keychain, password commands, `.pgpass` /
-  `.my.cnf`), databases in Docker
+  `.my.cnf`), databases in Docker, Supabase
 - [The query screen](docs/query-screen.md): the editor, results, tabs and
   the query library, and every key
 - [Without the UI](docs/command-line.md): `-e`, `--import`, `--test`,

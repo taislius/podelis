@@ -350,8 +350,17 @@ around it has a name:
   asked.
 - **No column values.**
 
-Its known limit is synonyms with no shared word ("earned money" for
-`payment.amount`). Facts in memory cover the ones a team names. The
+**How good it is, measured:** `src/gateway/context/eval.rs` runs 26
+questions over schema snapshots of Pagila, Sakila and Chinook, each with
+the tables its SQL needs, and fails when recall (those tables chosen) or
+precision (chosen tables used) drops under its floor. On 2026-11-01:
+recall 100% on all three, precision 33–38%. Money words ("revenue",
+"earned", "spent" → `amount`, `price`, `total`, `payment`) raised
+Pagila's recall from 86%; ranking views lower and leaving out a second way
+between tables joined already raised precision from 23–25%.
+
+Its known limit is synonyms with no shared word and no money word ("our
+best movies" for `film` by `rental` count). Facts in memory cover the ones a team names. The
 plan for the rest is **agentic retrieval**: the model, given tools to
 find and describe more tables, looks for itself in a loop (*ReAct*),
 with this builder staying the first, cheap try. Agents

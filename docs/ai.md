@@ -70,12 +70,17 @@ model sees the schema only if the project shares it.
 ## What the model is shown
 
 Only what the question needs: the tables whose names, columns or comments
-match its words ("rented" finds `rental`), the tables that join them,
+match its words ("rented" finds `rental`; money words such as "revenue",
+"earned", "spent" or "profit" find `amount`, `price` and `total` columns
+and `payment` tables), the tables that join them (not a second way
+between tables a key joins already),
 their columns, keys, where foreign keys point, the database's comments,
 and what your team has said about them (below). A fact that matches the
 question brings the tables it names: with "revenue is payment.amount" in
 memory, a question about revenue gets `payment`. A partitioned table is
-shown once, as itself, not as each partition. Never rows. `podelis
+shown once, as itself, not as each partition. A view comes after the
+tables, and not just for having a table's name in its own (`film_list`
+for "film") or for its columns alone. Never rows. `podelis
 gateway context prod "your question"` shows exactly that, and sends
 nothing. How it's chosen, in the research's terms (schema linking), and
 why this way: [the context, in the field's
@@ -110,12 +115,18 @@ confirm. A fact about a column of a table the database doesn't have (since
 dropped or renamed) isn't shown to the model; `podelis gateway context`
 lists such facts as maybe stale, to fix or forget.
 
-In the app, `Ctrl+K k` lists them: `a` adds, `d` forgets. When a model had
+In the app, `Ctrl+K k` lists them: `a` adds, `e` (or `Enter`) changes the
+selected one (`podelis memory edit <number> …` on the command line), `d`
+forgets. A fact you change is yours from then on: confirmed, and kept
+when `memory learn` reads its folder again; a model's guess you correct
+isn't suggested again. Its relation stays unless you change it
+(`orders history …` stays a history). When a model had
 to assume what something means, it's kept as a suggestion (orange, `-- assumed:`
 above its SQL) that's never shown to models until you confirm it (`c`, or
 `podelis memory confirm <number>`). Forget one that's wrong (`d`) and the
 same suggestion isn't kept again. Details in [Without the
-UI](command-line.md#what-your-team-knows-memory).
+UI](command-line.md#what-your-team-knows-memory); who can read the memory,
+in [Configuration](configuration.md#who-can-read-them).
 
 ## The gateway
 

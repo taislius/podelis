@@ -133,6 +133,7 @@ podelis memory add revenue defined as sum(payment.amount)   # a business term's 
 podelis memory add customer excluded by default deleted_at is not null   # rows left out unless asked for
 podelis memory add -p shop customers.tier gold spends over 1000 a year
 podelis memory                       # every fact, numbered (podelis memory list refunds: those matching)
+podelis memory edit 1 orders.status 3 = refunded   # changes fact 1 (then it's confirmed)
 podelis memory forget 2
 podelis memory learn db/migrations   # what your migrations say: each table's history, the comments above statements
 podelis memory confirm 7             # a model's assumption (ask says which) that's right

@@ -60,7 +60,7 @@ F9), `palette` (Ctrl+K), `explain_analyze` (Shift+F7, Ctrl+K a),
 Shift+F10, F10), `zoom` (Ctrl+K z, F12), `zoom_statement` (Ctrl+K b,
 Shift+F12), `select_statement` (Ctrl+K v), `projects` (Ctrl+K p),
 `transaction_mode` (Ctrl+K x), `next_warning` (Ctrl+K w), `ask` (Ctrl+K q),
-`ai_explain` (Ctrl+K y), `memory` (Ctrl+K k), `tab_list` (Ctrl+K g),
+`ai_explain` (Ctrl+K y), `memory` (Ctrl+K k), `tab_list` (Ctrl+K g), `connection_list` (Ctrl+K j),
 `settings` (Ctrl+K ,), `save_statement` (none; in the editor's menu). To
 have AI explain on `F8`, move commit off it: `commit = "Ctrl+K c"`,
 `ai_explain = ["F8", "Ctrl+K y"]`. Keys are written like `F5`, `Ctrl+R`,
@@ -173,8 +173,37 @@ characters long):
   outcome; for a model, its name and the tokens), never what was asked
   or answered, up to about 1 MB.
 
-Files are created readable only by you (they can contain SQL and
-connection details).
+### Who can read them
+
+Files are created readable only by you (`0600`: they can contain SQL and
+connection details), folders likewise (`0700`), and Podėlis makes the
+`podelis` folder itself yours alone when it starts, if it was left open to
+others (not a symlink's target, nor a `PODELIS_CONFIG_DIR` folder). Only the memory is SQLite (`memory/<project-id>.db`, and the
+journal SQLite makes beside it while writing, with the same rights); the
+library, history and tabs are JSON. Passwords and model keys are never in
+these files: they're in the OS keychain.
+
+What that does and doesn't stop:
+
+- **Other users of the machine** can't read your memory, saved queries,
+  history or tabs. An administrator (root) can.
+- **Programs you run, as you** (an AI agent with a shell, a script, a
+  malicious package) can read them, as they can read anything else of
+  yours. What `podelis mcp` lets an agent do (the connections you share,
+  read-only, approvals) holds only for what it does *through Podėlis*.
+  The keychain is different: on macOS a program other than Podėlis that
+  asks for its passwords gets the keychain's own Allow dialog.
+- **A lost laptop or a copied disk:** use the OS's disk encryption
+  (FileVault, LUKS); the files aren't encrypted by Podėlis.
+- **Backups and synced folders:** the config folder goes wherever your
+  backups go (Time Machine, a synced home folder). Keep it out of a folder
+  shared with others; with `PODELIS_CONFIG_DIR` pointing into one,
+  Podėlis leaves that folder's rights as they are.
+
+A team that shares facts and saved queries does it on purpose: `podelis
+memory export` writes the facts as text to review and keep in git, and a
+team's gateway (planned) keeps them on a server, each person seeing what
+their role allows.
 
 Passwords are stored in the OS keychain under the service `podelis`, keyed
 by project id and connection name, so renaming a project doesn't affect

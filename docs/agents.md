@@ -41,10 +41,25 @@ engine by its own list: files on the server (MySQL's `INTO OUTFILE`,
 PostgreSQL's `pg_read_file` and `lo_export`, SQLite's `ATTACH`), other
 sessions (`pg_terminate_backend`), locks that outlive the transaction,
 extensions (SQLite's `load_extension`) and other servers (`dblink`); the
-refusal says which and what it does. That list is a safety net, not a boundary:
+refusal says which and what it does. So is SQL whose meaning the checks
+can't be sure of: on MySQL an executable comment (`/*! … */`, MariaDB's
+`/*M! … */`, which the server runs as SQL: `SELECT 1 /*! INTO OUTFILE …
+*/` would write a file) and a backslash before a quote (where a string
+ends then depends on the server's `sql_mode`; double the quote instead,
+`''`); on PostgreSQL `set_config()`, which changes the session's settings
+as `SET` would. Versions up to 0.7.2 let a read-only agent write a file
+on a MySQL server that way: update, and give agents a user without the
+`FILE` privilege. That list is a safety net, not a boundary:
 **connect as a database user with only the rights agents should have**
 (for reading, `GRANT SELECT` on what they need, no superuser or `FILE`
 privilege). Podėlis's rules then sit on top.
+
+They hold for what an agent does *through* `podelis mcp`. An agent that
+also has a shell runs as you, and can read your files as you can: the
+project's memory, saved queries and history included (see [who can read
+them](configuration.md#who-can-read-them)). Passwords aren't in those
+files; on macOS another program asking the keychain for them gets its
+Allow dialog.
 
 ## A sandbox for agents
 
