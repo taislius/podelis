@@ -1,6 +1,6 @@
 //! The project's memory in the app (`Ctrl+K k`): what models are told
 //! about its data. Facts a model suggested wait (orange) until the user
-//! confirms them (`c`); `a` adds one, `d` forgets one. The gateway keeps
+//! confirms them (`c`); `a` adds one, `e` changes one, `d` forgets one. The gateway keeps
 //! them, so every change goes through it.
 
 use serde_json::{Value, json};
@@ -18,8 +18,11 @@ pub struct MemoryView {
     pub facts: Vec<Value>,
     pub selected: usize,
     pub loading: bool,
-    /// `a`: the fact being typed, `subject what…`.
+    /// `a`: the fact being typed, `subject what…`; or, with `editing`, the
+    /// one being changed (`e`).
     pub adding: Option<LineInput>,
+    /// The id of the fact `adding` changes (`e`), not a new one.
+    pub editing: Option<i64>,
 }
 
 /// What a gateway call from the app was for, and the project it was
@@ -108,11 +111,21 @@ impl App {
         let Some(view) = &mut self.memory_view else { return };
         if let Some(input) = &mut view.adding {
             match input.handle(key) {
-                InputResult::Cancel => view.adding = None,
+                InputResult::Cancel => {
+                    view.adding = None;
+                    view.editing = None;
+                }
                 InputResult::Submit => {
+                    // Not a fact (no value): said, and what's typed stays.
+                    if crate::gateway::memory::parse_fact(input.text()).is_none() {
+                        return self.set_status(t!("memory.add_hint").into(), true);
+                    }
                     let text = view.adding.take().map(|i| i.text().trim().to_string()).unwrap_or_default();
                     let project = view.project_id.clone();
-                    return self.add_fact(&text, project);
+                    return match view.editing.take() {
+                        Some(id) => self.update_fact(id, &text, project),
+                        None => self.add_fact(&text, project),
+                    };
                 }
                 InputResult::Changed | InputResult::Moved | InputResult::Ignored => {}
             }
@@ -127,7 +140,16 @@ impl App {
         let project = view.project_id.clone();
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.memory_view = None,
-            KeyCode::Char('a') => view.adding = Some(LineInput::new("")),
+            KeyCode::Char('a') => {
+                view.adding = Some(LineInput::new(""));
+                view.editing = None;
+            }
+            // The whole fact to change, as typed when adding it.
+            KeyCode::Char('e') | KeyCode::Enter if id.is_some() => {
+                let text = fact_line(&view.facts[view.selected]).unwrap_or_default();
+                view.adding = Some(LineInput::new(text));
+                view.editing = id;
+            }
             KeyCode::Char('c') if id.is_some() => {
                 self.gateway_call(
                     "memory.confirm",
@@ -146,19 +168,29 @@ impl App {
         }
     }
 
+    /// `e` in the memory window: fact `id` now says `text` (read as when
+    /// adding); confirmed, being the user's word now.
+    fn update_fact(&mut self, id: i64, text: &str, project: String) {
+        let params = json!({ "id": id, "text": text });
+        self.gateway_call("memory.update", params, GatewayPurpose::MemoryChanged("Changed", project, None));
+    }
+
     /// `a` in the memory window: `subject what…`, as `podelis memory add`.
     fn add_fact(&mut self, text: &str, project: String) {
-        if crate::gateway::memory::parse_fact(text).is_none() {
-            return self.set_status(t!("memory.add_hint").into(), true);
-        }
         let params = json!({ "text": text });
         self.gateway_call("memory.add", params, GatewayPurpose::MemoryChanged("Remembered", project, None));
     }
 }
 
+/// A fact as the gateway sent it, whole: `subject relation value` (as
+/// `Fact::line` writes it).
+fn fact_line(fact: &Value) -> Option<String> {
+    let part = |k: &str| fact[k].as_str().map(str::to_string);
+    Some(format!("{} {} {}", part("subject")?, part("relation")?, part("value")?))
+}
+
 /// A fact as the window shows it, `subject relation value`, shortened.
 fn fact_text(fact: &Value) -> Option<String> {
-    let part = |k: &str| fact[k].as_str().map(str::to_string);
-    let text = format!("{} {} {}", part("subject")?, part("relation")?, part("value")?);
+    let text = fact_line(fact)?;
     Some(if text.chars().count() > 60 { text.chars().take(59).collect::<String>() + "…" } else { text })
 }

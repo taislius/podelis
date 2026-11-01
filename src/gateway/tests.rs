@@ -543,6 +543,19 @@ async fn the_teams_facts_go_to_the_model_with_the_tables_they_are_about() {
 
     let exported = client.call("memory.export", json!({ "project": "p" })).await.unwrap();
     assert!(exported["text"].as_str().unwrap().contains("audit_log | is | never for reports | user"));
+    // Changed by its number, read as typed; the context shows it changed.
+    let changed = client
+        .call("memory.update", json!({ "project": "p", "id": 1, "text": "orders.total means VAT excluded" }))
+        .await
+        .unwrap();
+    assert_eq!((changed["value"].as_str(), changed["confirmed"].as_bool()), (Some("VAT excluded"), Some(true)));
+    let ask = json!({ "project": "p", "connection": "shop", "question": "orders per customer" });
+    let built = client.call("context", ask).await.unwrap();
+    assert!(built["facts"].to_string().contains("VAT excluded"), "{}", built["facts"]);
+    let err = client.call("memory.update", json!({ "project": "p", "id": 1 })).await.unwrap_err();
+    assert!(matches!(&err, CallError::Rpc(e) if e.code == code::INVALID_PARAMS), "{err}");
+    let err = client.call("memory.update", json!({ "project": "p", "id": 99, "text": "x means y" })).await.unwrap_err();
+    assert!(matches!(&err, CallError::Rpc(e) if e.code == code::MEMORY), "{err}");
     let forgotten = client.call("memory.forget", json!({ "project": "p", "id": 3 })).await.unwrap();
     assert_eq!(forgotten["id"], json!(3));
     let err = client.call("memory.forget", json!({ "project": "p", "id": 3 })).await.unwrap_err();

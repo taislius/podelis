@@ -463,10 +463,12 @@ fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
     }
     lines.push(Line::default());
     if let Some(input) = &view.adding {
+        let (mark, help) =
+            if view.editing.is_some() { (" ✎ ", t!("memory.edit_help")) } else { (" + ", t!("memory.add_help")) };
         lines.push(Line::from(
-            [vec![Span::styled(" + ", bold(t.accent))], input_spans(input, fg(t.text_bright))].concat(),
+            [vec![Span::styled(mark, bold(t.accent))], input_spans(input, fg(t.text_bright))].concat(),
         ));
-        lines.push(Line::from(Span::styled(format!(" {}", t!("memory.add_help")), dim())));
+        lines.push(Line::from(Span::styled(format!(" {help}"), dim())));
     } else {
         lines.push(Line::from(Span::styled(format!(" {}", t!("memory.shown")), dim())));
         lines.push(Line::from(Span::styled(format!(" {}", t!("memory.keys")), dim())));

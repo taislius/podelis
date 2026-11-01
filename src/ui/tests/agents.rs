@@ -124,8 +124,22 @@ fn the_memory_window_marks_what_waits_for_the_user() {
     assert!(screen.contains("MEMORY · SHOP"), "{screen}");
     assert!(screen.contains("orders.status means 3 = cancelled  · user"), "{screen}");
     assert!(screen.contains("orders.total means VAT included  · model:claude, not confirmed: c"), "{screen}");
-    assert!(screen.contains("a add · c confirm · d forget · Esc close"), "{screen}");
+    assert!(screen.contains("a add · e change · c confirm · d forget · Esc close"), "{screen}");
     // A long source is cut from its start; the fact stays whole.
     assert!(screen.contains("orders means note An order: status 1 new, 2 paid  · …x"), "{screen}");
     assert!(screen.contains("x/db/migrations"), "{screen}");
+    // `e`: the selected fact whole, to change.
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+    let view = app.memory_view.as_ref().unwrap();
+    assert_eq!(view.editing, Some(1));
+    assert_eq!(view.adding.as_ref().map(crate::app::LineInput::text), Some("orders.status means 3 = cancelled"));
+    let screen = render(&mut app, 110, 24);
+    assert!(
+        screen.contains("✎ orders.status means 3 = cancelled") && screen.contains("↵ save · Esc keep it"),
+        "{screen}"
+    );
+    // Esc keeps it as it was.
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let view = app.memory_view.as_ref().unwrap();
+    assert!(view.adding.is_none() && view.editing.is_none());
 }

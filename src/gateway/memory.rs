@@ -162,6 +162,12 @@ const SCHEMA: &[&str] = &[
         INSERT INTO facts_text(facts_text, rowid, subject, relation, value)
             VALUES ('delete', old.id, old.subject, old.relation, old.value);
     END",
+    // A fact edited: its words in the index change with it.
+    "CREATE TRIGGER IF NOT EXISTS facts_edited AFTER UPDATE OF subject, relation, value ON facts BEGIN
+        INSERT INTO facts_text(facts_text, rowid, subject, relation, value)
+            VALUES ('delete', old.id, old.subject, old.relation, old.value);
+        INSERT INTO facts_text(rowid, subject, relation, value) VALUES (new.id, new.subject, new.relation, new.value);
+    END",
 ];
 
 fn row(r: &sqlx::sqlite::SqliteRow) -> Fact {
@@ -276,6 +282,66 @@ pub async fn rejected(conn: &mut SqliteConnection, subject: &str, value: &str) -
     .await
     .map_err(|e| format!("memory: {e}"))?;
     Ok(found.is_some())
+}
+
+/// Reads an edit of a fact whose relation was `relation`: when the text
+/// still has that relation after the subject (`orders history created …`,
+/// `x note …`, a relation [`parse_fact`] doesn't know), it stays; otherwise
+/// the text is read as when adding.
+pub fn parse_edit(text: &str, relation: &str) -> Option<(String, String, String)> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let kept: Vec<String> = relation.split_whitespace().map(str::to_lowercase).collect();
+    let (subject, rest) = words.split_first()?;
+    let same =
+        !kept.is_empty() && rest.len() > kept.len() && rest.iter().zip(&kept).all(|(w, k)| w.to_lowercase() == *k);
+    if same {
+        return Some(((*subject).to_string(), relation.to_string(), rest[kept.len()..].join(" ")));
+    }
+    parse_fact(text)
+}
+
+/// Fact `id` now says `text` (the user's edit, read by [`parse_edit`]):
+/// the user's from then on (confirmed, its source `user`, so learning a
+/// folder again doesn't replace it), dated now. A model's guess changed is
+/// remembered as rejected, as when forgotten, so it isn't suggested again
+/// beside the correction. None if there's no such fact.
+pub async fn update(conn: &mut SqliteConnection, id: i64, text: &str) -> Result<Option<Fact>, String> {
+    let failed = |e: sqlx::Error| format!("memory: {e}");
+    let Some(old) = sqlx::query("SELECT * FROM facts WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(failed)?
+        .as_ref()
+        .map(row)
+    else {
+        return Ok(None);
+    };
+    let Some((subject, relation, value)) = parse_edit(text, &old.relation) else {
+        return Err("a fact needs what it's about and what's said about it".into());
+    };
+    if old.source.starts_with("model:") && (old.subject != subject || old.value != value) {
+        sqlx::query("INSERT INTO rejected (subject, value) VALUES (?, ?)")
+            .bind(&old.subject)
+            .bind(&old.value)
+            .execute(&mut *conn)
+            .await
+            .map_err(failed)?;
+    }
+    let at = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+    let r = sqlx::query(
+        "UPDATE facts SET subject = ?, relation = ?, value = ?, source = 'user', confirmed = 1, at = ? WHERE id = ?
+         RETURNING id, subject, relation, value, source, confirmed, at",
+    )
+    .bind(subject)
+    .bind(relation)
+    .bind(value)
+    .bind(at)
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(failed)?;
+    Ok(r.as_ref().map(row))
 }
 
 /// Marks a fact confirmed (one a model suggested, now the user's).

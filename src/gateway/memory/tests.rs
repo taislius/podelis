@@ -139,3 +139,51 @@ async fn another_name_and_a_defined_term_bring_their_tables() {
     let memory = for_question(&mut conn, "revenue per store").await.unwrap();
     assert_eq!(memory.words(), " revenue sum(payment.amount)");
 }
+
+#[tokio::test]
+async fn a_fact_is_changed_and_found_by_its_new_words() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut conn = open(dir.path(), "p1").await.unwrap();
+    let guess = add(&mut conn, "orders.status", "means", "3 = cancelled", "model:claude", false).await.unwrap();
+    let changed = update(&mut conn, guess.id, "orders.status means 3 = refunded").await.unwrap().unwrap();
+    // The user's word now: confirmed, theirs.
+    assert_eq!((changed.value.as_str(), changed.confirmed, changed.source.as_str()), ("3 = refunded", true, "user"));
+    // The model's guess, corrected, isn't suggested again.
+    assert!(rejected(&mut conn, "orders.status", "3 = cancelled").await.unwrap());
+    // The search index follows the edit: the new words find it, the old don't.
+    assert_eq!(list(&mut conn, Some("refunded")).await.unwrap().len(), 1);
+    assert!(list(&mut conn, Some("cancelled")).await.unwrap().is_empty());
+    // Forgetting it after an edit leaves the index clean too.
+    assert!(forget(&mut conn, guess.id).await.unwrap());
+    assert!(list(&mut conn, Some("refunded")).await.unwrap().is_empty());
+    assert!(update(&mut conn, 999, "x means y").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn an_edit_keeps_the_facts_own_relation_and_outlives_learning_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut conn = open(dir.path(), "p1").await.unwrap();
+    let learned = [crate::gateway::migrations::Learned {
+        subject: "orders".into(),
+        relation: "history".into(),
+        value: "created in 001".into(),
+    }];
+    replace_source(&mut conn, "file:/db/migrations", &learned).await.unwrap();
+    let id = list(&mut conn, None).await.unwrap()[0].id;
+    // A relation adding doesn't know (`history`) stays what it was.
+    let changed = update(&mut conn, id, "orders history created in 001, renamed in 004").await.unwrap().unwrap();
+    assert_eq!((changed.relation.as_str(), changed.value.as_str()), ("history", "created in 001, renamed in 004"));
+    // A value that only starts like another relation isn't read as one.
+    let fact = add(&mut conn, "revenue", "means", "defined as gross", "user", true).await.unwrap();
+    let changed = update(&mut conn, fact.id, "revenue means defined as net").await.unwrap().unwrap();
+    assert_eq!((changed.relation.as_str(), changed.value.as_str()), ("means", "defined as net"));
+    // Changing the relation itself works as when adding.
+    let changed = update(&mut conn, fact.id, "revenue defined as sum(payment.amount)").await.unwrap().unwrap();
+    assert_eq!((changed.relation.as_str(), changed.value.as_str()), ("defined as", "sum(payment.amount)"));
+    // Learning the folder again doesn't delete the user's edit.
+    replace_source(&mut conn, "file:/db/migrations", &learned).await.unwrap();
+    let facts = list(&mut conn, None).await.unwrap();
+    assert!(facts.iter().any(|f| f.value == "created in 001, renamed in 004" && f.source == "user"), "{facts:?}");
+    // No value: an error, nothing changed.
+    assert!(update(&mut conn, fact.id, "revenue").await.is_err());
+}
