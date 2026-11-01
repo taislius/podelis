@@ -241,6 +241,87 @@ impl App {
         self.conns.parked.get(&id).map(|slot| slot.form.short_name())
     }
 
+    /// Where connection `id` goes (`PostgreSQL db.example.com:5432/shop`),
+    /// for the connections list.
+    pub(super) fn conn_address(&self, id: u64) -> String {
+        let form = if self.conns.active == Some(id) {
+            Some(&self.connection.form)
+        } else {
+            self.conns.parked.get(&id).map(|s| &s.form)
+        };
+        form.map(ConnectForm::summary).unwrap_or_default()
+    }
+
+    /// From the connections list: to the shown tab if it's on `id`, else
+    /// the first tab on it.
+    pub(super) fn go_to_connection(&mut self, id: u64) {
+        if self.tabs[self.active_tab].conn == Some(id) {
+            return;
+        }
+        if let Some(i) = self.tabs.iter().position(|t| t.conn == Some(id)) {
+            self.switch_tab(i);
+        }
+    }
+
+    /// Ctrl+D in the connections list: asks before closing connection `id`
+    /// (its tabs are disconnected, an open transaction rolled back). Not
+    /// while a query runs on it: that's stopped in its tab first.
+    pub(super) fn request_close_connection(&mut self, id: u64) {
+        let Some(name) = self.conn_name(id) else { return };
+        let tabs: Vec<usize> = (0..self.tabs.len()).filter(|&i| self.tabs[i].conn == Some(id)).collect();
+        if let Some(&busy) = tabs.iter().find(|&&i| self.tab_running(i)) {
+            self.palette = None;
+            let tab = self.tabs[busy].name.clone();
+            return self.set_status(t!("conn_list.busy", name = name, tab = tab), true);
+        }
+        let names: Vec<&str> = tabs.iter().map(|&i| self.tabs[i].name.as_str()).collect();
+        let names = if names.is_empty() { t!("conn_list.no_tabs").to_string() } else { names.join(", ") };
+        let open = self.conn_txn(id) == Some(TxnState::Open);
+        self.palette = None;
+        self.confirm = Some(Confirm {
+            message: if open {
+                t!("conn_list.close_rollback", name = name, tabs = names)
+            } else {
+                t!("conn_list.close_ask", name = name, tabs = names)
+            },
+            details: Vec::new(),
+            danger: open,
+            action: ConfirmAction::CloseConnection(id),
+            offer_transaction: false,
+        });
+    }
+
+    /// Closes connection `id`: every tab on it is disconnected (and isn't
+    /// reopened by its next run), the connection closed; the shown tab
+    /// stays where it is.
+    pub(super) fn close_connection(&mut self, id: u64) {
+        let Some(name) = self.conn_name(id) else { return };
+        if self.conns.active == Some(id) {
+            self.invalidate_tasks();
+            self.tab.run.set_stream(None);
+            self.tab.run.fetching_more = false;
+            self.tab.run.executing = false;
+            self.tab.run.cancelling = false;
+            self.tab.run.cancel_failed = false;
+        }
+        for i in 0..self.tabs.len() {
+            if self.tabs[i].conn == Some(id) {
+                self.tabs[i].conn = None;
+                // Closed on purpose: a run there doesn't open it again.
+                if let Some(saved) = self.conns.tab_connections.get_mut(i) {
+                    *saved = None;
+                }
+            }
+        }
+        if self.conns.active == Some(id) {
+            self.switch_conn(None);
+            self.connection_lost = false;
+        }
+        self.release_unused_conns();
+        self.save_draft();
+        self.set_status(t!("conn_list.closed", name = name), false);
+    }
+
     /// The other tabs' connections: id, database and form.
     pub(super) fn parked_connections(&self) -> Vec<(u64, &Database, &ConnectForm)> {
         let mut out: Vec<_> = self

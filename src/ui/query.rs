@@ -629,16 +629,35 @@ fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
     }
     let items = app.palette_items();
     let width = fit(76, 30, area.width);
-    let rows = (area.height.saturating_sub(6) as usize).clamp(1, 14).min(items.len().max(1));
-    let rect = Rect { y: area.y + 2, ..centered_box(area, width, (rows as u16 + 4).min(area.height)) };
+    // The connections list says its keys under it (Ctrl+D closes).
+    let help = u16::from(palette.conns_only) * 2;
+    let rows = (area.height.saturating_sub(6 + help) as usize).clamp(1, 14).min(items.len().max(1));
+    // Two rows down from the top: no taller than what's left below that.
+    let rect = Rect {
+        y: area.y + 2,
+        ..centered_box(area, width, (rows as u16 + 4 + help).min(area.height.saturating_sub(2)))
+    };
     f.render_widget(Clear, rect);
-    let block = popup(if palette.tabs_only { t!("tab_list.title") } else { t!("palette.title") }, t.accent);
+    let title = if palette.conns_only {
+        t!("conn_list.title")
+    } else if palette.tabs_only {
+        t!("tab_list.title")
+    } else {
+        t!("palette.title")
+    };
+    let block = popup(title, t.accent);
     let inner = block.inner(rect);
     f.render_widget(block, rect);
-    let [search, list] = Layout::default()
+    let [search, list, keys] = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Min(0)])
+        .constraints([Constraint::Length(2), Constraint::Min(0), Constraint::Length(help)])
         .areas(inner);
+    if help > 0 {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(format!(" {}", t!("conn_list.help")), dim()))),
+            Rect { y: keys.y + 1, height: 1, ..keys },
+        );
+    }
     f.render_widget(
         Paragraph::new(Line::from(
             [vec![Span::styled(" › ", bold(t.accent))], input_spans(&palette.query, fg(t.text_bright))].concat(),

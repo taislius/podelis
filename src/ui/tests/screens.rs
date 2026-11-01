@@ -137,3 +137,18 @@ fn status_bar_says_whether_ai_is_on() {
         assert!(status_bar(&mut app).contains("AI claude · asks to share"), "{}", status_bar(&mut app));
     }
 }
+
+#[test]
+fn the_open_connections_list_says_its_keys() {
+    let (mut app, _dir) = query_app();
+    app.tabs[0].name = "orders".into();
+    app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+    app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+    let screen = render(&mut app, 110, 20);
+    assert!(screen.contains("OPEN CONNECTIONS") && screen.contains("Ctrl+D close it"), "{screen}");
+    assert!(screen.contains("orders") && screen.contains("(this one)"), "{screen}");
+    // A short terminal: it fits (no drawing past the screen's edge).
+    for height in 4..12 {
+        render(&mut app, 60, height);
+    }
+}

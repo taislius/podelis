@@ -518,3 +518,37 @@ async fn a_hidden_tabs_finished_query_is_announced() {
     finish(&mut app).await;
     assert!(app.take_notification().is_none());
 }
+
+#[test]
+fn renaming_a_tab_copies_and_pastes() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    app.tabs[0].name = "monthly churn".into();
+    app.run_action(Action::RenameTab);
+    assert!(app.tab_prompt.is_some());
+    // Ctrl+C copies what's typed (not the editor behind it, not quitting).
+    app.handle_key(ctrl('c'));
+    assert_eq!(app.clipboard.as_deref(), Some("monthly churn"));
+    assert!(app.confirm.is_none() && app.tab_prompt.is_some());
+    // A paste (the terminal's, or Ctrl+V's from the clipboard) goes in.
+    app.handle_key(ctrl('u'));
+    app.handle_paste("weekly churn");
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.tabs[0].name, "weekly churn");
+}
+
+#[test]
+fn a_paste_doesnt_reach_the_library_search_behind_its_delete_question() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    app.library.add("adhoc/top", "select * from orders").unwrap();
+    app.run_action(Action::Library);
+    app.handle_paste("top");
+    assert_eq!(app.library_view.as_ref().unwrap().query.text(), "top");
+    app.handle_key(ctrl('d'));
+    assert!(app.library_view.as_ref().unwrap().confirm_delete);
+    // Pasted while asked: the search stays, and nothing's copied from it.
+    app.handle_paste("other");
+    assert_eq!(app.library_view.as_ref().unwrap().query.text(), "top");
+    assert!(app.prompt_text().is_none());
+}

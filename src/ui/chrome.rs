@@ -448,6 +448,7 @@ pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String
                     (&keys_menu, t!("help.keys_menu")),
                     (k(Action::OpenConnection), t!("help.open_connection")),
                     (k(Action::Disconnect), t!("help.disconnect")),
+                    (k(Action::ConnectionList), t!("help.connection_list")),
                     (k(Action::Projects), t!("help.projects_screen")),
                 ],
             ),

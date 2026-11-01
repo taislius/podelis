@@ -668,6 +668,9 @@ pub enum ConfirmAction {
         filled: Option<Filled>,
     },
     Disconnect,
+    /// Close an open connection (`Ctrl+K j`, `Ctrl+D`): every tab on it
+    /// is disconnected.
+    CloseConnection(u64),
     Quit,
     CloseTab,
     /// Leave the project, for another one (or the project list); `true`
@@ -1540,6 +1543,7 @@ impl App {
                 self.run_writes(sql, offset, infos, RunPurpose::Query, filled);
             }
             ConfirmAction::Disconnect => self.disconnect(),
+            ConfirmAction::CloseConnection(id) => self.close_connection(id),
             ConfirmAction::Quit => self.should_quit = true,
             ConfirmAction::CloseTab => self.close_tab(),
             ConfirmAction::LeaveProject(target, panes) => self.go_to_project(target, panes),
