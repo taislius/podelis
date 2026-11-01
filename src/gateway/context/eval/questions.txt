@@ -1,0 +1,43 @@
+# The retrieval gold set: database | question | the tables the right SQL
+# needs (base tables, not views) | facts the team confirmed, if any
+# (subject / relation / value; several separated by ;).
+# The first 13 are ai-test's questions.txt (~/podelis-test), without the
+# impossible one; the rest add synonyms, business terms and longer joins.
+
+# Easy: the words match table names
+pagila  | how many films are in each category | film_category, category
+pagila  | top 10 customers by total payments | customer, payment
+sakila  | which actors appeared in the most films | actor, film_actor
+chinook | total sales per country, highest first | invoice
+
+# The words don't match: "revenue", "rented", "late"
+pagila  | revenue per film category in 2022 | payment, rental, inventory, film_category, category
+pagila  | which films were never rented | film, inventory, rental
+pagila  | customers who returned a film late more than 3 times | customer, rental, inventory, film
+sakila  | average rental duration per store | rental, inventory, store
+chinook | which genre earns the most per track sold | genre, track, invoiceline
+
+# Joins across several tables
+pagila  | the actor whose films earned the most money | actor, film_actor, inventory, rental, payment
+chinook | employees and how much their customers spent | employee, customer, invoice
+
+# Ambiguous: what's there to answer with
+pagila  | profit per store | payment, staff, store
+
+# More of each
+pagila  | films in English longer than two hours | film, language
+pagila  | customers in each country | customer, address, city, country
+sakila  | which staff member took the most payments | staff, payment
+sakila  | films with no actors | film, film_actor
+chinook | the five longest tracks and their albums | track, album
+chinook | artists with more than ten albums | artist, album
+chinook | which playlists have the most tracks | playlist, playlisttrack
+chinook | tracks of each media type | track, mediatype
+
+# Synonyms and business terms, with the facts that say them
+pagila  | top clients by spend | customer, payment | customer / also called / client
+pagila  | movies per genre | film, film_category, category | film / also called / movie; category / also called / genre
+sakila  | active members in each shop | customer, store | customer / also called / member; store / also called / shop; customer / excluded by default / active = 0
+chinook | songs bought by each buyer | track, invoiceline, invoice, customer | track / also called / song; customer / also called / buyer
+chinook | net revenue per year | invoice | net revenue / defined as / sum(Invoice.Total)
+pagila  | churned customers | customer, rental | churned / defined as / customer with no rental in the last 90 days

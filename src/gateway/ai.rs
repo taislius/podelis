@@ -301,6 +301,16 @@ async fn built_for(
         tracing::warn!(error = %e, "gateway: the project's memory couldn't be read");
         super::memory::ForQuestion::default()
     });
+    context_for(schema, question, &memory)
+}
+
+/// The context for `question` once memory's been read: what `ask` builds,
+/// and what the retrieval eval (`context/eval.rs`) measures.
+pub(super) fn context_for(
+    schema: &Schema,
+    question: &str,
+    memory: &super::memory::ForQuestion,
+) -> super::context::Context {
     let built = super::context::build(schema, &format!("{question}{}", memory.words()));
     let tables: Vec<String> = built.tables.iter().map(|t| t.name.clone()).collect();
     let facts = memory.about(&tables);

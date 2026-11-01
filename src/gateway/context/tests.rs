@@ -296,3 +296,61 @@ fn facts_about_missing_tables_are_left_out_as_stale() {
     // A word that names no table (a term) isn't stale.
     assert!(built.facts.iter().any(|f| f.starts_with("revenue defined as")), "{:?}", built.facts);
 }
+
+#[test]
+fn money_words_match_amounts_totals_and_payments() {
+    // "earned" names no table or column; `orders.total` holds the money.
+    let c = build(&shop(), "which customers earned us the most");
+    assert!(names(&c).contains(&"public.orders"), "{:?}", c.tables);
+    let why = &c.tables.iter().find(|t| t.name == "public.orders").unwrap().why;
+    assert!(why.contains("columns total"), "{why}");
+    // Without a money word, `total` isn't wanted.
+    let c = build(&shop(), "customers from Lithuania");
+    assert_eq!(names(&c), ["public.customers", "public.orders"]);
+    assert_eq!(c.tables[1].why, "joins customers");
+}
+
+fn with_views() -> Schema {
+    let mut s = shop();
+    let (mut list, cols) = table("orders_list", 0, &[("id", "bigint", false), ("country", "text", false)]);
+    list.is_view = true;
+    s.tables.push((list, cols));
+    let (mut sales, cols) = table("country_sales", 0, &[("country", "text", false)]);
+    sales.is_view = true;
+    s.tables.push((sales, cols));
+    s
+}
+
+#[test]
+fn views_dont_come_for_a_tables_name_or_their_columns_alone() {
+    // `orders_list` matches "orders", a table's own name: the table comes,
+    // not the view.
+    let c = build(&with_views(), "orders placed in May");
+    assert!(!names(&c).contains(&"public.orders_list"), "{:?}", c.tables);
+    // `country_sales` by words of its own name: it comes.
+    let c = build(&with_views(), "sales by country");
+    let n = names(&c);
+    assert!(n.contains(&"public.country_sales"), "{n:?}");
+    // `orders_list` has a `country` column, like `customers`: not chosen
+    // for it.
+    assert!(!n.contains(&"public.orders_list"), "{n:?}");
+}
+
+#[test]
+fn a_second_way_between_tables_joined_already_isnt_brought() {
+    // `refunds` links `orders` and `customers`, which a key joins already.
+    let mut s = shop();
+    s.tables.push(table(
+        "refunds",
+        10,
+        &[("id", "integer", true), ("order_id", "bigint", false), ("customer_id", "integer", false)],
+    ));
+    s.links.push(link("refunds", "order_id", "orders"));
+    s.links.push(link("refunds", "customer_id", "customers"));
+    let c = build(&s, "orders of each customer");
+    assert!(names(&c).starts_with(&["public.orders", "public.customers"]), "{:?}", c.tables);
+    assert!(!names(&c).contains(&"public.refunds"), "{:?}", c.tables);
+    // Asked for, it comes.
+    let c = build(&s, "refunds of each customer");
+    assert!(names(&c).contains(&"public.refunds"), "{:?}", c.tables);
+}
