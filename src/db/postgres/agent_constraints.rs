@@ -27,6 +27,9 @@ pub(in crate::db) static AGENT_CONSTRAINTS: AgentConstraints = AgentConstraints 
         ("pg_advisory_lock_shared", LOCKS),
         ("pg_try_advisory_lock", LOCKS),
         ("pg_try_advisory_lock_shared", LOCKS),
+        // SET from within a query: `standard_conforming_strings` off would
+        // change where strings end, past what these checks see.
+        ("set_config", "changes the session's settings"),
         ("dblink", "reaches other servers"),
         ("dblink_exec", "reaches other servers"),
         ("dblink_connect", "reaches other servers"),
@@ -69,6 +72,7 @@ mod tests {
             ("select lo_export(1, '/tmp/x')", "reaches the server's files"),
             ("select pg_advisory_lock(1)", "holds a lock past the transaction"),
             ("SET default_transaction_read_only = off", "transaction of its own"),
+            ("select set_config('standard_conforming_strings', 'off', false)", "changes the session's settings"),
             ("BEGIN READ WRITE; insert into t values (1); COMMIT", "transaction of its own"),
             // MySQL's and SQLite's, not PostgreSQL's.
             ("replace into t values (1)", "schema changes on PostgreSQL"),

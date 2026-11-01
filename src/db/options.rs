@@ -225,7 +225,7 @@ pub enum PasswordSource {
     None,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ConnectParams {
     pub engine: Engine,
     /// Hostname, IP address (IPv6 without brackets), or a Unix socket path
@@ -244,6 +244,25 @@ pub struct ConnectParams {
     /// Program and arguments that print the password, run when connecting
     /// if `password` is empty (see [`super::password_command`]).
     pub password_command: Vec<String>,
+}
+
+/// Everything but the password: a `{:?}` in a log line or a panic mustn't
+/// write it out.
+impl std::fmt::Debug for ConnectParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectParams")
+            .field("engine", &self.engine)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("user", &self.user)
+            .field("password", &if self.password.is_empty() { "" } else { "<hidden>" })
+            .field("database", &self.database)
+            .field("ssl_mode", &self.ssl_mode)
+            .field("read_only", &self.read_only)
+            .field("ssh", &self.ssh)
+            .field("password_command", &self.password_command)
+            .finish()
+    }
 }
 
 impl ConnectParams {
@@ -297,5 +316,20 @@ impl ConnectParams {
             && path != ":memory:"
             && !std::path::Path::new(path).exists();
         missing.then_some(path)
+    }
+}
+
+#[cfg(test)]
+mod debug_tests {
+    #[test]
+    fn debug_output_hides_the_password() {
+        let mut params = crate::cli::form_for_address(&crate::cli::classify("postgres://bob:hunter2@db:5432/shop"))
+            .unwrap()
+            .params()
+            .unwrap();
+        let shown = format!("{params:?}");
+        assert!(!shown.contains("hunter2") && shown.contains("<hidden>") && shown.contains("bob"), "{shown}");
+        params.password.clear();
+        assert!(!format!("{params:?}").contains("<hidden>"));
     }
 }
