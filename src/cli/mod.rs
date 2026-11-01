@@ -18,7 +18,8 @@ Usage: podelis [OPTIONS] [CONNECTION]
        podelis mcp [-p <project>] [--name <label>]
        podelis ask [-p <project>] <connection> <question>
        podelis memory [-p <project>] [list [<words>] | add <subject> <what> |
-                      forget <id> | confirm <id> | learn <folder> | export]
+                      edit <id> <subject> <what> | forget <id> | confirm <id> |
+                      learn <folder> | export]
        podelis gateway [status | start | stop | models]
        podelis gateway key <model> | test [<model>]
        podelis gateway context [-p <project>] <connection> <question>
@@ -69,7 +70,8 @@ on this machine is shown a project's schema only once you allow it.
 memory is what the project's team has said about its data, shown to
 models when they write SQL: `podelis memory add orders.status 3 =
 cancelled`, `add revenue is orders.total minus refunds`. list shows the
-facts (or those matching words), forget removes one by its number,
+facts (or those matching words), edit changes one by its number (it's
+then confirmed), forget removes one by its number,
 confirm makes a model's suggestion count, learn reads a folder of SQL
 migrations (each table's history, and the comments above statements),
 export prints them all as text to keep or review.
@@ -248,15 +250,16 @@ fn check_subcommands(out: &Args) -> Result<(), String> {
         let enough = match words.first().map(String::as_str) {
             None | Some("list" | "export") => true,
             Some("add") => words.len() >= 3,
+            Some("edit") => words.len() >= 4 && words[1].parse::<i64>().is_ok(),
             Some("forget" | "confirm") => words.get(1).is_some_and(|id| id.parse::<i64>().is_ok()),
             Some("learn") => words.len() == 2,
             Some(other) => {
-                return Err(format!("memory: no '{other}' (list, add, forget, confirm, learn, export)"));
+                return Err(format!("memory: no '{other}' (list, add, edit, forget, confirm, learn, export)"));
             }
         };
         if !enough {
-            return Err("memory add needs a subject and what's said about it; forget and confirm, a fact's number; \
-                 learn, a folder"
+            return Err("memory add needs a subject and what's said about it; edit, a fact's number, then those; \
+                 forget and confirm, a fact's number; learn, a folder"
                 .into());
         }
     }
@@ -717,6 +720,9 @@ mod tests {
         let add = run(&["memory", "add", "orders.status", "3", "=", "cancelled"]).unwrap();
         assert_eq!(add.memory, Some(["add", "orders.status", "3", "=", "cancelled"].map(String::from).to_vec()));
         assert!(run(&["memory", "forget", "x"]).is_err() && run(&["memory", "drop"]).is_err());
+        assert!(run(&["memory", "edit", "4", "orders.status", "3", "=", "refunded"]).is_ok());
+        assert!(run(&["memory", "edit", "x", "orders.status", "means"]).is_err());
+        assert!(run(&["memory", "edit", "4", "orders.status"]).is_err());
         assert_eq!(run(&["memory"]).unwrap().memory, Some(Vec::new()));
         // Words after `memory` are its own, `ask` and `gateway` too.
         let odd = run(&["memory", "add", "quotes.side", "means", "ask", "gateway"]).unwrap();

@@ -422,6 +422,11 @@ pub async fn memory(config_dir: &Path, project: Option<&str>, words: &[String]) 
             params["text"] = json!(words[1..].join(" "));
             ("memory.add", "Remembered")
         }
+        "edit" => {
+            params["id"] = json!(words[1].parse::<i64>().unwrap_or(0));
+            params["text"] = json!(words[2..].join(" "));
+            ("memory.update", "Changed")
+        }
         "forget" | "confirm" => {
             params["id"] = json!(words[1].parse::<i64>().unwrap_or(0));
             if action == "forget" { ("memory.forget", "Forgot") } else { ("memory.confirm", "Confirmed") }
@@ -478,7 +483,7 @@ pub async fn memory(config_dir: &Path, project: Option<&str>, words: &[String]) 
             }
         }
         _ => {
-            let what = if method == "memory.add" {
+            let what = if method == "memory.add" || method == "memory.update" {
                 format!(
                     " #{}: {} {} {}",
                     answer["id"],

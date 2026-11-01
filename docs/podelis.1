@@ -276,7 +276,7 @@ the project shares it: the first time,
 asks (in a terminal) whether to send it this once or always for the
 project.
 Exit status: 0 with SQL, 1 if none came, 3 if the schema wasn't sent.
-.It Cm memory Oo Fl p Ar project Oc Op Cm list | add | forget | confirm | learn | export
+.It Cm memory Oo Fl p Ar project Oc Op Cm list | add | edit | forget | confirm | learn | export
 What the project's team has said about its data, shown to models when
 they write SQL
 .Pq see Cm ask :
@@ -298,6 +298,13 @@ add are.
 .Cm list ,
 the default, shows them all, or those matching
 .Ar words ;
+.Cm edit Ar id subject what
+changes one by its number (as
+.Cm add
+reads it, its relation kept unless changed; it's then yours, confirmed,
+and kept when
+.Cm learn
+runs again);
 .Cm forget
 removes one by its number;
 .Cm confirm

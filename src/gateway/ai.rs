@@ -775,6 +775,17 @@ pub async fn memory(
                 .map(|f| f.to_json())
                 .map_err(failed)
         }
+        "memory.update" => {
+            let (Some(id), Some(text)) = (id, text("text").filter(|t| !t.trim().is_empty())) else {
+                let needs = "memory.update needs the fact's `id` and what it says now (`text`)";
+                return (Err(RpcError::new(code::INVALID_PARAMS, needs)), about);
+            };
+            match mem::update(&mut conn, id, text).await {
+                Ok(Some(f)) => Ok(f.to_json()),
+                Ok(None) => Err(RpcError::new(code::MEMORY, format!("no fact {id} in project '{}'", project.name))),
+                Err(e) => Err(failed(e)),
+            }
+        }
         "memory.list" => mem::list(&mut conn, text("search"))
             .await
             .map(|facts| json!({ "project": project.name, "facts": facts.iter().map(mem::Fact::to_json).collect::<Vec<_>>() }))
