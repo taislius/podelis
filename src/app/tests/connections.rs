@@ -1021,3 +1021,84 @@ async fn a_new_connection_is_kept_once_it_works() {
     app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
     assert_eq!(saved(&app).len(), 2);
 }
+
+#[tokio::test]
+async fn open_connections_are_listed_gone_to_and_closed() {
+    let (mut app, dir) = test_app();
+    let project = project_id(&app);
+    let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
+    app.store.upsert(&project, None, a.clone()).unwrap();
+    app.store.upsert(&project, None, b.clone()).unwrap();
+    connect_profile(&mut app, &a).await;
+    app.tabs[0].name = "orders".into();
+    app.handle_key(ctrl('t'));
+    app.tabs[1].name = "refunds".into();
+    app.handle_key(ctrl('o'));
+    connect_profile(&mut app, &b).await;
+    app.tabs[2].name = "users".into();
+    // More rows than are fetched at first: its result is open (holding a
+    // session) until the tab is hidden; closing the connection then
+    // doesn't wait on it.
+    run_sql(&mut app, "with recursive n(i) as (select 1 union all select i + 1 from n where i < 5000) select i from n")
+        .await;
+    assert!(app.tab.run.stream.is_some(), "a result with more to fetch");
+
+    // Ctrl+K j: each connection with its tabs, the shown one's first.
+    app.handle_key(ctrl('k'));
+    app.handle_key(key(KeyCode::Char('j')));
+    let items = app.palette_items();
+    assert!(app.palette.as_ref().is_some_and(|p| p.conns_only));
+    assert_eq!(items.len(), 2);
+    let entries: Vec<String> = items.iter().map(|c| app.palette_command_text(*c)).collect();
+    assert!(
+        entries[0].starts_with("beta") && entries[0].contains("users") && entries[0].ends_with("(this one)"),
+        "{entries:?}"
+    );
+    assert!(entries[1].starts_with("alpha") && entries[1].contains("orders, refunds"), "{entries:?}");
+
+    // Found by a tab's name; Enter goes to its first tab.
+    type_text(&mut app, "refunds");
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!((app.active_tab, app.connection.form.name.as_str()), (0, "alpha"));
+
+    // Ctrl+D closes the other one, asking first; its tab is disconnected.
+    app.handle_key(ctrl('k'));
+    app.handle_key(key(KeyCode::Char('j')));
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(ctrl('d'));
+    let confirm = app.confirm.as_ref().expect("asked first");
+    assert!(matches!(confirm.action, ConfirmAction::CloseConnection(_)), "{}", confirm.message);
+    assert!(confirm.message.contains("beta") && confirm.message.contains("users"), "{}", confirm.message);
+    app.handle_key(key(KeyCode::Char('y')));
+    assert!(app.tabs[2].conn.is_none() && app.tabs[0].conn.is_some() && app.tabs[1].conn == app.tabs[0].conn);
+    assert_eq!(said(&app), "Closed beta");
+    assert!(app.tab_run(2).is_some_and(|r| r.stream.is_none()), "a hidden tab holds no stream");
+    assert_eq!(app.parked_connections().len(), 0);
+
+    // The shown one too: its tabs stay, unconnected, on the query screen.
+    run_sql(&mut app, "create table t (x int)").await;
+    app.handle_key(ctrl('k'));
+    app.handle_key(key(KeyCode::Char('j')));
+    app.handle_key(ctrl('d'));
+    app.handle_key(key(KeyCode::Char('y')));
+    assert!(matches!(app.screen, Screen::Query) && app.tabs.iter().all(|t| t.conn.is_none()));
+    assert!(app.connection.database.is_none());
+    // Nothing open: the list says so instead of opening empty.
+    app.handle_key(ctrl('k'));
+    app.handle_key(key(KeyCode::Char('j')));
+    assert!(app.palette.is_none());
+}
+
+#[tokio::test]
+async fn closing_a_connection_says_its_transaction_goes() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    run_sql(&mut app, "create table t (x int)").await;
+    run_sql(&mut app, "begin; insert into t values (1)").await;
+    app.handle_key(ctrl('k'));
+    app.handle_key(key(KeyCode::Char('j')));
+    let entry = app.palette_command_text(app.palette_items()[0]);
+    assert!(entry.contains("transaction open"), "{entry}");
+    app.handle_key(ctrl('d'));
+    let confirm = app.confirm.as_ref().unwrap();
+    assert!(confirm.danger && confirm.message.contains("rolled back"), "{}", confirm.message);
+}

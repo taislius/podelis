@@ -29,6 +29,8 @@ pub enum Command {
     Quit,
     /// An open tab, by index.
     SwitchTab(usize),
+    /// An open connection (`Ctrl+K j`), by its id: goes to a tab on it.
+    GoToConnection(u64),
     /// Compare with another tab's connection (or the only other one).
     CompareSchema(Option<u64>),
     /// Run the last query again every this many seconds.
@@ -94,6 +96,7 @@ impl Command {
             Command::Help => t!("palette.help"),
             Command::Quit => t!("palette.quit"),
             Command::SwitchTab(_) => t!("palette.switch_tab"),
+            Command::GoToConnection(_) => t!("menu.connection_list"),
             Command::CompareSchema(_) => t!("palette.compare_schema"),
             Command::SnapshotSchema => t!("palette.snapshot"),
             Command::Watch(_) => t!("palette.watch"),
@@ -109,6 +112,7 @@ impl Command {
             Command::SwitchTab(i) => {
                 format!("{}: {}", t!("palette.switch_tab"), app.tabs.get(i).map_or("", |t| t.name.as_str()))
             }
+            Command::GoToConnection(id) => app.connection_entry(id),
             Command::Watch(0) => t!("palette.stop_watch").to_string(),
             Command::Watch(s) => t!("palette.watch_every", s = s),
             Command::CompareSnapshot(i) => match app.palette.as_ref().and_then(|p| p.snapshots.get(i)) {
@@ -150,6 +154,7 @@ impl Command {
             | Command::OpenRowsAs(_)
             | Command::AgentActivity
             | Command::SwitchTab(_)
+            | Command::GoToConnection(_)
             | Command::CompareSchema(_)
             | Command::SnapshotSchema
             | Command::Watch(_)
@@ -180,6 +185,10 @@ pub struct Palette {
     /// Each tab's text to search, lowercased, read once when the list
     /// opens (it's searched on every key and drawn every frame).
     tab_texts: Vec<String>,
+    /// Only the open connections (Ctrl+K j), with their text to search
+    /// (name, address, its tabs' names), lowercased.
+    pub conns_only: bool,
+    conn_texts: Vec<(u64, String)>,
 }
 
 impl App {
@@ -194,6 +203,8 @@ impl App {
             snapshots: self.snapshots(),
             tabs_only: false,
             tab_texts: Vec::new(),
+            conns_only: false,
+            conn_texts: Vec::new(),
         });
         if !menu_now {
             let key = self.keymap.short_label(Action::Palette);
@@ -254,7 +265,69 @@ impl App {
                     format!("{}\n{on}\n{}", tab.name, self.tab_text(i)).to_lowercase()
                 })
                 .collect(),
+            conns_only: false,
+            conn_texts: Vec::new(),
         });
+    }
+
+    /// Ctrl+K j: the open connections, to go to or close; the shown tab's
+    /// selected.
+    pub(super) fn open_connection_list(&mut self) {
+        let mut ids: Vec<u64> = self.conns.active.into_iter().collect();
+        ids.extend(self.parked_connections().into_iter().map(|(id, ..)| id));
+        let conn_texts: Vec<(u64, String)> = ids
+            .iter()
+            .map(|&id| {
+                let tabs: Vec<&str> =
+                    self.tabs.iter().filter(|t| t.conn == Some(id)).map(|t| t.name.as_str()).collect();
+                (
+                    id,
+                    format!(
+                        "{}\n{}\n{}",
+                        self.conn_name(id).unwrap_or_default(),
+                        self.conn_address(id),
+                        tabs.join("\n")
+                    )
+                    .to_lowercase(),
+                )
+            })
+            .collect();
+        if conn_texts.is_empty() {
+            return self.set_status(t!("tab_list.no_connection").to_string(), false);
+        }
+        self.palette = Some(Palette {
+            query: LineInput::default(),
+            selected: 0,
+            searching: true,
+            menu: false,
+            opened: Instant::now(),
+            snapshots: Vec::new(),
+            tabs_only: false,
+            tab_texts: Vec::new(),
+            conns_only: true,
+            conn_texts,
+        });
+    }
+
+    /// An open connection as its list shows it: its name, engine and
+    /// address, its tabs, and how it is (a query running, a transaction
+    /// open, lost).
+    pub fn connection_entry(&self, id: u64) -> String {
+        let name = self.conn_name(id).unwrap_or_default();
+        let tabs: Vec<usize> = (0..self.tabs.len()).filter(|&i| self.tabs[i].conn == Some(id)).collect();
+        let names: Vec<&str> = tabs.iter().map(|&i| self.tabs[i].name.as_str()).collect();
+        let names = if names.is_empty() { t!("conn_list.no_tabs").to_string() } else { names.join(", ") };
+        let running = tabs.iter().find_map(|&i| self.tab_run(i).filter(|r| r.executing).map(|r| (i, r)));
+        let status = if let Some((_, run)) = running {
+            Some(t!("tab_list.running", time = mm_ss(run.since.map_or(0, |s| s.elapsed().as_secs()))))
+        } else if self.conns.active == Some(id) && self.connection_lost {
+            Some(t!("tab_list.lost").to_string())
+        } else {
+            (self.conn_txn(id) == Some(TxnState::Open)).then(|| t!("tab_list.in_transaction").to_string())
+        };
+        let status = status.map(|s| format!("  · {s}")).unwrap_or_default();
+        let here = if self.conns.active == Some(id) { format!("  ({})", t!("menu.this_one")) } else { String::new() };
+        format!("{name}  · {}  · {names}{status}{here}", self.conn_address(id))
     }
 
     /// When the waiting Ctrl+K should show its menu.
@@ -274,6 +347,14 @@ impl App {
     /// Commands whose description contains every word typed.
     pub fn palette_items(&self) -> Vec<Command> {
         let query = self.palette.as_ref().map(|p| p.query.text().to_lowercase()).unwrap_or_default();
+        if let Some(palette) = self.palette.as_ref().filter(|p| p.conns_only) {
+            return (palette.conn_texts.iter())
+                .filter(|(id, text)| {
+                    self.conn_name(*id).is_some() && query.split_whitespace().all(|w| text.contains(w))
+                })
+                .map(|(id, _)| Command::GoToConnection(*id))
+                .collect();
+        }
         if let Some(palette) = self.palette.as_ref().filter(|p| p.tabs_only) {
             // A tab by its name, its connection, or the SQL in it.
             return (palette.tab_texts.iter().enumerate())
@@ -319,11 +400,21 @@ impl App {
             palette.selected = i;
             return;
         }
+        // Ctrl+D in the connections: close the one selected.
+        if palette.conns_only && ctrl && key.code == KeyCode::Char('d') {
+            let selected = palette.selected;
+            if let Some(Command::GoToConnection(id)) = self.palette_items().get(selected).copied() {
+                self.request_close_connection(id);
+            }
+            return;
+        }
         match key.code {
             KeyCode::Esc => self.palette = None,
             // Back to the letters.
             // (Not from the tab list: it has no letters to go back to.)
-            KeyCode::Backspace if palette.query.is_empty() && !palette.tabs_only => palette.searching = false,
+            KeyCode::Backspace if palette.query.is_empty() && !palette.tabs_only && !palette.conns_only => {
+                palette.searching = false;
+            }
             KeyCode::Enter => {
                 let selected = palette.selected;
                 let chosen = self.palette_items().get(selected).copied();
@@ -410,6 +501,7 @@ impl App {
             Command::Help => self.help_visible = true,
             Command::Quit => self.request_quit(),
             Command::SwitchTab(i) => self.switch_tab(i),
+            Command::GoToConnection(id) => self.go_to_connection(id),
             Command::CompareSchema(id) => self.compare_schema(id),
             Command::SnapshotSchema => self.snapshot_schema(),
             Command::Watch(0) => self.stop_watch(""),

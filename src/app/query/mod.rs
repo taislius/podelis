@@ -18,6 +18,14 @@ impl App {
     pub(in crate::app) fn handle_query_key(&mut self, key: KeyEvent) {
         let after_esc = std::mem::take(&mut self.esc_then_tab);
         self.esc_then_tab = key.code == KeyCode::Esc && self.focus == Focus::Editor;
+        // Ctrl+V in a prompt (renaming a tab, the palette, the pipe…) or a
+        // form: the system clipboard, as the terminal's own paste goes.
+        if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('v') && self.takes_paste() {
+            return match crate::system::clipboard::read() {
+                Ok(text) => self.paste_on_query_screen(&text),
+                Err(e) => self.set_status(crate::system::clipboard::read_failed(&e), true),
+            };
+        }
         if self.overlay_key(key) {
             return;
         }
@@ -193,7 +201,8 @@ impl App {
                 }
             }
             Some(Overlay::Library) => {
-                if let Some(view) = &mut self.library_view {
+                // Not behind "delete this saved query?".
+                if let Some(view) = self.library_view.as_mut().filter(|v| !v.confirm_delete) {
                     view.query.insert_str(text);
                     view.selected = 0;
                 }
@@ -216,11 +225,44 @@ impl App {
         }
     }
 
+    /// The text of the one-line prompt in front, if one is: what Ctrl+C
+    /// copies there.
+    pub(in crate::app) fn prompt_text(&self) -> Option<String> {
+        let text = match self.top_overlay()? {
+            Overlay::PipePrompt => self.pipe_prompt.as_ref()?.text(),
+            Overlay::AskPrompt => self.ask_prompt.as_ref()?.text(),
+            Overlay::TabPrompt => self.tab_prompt.as_ref()?.text.text(),
+            Overlay::Palette => self.palette.as_ref().filter(|p| p.searching)?.query.text(),
+            Overlay::Library => self.library_view.as_ref().filter(|v| !v.confirm_delete)?.query.text(),
+            Overlay::Memory => self.memory_view.as_ref()?.adding.as_ref()?.text(),
+            _ => return None,
+        };
+        Some(text.to_string())
+    }
+
+    /// Whether the popup in front has a field a paste goes into (what
+    /// Ctrl+V reads the clipboard for): the prompts, and the forms.
+    fn takes_paste(&self) -> bool {
+        match self.top_overlay() {
+            Some(Overlay::ParamForm | Overlay::RowForm) => true,
+            Some(Overlay::Settings) => self.settings_view.as_ref().is_some_and(|v| v.editing.is_some()),
+            _ => self.prompt_text().is_some(),
+        }
+    }
+
     /// Ctrl+C: copies the editor's selection (or its line), the open cell,
-    /// the results row (or the marked rows), or the navigator's name.
+    /// the results row (or the marked rows), the navigator's name, or what's
+    /// typed in a prompt.
     pub(in crate::app) fn copy_focused(&mut self) {
         if self.cell_view.is_some() {
             return self.copy_cell();
+        }
+        // A one-line prompt in front: its text (it has no selection).
+        if let Some(text) = self.prompt_text() {
+            if text.is_empty() {
+                return self.set_status(t!("copy.nothing").to_string(), false);
+            }
+            return self.copy_text(text, t!("copy.prompt"));
         }
         let has_row = self.grid_shown() && self.selected_row().is_some();
         match self.focus {
@@ -414,6 +456,7 @@ impl App {
             Action::Zoom => self.toggle_zoom(),
             Action::ZoomStatement => self.toggle_statement_zoom(),
             Action::TabList => self.open_tab_list(),
+            Action::ConnectionList => self.open_connection_list(),
             Action::Settings => self.open_settings(),
             Action::SelectStatement => self.select_statement(),
             Action::Heartbeat => self.toggle_heartbeat(),
