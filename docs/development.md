@@ -62,6 +62,16 @@ first use), so local builds and CI see the same lints. Lints are configured
 in `Cargo.toml` (`[lints]`), formatting in `rustfmt.toml`, and
 licence/advisory policy in `deny.toml`.
 
+**Unix only, POSIX where it can be.** Podėlis needs a Unix: file modes
+(`0600` for what holds secrets), process groups for password commands,
+Unix sockets for the gateway. Built and tested on Linux and macOS; the
+BSDs should build too (the keychain is the Secret Service there, as on
+Linux) but aren't tested. What it runs is POSIX: `sh -c` for pipes and
+viewers, `kill`, `ssh`; the opener is `open` on macOS and `xdg-open`
+elsewhere. The scripts are POSIX `sh` (Debian's `/bin/sh` is dash):
+`check.sh` runs shellcheck on them, or `dash -n` where only dash is
+installed. Windows isn't supported.
+
 GitHub Actions, kept small to save minutes:
 
 - `ci.yml` — on pushes to master (not docs-only ones): format,
@@ -72,7 +82,9 @@ GitHub Actions, kept small to save minutes:
 - `platforms.yml` — tests on macOS weekly, on release tags, or
   by hand (`gh workflow run platforms.yml --repo taislius/podelis`, or
   Actions → Platforms → Run workflow).
-- `deny.yml` — `cargo deny` when dependencies change, and weekly.
+- `deny.yml` — `cargo deny` when dependencies change, and weekly; beside
+  it osv-scanner (OSV: GitHub's advisories as well as RustSec's), with the
+  same exceptions in `osv-scanner.toml` as in `deny.toml`.
 - The Linux runners are pinned (`ubuntu-24.04`), not `ubuntu-latest`: a
   release binary needs at least the glibc it was built against, so
   building on the newest Ubuntu would leave out older systems.
@@ -90,6 +102,14 @@ GitHub Actions, kept small to save minutes:
   checksums: cancel that run (`gh run cancel <id>`) unless that's wanted.
   The release itself is made first, once; each build then uploads to it,
   trying again a few times when GitHub's API times out.
+- **SBOM and auditable binaries.** Each release build is made with
+  `cargo auditable`, which keeps the dependency list inside the binary
+  (`cargo audit bin podelis`, Trivy, Syft and Grype read it), and ships a
+  CycloneDX 1.5 SBOM (`cargo cyclonedx`, without build-only crates) in the
+  archive and beside it as `podelis-<tag>-<target>.cdx.json`. The patched
+  sqlx-mysql shows there as a local file (`file://patches/sqlx-mysql`).
+  Locally: `cargo cyclonedx --format json --spec-version 1.5
+  --no-build-deps --override-filename podelis.cdx`.
 - **Signing on macOS.** The keychain ties a stored key or password to
   the program that stored it, so an unsigned build (each `cargo build`,
   each update) is a stranger to it and its Allow dialog comes again.
