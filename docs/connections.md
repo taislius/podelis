@@ -129,6 +129,31 @@ a connection closed before its handshake against your host, and enough of
 them (its `max_connect_errors`) would block it. A tab whose connection couldn't
 be reopened tries again on the next run (`F5`, `F6`, `F7`).
 
+## Supabase
+
+A Supabase project is PostgreSQL: paste a connection string from its
+dashboard (**Connect**) into a new connection's form (a pasted URL fills
+in the whole form), or open it from the command line
+(`podelis 'postgresql://postgres.<ref>:…@…pooler.supabase.com:5432/postgres'`).
+
+- **Direct:** `db.<project-ref>.supabase.co`, port 5432, user `postgres`.
+  This host has only an IPv6 address unless the project has the IPv4
+  add-on; on an IPv4-only network use the pooler.
+- **Pooler, session mode:** `aws-<n>-<region>.pooler.supabase.com`
+  (copy it from the dashboard), port 5432, user `postgres.<project-ref>`.
+- **Transaction mode (port 6543) is refused**, on the shared pooler and
+  the dedicated PgBouncer alike: each transaction may run on another
+  server connection, and a SQL client needs one session (`SET`, a
+  transaction across runs, cancelling a query by its server process).
+  The message says to use port 5432 on the same host.
+- **TLS:** on Supabase's hosts SSL mode `prefer` (the default) is
+  `require`. For a checked certificate, download the root certificate
+  from the project's database settings and use `verify-full`.
+- **Supabase's own schemas** (`storage`, `realtime`, `vault`,
+  `extensions`, `graphql`, `supabase_functions`…) are in the navigator's
+  system section, like `pg_catalog`, and never shown to models. `auth`
+  isn't one of them: `auth.users` is often queried.
+
 ## Databases in Docker
 
 A container's published port (`-p 5433:5432`) is

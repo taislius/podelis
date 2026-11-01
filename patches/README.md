@@ -24,6 +24,11 @@ the `rsa` crate isn't built at all. Its test
 (`cargo test -p sqlx-mysql --lib rsa_backend`) encrypts with a fresh key's
 PEM and decrypts it back; check.sh doesn't run it.
 
+Upstream: the empty-password fix is merged (transact-rs/sqlx#4493, for
+our report #4482, 2026-10-31) but not yet released; aws-lc-rs instead of
+`rsa` is still an open request (#4082). When a release has the first, the
+copy here needs only the second.
+
 `Cargo.toml` points `[patch.crates-io]` here. Remove the folder and the
 patch once a sqlx-mysql release has both fixes (`cargo update -p
 sqlx-mysql` shows a newer version), then check that Rfam still connects,

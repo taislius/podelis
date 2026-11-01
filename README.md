@@ -243,4 +243,7 @@ ideas are welcome (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 Release archives include `THIRD-PARTY-LICENSES.txt` with the licences of
 the bundled crates (`./scripts/third-party-licenses.sh` generates it; needs
-`cargo install cargo-about --features cli`).
+`cargo install cargo-about --features cli`), and `podelis.cdx.json`, a
+CycloneDX SBOM of every crate built in (also beside each archive on the
+release page). The binaries carry their dependency list too
+(`cargo auditable`): `cargo audit bin podelis` checks one for advisories.
