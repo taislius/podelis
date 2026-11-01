@@ -230,7 +230,7 @@ impl Pipe {
     fn read(pipe: Option<impl Read + Send + 'static>) -> Self {
         let pipe_buf = Arc::new(Mutex::new(Vec::new()));
         let done = Arc::new(AtomicBool::new(false));
-        let (buf, finished) = (pipe_buf.clone(), done.clone());
+        let (buf, finished) = (Arc::clone(&pipe_buf), Arc::clone(&done));
         std::thread::spawn(move || {
             if let Some(mut pipe) = pipe {
                 let mut chunk = [0u8; 4096];

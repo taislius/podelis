@@ -55,7 +55,7 @@ pub fn misestimated(estimated: f64, actual: f64) -> bool {
 
 /// What an engine can do, for the app to decide what to offer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(clippy::struct_excessive_bools)]
+#[expect(clippy::struct_excessive_bools, reason = "independent yes-or-no capabilities")]
 pub struct Capabilities {
     /// A local file: no host, port, user, TLS or SSH.
     pub file_based: bool,
@@ -101,7 +101,7 @@ pub enum ContainerSecret {
 
 /// How the lexer splits this engine's SQL.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(clippy::struct_excessive_bools)]
+#[expect(clippy::struct_excessive_bools, reason = "independent lexer switches")]
 pub struct LexerRules {
     /// `#` starts a comment.
     pub hash_comments: bool,

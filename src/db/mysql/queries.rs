@@ -1,8 +1,6 @@
 //! MySQL: catalog, details and session queries.
 
-// Every engine has these functions with one signature, the generated
-// dispatch calling them alike (build.rs): some needn't wait for anything.
-#![allow(clippy::unused_async)]
+#![expect(clippy::unused_async, reason = "every engine has these functions with one signature, the generated dispatch calling them alike (build.rs): some needn't wait for anything")]
 
 use super::super::activity::Activity;
 use super::super::catalog::{ColumnRow, TableRow};
@@ -17,10 +15,7 @@ impl Database {
     /// after `close()`) a query takes one from the pool.
     pub(in crate::db) fn mysql_session_now(&self) -> Option<MappedMutexGuard<'_, PoolConnection<MySql>>> {
         let session = self.0.session.try_lock().ok()?;
-        MutexGuard::try_map(session, |s| match s {
-            Session::MySql(c) => Some(c),
-            _ => None,
-        })
+        MutexGuard::try_map(session, |s| if let Session::MySql(c) = s { Some(c) } else { None })
         .ok()
     }
 }

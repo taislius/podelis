@@ -1,7 +1,16 @@
 // Built with fewer database engines than the default (Cargo features), code
 // only the others use goes unused, and with one engine its own pool can't
 // be another's: that's expected there.
-#![cfg_attr(not(feature = "default"), allow(dead_code, unused_imports, irrefutable_let_patterns))]
+#![cfg_attr(
+    not(feature = "default"),
+    allow(
+        dead_code,
+        unused_imports,
+        irrefutable_let_patterns,
+        clippy::allow_attributes,
+        reason = "which of these fire depends on the engines built, so not `expect`"
+    )
+)]
 
 #[macro_use]
 mod lang;
@@ -282,16 +291,16 @@ async fn run(terminal: &mut DefaultTerminal, app: &mut App, enhanced: bool, mut 
         let splash_due = app.splash_due().map(tokio::time::Instant::from_std);
         let drag_due = app.drag_scroll_due().map(tokio::time::Instant::from_std);
         tokio::select! {
-            () = async { tokio::time::sleep_until(menu_due.unwrap()).await }, if menu_due.is_some() => {
+            () = async { tokio::time::sleep_until(menu_due.unwrap_or_else(tokio::time::Instant::now)).await }, if menu_due.is_some() => {
                 app.show_palette_menu();
             }
-            () = async { tokio::time::sleep_until(splash_due.unwrap()).await }, if splash_due.is_some() => {
+            () = async { tokio::time::sleep_until(splash_due.unwrap_or_else(tokio::time::Instant::now)).await }, if splash_due.is_some() => {
                 app.show_splash();
             }
-            () = async { tokio::time::sleep_until(drag_due.unwrap()).await }, if drag_due.is_some() => {
+            () = async { tokio::time::sleep_until(drag_due.unwrap_or_else(tokio::time::Instant::now)).await }, if drag_due.is_some() => {
                 app.drag_scroll();
             }
-            () = async { tokio::time::sleep_until(lint_due.unwrap()).await }, if lint_due.is_some() => {
+            () = async { tokio::time::sleep_until(lint_due.unwrap_or_else(tokio::time::Instant::now)).await }, if lint_due.is_some() => {
                 app.tick();
             }
             event = input_rx.recv() => {

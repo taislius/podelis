@@ -207,7 +207,7 @@ fn dollar_tag_len(b: &[u8], i: usize) -> Option<usize> {
 }
 
 fn skip_dollar_quoted(b: &[u8], i: usize) -> usize {
-    let len = dollar_tag_len(b, i).unwrap();
+    let len = dollar_tag_len(b, i).expect("called where a dollar quote starts");
     let tag = &b[i..i + len];
     let body = i + len;
     b[body..].windows(len).position(|w| w == tag).map_or(b.len(), |p| body + p + len)
@@ -595,7 +595,7 @@ pub fn highlight_lines_and_starts(text: &str, engine: Engine) -> (HighlightedLin
                 clean_starts.push(tok.kind == TokenKind::Whitespace);
             }
             if !part.is_empty() {
-                lines.last_mut().unwrap().push((part, hl));
+                lines.last_mut().expect("there's always a line").push((part, hl));
             }
         }
     }

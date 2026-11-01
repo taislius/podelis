@@ -154,14 +154,14 @@ impl App {
                 self.gateway_call(
                     "memory.confirm",
                     json!({ "id": id }),
-                    GatewayPurpose::MemoryChanged("Confirmed", project.clone(), shown),
+                    GatewayPurpose::MemoryChanged("Confirmed", project, shown),
                 );
             }
             KeyCode::Char('d') if id.is_some() => {
                 self.gateway_call(
                     "memory.forget",
                     json!({ "id": id }),
-                    GatewayPurpose::MemoryChanged("Forgot", project.clone(), shown),
+                    GatewayPurpose::MemoryChanged("Forgot", project, shown),
                 );
             }
             _ => {}

@@ -41,7 +41,6 @@ impl App {
         self.load_catalog();
     }
 
-    #[allow(clippy::too_many_lines)] // one arm per key
     pub(in crate::app) fn handle_schema_key(&mut self, key: KeyEvent) {
         let engine = self.engine();
         let Some(panel) = &mut self.connection.schema else { return };

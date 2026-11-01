@@ -41,10 +41,11 @@ fn fields(line: &str) -> Vec<String> {
     let mut fields = vec![String::new()];
     let mut chars = line.chars();
     while let Some(c) = chars.next() {
+        let last = fields.last_mut().expect("there's always a field");
         match c {
-            '\\' => fields.last_mut().unwrap().extend(chars.next()),
+            '\\' => last.extend(chars.next()),
             ':' => fields.push(String::new()),
-            c => fields.last_mut().unwrap().push(c),
+            c => last.push(c),
         }
     }
     fields

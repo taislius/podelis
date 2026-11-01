@@ -128,7 +128,7 @@ impl Engine {{
         engines.iter().filter(|e| all || e.built).fold(String::new(), |mut s, e| {
             let _ = writeln!(
                 s,
-                "            {} => {{\n                #[allow(unused_imports)]\n                use $crate::db::{} as engine;\n                $body\n            }}",
+                "            {} => {{\n                #[allow(unused_imports, clippy::allow_attributes, reason = \"not every body uses the engine's module, so not `expect`\")]\n                use $crate::db::{} as engine;\n                $body\n            }}",
                 pattern(e),
                 e.module
             );

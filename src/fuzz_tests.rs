@@ -135,7 +135,7 @@ proptest! {
 
     #[test]
     fn error_ranges_stay_inside_the_text(text in sqlish(), c in 0usize..200, line in 0usize..20, token in "[a-z']{0,5}") {
-        for pos in [ErrorPos::Char(c), ErrorPos::Line(line), ErrorPos::Token(token.clone()), ErrorPos::Near { line, text: token.clone() }] {
+        for pos in [ErrorPos::Char(c), ErrorPos::Line(line), ErrorPos::Token(token.clone()), ErrorPos::Near { line, text: token }] {
             if let Some((start, len)) = analyze::error_range(&text, &pos) {
                 prop_assert!(start + len <= text.len());
                 prop_assert!(text.is_char_boundary(start) && text.is_char_boundary(start + len));

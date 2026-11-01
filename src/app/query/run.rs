@@ -142,7 +142,7 @@ impl App {
         if std::mem::take(&mut self.tab.run.cancelling) {
             return self.set_status("Cancelled".to_string(), false);
         }
-        #[allow(clippy::cast_precision_loss)] // a threshold
+        #[expect(clippy::cast_precision_loss, reason = "a threshold")]
         let limit = self.settings.guard_rows as f64;
         let heavy: Vec<String> = scans
             .iter()

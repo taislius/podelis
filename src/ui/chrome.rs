@@ -337,8 +337,7 @@ fn key_hints(app: &App, width: u16) -> Vec<Span<'static>> {
 }
 
 /// The keys of the screen by section, as (keys, what they do).
-// Long only because it lists the keys.
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines, reason = "long only because it lists the keys")]
 pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String)>)> {
     let k = |a: Action| app.keymap.label(a);
     let undo_redo = format!("{} / {}", k(Action::Undo), k(Action::Redo));

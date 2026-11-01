@@ -304,7 +304,7 @@ async fn approved_writes_wait_for_the_user() {
     let pending = crate::agents::pending_dir(dir.path(), "p1");
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let user = tokio::spawn({
-        let (pending, seen) = (pending.clone(), seen.clone());
+        let (pending, seen) = (pending.clone(), Arc::clone(&seen));
         async move {
             loop {
                 for request in crate::agents::pending(&pending) {
