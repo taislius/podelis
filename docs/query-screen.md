@@ -57,6 +57,7 @@ Keys that work directly:
 | `Ctrl+↑` / `Ctrl+↓` | Move the border between the editor and the results up / down |
 | `Ctrl+←` / `Ctrl+→` | Move the navigator's border left / right (from the navigator or the results; in the editor they move by word) |
 | `Ctrl+Q` | Quit (`Ctrl+C` copies on this screen: see the editor and results keys) |
+| `Ctrl+C` / `Ctrl+V` in a one-line prompt | Renaming a tab, saving to the library, the palette's search, the pipe, asking: `Ctrl+C` copies what's typed, `Ctrl+V` pastes from the system clipboard (the terminal's own paste works too) |
 | `F1` | Every key |
 
 The function keys from earlier versions still work: `F2` navigator, `F3`
@@ -78,6 +79,7 @@ From any pane:
 | `Ctrl+K l` | Search saved queries (name, group and SQL) and history; `Enter` (or a double click) opens, `F4` renames/moves, `Ctrl+D` deletes. Each row says when it was saved or ran, and the selected one's first five lines show under the list. `@` words narrow it by date: `@today`, `@yesterday`, `@7d` / `@2w` / `@3m` (the last days, weeks, months), `@2026`, `@2026-10`, `@2026-10-21`, `@2026-10-01..2026-10-15` (either side may be left out). Queries saved, or run, by older versions have no date and don't match these |
 | `Ctrl+K ,` | Settings: language, theme, editor keys (vim), key hints, mouse, the checks, row limit, timeouts and the rest of `config.toml`'s general ones. `←`/`→` change one, `Enter` changes it or types a number; each change applies at once and is saved (see [Configuration](configuration.md)) |
 | `Ctrl+K g` | Every open tab in a list, with its connection and how that is: the query running there and for how long (`running 3:12`, `cancelling…`), a transaction left open, a lost connection, or no connection. Type to find one by its name, its connection or the SQL in it; `↑`/`↓` and `Enter` go there |
+| `Ctrl+K j` | The open connections: each with where it goes, its tabs, and a query running there, an open transaction or a lost connection. Type to find one by its name, address or a tab's name; `Enter` goes to a tab on it, `Ctrl+D` closes it (asking first, and saying when an open transaction would be rolled back): every tab on it is disconnected and stays, and isn't reconnected by its next run. While a query runs on it, it says to stop that first |
 
 A tab's `SQL` label is orange while the tab isn't saved to the library
 (its text is still kept as a draft), and a `●` on a saved query's tab means
@@ -297,7 +299,12 @@ there did (copied, nothing to run, a plan waiting for the running query…)
 and holds the transaction modes; the results' says the same for keys there,
 the run's progress and outcome, then the selected cell. The status bar at
 the bottom is for the connection, key hints and everything else. A footer's
-message goes with the next key; MESSAGES keeps it.
+message goes with the next key; MESSAGES keeps it. At the status bar's
+right end, while no message needs the room: whether AI is on (`AI off`
+with no model in `config.toml`, else `AI` and the default model's name),
+and `· asks to share` when that model isn't on this machine and the
+project keeps its schemas to local ones, so `Ctrl+K q` would ask first
+(see [AI models](ai.md)).
 
 **Menus.** Right-click a pane, or press `m` in the results or schema
 (`Ctrl+K m` or `Shift+F10` anywhere), for a small menu of what you can do
