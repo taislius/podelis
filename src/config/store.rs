@@ -404,10 +404,34 @@ pub fn project_account(project_id: &str, name: &str) -> String {
 /// Where all of Podėlis's files live. `PODELIS_CONFIG_DIR` overrides the
 /// OS default, e.g. for a portable setup or testing.
 pub fn config_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("PODELIS_CONFIG_DIR").filter(|d| !d.is_empty()) {
-        return PathBuf::from(dir);
+    config_dir_from_env().unwrap_or_else(|| dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("podelis"))
+}
+
+/// The folder `PODELIS_CONFIG_DIR` names, if it's set.
+fn config_dir_from_env() -> Option<PathBuf> {
+    std::env::var_os("PODELIS_CONFIG_DIR").filter(|d| !d.is_empty()).map(PathBuf::from)
+}
+
+/// Makes the config folder the user's alone (0700), if it was made more
+/// open (by an older version, or `mkdir`): its files are 0600 and its
+/// folders 0700 already, but others could still list the projects' ids.
+/// A folder given by `PODELIS_CONFIG_DIR`, or a symlink (into a dotfiles
+/// or synced folder, say), is left as it is.
+pub fn secure_config_dir() {
+    if config_dir_from_env().is_none() {
+        secure_dir(&config_dir());
     }
-    dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("podelis")
+}
+
+fn secure_dir(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    // Not followed: a link's target is another folder's to decide.
+    if let Ok(meta) = fs::symlink_metadata(dir)
+        && meta.is_dir()
+        && meta.permissions().mode() & 0o077 != 0
+    {
+        restrict(dir, 0o700);
+    }
 }
 
 fn backup_path(path: &Path) -> PathBuf {
@@ -631,6 +655,25 @@ mod tests {
         let (reloaded, _) = ConnectionStore::load_from(path);
         assert_eq!(reloaded.projects, store.projects);
         assert_eq!(reloaded.last_project.as_deref(), Some(id.as_str()));
+    }
+
+    #[test]
+    fn a_config_folder_open_to_others_is_made_the_users_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("podelis");
+        fs::create_dir(&folder).unwrap();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o755)).unwrap();
+        secure_dir(&folder);
+        assert_eq!(fs::metadata(&folder).unwrap().permissions().mode() & 0o777, 0o700);
+        // A symlink to a folder elsewhere: that folder is left as it is.
+        let elsewhere = dir.path().join("dotfiles");
+        fs::create_dir(&elsewhere).unwrap();
+        fs::set_permissions(&elsewhere, fs::Permissions::from_mode(0o755)).unwrap();
+        let link = dir.path().join("linked");
+        std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+        secure_dir(&link);
+        assert_eq!(fs::metadata(&elsewhere).unwrap().permissions().mode() & 0o777, 0o755);
     }
 
     #[test]
