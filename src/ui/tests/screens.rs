@@ -115,3 +115,25 @@ fn welcome_on_first_run_and_the_reopening_card() {
     assert!(screen.contains("reopening shop") && screen.contains("any key continues"), "{screen}");
     assert_snapshot!("reopening", screen);
 }
+
+#[test]
+fn status_bar_says_whether_ai_is_on() {
+    let (mut app, _dir) = query_app();
+    app.notes.status.clear();
+    let status_bar = |app: &mut App| render(app, 140, 12).lines().last().unwrap().to_string();
+    app.settings.models.clear();
+    assert!(status_bar(&mut app).contains("AI off"), "{}", status_bar(&mut app));
+    let model = |url: &str| -> crate::gateway::models::ModelConfig {
+        toml::from_str(&format!("name = \"claude\"\napi = \"anthropic\"\nmodel = \"claude-opus-5-5\"\nurl = \"{url}\""))
+            .unwrap()
+    };
+    // A model on this machine: what it's shown stays here.
+    app.settings.models = vec![model("http://localhost:11434")];
+    let bar = status_bar(&mut app);
+    assert!(bar.contains("AI claude") && !bar.contains("asks to share"), "{bar}");
+    // A provider's, with the project sharing schemas only locally.
+    app.settings.models = vec![model("https://api.anthropic.com")];
+    if app.project().is_none_or(|p| p.share_schema == crate::config::store::ShareSchema::Local) {
+        assert!(status_bar(&mut app).contains("AI claude · asks to share"), "{}", status_bar(&mut app));
+    }
+}

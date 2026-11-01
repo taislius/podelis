@@ -164,6 +164,12 @@ pub(super) fn draw_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
     if let Some(note) = app.agent_note().filter(|_| matches!(app.screen, Screen::Query)) {
         right.push(Span::styled(format!(" {note} "), bold(t.warn)));
     }
+    // Whether AI is on, while no message needs the room.
+    let in_results = app.notes.status_in_results && app.hits.results.width > 0;
+    let quiet = app.notes.status.is_empty() || in_results;
+    if matches!(app.screen, Screen::Query) && quiet {
+        right.extend(ai_status(app));
+    }
 
     let left_w = Line::from(left.clone()).width() as u16;
     let right_w = Line::from(right.clone()).width() as u16;
@@ -183,8 +189,7 @@ pub(super) fn draw_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
 
     // A message takes the middle; otherwise key hints. A run's outcome is
     // in the results pane, unless that's hidden (another pane zoomed).
-    let in_results = app.notes.status_in_results && app.hits.results.width > 0;
-    let middle = if app.notes.status.is_empty() || in_results {
+    let middle = if quiet {
         Line::from(key_hints(app, mid.width)).alignment(Alignment::Center)
     } else {
         Line::from(Span::styled(
@@ -193,6 +198,22 @@ pub(super) fn draw_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
         ))
     };
     f.render_widget(Paragraph::new(middle), mid);
+}
+
+/// Whether AI is on, and with which model (`Ctrl+K q` asks it).
+fn ai_status(app: &App) -> Vec<Span<'static>> {
+    match app.ai_state() {
+        crate::app::AiState::Off => vec![Span::styled(format!(" {} ", t!("bar.ai_off")), dim())],
+        crate::app::AiState::On { model, asks_to_share } => {
+            let mut spans =
+                vec![Span::styled(format!(" {} ", t!("bar.ai")), muted()), Span::styled(model, fg(theme().text))];
+            if asks_to_share {
+                spans.push(Span::styled(format!(" · {}", t!("bar.ai_asks_to_share")), muted()));
+            }
+            spans.push(Span::raw(" "));
+            spans
+        }
+    }
 }
 
 fn owned<'a>(hints: &[(&str, &'a str)]) -> Vec<(String, &'a str)> {

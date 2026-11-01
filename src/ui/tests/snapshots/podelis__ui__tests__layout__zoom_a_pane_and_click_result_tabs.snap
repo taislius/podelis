@@ -1,5 +1,6 @@
 ---
 source: src/ui/tests/layout.rs
+assertion_line: 170
 expression: screen
 ---
 " >_  PODĖLIS v0.0.0   │  project  shop ▼                                                  "
@@ -17,4 +18,4 @@ expression: screen
 "│                                                                                        │"
 "│ Zoomed: Tab moves between panes; Ctrl+K z · F12 or Esc returns                         │"
 "└────────────────────────────────────────────────────────────────────────────────────────┘"
-" ● prod  db.internal:3306 · MySQL       z  unzoom   ^K  keys   m  menu · right-click      "
+" ● prod  db.internal:3306 · MySQL   z  unzoom   ^K  keys   m  menu · right-click   AI off "
