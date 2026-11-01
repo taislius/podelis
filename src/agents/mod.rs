@@ -114,12 +114,38 @@ pub fn explainable(sql: &str, engine: Engine) -> Result<(), String> {
 /// they change the session, end Podėlis's transaction, or reach outside).
 fn allowed(sql: &str, engine: Engine) -> Result<Vec<crate::sql::analyze::StatementInfo>, String> {
     let rules = engine.dialect().agent_constraints();
+    // MySQL runs what's in `/*! … */` (MariaDB `/*M! … */` too): code the
+    // checks below wouldn't see (`/*! INTO OUTFILE '…' */`). The whole text,
+    // as the server gets it: a statement's comments around it aren't in
+    // what `split_statements` gives back.
+    if engine == Engine::MySql
+        && let Some(t) = crate::sql::tokenize(sql, engine).into_iter().find(|t| {
+            t.kind == crate::sql::TokenKind::Comment && {
+                let c = &sql[t.range.clone()];
+                c.starts_with("/*!") || c.starts_with("/*M!") || c.starts_with("/*m!")
+            }
+        })
+    {
+        return Err(format!(
+            "“{}” is an executable comment, which MySQL runs as SQL: agents can't send them",
+            one_line(&sql[t.range])
+        ));
+    }
+    // Where a string ends after `\'` depends on the server's sql_mode
+    // (NO_BACKSLASH_ESCAPES, ANSI_QUOTES), which the checks here don't
+    // know: code could hide in what they'd take for a string.
+    if engine == Engine::MySql && (sql.contains("\\'") || sql.contains("\\\"")) {
+        return Err("a backslash before a quote (\\' or \\\"): its meaning depends on the server's sql_mode; \
+             write a quote inside a string doubled ('') instead"
+            .to_string());
+    }
     let statements = crate::sql::split_statements(sql, engine);
     if statements.is_empty() {
         return Err("there's no SQL to run".to_string());
     }
     for statement in &statements {
-        let words: Vec<String> = crate::sql::tokenize(statement, engine)
+        let tokens = crate::sql::tokenize(statement, engine);
+        let words: Vec<String> = tokens
             .into_iter()
             .filter(|t| t.kind == crate::sql::TokenKind::Word)
             .map(|t| statement[t.range].to_ascii_lowercase())

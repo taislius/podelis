@@ -53,10 +53,20 @@ mod tests {
             ("select get_lock('x', 10)", "holds a lock past the transaction"),
             ("set autocommit = 1", "not SET: Podėlis runs each call in a transaction of its own"),
             ("lock tables t write", "transaction of its own"),
+            // MySQL runs an executable comment's code: what the words don't
+            // see (found 2026-11-01: a read-only agent wrote a file this way).
+            ("select 1 /*! into outfile '/tmp/x' */", "executable comment"),
+            ("select 1 /*!80000 for update */", "executable comment"),
+            ("select 1 /*M! , load_file('/etc/passwd') */", "executable comment"),
+            // With NO_BACKSLASH_ESCAPES the server ends the string at `\'`.
+            ("select 'a\\' , load_file('/etc/passwd') -- '", "backslash before a quote"),
+            ("select \"a\\\" , load_file('/etc/passwd') -- \"", "backslash before a quote"),
         ] {
             assert!(refused(sql).contains(why), "{sql}: {}", refused(sql));
         }
         assert_eq!(run("replace into t values (1)"), Wrap::Commit);
         assert_eq!(run("describe t"), Wrap::Commit);
+        // Plain comments and optimizer hints are fine.
+        assert_eq!(run("select /*+ MAX_EXECUTION_TIME(1000) */ 1 /* why */ -- note"), Wrap::Commit);
     }
 }
