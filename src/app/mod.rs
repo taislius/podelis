@@ -892,6 +892,16 @@ pub struct App {
     db_rx: mpsc::UnboundedReceiver<DbEvent>,
 }
 
+/// What the status bar says about AI ([`App::ai_state`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AiState {
+    /// No model in `[[models]]`.
+    Off,
+    /// The default model; `asks_to_share` when it isn't on this machine and
+    /// the project keeps its schemas to local models (asking asks first).
+    On { model: String, asks_to_share: bool },
+}
+
 impl App {
     // Long only because it lists every field.
     #[allow(clippy::too_many_lines)]
@@ -1039,6 +1049,18 @@ impl App {
 
     pub fn engine(&self) -> Engine {
         self.connection.database.as_ref().map_or(self.connection.form.engine, Database::engine)
+    }
+
+    /// Whether asking a model works here, for the status bar: no model
+    /// set up, or the default one, and whether the open project's schemas
+    /// may go to it (`share_schema`).
+    pub fn ai_state(&self) -> AiState {
+        let Some(model) = self.settings.models.first() else {
+            return AiState::Off;
+        };
+        let shared = crate::gateway::models::on_this_machine(model)
+            || self.project().is_some_and(|p| p.share_schema == crate::config::store::ShareSchema::All);
+        AiState::On { model: model.name.clone(), asks_to_share: !shared }
     }
 
     pub fn project(&self) -> Option<&Project> {

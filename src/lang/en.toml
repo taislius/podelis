@@ -228,6 +228,9 @@ one = "it assumed {n} thing: Ctrl+K k to confirm"
 other = "it assumed {n} things: Ctrl+K k to confirm"
 
 [bar]
+ai = "AI"
+ai_asks_to_share = "asks to share"
+ai_off = "AI off"
 connecting = "CONNECTING…"
 connection_lost = "connection lost"
 new_connection = "new connection"

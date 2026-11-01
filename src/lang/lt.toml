@@ -237,6 +237,9 @@ one = "jis spėjo {n} dalyką: Ctrl+K k patvirtinti"
 other = "jis spėjo {n} dalykų: Ctrl+K k patvirtinti"
 
 [bar]
+ai = "DI"
+ai_asks_to_share = "klaus, ar dalintis"
+ai_off = "DI išjungtas"
 connecting = "JUNGIAMASI…"
 connection_lost = "ryšys nutrūko"
 new_connection = "naujas ryšys"
