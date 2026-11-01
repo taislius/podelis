@@ -30,6 +30,7 @@ mod options;
 pub mod password_command;
 pub mod passwords;
 mod run;
+pub mod supabase;
 #[cfg(test)]
 pub(crate) mod tests;
 mod tunnel;
@@ -94,6 +95,8 @@ struct Inner {
     /// (`connect::check_reach`). None for a file, a socket path, or an SSH
     /// tunnel (its end is this machine).
     address: Option<(String, u16)>,
+    /// A Supabase database: its own schemas are system ones.
+    supabase: bool,
 }
 
 /// Transaction state of the session connection.
@@ -269,7 +272,7 @@ impl Database {
                 params.engine.label()
             );
         }
-        let params = params.with_password().await?;
+        let mut params = params.with_password().await?;
         // An IPv6 address may come in brackets; a file path is used as given.
         let mut host = if params.engine.is_file_based() {
             params.host.trim().to_string()
@@ -277,6 +280,15 @@ impl Database {
             params.host.trim().trim_start_matches('[').trim_end_matches(']').to_string()
         };
         let mut port = params.port;
+        let supabase = params.engine == Engine::Postgres && supabase::is_supabase(&host);
+        if supabase {
+            if let Some(why) = supabase::refused(&host, port) {
+                anyhow::bail!(why);
+            }
+            if params.ssl_mode == SslMode::Prefer {
+                params.ssl_mode = SslMode::Require;
+            }
+        }
         let mut tunnel = None;
         if let Some(dest) = params.ssh.as_deref().filter(|_| !params.engine.is_file_based()) {
             if host.starts_with('/') {
@@ -333,6 +345,7 @@ impl Database {
             stale: AtomicBool::new(false),
             stream_task: std::sync::Mutex::new(None),
             address,
+            supabase,
         })))
     }
 

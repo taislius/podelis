@@ -46,7 +46,8 @@ impl Database {
                     .and_then(|parent| parent.split_once('\x1f'))
                     .map(|(s, t)| (s.to_string(), t.to_string()));
                 TableInfo {
-                    system: dialect.is_system_table(&schema, &name),
+                    system: dialect.is_system_table(&schema, &name)
+                        || (self.0.supabase && super::supabase::is_internal_schema(&schema)),
                     schema,
                     name,
                     is_view: partition_of.is_none() && kind.to_ascii_uppercase().contains("VIEW"),
