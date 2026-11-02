@@ -17,10 +17,11 @@ Run `./scripts/install-hooks.sh` once to have git run `check.sh` before
 every push (skip once with `git push --no-verify`).
 
 Besides unit, snapshot and live-database tests, property tests
-([proptest](https://crates.io/crates/proptest), `src/fuzz_tests.rs`) feed
-random SQL-ish text to the lexer, splitter, analyzer, completion, parameter
-handling and editor; failures they find are saved in `proptest-regressions/`
-and re-run first.
+([proptest](https://crates.io/crates/proptest)) feed random input to the
+lexer, splitter, formatter, analyzer, completion and parameter handling (the
+core's `tests/properties.rs`), the editor and the library's search (beside
+their code); failures they find are saved in each crate's
+`tests/proptest-regressions/` and re-run first.
 
 **Where tests go.** Tests sit with the code they test, as Rust's unit
 tests do: a `#[cfg(test)] mod tests` at the end of a file, or a file of
