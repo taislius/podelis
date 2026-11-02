@@ -1,0 +1,26 @@
+# Fuzzing the core's SQL handling (cargo-fuzz, on nightly): run with
+# `cargo +nightly fuzz run sql_text` from crates/podelis-core. Its own
+# workspace, not the project's: nightly and libFuzzer stay out of builds.
+[package]
+name = "podelis-core-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# Every engine's dialect is built whatever the features (Engine::ALL); one
+# engine's driver is needed to build at all, SQLite's is the lightest.
+podelis-core = { path = "..", default-features = false, features = ["sqlite"] }
+
+[[bin]]
+name = "sql_text"
+path = "fuzz_targets/sql_text.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
