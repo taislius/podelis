@@ -19,14 +19,11 @@ mod ai;
 pub mod client;
 pub mod command;
 #[cfg(test)]
-mod eval;
+mod eval_snapshots;
 pub mod protocol;
 pub mod server;
 #[cfg(test)]
 pub(crate) mod tests;
-
-// The AI the gateway serves (`podelis-ai`), under the names its code uses.
-pub use podelis_ai::{context, memory, migrations, models, names};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

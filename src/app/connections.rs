@@ -409,14 +409,14 @@ impl App {
             return;
         }
         if !password.is_empty()
-            && let Err(e) = store::store_password(&new_account, &password)
+            && let Err(e) = crate::db::keychain::store_password(&new_account, &password)
         {
             self.manager.connection_message = Some((format!("Couldn't move password: {e:#}"), true));
             return;
         }
         match self.store.move_connection(&from, &profile.name, target) {
             Ok(()) => {
-                let _ = store::delete_password(&old_account);
+                let _ = crate::db::keychain::delete_password(&old_account);
                 self.manager.connection_message =
                     Some((t!("connections.moved", name = profile.name, target = target_name), false));
                 let len = self.profiles().len();
@@ -425,7 +425,7 @@ impl App {
                 }
             }
             Err(e) => {
-                let _ = store::delete_password(&new_account);
+                let _ = crate::db::keychain::delete_password(&new_account);
                 self.manager.connection_message = Some((format!("Couldn't move: {e:#}"), true));
             }
         }
@@ -437,7 +437,7 @@ impl App {
         let name = profile.name.clone();
         match self.store.delete(&project_id, &name) {
             Ok(()) => {
-                let _ = store::delete_password(&store::keychain_account(&project_id, &profile));
+                let _ = crate::db::keychain::delete_password(&store::keychain_account(&project_id, &profile));
                 self.manager.connection_message = Some((t!("connections.deleted", name = name), false));
                 if self.manager.connection_selected > 0 && self.manager.connection_selected >= self.profiles().len() {
                     self.manager.connection_selected -= 1;
@@ -567,7 +567,7 @@ impl App {
         let account = store::project_account(&project_id, &name);
         let keep = if profile.password_command.is_empty() { form.password.as_str() } else { "" };
         if !form.engine.is_file_based()
-            && let Err(e) = store::store_password(&account, keep)
+            && let Err(e) = crate::db::keychain::store_password(&account, keep)
             && !keep.is_empty()
         {
             let pgpass = form.engine.dialect().password_files_note();
@@ -588,7 +588,7 @@ impl App {
         if let Some(old) = &original {
             let old_account = if form.original_legacy { old.clone() } else { store::project_account(&project_id, old) };
             if old_account != account {
-                let _ = store::delete_password(&old_account);
+                let _ = crate::db::keychain::delete_password(&old_account);
             }
         }
         form.original_legacy = false;

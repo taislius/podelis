@@ -12,9 +12,9 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::net::unix::OwnedWriteHalf;
 
-use super::context::Schema;
-use super::models::{self, ModelConfig, Prompt};
 use super::protocol::{self, RpcError, code};
+use podelis_ai::context::Schema;
+use podelis_ai::models::{self, ModelConfig, Prompt};
 
 /// The models in `config.toml`. A file that doesn't parse is said as it
 /// is, not taken for one with no models (its defaults would have none).
@@ -199,7 +199,8 @@ impl Caches {
         }
         // Opened without holding the list: other projects' memories are
         // used meanwhile. Two opening it at once: the first kept wins.
-        let opened = std::sync::Arc::new(tokio::sync::Mutex::new(super::memory::open(config_dir, project_id).await?));
+        let opened =
+            std::sync::Arc::new(tokio::sync::Mutex::new(podelis_ai::memory::open(config_dir, project_id).await?));
         let mut open = self.memories.lock().await;
         Ok(std::sync::Arc::clone(open.entry(project_id.to_string()).or_insert(opened)))
     }
@@ -291,30 +292,17 @@ async fn built_for(
     project_id: &str,
     schema: &Schema,
     question: &str,
-) -> super::context::Context {
+) -> podelis_ai::context::Context {
     let found = async {
         let conn = caches.memory(config_dir, project_id).await?;
         let mut conn = conn.lock().await;
-        super::memory::for_question(&mut conn, question).await
+        podelis_ai::memory::for_question(&mut conn, question).await
     };
     let memory = found.await.unwrap_or_else(|e| {
         tracing::warn!(error = %e, "gateway: the project's memory couldn't be read");
-        super::memory::ForQuestion::default()
+        podelis_ai::memory::ForQuestion::default()
     });
-    context_for(schema, question, &memory)
-}
-
-/// The context for `question` once memory's been read: what `ask` builds,
-/// and what the retrieval eval (`gateway/eval.rs`) measures.
-pub(super) fn context_for(
-    schema: &Schema,
-    question: &str,
-    memory: &super::memory::ForQuestion,
-) -> super::context::Context {
-    let built = super::context::build(schema, &format!("{question}{}", memory.words()));
-    let tables: Vec<String> = built.tables.iter().map(|t| t.name.clone()).collect();
-    let facts = memory.about(&tables);
-    built.with_facts(&facts, schema)
+    podelis_ai::context::for_question(schema, question, &memory)
 }
 
 /// A connection's schema, and its project's name and setting for
@@ -513,9 +501,9 @@ async fn converse(
         attempts += 1;
         // An explanation is words (its blocks quoted): no SQL to check.
         let (sql, said) =
-            if explain { (None, reply.text.trim().to_string()) } else { super::names::split_answer(&reply.text) };
+            if explain { (None, reply.text.trim().to_string()) } else { podelis_ai::names::split_answer(&reply.text) };
         let problems =
-            sql.as_deref().map(|sql| super::names::problems(sql, schema.dialect, schema)).unwrap_or_default();
+            sql.as_deref().map(|sql| podelis_ai::names::problems(sql, schema.dialect, schema)).unwrap_or_default();
         if problems.is_empty() || attempts > NAME_RETRIES {
             return Ok(Answered { sql, said, problems, reply, attempts, input_tokens, output_tokens, looked_at });
         }
@@ -535,7 +523,7 @@ fn look_up(schema: &Schema, call: &models::ToolCall, looked_at: &mut Vec<String>
     let arg = |name: &str| call.input.get(name).and_then(Value::as_str).unwrap_or_default().trim().to_string();
     match call.name.as_str() {
         "find_tables" => {
-            let found = super::context::find(schema, &arg("words"));
+            let found = podelis_ai::context::find(schema, &arg("words"));
             if found.is_empty() {
                 return "No table matches those words.".into();
             }
@@ -544,7 +532,7 @@ fn look_up(schema: &Schema, call: &models::ToolCall, looked_at: &mut Vec<String>
         "describe_table" if looked_at.len() >= LOOKUP_TABLES => {
             "Enough tables looked up: write the query with what you have.".into()
         }
-        "describe_table" => match super::context::describe(schema, &arg("name")) {
+        "describe_table" => match podelis_ai::context::describe(schema, &arg("name")) {
             Some((name, text)) => {
                 if !looked_at.contains(&name) {
                     looked_at.push(name);
@@ -651,7 +639,7 @@ pub async fn ask(
     let result = json!({
         "sql": sql,
         "said": said,
-        "suggested": suggested.iter().map(super::memory::Fact::to_json).collect::<Vec<_>>(),
+        "suggested": suggested.iter().map(podelis_ai::memory::Fact::to_json).collect::<Vec<_>>(),
         "problems": problems,
         "tables": tables,
         "looked_at": looked_at,
@@ -699,17 +687,17 @@ async fn keep_suggestions(
     project_id: &str,
     model: &str,
     facts: &[(String, String, String)],
-) -> Vec<super::memory::Fact> {
+) -> Vec<podelis_ai::memory::Fact> {
     if facts.is_empty() {
         return Vec::new();
     }
     let kept = async {
         let conn = caches.memory(config_dir, project_id).await?;
         let mut conn = conn.lock().await;
-        let known = super::memory::list(&mut conn, None).await?;
+        let known = podelis_ai::memory::list(&mut conn, None).await?;
         let mut kept = Vec::new();
         for (subject, relation, value) in facts {
-            let same = |f: &super::memory::Fact| {
+            let same = |f: &podelis_ai::memory::Fact| {
                 f.subject.eq_ignore_ascii_case(subject) && f.value.eq_ignore_ascii_case(value)
             };
             if let Some(waiting) = known.iter().find(|f| same(f)) {
@@ -718,11 +706,11 @@ async fn keep_suggestions(
                 }
                 continue;
             }
-            if super::memory::rejected(&mut conn, subject, value).await? {
+            if podelis_ai::memory::rejected(&mut conn, subject, value).await? {
                 continue;
             }
             let source = format!("model:{model}");
-            kept.push(super::memory::add(&mut conn, subject, relation, value, &source, false).await?);
+            kept.push(podelis_ai::memory::add(&mut conn, subject, relation, value, &source, false).await?);
         }
         Ok::<_, String>(kept)
     };
@@ -741,7 +729,7 @@ pub async fn memory(
     method: &str,
     params: &Value,
 ) -> (Result<Value, RpcError>, Value) {
-    use super::memory as mem;
+    use podelis_ai::memory as mem;
     let text = |key: &str| params.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
     let project = match find_project(config_dir, text("project")) {
         Ok(p) => p,
@@ -807,12 +795,11 @@ pub async fn memory(
             };
             let folder = crate::config::settings::expand_home(folder);
             let reading = folder.clone();
-            let files = tokio::task::spawn_blocking(move || super::migrations::read_folder(&reading)).await;
+            let files = tokio::task::spawn_blocking(move || podelis_ai::migrations::read_folder(&reading)).await;
             match files {
                 Ok(Ok(files)) => {
-                    let engines: Vec<_> = project.connections.iter().map(|c| c.engine).collect();
-                    let engine = super::migrations::engine_of(&engines);
-                    let learned = super::migrations::learn(&files, engine);
+                    let engine = podelis_ai::migrations::engine_of(project.connections.iter().map(|c| c.engine));
+                    let learned = podelis_ai::migrations::learn(&files, engine);
                     let source = format!("file:{}", folder.display());
                     mem::replace_source(&mut conn, &source, &learned)
                         .await

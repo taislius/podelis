@@ -234,8 +234,8 @@ async fn the_memory_window_adds_confirms_and_forgets_facts() {
     let mut app = asking_app(dir.path(), "").await;
     let _gateway = crate::gateway::tests::start(dir.path(), None);
     // A model's guess, waiting.
-    let mut conn = crate::gateway::memory::open(dir.path(), &app.project().unwrap().id).await.unwrap();
-    crate::gateway::memory::add(&mut conn, "orders.total", "means", "VAT included", "model:near", false).await.unwrap();
+    let mut conn = podelis_ai::memory::open(dir.path(), &app.project().unwrap().id).await.unwrap();
+    podelis_ai::memory::add(&mut conn, "orders.total", "means", "VAT included", "model:near", false).await.unwrap();
     drop(conn);
     app.run_action(Action::Memory);
     until_memory_loaded(&mut app, 1).await;
@@ -358,7 +358,7 @@ fn deleting_a_project_deletes_its_memory() {
     let id = store.add_project("gone").unwrap();
     store.add_project("kept").unwrap();
     let mut app = App::new(store, None, Some(dir.path().to_path_buf()));
-    let memory = crate::gateway::memory::path(dir.path(), &id);
+    let memory = podelis_ai::memory::path(dir.path(), &id);
     std::fs::create_dir_all(memory.parent().unwrap()).unwrap();
     std::fs::write(&memory, "facts").unwrap();
     app.manager.project_selected = app.store.projects.iter().position(|p| p.id == id).unwrap();

@@ -24,7 +24,7 @@ fn files() -> Vec<(String, String)> {
 
 #[test]
 fn a_tables_history_and_its_authors_notes() {
-    let learned = learn(&files(), engine_of(&[]));
+    let learned = learn(&files(), engine_of([]));
     let fact = |subject: &str, relation: &str| {
         learned.iter().find(|l| l.subject == subject && l.relation == relation).map(|l| l.value.as_str())
     };
@@ -94,8 +94,8 @@ fn names_quoted_the_engines_way() {
 
 #[test]
 fn the_engine_most_connections_use() {
-    assert_eq!(engine_of(&[]), Engine::ALL[0]);
+    assert_eq!(engine_of([]), Engine::ALL[0]);
     let [first, second, ..] = Engine::ALL;
-    assert_eq!(engine_of(&[second, first, second]), second);
-    assert_eq!(engine_of(&[second, first]), first, "a tie: the first listed");
+    assert_eq!(engine_of([second, first, second]), second);
+    assert_eq!(engine_of([second, first]), first, "a tie: the first listed");
 }

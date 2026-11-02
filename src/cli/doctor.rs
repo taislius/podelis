@@ -68,7 +68,7 @@ pub async fn run(
     });
 
     // Reading an entry that doesn't exist exercises keychain access.
-    steps.push(match store::get_password("podelis-doctor-probe") {
+    steps.push(match crate::db::keychain::get_password("podelis-doctor-probe") {
         Ok(_) => step("Keychain", StepState::Ok, "readable", None),
         Err(e) => step(
             "Keychain",

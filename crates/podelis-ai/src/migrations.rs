@@ -77,9 +77,15 @@ struct History {
 
 /// The engine a project's migrations are written for: the one most of its
 /// connections (`engines`, one per connection) use; with none, the first.
-pub fn engine_of(engines: &[Engine]) -> Engine {
+pub fn engine_of(engines: impl IntoIterator<Item = Engine>) -> Engine {
+    let mut counts = [0_usize; Engine::ALL.len()];
+    for engine in engines {
+        if let Some(i) = Engine::ALL.iter().position(|e| *e == engine) {
+            counts[i] += 1;
+        }
+    }
     // Reversed, so a tie goes to the engine listed first.
-    Engine::ALL.into_iter().rev().max_by_key(|e| engines.iter().filter(|c| *c == e).count()).unwrap_or(Engine::ALL[0])
+    (0..counts.len()).rev().max_by_key(|&i| counts[i]).map_or(Engine::ALL[0], |i| Engine::ALL[i])
 }
 
 /// The facts in `files` (name, SQL), oldest first, read as `engine`'s SQL.

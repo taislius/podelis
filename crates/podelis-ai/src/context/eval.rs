@@ -19,29 +19,17 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
-
-use super::context::Schema;
-use crate::db::{ColumnInfo, Comment, Link, TableInfo};
-
-#[derive(Serialize, Deserialize)]
-struct Snapshot {
-    engine: String,
-    dialect: crate::db::Engine,
-    tables: Vec<(TableInfo, Vec<ColumnInfo>)>,
-    links: Vec<Link>,
-    comments: Vec<Comment>,
-}
+use super::Schema;
 
 fn folder() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/gateway/eval")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/context/eval")
 }
 
+/// A snapshot (written by the app's `eval_snapshots::dump_schemas`).
 fn schema(name: &str) -> Schema {
     let file = folder().join(format!("{name}.json"));
     let text = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
-    let s: Snapshot = serde_json::from_str(&text).unwrap();
-    Schema { engine: s.engine, dialect: s.dialect, tables: s.tables, links: s.links, comments: s.comments }
+    serde_json::from_str(&text).unwrap()
 }
 
 /// One line of `questions.txt`:
@@ -107,13 +95,13 @@ async fn measure() -> BTreeMap<String, Tally> {
         let schema = schemas.entry(case.database.clone()).or_insert_with(|| self::schema(&case.database));
         let memory = {
             let dir = tempfile::tempdir().unwrap();
-            let mut conn = crate::gateway::memory::open(dir.path(), "eval").await.unwrap();
+            let mut conn = crate::memory::open(dir.path(), "eval").await.unwrap();
             for (s, r, v) in &case.facts {
-                crate::gateway::memory::add(&mut conn, s, r, v, "user", true).await.unwrap();
+                crate::memory::add(&mut conn, s, r, v, "user", true).await.unwrap();
             }
-            crate::gateway::memory::for_question(&mut conn, &case.question).await.unwrap()
+            crate::memory::for_question(&mut conn, &case.question).await.unwrap()
         };
-        let built = crate::gateway::ai::context_for(schema, &case.question, &memory);
+        let built = super::for_question(schema, &case.question, &memory);
         let chosen: Vec<String> = built.tables.iter().map(|t| bare(&t.name)).collect();
         let t = out.entry(case.database.clone()).or_default();
         t.questions += 1;
@@ -177,37 +165,4 @@ async fn retrieval_recall_holds() {
         }
     }
     assert!(failed.is_empty(), "{failed:?}");
-}
-
-/// Writes `eval/<name>.json` for each `name=address` in
-/// `PODELIS_EVAL_DUMP` (space-separated; a URL or a SQLite file):
-///
-/// ```sh
-/// PODELIS_EVAL_DUMP="pagila=postgres://postgres:…@127.0.0.1:55433/pagila?sslmode=disable \
-///   sakila=mysql://root:…@127.0.0.1:53385/sakila?ssl-mode=disabled chinook=$HOME/podelis-test/Chinook.sqlite" \
-///   cargo test dump_schemas -- --ignored
-/// ```
-#[tokio::test]
-#[ignore = "needs the databases; makes the snapshots"]
-async fn dump_schemas() {
-    let spec = std::env::var("PODELIS_EVAL_DUMP").expect("PODELIS_EVAL_DUMP");
-    for pair in spec.split_whitespace() {
-        let (name, address) = pair.split_once('=').expect("name=address");
-        let form =
-            crate::config::draft::ConnectionDraft::from_address(&crate::config::draft::classify(address)).unwrap();
-        let mut params = form.params().unwrap();
-        params.read_only = true;
-        let engine = params.engine;
-        let db = crate::db::Database::connect(params).await.unwrap();
-        let mut tables = db.catalog(false).await.unwrap();
-        tables.retain(|(t, _)| !t.system);
-        tables.sort_by(|a, b| (&a.0.schema, &a.0.name).cmp(&(&b.0.schema, &b.0.name)));
-        let mut links = db.links().await.unwrap();
-        links.sort_by(|a, b| (&a.schema, &a.table, &a.column).cmp(&(&b.schema, &b.table, &b.column)));
-        let mut comments = db.comments().await.unwrap();
-        comments.sort_by(|a, b| (&a.schema, &a.table, &a.column).cmp(&(&b.schema, &b.table, &b.column)));
-        let snapshot = Snapshot { engine: engine.label().to_string(), dialect: engine, tables, links, comments };
-        let file = folder().join(format!("{name}.json"));
-        std::fs::write(&file, serde_json::to_string_pretty(&snapshot).unwrap() + "\n").unwrap();
-    }
 }

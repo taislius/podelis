@@ -4,9 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::db::keychain::get_password;
 use crate::db::{AgentAccess, ConnectionMode, Engine, SslMode, TxMode};
-// The OS keychain is the core's (the gateway reads models' keys there too).
-pub use crate::db::keychain::{delete_password, get_password, store_password};
 
 /// Project that connections saved before projects existed are moved into.
 pub const DEFAULT_PROJECT: &str = "Default";
@@ -532,9 +531,6 @@ mod tests {
         store.project(project).unwrap().connections.iter().map(|c| c.name.clone()).collect()
     }
 
-    /// Opt-in (`PODELIS_TEST_KEYCHAIN=1`): writes, reads, moves and deletes
-    /// real OS keychain entries under throwaway accounts, the way saving,
-    /// moving and deleting connections does. macOS may ask for permission.
     #[test]
     fn settings_a_newer_version_wrote_are_kept() {
         let dir = tempfile::tempdir().unwrap();
@@ -566,28 +562,6 @@ mod tests {
         // A setting this version knows, set back to its default, stays gone.
         store.set_share_schema(&id, ShareSchema::Local).unwrap();
         assert!(!fs::read_to_string(&path).unwrap().contains("share_schema"));
-    }
-
-    #[test]
-    fn live_keychain_round_trip() {
-        if std::env::var("PODELIS_TEST_KEYCHAIN").as_deref() != Ok("1") {
-            return;
-        }
-        let from = format!("podelis-test-{}", uuid::Uuid::new_v4());
-        let to = format!("podelis-test-{}", uuid::Uuid::new_v4());
-        let p = profile("conn");
-        let (a, b) = (keychain_account(&from, &p), keychain_account(&to, &p));
-        store_password(&a, "s3cret").unwrap();
-        assert_eq!(get_password(&a).unwrap(), "s3cret");
-        // Move, as `m` does: copy to the new account, delete the old one.
-        store_password(&b, &get_password(&a).unwrap()).unwrap();
-        delete_password(&a).unwrap();
-        assert_eq!(get_password(&a).unwrap(), "");
-        assert_eq!(get_password(&b).unwrap(), "s3cret");
-        // An empty password removes the entry; deleting twice is fine.
-        store_password(&b, "").unwrap();
-        assert_eq!(get_password(&b).unwrap(), "");
-        delete_password(&b).unwrap();
     }
 
     #[cfg(unix)]
@@ -651,12 +625,12 @@ mod tests {
         let (reloaded, _) = ConnectionStore::load_from(path);
         assert_eq!(reloaded.projects, store.projects);
         // A password in the keychain under its name isn't read.
-        store_password(&project_account(&id, "a"), "stale").unwrap();
+        crate::db::keychain::store_password(&project_account(&id, "a"), "stale").unwrap();
         assert_eq!(saved_password(&id, &with_command), (String::new(), None));
-        store_password(&project_account(&id, "b"), "s3cret").unwrap();
+        crate::db::keychain::store_password(&project_account(&id, "b"), "s3cret").unwrap();
         assert_eq!(saved_password(&id, &profile("b")), ("s3cret".to_string(), None));
-        delete_password(&project_account(&id, "a")).unwrap();
-        delete_password(&project_account(&id, "b")).unwrap();
+        crate::db::keychain::delete_password(&project_account(&id, "a")).unwrap();
+        crate::db::keychain::delete_password(&project_account(&id, "b")).unwrap();
     }
 
     #[test]

@@ -288,7 +288,7 @@ async fn complete_asks_the_model_streams_its_answer_and_tries_again_when_busy() 
         log.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).find(|l| l["method"] == "complete").unwrap();
     assert_eq!((complete["model"].clone(), complete["output_tokens"].clone()), (json!("fake"), json!(3)));
     assert!(!log.contains("Write SQL") && !log.contains("select 1") && !log.contains("sk-test-key"));
-    crate::config::store::delete_password("model:fake").unwrap();
+    crate::db::keychain::delete_password("model:fake").unwrap();
 }
 
 #[tokio::test]
@@ -502,7 +502,7 @@ async fn ask_shows_a_schema_to_a_far_model_only_if_the_project_shares_it() {
         e.message
     );
     assert_eq!(e.data.as_ref().unwrap()["project"], json!("p"));
-    crate::config::store::delete_password("model:far").unwrap();
+    crate::db::keychain::delete_password("model:far").unwrap();
 }
 
 #[tokio::test]

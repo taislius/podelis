@@ -189,7 +189,7 @@ impl App {
                 self.manager.project_message = Some((tn!("projects.deleted", count, name = project.name), false));
                 // Its memory for models too (the gateway may keep it open: on
                 // Unix the file goes, and nothing asks for this project again).
-                let memory = self.data_dir.as_ref().map(|d| crate::gateway::memory::path(d, &id));
+                let memory = self.data_dir.as_ref().map(|d| podelis_ai::memory::path(d, &id));
                 let files = [self.history_path(&id), self.draft_path(&id), self.tabs_path(&id), memory];
                 for path in files.into_iter().flatten() {
                     let _ = std::fs::remove_file(path);
@@ -198,7 +198,8 @@ impl App {
                 if count > 0 {
                     tokio::task::spawn_blocking(move || {
                         for profile in &project.connections {
-                            let _ = store::delete_password(&store::keychain_account(&project.id, profile));
+                            let _ =
+                                crate::db::keychain::delete_password(&store::keychain_account(&project.id, profile));
                         }
                     });
                 }

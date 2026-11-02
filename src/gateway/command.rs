@@ -102,7 +102,7 @@ async fn context(config_dir: &Path, project: Option<&str>, words: &[String]) -> 
         let _ = writeln!(out, "  {}: {}", t["name"].as_str().unwrap_or("?"), t["why"].as_str().unwrap_or(""));
     }
     if let Some(n) = built["left_out"].as_u64().filter(|n| *n > 0) {
-        use super::context::{MAX_CHARS, MAX_ENTRY, MAX_TABLES};
+        use podelis_ai::context::{MAX_CHARS, MAX_ENTRY, MAX_TABLES};
         let tokens = MAX_CHARS / 4;
         let _ = writeln!(
             out,
@@ -187,8 +187,8 @@ fn store_key(config_dir: &Path, name: &str) -> i32 {
         };
         key
     };
-    let account = super::models::ModelConfig::keychain_account(name);
-    match crate::config::store::store_password(&account, key.trim()) {
+    let account = podelis_ai::models::ModelConfig::keychain_account(name);
+    match crate::db::keychain::store_password(&account, key.trim()) {
         Ok(()) => say(&format!("Stored in the OS keychain (service podelis, account {account})."), 0),
         Err(e) => {
             let _ = writeln!(std::io::stderr(), "Couldn't store it: {e:#}");

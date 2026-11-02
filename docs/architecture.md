@@ -6,10 +6,9 @@ words it says, which know nothing of the app), `podelis-ai`
 (`crates/podelis-ai/`: models, context, memory, migrations read into
 facts, a model's SQL checked; on the core, never the app) and `podelis`
 (the root: the app, its UI, the command line, the gateway process and
-agents). The root crate re-exports the others' modules (`use
-podelis_core::{db, lang, sql}` in `main.rs`, `pub use podelis_ai::{…}` in
-`gateway/mod.rs`), so its code says `crate::db::…` and
-`gateway::memory::…` as before.
+agents). The root crate re-exports the core's modules (`use podelis_core::{db,
+lang, sql}` in `main.rs`), so its code says `crate::db::…` as before; the
+AI crate it names as `podelis_ai::…`.
 
 ```
 crates/podelis-core/
@@ -52,10 +51,16 @@ src/
 Each module uses only those to its left (lower):
 
 ```
-podelis-core (lang, sql, db)  →  podelis-ai  →  editor, related, chart  →  config  →  system  →  transfer  →  agents, gateway  →  app  →  ui  →  cli, main.rs
+podelis-core (lang, sql, db)  →  podelis-ai | editor, related, chart  →  config  →  system  →  transfer  →  agents, gateway  →  app  →  ui  →  cli, main.rs
 ```
 
-Cargo keeps the core below the rest: it can't name the app's modules.
+`podelis-ai` and `editor`, `related`, `chart` sit side by side on the
+core: neither uses the other, and `config` is the first to use the AI
+crate (`[[models]]`). The app's code names it as `podelis_ai::…` (no
+re-exports), so every use of it reads the same.
+
+Cargo keeps the core below the rest, and the AI crate below the app:
+neither can name the app's modules.
 Inside the root crate, `tests/layers.rs` checks the order in the code
 that ships (items marked `#[cfg(test)]` may reach across): a
 `crate::app` in `gateway/`, or a `use crate::{app::…}`, fails `cargo
@@ -268,8 +273,8 @@ AI models, the context they're shown, their tools and memory (the plan is
 in the private planning notes). Clients talk to it; they don't call
 models themselves. The process (protocol, server, client, its methods)
 is the root crate's `src/gateway/`; what it serves is `podelis-ai`, a
-library under it (`crates/podelis-ai/src/`), re-exported there as
-`gateway::{context, memory, migrations, models, names}`.
+library under it (`crates/podelis-ai/src/`), which the gateway (and the
+app, for memory and models) names as `podelis_ai::…`.
 
 ```
 src/gateway/
@@ -285,7 +290,7 @@ src/gateway/
   command.rs    `podelis gateway [status | start | stop | models | key | test]`
   ai.rs         the `models`, `complete`, `context`, `ask` and `memory.*`
                 methods
-  eval.rs       the context's eval (see "How good it is, measured")
+  eval_snapshots.rs  the eval's schema snapshots, made from live databases
 crates/podelis-ai/src/
   memory.rs     a project's facts ("thing, relation, value", who said it,
                 confirmed or not) in `memory/<project-id>.db`, with an FTS5
@@ -411,7 +416,7 @@ around it has a name:
   asked.
 - **No column values.**
 
-**How good it is, measured:** `src/gateway/eval.rs` runs 26
+**How good it is, measured:** `crates/podelis-ai/src/context/eval.rs` runs 26
 questions over schema snapshots of Pagila, Sakila and Chinook, each with
 the tables its SQL needs, and fails when recall (those tables chosen) or
 precision (chosen tables used) drops under its floor. On 2026-11-01:
