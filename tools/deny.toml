@@ -1,4 +1,5 @@
-# cargo-deny: run `cargo deny check` (CI does this on every push).
+# cargo-deny: run `cargo deny --config tools/deny.toml check` (check.sh does,
+# and CI when dependencies change, and weekly).
 
 [graph]
 all-features = true
