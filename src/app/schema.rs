@@ -158,3 +158,230 @@ fn table_definition(engine: Engine, table: &SchemaTable) -> String {
     }
     out
 }
+
+pub struct SchemaTable {
+    pub info: TableInfo,
+    pub expanded: bool,
+    pub columns: Vec<ColumnInfo>,
+    /// Indexes, foreign keys and definition, loaded on first expand.
+    pub details: Option<TableDetails>,
+    pub details_loading: bool,
+}
+
+impl SchemaTable {
+    pub(in crate::app) fn new(info: TableInfo, columns: Vec<ColumnInfo>) -> Self {
+        SchemaTable { info, expanded: false, columns, details: None, details_loading: false }
+    }
+
+    /// Where column `name` points as a foreign key (`orders.id`).
+    pub fn foreign_key(&self, column: &str) -> Option<&str> {
+        let details = self.details.as_ref()?;
+        details.foreign_keys.iter().find(|f| f.column == column).map(|f| f.target.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SchemaSection {
+    Tables,
+    Views,
+    /// The database's own catalog tables and views, when shown.
+    System,
+    Routines,
+}
+
+impl SchemaSection {
+    /// Whether `info` is listed in this section.
+    pub fn holds(self, info: &TableInfo) -> bool {
+        match self {
+            SchemaSection::Tables => !info.system && !info.is_view,
+            SchemaSection::Views => !info.system && info.is_view,
+            SchemaSection::System => info.system,
+            SchemaSection::Routines => false,
+        }
+    }
+}
+
+/// The order of the navigator's tables (`o` cycles it).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SchemaSort {
+    #[default]
+    Name,
+    /// Most rows first (the server's estimate).
+    Rows,
+    /// Biggest on disk first, indexes included.
+    Size,
+}
+
+impl SchemaSort {
+    pub fn next(self) -> Self {
+        match self {
+            SchemaSort::Name => SchemaSort::Rows,
+            SchemaSort::Rows => SchemaSort::Size,
+            SchemaSort::Size => SchemaSort::Name,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SchemaSort::Name => t!("navigator.by_name"),
+            SchemaSort::Rows => t!("navigator.by_rows"),
+            SchemaSort::Size => t!("navigator.by_size"),
+        }
+    }
+}
+
+/// One visible row of the schema tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SchemaNode {
+    /// A section header; not selectable.
+    Section(SchemaSection),
+    Table(usize),
+    Column(usize, usize),
+    Index(usize, usize),
+    Routine(usize),
+}
+
+impl SchemaNode {
+    pub(in crate::app) fn table(self) -> Option<usize> {
+        match self {
+            SchemaNode::Table(t) | SchemaNode::Column(t, _) | SchemaNode::Index(t, _) => Some(t),
+            SchemaNode::Section(_) | SchemaNode::Routine(_) => None,
+        }
+    }
+}
+
+/// The database catalog: shown in the schema browser and used for
+/// autocomplete. Loaded on connect.
+#[derive(Default)]
+pub struct SchemaPanel {
+    pub tables: Vec<SchemaTable>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub selected: usize,
+    /// Only tables whose name contains this (case-insensitive) are shown.
+    pub filter: LineInput,
+    pub filter_editing: bool,
+    /// Functions and procedures.
+    pub routines: Vec<RoutineInfo>,
+    /// A table whose definition opens once its details arrive.
+    pub show_definition_of: Option<(String, String)>,
+    pub sort: SchemaSort,
+    /// The first row on screen, and how many fit (as last drawn).
+    pub scroll: usize,
+    pub page: usize,
+}
+
+impl SchemaPanel {
+    /// Scrolls so the selected row shows, with an expanded table's
+    /// columns and indexes as far as they fit (the table stays on screen),
+    /// for `height` rows. Returns the first row to show.
+    pub fn scroll_into_view(&mut self, nodes: &[SchemaNode], height: usize) -> usize {
+        self.page = height.max(1);
+        let selected = self.selected.min(nodes.len().saturating_sub(1));
+        if let Some(SchemaNode::Table(t)) = nodes.get(selected) {
+            let children = nodes[selected + 1..].iter().take_while(|n| n.table() == Some(*t)).count();
+            let wanted = (selected + children + 1).saturating_sub(self.page).min(selected);
+            self.scroll = self.scroll.max(wanted);
+        }
+        if selected < self.scroll {
+            // A section's heading comes along with its first table.
+            let heading = selected.checked_sub(1).filter(|&i| matches!(nodes[i], SchemaNode::Section(_)));
+            self.scroll = heading.unwrap_or(selected);
+        }
+        if selected >= self.scroll + self.page {
+            self.scroll = selected + 1 - self.page;
+        }
+        // No empty space below the last row.
+        self.scroll = self.scroll.min(nodes.len().saturating_sub(self.page));
+        self.scroll
+    }
+
+    /// The visible rows: a TABLES section, then VIEWS, then SYSTEM (if
+    /// loaded), each with its (filtered) tables and the columns of expanded
+    /// ones.
+    pub fn nodes(&self) -> Vec<SchemaNode> {
+        let needle = self.filter.text().to_lowercase();
+        let mut nodes = Vec::new();
+        let mut buf = String::new();
+        // Each name lowercased once, to filter and rank it.
+        let mut rank = |name: &str| match_rank(name, &needle, &mut buf);
+        for section in [SchemaSection::Tables, SchemaSection::Views, SchemaSection::System] {
+            let mut ranked: Vec<(u8, usize)> = (0..self.tables.len())
+                .filter(|&t| section.holds(&self.tables[t].info))
+                .filter_map(|t| Some((rank(&self.tables[t].info.name)?, t)))
+                .collect();
+            // Biggest first; unknown sizes last. The sort is stable, so
+            // ties stay by name. By name while filtering, the best matches
+            // first: `products` before `alternative_prod` for "produc".
+            match self.sort {
+                SchemaSort::Name => ranked.sort_by_key(|&(rank, _)| rank),
+                SchemaSort::Rows => ranked.sort_by_key(|&(_, t)| std::cmp::Reverse(self.tables[t].info.rows)),
+                SchemaSort::Size => ranked.sort_by_key(|&(_, t)| std::cmp::Reverse(self.tables[t].info.bytes)),
+            }
+            let matching: Vec<usize> = ranked.into_iter().map(|(_, t)| t).collect();
+            if matching.is_empty() {
+                continue;
+            }
+            nodes.push(SchemaNode::Section(section));
+            for t in matching {
+                nodes.push(SchemaNode::Table(t));
+                let table = &self.tables[t];
+                if table.expanded {
+                    nodes.extend((0..table.columns.len()).map(|c| SchemaNode::Column(t, c)));
+                    let indexes = table.details.as_ref().map_or(0, |d| d.indexes.len());
+                    nodes.extend((0..indexes).map(|i| SchemaNode::Index(t, i)));
+                }
+            }
+        }
+        let mut routines: Vec<(u8, usize)> =
+            (0..self.routines.len()).filter_map(|r| Some((rank(&self.routines[r].name)?, r))).collect();
+        routines.sort_by_key(|&(rank, _)| rank);
+        if !routines.is_empty() {
+            nodes.push(SchemaNode::Section(SchemaSection::Routines));
+            nodes.extend(routines.into_iter().map(|(_, r)| SchemaNode::Routine(r)));
+        }
+        nodes
+    }
+}
+
+/// How well `name` matches the filter `needle` (lowercase), best first: the
+/// name itself, a name starting with it, a word in it starting with it
+/// (after `_`, `.`, `-` or a space), anywhere else; `None` when it isn't in
+/// it at all. Case is folded as the results' filter folds it, in `buf`. No
+/// filter: all alike.
+fn match_rank(name: &str, needle: &str, buf: &mut String) -> Option<u8> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let name = results::lowered_for(name, needle, buf).filter(|n| n.contains(needle))?;
+    Some(if name == needle {
+        0
+    } else if name.starts_with(needle) {
+        1
+    } else if name.match_indices(needle).any(|(i, _)| name[..i].ends_with(['_', '.', '-', ' '])) {
+        // (A match right after a separator: `order_p` in `big_order_products` too.)
+        2
+    } else {
+        3
+    })
+}
+
+#[cfg(test)]
+mod match_tests {
+    #[test]
+    fn the_best_matches_come_first() {
+        let mut names = vec!["alternative_prod", "order_products", "products", "productsx", "prod", "reproduce"];
+        let mut buf = String::new();
+        names.sort_by_key(|n| super::match_rank(n, "prod", &mut buf));
+        assert_eq!(names, ["prod", "products", "productsx", "alternative_prod", "order_products", "reproduce"]);
+        assert_eq!(super::match_rank("cats", "prod", &mut buf), None, "not in it");
+        // A filter with a separator in it still starts a word.
+        assert_eq!(super::match_rank("big_order_products", "order_p", &mut buf), Some(2));
+        assert_eq!(super::match_rank("xorder_px", "order_p", &mut buf), Some(3));
+        // Folded as the filter folds it: a Lithuanian name ranks as itself.
+        assert_eq!(super::match_rank("Žąsys", "žąsys", &mut buf), Some(0));
+        assert_eq!(super::match_rank("ŽĄSYS_seni", "žąs", &mut buf), Some(1));
+        // Greek's final sigma, as the filter's text lowercases it.
+        assert_eq!(super::match_rank("ΟΔΟΣ", &"ΟΔΟΣ".to_lowercase(), &mut buf), Some(0));
+    }
+}
