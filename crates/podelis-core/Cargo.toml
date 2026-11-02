@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+# Not a native library: lets its build script tell the app's which engines
+# are built (`cargo::metadata`, read as DEP_PODELIS_CORE_*).
+links = "podelis_core"
 
 [dependencies]
 anyhow.workspace = true
