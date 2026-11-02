@@ -235,6 +235,11 @@ pub trait SqlDialect: Backend {
     fn keeps_only_affinity(&self) -> bool {
         false
     }
+    /// Whether it keeps a string's length and fixed width (`varchar(120)`,
+    /// `char(3)`): beside one that doesn't, they're any text.
+    fn keeps_string_lengths(&self) -> bool {
+        true
+    }
     /// A position only the message's text gives (SQLite's `near "x"`), for
     /// the background syntax check.
     fn position_in_message(&self, _message: &str) -> Option<super::ErrorPos> {

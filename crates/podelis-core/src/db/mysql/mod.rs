@@ -298,7 +298,8 @@ impl SqlDialect for MySql {
     fn modify_column(&self, table: &str, column: &str, data_type: &str, nullable: bool) -> Option<String> {
         let null = if nullable { "NULL" } else { "NOT NULL" };
         Some(format!("ALTER TABLE {table} MODIFY COLUMN {column} {data_type} {null}"))
-    }}
+    }
+}
 
 /// The kind of server, from its version string (`8.0.36`, `5.7.44-log`,
 /// `10.11.6-MariaDB-0+deb12u1`).

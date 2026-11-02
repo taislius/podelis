@@ -19,6 +19,7 @@ pub static TEST_SQL: TestSql = TestSql {
     sleep: None,
     count_to_2500: "WITH RECURSIVE s(g) AS (SELECT 1 UNION ALL SELECT g + 1 FROM s WHERE g < 2500) SELECT g FROM s",
     plan_shows: &["SCAN t"],
+    analyzed_shows: "",
     analyze: "ANALYZE {table}",
     binary: ["CREATE TEMP TABLE bin_t (b blob)", "X'00FF275C'", "X'00FF275C'"],
     comments: None,

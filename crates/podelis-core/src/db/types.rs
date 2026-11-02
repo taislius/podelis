@@ -81,12 +81,18 @@ fn standard(ty: &str) -> TypeKind {
 
 /// Whether type `a` on one engine and `b` on another hold the same values.
 /// Beside an engine that keeps only a type's affinity, any integer matches
-/// any other, and lengths don't count.
+/// any other, and lengths don't count; beside one that keeps no string
+/// lengths, any string type is text.
 pub fn same_type(a_engine: Engine, a: &str, b_engine: Engine, b: &str) -> bool {
     use TypeKind as Kind;
     let (a, b) = (kind(a_engine, a), kind(b_engine, b));
-    if !a_engine.dialect().keeps_only_affinity() && !b_engine.dialect().keeps_only_affinity() {
-        return a == b;
+    let (da, db) = (a_engine.dialect(), b_engine.dialect());
+    if !da.keeps_only_affinity() && !db.keeps_only_affinity() {
+        if da.keeps_string_lengths() && db.keeps_string_lengths() {
+            return a == b;
+        }
+        let text = |k: Kind| if matches!(k, Kind::Varchar(_) | Kind::Char(_)) { Kind::Text } else { k };
+        return text(a) == text(b);
     }
     let loose = |k: Kind| match k {
         Kind::Int(_) => Kind::Int(8),

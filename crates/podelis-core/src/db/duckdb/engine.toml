@@ -1,0 +1,5 @@
+# This folder is a database engine: build.rs finds it by this file.
+name = "DuckDb"   # its Engine variant, as connections.toml writes it
+order = 4    # its place in lists (the connection form cycles in this order)
+feature = "duckdb"   # its Cargo feature: builds its driver
+opt_in = true   # not in `default` yet: "every engine" doesn't wait for it

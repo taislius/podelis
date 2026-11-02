@@ -34,7 +34,8 @@ pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::Sqlite>;
 /// This engine's dialect, for `Engine::dialect`.
 pub(super) static DIALECT: Sqlite = Sqlite;
 
-impl Backend for Sqlite {    fn label(&self) -> &'static str {
+impl Backend for Sqlite {
+    fn label(&self) -> &'static str {
         "SQLite"
     }
     fn url_schemes(&self) -> &'static [&'static str] {
@@ -190,7 +191,8 @@ impl SqlDialect for Sqlite {
     }
     fn add_foreign_key(&self, _table: &str, _column: &str, _target: &str, _target_column: &str) -> Option<String> {
         None
-    }}
+    }
+}
 
 /// EXPLAIN QUERY PLAN rows (id, parent, _, detail), nested by parent.
 fn plan_tree(rows: &[Vec<Option<String>>]) -> String {

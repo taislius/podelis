@@ -25,6 +25,9 @@ struct Found {
     feature: String,
     /// The feature is on.
     built: bool,
+    /// Not in the default build yet (`opt_in = true`): `every_engine`
+    /// doesn't wait for it.
+    opt_in: bool,
 }
 
 /// `key = "value"` and `key = 1` lines; `#` starts a comment.
@@ -51,7 +54,8 @@ fn find_engines(db: &Path) -> Vec<Found> {
         let var = format!("CARGO_FEATURE_{}", feature.to_uppercase().replace('-', "_"));
         println!("cargo::rerun-if-env-changed={var}");
         let built = std::env::var_os(&var).is_some();
-        engines.push(Found { module, name, order, feature, built });
+        let opt_in = field(&text, "opt_in").is_some_and(|v| v == "true");
+        engines.push(Found { module, name, order, feature, built, opt_in });
     }
     engines.sort_by(|a, b| (a.order, &a.module).cmp(&(b.order, &b.module)));
     assert!(!engines.is_empty(), "no engine in src/db (a folder with an engine.toml)");
@@ -64,12 +68,12 @@ fn find_engines(db: &Path) -> Vec<Found> {
     engines
 }
 
-/// `every_engine` when each engine's feature is on: what's left unused with
-/// fewer is allowed only without it (lib.rs). The app's build script gets the
+/// `every_engine` when each engine's feature is on (but those still opt-in):
+/// what's left unused with fewer is allowed only without it (lib.rs). The app's build script gets the
 /// same from `links` (`DEP_PODELIS_CORE_EVERY_ENGINE`), so no crate lists the
 /// engines.
 fn tell_every_engine(engines: &[Found]) {
-    let every = engines.iter().all(|e| e.built);
+    let every = engines.iter().filter(|e| !e.opt_in).all(|e| e.built);
     println!("cargo::rustc-check-cfg=cfg(every_engine)");
     if every {
         println!("cargo::rustc-cfg=every_engine");

@@ -587,7 +587,7 @@ mod tests {
     async fn live_schemas_across_engines() {
         let ddl = "CREATE TABLE same_t (id int NOT NULL PRIMARY KEY, big bigint, small smallint, name varchar(120), \
                    code char(3), note text, price numeric(10,2), ratio double precision, ok boolean, \
-                   day date, at time, seen DECIMAL(5,0))";
+                   day date, clock time, seen DECIMAL(5,0))";
         let mut shapes = Vec::new();
         for engine in Engine::BUILT {
             let Some((db, _)) = crate::db::tests::own_live_db(engine, "podelis_diff").await else { continue };
@@ -605,6 +605,15 @@ mod tests {
             let wide = shape(", later varchar(20)").await;
             db.run("DROP TABLE same_t", 1).await.unwrap();
             let diff = schema_diff(&wide, &narrow, side("here"), side("there"));
+            // Where the catalog keeps no lengths (DuckDB's VARCHAR), there's
+            // no difference to see.
+            let length_kept =
+                wide[0].columns.last().map(|c| &c.data_type) != narrow[0].columns.last().map(|c| &c.data_type);
+            if !length_kept {
+                assert_eq!(diff.differences, 0, "{engine:?}: {}", diff.report);
+                shapes.push((engine, plain));
+                continue;
+            }
             assert!(
                 diff.report.contains("column later: varchar(20) here, varchar(10) there"),
                 "{engine:?}: {}",

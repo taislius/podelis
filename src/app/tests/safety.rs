@@ -249,7 +249,8 @@ async fn explain_analyze_of_a_write_is_rolled_back() {
         app.handle_key(key(KeyCode::Char('y')));
         finish(&mut app).await;
         let plan = app.tab.plan.clone().unwrap_or_default().text;
-        assert!(plan.contains("actual time"), "{engine:?}: {plan} / {}", app.notes.status);
+        let ran = crate::db::tests::test_sql(engine).analyzed_shows;
+        assert!(plan.contains(ran), "{engine:?}: {plan} / {}", app.notes.status);
         assert_eq!(app.connection.txn, TxnState::Idle, "{engine:?}");
         run_sql(&mut app, "select x from ea").await;
         assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("1".to_string())]], "{engine:?}");

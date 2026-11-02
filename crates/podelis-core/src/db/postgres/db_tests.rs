@@ -19,6 +19,7 @@ pub static TEST_SQL: TestSql = TestSql {
     sleep: Some("SELECT pg_sleep({s})"),
     count_to_2500: "SELECT g FROM generate_series(1, 2500) g",
     plan_shows: &["Scan on t"],
+    analyzed_shows: "actual time",
     analyze: "ANALYZE {table}",
     binary: ["CREATE TEMP TABLE bin_t (b bytea)", r"'\x00ff275c'", r"\x00ff275c"],
     comments: Some(&[

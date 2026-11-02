@@ -87,6 +87,9 @@ pub struct TestSql {
     pub count_to_2500: &'static str,
     /// What the plan of `SELECT id FROM t WHERE id = 1` shows (any of).
     pub plan_shows: &'static [&'static str],
+    /// What an EXPLAIN ANALYZE's plan shows, where it has one: that the
+    /// statement ran.
+    pub analyzed_shows: &'static str,
     /// Updates the planner's numbers for table `{table}`.
     pub analyze: &'static str,
     /// Makes table `bin_t` with a binary column `b`; a value with a NUL,
@@ -458,14 +461,17 @@ async fn full_scans_on_live_servers() {
         let rows: Vec<String> = (1..=2000).map(|i| format!("({i}, 'n{i}')")).collect();
         db.run(&format!("INSERT INTO scan_big VALUES {}", rows.join(", ")), 1).await.unwrap();
         db.run(&test_sql(engine).analyze.replace("{table}", "scan_big"), 1).await.unwrap();
-        let scans = db.full_scans("SELECT * FROM scan_big WHERE note = 'x'").await.unwrap();
+        // A value within the column's range: a planner that keeps each
+        // column's least and greatest (DuckDB's) skips a table that can't
+        // have it.
+        let scans = db.full_scans("SELECT * FROM scan_big WHERE note = 'n1x'").await.unwrap();
         let tables = db.tables(false).await.unwrap();
         if tables.iter().find(|t| t.name == "scan_big").is_some_and(|t| t.rows.is_none()) {
             assert!(scans.is_empty(), "{engine:?}: {scans:?}");
             continue;
         }
         let (table, rows) = scans.first().unwrap_or_else(|| panic!("{engine:?}: no full scan found"));
-        assert!(table == "scan_big" || table == "public.scan_big", "{engine:?}: {table}");
+        assert!(["scan_big", "public.scan_big", "main.scan_big"].contains(&table.as_str()), "{engine:?}: {table}");
         assert!(*rows > 1000.0, "{engine:?}: {rows}");
         // By its key: no full scan; writes aren't planned.
         assert!(db.full_scans("SELECT * FROM scan_big WHERE id = 5").await.unwrap().is_empty(), "{engine:?}");
@@ -541,7 +547,8 @@ fn the_statements_podelis_writes() {
         assert_eq!(d.rollback_to_savepoint("p_1"), "ROLLBACK TO SAVEPOINT p_1");
         assert_eq!(d.ping(), "SELECT 1");
         assert_eq!(d.sandbox_session().is_some(), d.capabilities().ddl_commits, "{engine:?}: MySQL's autocommit");
-        assert_eq!(d.copy_into("/tmp/x.db").is_some(), engine.is_file_based(), "{engine:?}");
+        // Only a file is copied (not every file engine can yet: DuckDB).
+        assert!(d.copy_into("/tmp/x.db").is_none() || engine.is_file_based(), "{engine:?}");
         assert_eq!(d.select_rows("t", None, None), "SELECT * FROM t");
         assert_eq!(d.select_rows("t", Some("a = 1"), Some(100)), "SELECT * FROM t WHERE a = 1 LIMIT 100");
         let columns = ["a".to_string(), "b".to_string()];
