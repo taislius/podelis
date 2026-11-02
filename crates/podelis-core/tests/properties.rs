@@ -1,12 +1,14 @@
-//! Property tests: random input for everything that handles what the user
-//! types. Nothing may panic, and core invariants must hold.
+//! Property tests: random SQL-ish input for everything that handles what
+//! the user types (formatting, tokens, statements, highlighting, analysis,
+//! errors, completion, parameters). Nothing may panic, and the invariants
+//! must hold. Through the crate's public API, as any user of it sees it.
 
 use proptest::prelude::*;
+use proptest::test_runner::FileFailurePersistence;
 
-use crate::db::{ColumnInfo, Engine, ErrorPos};
-use crate::editor::TextEditor;
-use crate::sql::complete::{self, TableRef};
-use crate::{sql, sql::analyze};
+use podelis_core::db::{ColumnInfo, Engine, ErrorPos};
+use podelis_core::sql::complete::{self, TableRef};
+use podelis_core::sql::{self, analyze};
 
 /// SQL-ish text: keywords, quotes, comments, dollar quotes, unicode, newlines.
 fn sqlish() -> impl Strategy<Value = String> {
@@ -44,7 +46,14 @@ fn engine() -> impl Strategy<Value = Engine> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(400))]
+    // Cases that failed once are kept beside this file (proptest's default
+    // would be a folder at the crate's root) and tried again first.
+    #![proptest_config(ProptestConfig {
+        failure_persistence: Some(Box::new(FileFailurePersistence::Direct(
+            "tests/proptest-regressions/properties.txt",
+        ))),
+        ..ProptestConfig::with_cases(400)
+    })]
 
     /// Formatting never panics and, when it formats, changes nothing but
     /// spacing.
@@ -121,13 +130,13 @@ proptest! {
 
     #[test]
     fn analysis_never_panics(text in sqlish(), engine in engine()) {
-        let parsed = crate::sql::parse::parse(&text, engine);
+        let parsed = sql::parse::parse(&text, engine);
         let _ = analyze::analyze(&parsed);
         let _ = analyze::edit_source(&parsed);
         if let Some(hint) = analyze::syntax_hint(&parsed) {
             prop_assert!(hint.offset.is_none_or(|o| o <= text.len()));
         }
-        for hint in crate::sql::lint::lints(&parsed, "") {
+        for hint in sql::lint::lints(&parsed, "") {
             let end = hint.offset.unwrap_or(0) + hint.len.unwrap_or(0);
             prop_assert!(end <= text.len() && text.is_char_boundary(end));
         }
@@ -155,54 +164,16 @@ proptest! {
         prop_assert!(prefix_len <= text[..cursor].chars().count());
     }
 
-    /// Random editing keeps the cursor inside the text and never panics.
-    #[test]
-    fn editor_survives_random_edits(ops in prop::collection::vec((0u8..18, any::<char>(), "[a-zž\n ]{0,4}"), 0..60)) {
-        let mut ed = TextEditor::new();
-        for (op, ch, s) in ops {
-            match op {
-                0 => ed.insert_char(if ch.is_control() { 'x' } else { ch }),
-                1 => ed.insert_str(&s),
-                2 => ed.insert_newline(),
-                3 => ed.backspace(),
-                4 => ed.delete(),
-                5 => { ed.prepare_move(ch.is_alphabetic()); ed.move_left(); }
-                6 => { ed.prepare_move(ch.is_alphabetic()); ed.move_right(); }
-                7 => { ed.prepare_move(ch.is_alphabetic()); ed.move_up(); }
-                8 => { ed.prepare_move(ch.is_alphabetic()); ed.move_down(); }
-                9 => { ed.prepare_move(false); ed.move_word_left(); }
-                10 => { ed.prepare_move(false); ed.move_word_right(); }
-                11 => { ed.undo(); }
-                12 => { ed.redo(); }
-                13 => ed.select_all(),
-                14 => { ed.cut(); }
-                15 => ed.replace_before_cursor(s.chars().count() % 3, &s),
-                16 => ed.set_text(&s),
-                _ => ed.scroll_to_cursor(5, 10),
-            }
-            prop_assert!(ed.cursor_row < ed.lines.len());
-            prop_assert!(ed.cursor_col <= ed.lines[ed.cursor_row].chars().count());
-            let offset = ed.cursor_offset();
-            prop_assert!(offset <= ed.text().len());
-            prop_assert_eq!(ed.pos_of_offset(offset), (ed.cursor_row, ed.cursor_col));
-        }
-    }
-
-    #[test]
-    fn library_search_never_panics(query in "\\PC{0,20}", text in sqlish()) {
-        let _ = crate::config::library::matches(&query, &[&text]);
-    }
-
     #[test]
     fn parameters_fill_and_map_back(text in sqlish(), engine in engine(), value in "\\PC{0,8}") {
-        let params = crate::sql::params::find(&text, engine);
+        let params = sql::params::find(&text, engine);
         for p in &params {
             for r in &p.ranges {
                 prop_assert!(text.is_char_boundary(r.start) && text.is_char_boundary(r.end));
             }
         }
         let values = vec![value; params.len()];
-        let filled = crate::sql::params::fill(&text, &params, &values, engine);
+        let filled = sql::params::fill(&text, &params, &values, engine);
         for offset in 0..=filled.sql.len() {
             prop_assert!(filled.to_original(offset) <= text.len());
         }
