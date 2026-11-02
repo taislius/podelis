@@ -85,6 +85,20 @@ impl Dialect for MySql {
         Some(crate::db::ContainerLogin { user: "root".to_string(), database, password })
     }
 
+    fn connect_hint(&self, message: &str) -> Option<&'static str> {
+        let has = |s: &str| message.contains(s);
+        Some(if has("access denied for user") && has("using password: no") {
+            "the server wants a password: enter it, give the connection a password command, or put it in ~/.my.cnf (with host = this server, unless it's local)"
+        } else if has("access denied for user") {
+            "wrong user or password, or this user isn't allowed to connect from your host"
+        } else if has("unknown database") {
+            "no database by that name: check it, or leave Database empty for the default"
+        } else if has("too many connections") {
+            "the server has no free connections: close some, or raise its connection limit"
+        } else {
+            return None;
+        })
+    }
     /// `float` is a 4-byte float here; `timestamp` a moment in time (stored
     /// in UTC, shown in the session's zone).
     fn type_kind(&self, ty: &str) -> Option<crate::db::TypeKind> {

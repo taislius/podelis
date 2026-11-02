@@ -572,6 +572,27 @@ fn the_statements_podelis_writes() {
     assert_eq!(copy.as_deref(), Some("VACUUM INTO '/tmp/o''k.db'"), "the path quoted as a literal");
 }
 
+/// Each engine words its own connection errors, and only its dialect
+/// answers them; the network's are no engine's, and `hint` finds both.
+#[test]
+fn each_engine_hints_at_its_own_connection_errors() {
+    let whose = |message: &str| {
+        let m = message.to_lowercase();
+        Engine::ALL.into_iter().filter(|e| e.dialect().connect_hint(&m).is_some()).collect::<Vec<_>>()
+    };
+    let postgres = "password authentication failed for user \"app\"";
+    let mysql = "Access denied for user 'root'@'localhost' (using password: NO)";
+    let sqlite = "unable to open database file";
+    assert_eq!(whose(postgres), [Engine::Postgres]);
+    assert_eq!(whose(mysql), [Engine::MySql]);
+    assert_eq!(whose(sqlite), [Engine::Sqlite]);
+    assert!(whose("Connection refused (os error 61)").is_empty(), "the network's");
+    for message in [postgres, mysql, sqlite, "Connection refused (os error 61)", "invalid peer certificate"] {
+        assert!(super::diagnose::hint(message).is_some(), "{message}");
+    }
+    assert!(super::diagnose::hint(mysql).unwrap().contains("wants a password"));
+}
+
 // Column types across engines (`db::types`): each engine's names from its
 // dialect, the standard's shared.
 #[cfg(test)]
