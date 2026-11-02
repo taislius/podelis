@@ -1,18 +1,23 @@
 use super::*;
 
+/// Whatever engines the build has (their order isn't this test's).
 #[test]
 fn toggling_engine_updates_default_port_only() {
     let mut form = ConnectForm::new();
+    let first = form.engine;
     form.cycle_engine(true);
-    assert_eq!(form.port, "3306");
+    assert_eq!(form.port, form.engine.default_port(), "the default follows the engine");
     form.port = "13306".into();
     form.cycle_engine(false);
-    assert_eq!(form.port, "13306");
+    assert_eq!((form.engine, form.port.as_str()), (first, "13306"), "a typed port stays");
 }
 
+/// SQLite, and a server engine either side of it (the engines wrap round).
+#[cfg(all(feature = "sqlite", any(feature = "postgres", feature = "mysql")))]
 #[test]
 fn sqlite_form_shows_only_file_fields() {
     let mut form = ConnectForm::new();
+    // The first engine is a server's; SQLite is listed last.
     form.cycle_engine(false);
     assert_eq!(form.engine, Engine::Sqlite);
     assert!(form.host.is_empty() && form.port.is_empty());
@@ -23,7 +28,9 @@ fn sqlite_form_shows_only_file_fields() {
     let params = form.params().unwrap();
     assert!(params.read_only && params.ssh.is_none());
     form.cycle_engine(false);
-    assert_eq!((form.engine, form.host.as_str(), form.port.as_str()), (Engine::MySql, "/tmp/x.db", "3306"));
+    let server = form.engine;
+    assert!(!server.is_file_based(), "{server:?}");
+    assert_eq!((form.host.as_str(), form.port.as_str()), ("/tmp/x.db", server.default_port()));
     // An empty file name becomes localhost again.
     form.cycle_engine(true);
     form.host.clear();

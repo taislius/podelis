@@ -224,6 +224,7 @@ mod tests {
         assert_eq!(published("0.0.0.0:6000-6001->5432-5433/tcp", 5433), Some(("localhost".to_string(), 6001)));
     }
 
+    #[cfg(feature = "postgres")]
     #[test]
     fn a_postgres_container() {
         let c = ps("abc\tshop-db\tpostgres:17\t0.0.0.0:5433->5432/tcp")
@@ -240,6 +241,7 @@ mod tests {
         assert!(c.profile.unwrap().password_command.is_empty());
     }
 
+    #[cfg(feature = "mysql")]
     #[test]
     fn a_mysql_container() {
         let line = "abc\tmy\tmysql:9\t0.0.0.0:3306->3306/tcp, 33060/tcp";
@@ -271,9 +273,16 @@ mod tests {
         let exporter = "abc\tpg-exp\tprometheuscommunity/postgres-exporter\t0.0.0.0:9187->9187/tcp";
         assert!(ps(exporter).container("docker", &[]).is_none());
         assert!(ps("abc\tx\tother\t0.0.0.0:15432->15432/tcp").container("docker", &[]).is_none());
-        // An official image by name, from another registry.
-        assert!(ps("abc\tdb\tdocker.io/bitnami/mysql:8\t").container("docker", &[]).is_some());
-        let c = ps("abc\tinternal\tpostgres:17\t5432/tcp").container("docker", &[]).unwrap();
-        assert!(c.profile.is_none(), "no address on this machine");
+        // An official image by name, from another registry: a database
+        // when this build has its engine.
+        let bitnami = ps("abc\tdb\tdocker.io/bitnami/mysql:8\t").container("docker", &[]);
+        assert_eq!(bitnami.is_some(), Engine::BUILT.contains(&Engine::MySql));
+        if let Some(c) = ps("abc\tinternal\tpostgres:17\t5432/tcp").container("docker", &[]) {
+            assert!(c.profile.is_none(), "no address on this machine");
+        }
+        assert_eq!(
+            ps("abc\tinternal\tpostgres:17\t5432/tcp").container("docker", &[]).is_some(),
+            Engine::BUILT.contains(&Engine::Postgres)
+        );
     }
 }

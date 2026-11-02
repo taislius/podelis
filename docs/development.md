@@ -4,7 +4,7 @@
 
 ```sh
 cargo install cargo-deny --locked   # once: check.sh requires it
-./scripts/check.sh   # rustfmt, clippy (pedantic, warnings as errors), tests, cargo-deny
+./scripts/check.sh   # rustfmt, clippy (pedantic, warnings as errors), tests (all engines, then PostgreSQL and SQLite only), cargo-deny
 ```
 
 How the code is organised — the app/UI/database layers, and the database
@@ -92,7 +92,10 @@ PODELIS_EVAL_DUMP="pagila=postgres://postgres:…@127.0.0.1:55433/pagila?sslmode
 GitHub Actions, kept small to save minutes:
 
 - `ci.yml` — on pushes to master (not docs-only ones): format,
-  clippy and tests on Linux against real PostgreSQL and MySQL; a newer push
+  clippy and tests on Linux against real PostgreSQL and MySQL, then clippy
+  and tests again built with fewer engines (`--no-default-features
+  --features postgres,sqlite`, as the README shows: no test may assume
+  MySQL is there); a newer push
   cancels the older run. A force-push may not start it; run it by hand
   with `gh workflow run ci.yml --repo taislius/podelis` (or Actions → CI →
   Run workflow).
