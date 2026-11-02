@@ -1,7 +1,9 @@
 //! Which of Podėlis's modules may use which: the layers in
 //! `docs/architecture.md`, checked in the source so a new import that
-//! points the wrong way fails here instead of being found later (one crate
-//! doesn't stop `crate::app` being reached from anywhere).
+//! points the wrong way fails here instead of being found later. Between
+//! crates Cargo checks it (`podelis-core`: `db`, `sql`, `lang` can't name
+//! the app); inside the app's crate one module can reach any other, so
+//! this does. `crate::db` and `crate::sql` are the core's, re-exported.
 //!
 //! Only code that ships is checked: comments, files of tests and the
 //! items marked `#[cfg(test)]` (a `mod tests;` line, a `mod tests { … }`
@@ -13,15 +15,12 @@
 use std::path::{Path, PathBuf};
 
 /// Each module, and the modules its code must not use. From the bottom up:
-/// words and the text editor (nothing below them), SQL text, databases
-/// (and their small helpers `related` and `chart`), what's on disk, the
+/// the text editor (nothing below it), the databases' small helpers
+/// `related` and `chart` (above `podelis-core`), what's on disk, the
 /// machine, data in and out, agents and the gateway, then the app, its
 /// drawing and the command line.
 const RULES: &[(&str, &[&str])] = &[
-    ("lang", ALL),
     ("editor", ALL),
-    ("sql", &["config", "system", "transfer", "agents", "gateway", "app", "ui", "cli", "related", "chart"]),
-    ("db", &["config", "system", "transfer", "agents", "gateway", "app", "ui", "cli", "related", "chart"]),
     ("related", &["config", "system", "transfer", "agents", "gateway", "app", "ui", "cli", "chart"]),
     ("chart", &["config", "system", "transfer", "agents", "gateway", "app", "ui", "cli", "related"]),
     ("config", &["system", "transfer", "agents", "gateway", "app", "ui", "cli"]),
@@ -33,7 +32,7 @@ const RULES: &[(&str, &[&str])] = &[
     ("ui", &["cli"]),
 ];
 
-/// Every module but `lang` and `editor`, which use none.
+/// Every module, for `editor`, which uses none.
 const ALL: &[&str] =
     &["sql", "db", "related", "chart", "config", "system", "transfer", "agents", "gateway", "app", "ui", "cli"];
 
@@ -141,9 +140,11 @@ fn shipped_lines(text: &str) -> Vec<(usize, String)> {
     out
 }
 
-/// The modules `code` names after `crate::`, a `crate::{…}` group's too.
+/// The modules `code` names after `crate::` (or the core's own name), a
+/// `crate::{…}` group's too.
 fn modules_named(code: &str) -> Vec<String> {
     let mut out = Vec::new();
+    let code = code.replace("podelis_core::", "crate::");
     for (i, _) in code.match_indices("crate::") {
         let rest = &code[i + "crate::".len()..];
         if let Some(group) = rest.strip_prefix('{') {
@@ -179,6 +180,7 @@ fn the_check_sees_what_it_should() {
     assert_eq!(modules_named("use crate::app::ConnectForm;"), ["app"]);
     assert_eq!(modules_named("    let x = crate::cli::classify(a);"), ["cli"]);
     assert_eq!(modules_named("use crate::application::X;"), ["application"]);
+    assert_eq!(modules_named("use podelis_core::db::Engine;"), ["db"]);
     assert_eq!(modules_named("use crate::{app::ConnectForm, config::{store, draft}, db};"), ["app", "config", "db"]);
     let text = "\
 use crate::db::Engine;

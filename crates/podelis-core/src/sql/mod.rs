@@ -2,12 +2,12 @@
 //! boundaries (semicolons outside strings/comments) and to colour the editor;
 //! it never rejects input.
 
-pub(crate) mod analyze;
-pub(crate) mod complete;
-pub(crate) mod lint;
-pub(crate) mod params;
-pub(crate) mod parse;
-pub(crate) mod scope;
+pub mod analyze;
+pub mod complete;
+pub mod lint;
+pub mod params;
+pub mod parse;
+pub mod scope;
 use std::ops::Range;
 
 use crate::db::{Engine, LexerRules};
@@ -543,7 +543,7 @@ pub enum Highlight {
 pub type HighlightedLines<'a> = Vec<Vec<(&'a str, Highlight)>>;
 
 /// Splits `text` into lines of highlighted fragments.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn highlight_lines(text: &str, engine: Engine) -> HighlightedLines<'_> {
     highlight_lines_and_starts(text, engine).0
 }

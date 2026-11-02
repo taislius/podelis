@@ -1,3 +1,12 @@
+//! The tests every engine shares, and their helpers. Built for this
+//! crate's tests and, with `test-support`, for the app's: there the live
+//! tests below (each engine's tests call them) go unused.
+#![expect(clippy::unwrap_used, reason = "test code: a panic is the failed assertion")]
+#![cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the engines' own tests run the live tests; the app's use only the helpers")
+)]
+
 use super::*;
 
 /// Live-database tests run where an engine's test server is set, by its
@@ -25,7 +34,7 @@ pub(in crate::db) fn live_params(engine: Engine) -> Option<ConnectParams> {
     on_driver!(engine, engine::db_tests::live_params())
 }
 
-pub(crate) async fn live_db(engine: Engine) -> Option<Database> {
+pub async fn live_db(engine: Engine) -> Option<Database> {
     let params = live_params(engine)?;
     Some(Database::connect(params).await.expect("connect"))
 }
@@ -33,7 +42,7 @@ pub(crate) async fn live_db(engine: Engine) -> Option<Database> {
 /// A database of the test's own, `name`, on `engine`, and how to reach it
 /// again: on its test server (none set: `None`), or a new file. For the
 /// tests every engine shares, so each runs on each engine there is.
-pub(crate) async fn own_live_db(engine: Engine, name: &str) -> Option<(Database, ConnectParams)> {
+pub async fn own_live_db(engine: Engine, name: &str) -> Option<(Database, ConnectParams)> {
     on_driver!(engine, engine::db_tests::own_live_db(name).await)
 }
 
@@ -49,7 +58,7 @@ pub(in crate::db) fn scratch_file(name: &str) -> std::path::PathBuf {
 
 /// What the tests every engine shares need said in the engine's own SQL
 /// (each engine's `db_tests::TEST_SQL`).
-pub(crate) struct TestSql {
+pub struct TestSql {
     /// A query that waits `{s}` seconds; `None` where a query can't wait.
     pub sleep: Option<&'static str>,
     /// Statements giving the numbers 1 to 2500, one per row (the last one
@@ -75,7 +84,7 @@ pub(crate) struct TestSql {
     pub without_rollback: Option<&'static str>,
 }
 
-pub(crate) fn test_sql(engine: Engine) -> &'static TestSql {
+pub fn test_sql(engine: Engine) -> &'static TestSql {
     on_driver!(engine, &engine::db_tests::TEST_SQL)
 }
 
@@ -195,12 +204,12 @@ pub(in crate::db) async fn live_cancel(db: &Database, slow: &str, stopped: impl 
 
 /// The engine whose database is a file, needing no server: for tests that
 /// need a database that's always there.
-pub(crate) fn file_engine() -> Engine {
+pub fn file_engine() -> Engine {
     Engine::BUILT.into_iter().find(|e| e.is_file_based()).expect("an engine with file databases")
 }
 
 /// A file database at `path`.
-pub(crate) fn file_params(path: &std::path::Path, read_only: bool) -> ConnectParams {
+pub fn file_params(path: &std::path::Path, read_only: bool) -> ConnectParams {
     ConnectParams {
         engine: file_engine(),
         host: path.to_string_lossy().into_owned(),

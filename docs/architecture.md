@@ -1,8 +1,23 @@
 # Architecture
 
-Podėlis is one binary with three layers:
+Podėlis is one binary, built from a Cargo workspace of two crates:
+`podelis-core` (`crates/podelis-core/`: the databases, SQL text and the
+words it says, which know nothing of the app) and `podelis` (the root:
+the app, its UI, the command line, the gateway and agents). The root
+crate re-exports the core's modules (`use podelis_core::{db, lang, sql}`
+in `main.rs`), so its code says `crate::db::…` as before.
 
 ```
+crates/podelis-core/
+  build.rs               finds the engines (see "Databases")
+  src/lib.rs             the crate: `db`, `sql`, `lang` (`t!`, `tn!`)
+  src/db/                talking to databases (below)
+  src/sql/               SQL text, never a connection: the lexer and
+                         statement splitter (mod.rs), analysis (analyze),
+                         completion, parameters, and the syntax tree:
+                         parsing once (parse), scopes, lint rules (see "SQL
+                         checks"); engine rules come from db
+  src/lang/              the words, a TOML file per language
 src/
   main.rs                startup and the event loop
   cli/                   without the UI: -e / --test / --import (mod.rs),
@@ -10,12 +25,6 @@ src/
   app/                   state and behaviour (no drawing): screens, tabs, keys,
                          editing, running queries (query/), the navigator…
   ui/                    drawing with ratatui; reads the app's state
-  db/                    talking to databases (below)
-  sql/                   SQL text, never a connection: the lexer and
-                         statement splitter (mod.rs), analysis (analyze),
-                         completion, parameters, and the syntax tree:
-                         parsing once (parse), scopes, lint rules (see "SQL
-                         checks"); engine rules come from db
   agents/                what agents may run (mod.rs), their log and
                          approvals, and the MCP server (`podelis mcp`)
   gateway/               the separate gateway process: models, context,
@@ -38,15 +47,16 @@ src/
 Each module uses only those to its left (lower):
 
 ```
-lang, editor  →  sql, db (related, chart)  →  config  →  system  →  transfer  →  agents, gateway  →  app  →  ui  →  cli, main.rs
+podelis-core (lang, sql, db)  →  editor, related, chart  →  config  →  system  →  transfer  →  agents, gateway  →  app  →  ui  →  cli, main.rs
 ```
 
-`tests/layers.rs` checks it in the code that ships (items marked
-`#[cfg(test)]` may reach across): a `crate::app` in `gateway/`, or a
-`use crate::{app::…}`, fails `cargo test`. Two
-exceptions remain, still to go: `sql` and `db` use each other (`Engine`
-and the lexer rules one way, statement analysis the other), and `sql`
-borrows `editor::is_word_char`. `agents` and `gateway` share a level: the
+Cargo keeps the core below the rest: it can't name the app's modules.
+Inside the root crate, `tests/layers.rs` checks the order in the code
+that ships (items marked `#[cfg(test)]` may reach across): a
+`crate::app` in `gateway/`, or a `use crate::{app::…}`, fails `cargo
+test`. Inside the core, `sql` and `db` use each other (`Engine` and the
+lexer rules one way, statement analysis the other); being one crate,
+that's allowed. `agents` and `gateway` share a level: the
 gateway serves agents' MCP sessions, and `podelis mcp` starts the gateway.
 
 Whoever connects (the app, `-e`, the gateway, agents) turns a saved
@@ -136,7 +146,7 @@ everywhere:
 
 The app talks to one type, `db::Database` (the port). Each engine is a
 self-contained adapter folder, and nothing outside its folder names it:
-`build.rs` finds the engines.
+`build.rs` finds the engines. All of it is in `crates/podelis-core/`.
 
 ```
 build.rs          finds every src/db/<engine>/ with an engine.toml and

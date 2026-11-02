@@ -15,7 +15,7 @@ pub(in crate::db) async fn own_live_db(name: &str) -> Option<(Database, ConnectP
     Some((Database::connect(params.clone()).await.expect("open"), params))
 }
 
-pub(crate) static TEST_SQL: TestSql = TestSql {
+pub static TEST_SQL: TestSql = TestSql {
     sleep: None,
     count_to_2500: "WITH RECURSIVE s(g) AS (SELECT 1 UNION ALL SELECT g + 1 FROM s WHERE g < 2500) SELECT g FROM s",
     plan_shows: &["SCAN t"],

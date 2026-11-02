@@ -24,21 +24,23 @@ and re-run first.
 **Where tests go.** Tests sit with the code they test, as Rust's unit
 tests do: a `#[cfg(test)] mod tests` at the end of a file, or a file of
 their own beside it once they grow (an engine's
-`src/db/<engine>/db_tests.rs`), or a folder of files by topic
+`crates/podelis-core/src/db/<engine>/db_tests.rs`), or a folder of files by topic
 (`src/app/tests/`, `src/ui/tests/`). Being inside the crate, they
 can reach private code (`App`, its keys, what the UI drew), which is most
-of what they check. Cargo's `tests/` folder is for integration tests:
+of what they check. The app's tests reach the core's test helpers
+(`db::tests`: test servers, scratch databases) through its
+`test-support` feature, on only for them. Cargo's `tests/` folder is for integration tests:
 crates of their own that see only a library's public API. Podėlis is a
 program, not a library, so that folder is only for tests that run the
 built `podelis` from outside (its path is in `CARGO_BIN_EXE_podelis`), like
 a user or a script would: `-e`, `--format`, exit codes, `--help`
 (`tests/cli.rs`).
 
-**Translations.** The app's words are in `src/lang/`, a TOML file per
+**Translations.** The app's words are in `crates/podelis-core/src/lang/`, a TOML file per
 language (`en.toml`, `lt.toml`), built into the program. Code says
 `t!("section.key")` (a `&'static str`) or `t!("section.key", name =
 value)` for `{name}` in the text; a counted word is `tn!("section.key", n)`
-with forms `one`, `few` and `other` (`plural` in `src/lang/mod.rs` has each
+with forms `one`, `few` and `other` (`plural` in `lang/mod.rs` has each
 language's rule: Lithuanian uses all three). English is complete; a key
 another language lacks shows in English. Tests check that every key the
 code uses is in English, that English has none unused, and that each

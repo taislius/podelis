@@ -1,17 +1,83 @@
 [package]
 name = "podelis"
-version = "0.7.3"
-edition = "2024"
-rust-version = "1.94" # sqlx 0.9; rust-toolchain.toml pins the newer compiler used for development
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "A terminal UI SQL client for PostgreSQL, MySQL and SQLite"
-license = "AGPL-3.0-only"
-repository = "https://github.com/taislius/podelis"
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
 exclude = [".github/", ".githooks/", "docs/demo.gif", "packaging/", "patches/"]
 keywords = ["sql", "tui", "postgres", "mysql", "database"]
 categories = ["command-line-utilities", "database"]
+# Installed from git (`cargo install --git`), never from crates.io: its
+# `podelis-core` is a path in the workspace.
+publish = false
 
 [dependencies]
+podelis-core = { path = "crates/podelis-core", default-features = false }
+anyhow.workspace = true
+chrono.workspace = true
+crossterm.workspace = true
+csv.workspace = true
+dirs.workspace = true
+flate2.workspace = true
+futures-util.workspace = true
+keyring.workspace = true
+reqwest.workspace = true
+ratatui.workspace = true
+rmcp.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlformat.workspace = true
+sqlparser.workspace = true
+# SQLite is always built: the gateway keeps each project's memory in it.
+# The other drivers come with their engines' features.
+sqlx.workspace = true
+tokio.workspace = true
+toml.workspace = true
+# Changing a setting in config.toml keeps the file's comments and layout.
+toml_edit.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+unicode-width.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[features]
+# The database engines built in (each a `crates/podelis-core/src/db/<engine>/`
+# folder): build fewer with `--no-default-features --features postgres`, say.
+default = ["postgres", "mysql", "sqlite"]
+postgres = ["podelis-core/postgres"]
+mysql = ["podelis-core/mysql"]
+sqlite = ["podelis-core/sqlite"]
+
+[dev-dependencies]
+podelis-core = { path = "crates/podelis-core", default-features = false, features = ["test-support"] }
+insta.workspace = true
+proptest.workspace = true
+# An MCP client, to test `podelis mcp` over the real protocol.
+rmcp = { workspace = true, features = ["client"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true
+
+[workspace]
+members = [".", "crates/podelis-core"]
+# Plain `cargo build`, `test` and `clippy` cover both.
+default-members = [".", "crates/podelis-core"]
+resolver = "3"
+
+[workspace.package]
+version = "0.7.3"
+edition = "2024"
+rust-version = "1.94" # sqlx 0.9; rust-toolchain.toml pins the newer compiler used for development
+license = "AGPL-3.0-only"
+repository = "https://github.com/taislius/podelis"
+
+[workspace.dependencies]
 anyhow = "1.0.104"
 chrono = "0.4.45"
 crossterm = { version = "0.29.0", features = ["osc52"] }
@@ -40,23 +106,8 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 unicode-width = "0.2.2"
 url = "2.5"
 uuid = { version = "1.27.0", features = ["v4"] }
-
-[features]
-# The database engines built in (each an `src/db/<engine>/` folder): build
-# fewer with `--no-default-features --features postgres`, say.
-default = ["postgres", "mysql", "sqlite"]
-postgres = ["sqlx/postgres"]
-# With RSA: MySQL 8's login sends the password RSA-encrypted when there's no
-# TLS and the server hasn't cached the user's login (after a restart). The
-# patched sqlx-mysql (patches/) does it with aws-lc-rs, not the `rsa` crate.
-mysql = ["sqlx/mysql", "sqlx/mysql-rsa"]
-sqlite = []
-
-[dev-dependencies]
 insta = "1"
 proptest = "1"
-# An MCP client, to test `podelis mcp` over the real protocol.
-rmcp = { version = "3.5.1", features = ["client"] }
 tempfile = "3"
 
 [profile.release]
@@ -66,10 +117,10 @@ lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
 
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = "forbid"
 
-[lints.clippy]
+[workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 # Deliberate in this codebase:
 cast_possible_truncation = "allow" # terminal coordinates are u16; values are clamped before casting
@@ -78,6 +129,12 @@ wildcard_imports = "allow"         # `use super::*` in the app's per-screen modu
 struct_excessive_bools = "allow"   # UI state flags
 items_after_statements = "allow"   # local consts next to where they're used
 assert_is_empty = "allow"          # `assert!(x.is_empty())` reads better than `assert_eq!(x, [] as [T; 0])`
+# Library crates here aren't published: their callers are the app, so what
+# a public API would need is noise.
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
 # Catch leftovers:
 dbg_macro = "warn"
 todo = "warn"

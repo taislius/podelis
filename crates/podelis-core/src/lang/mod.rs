@@ -180,6 +180,7 @@ pub fn fill(key: &str, values: &[(&str, String)]) -> String {
 
 /// `t!("section.key")`: the words, `&'static str`. `t!("section.key", name =
 /// value, …)`: with the values put in, a `String`.
+#[macro_export]
 macro_rules! t {
     ($key:literal) => {
         $crate::lang::text($key)
@@ -192,6 +193,7 @@ macro_rules! t {
 /// `tn!("section.key", n)`: the form of a counted word for `n` (as a
 /// number, `{n}`), a `String`; `tn!("section.key", n, name = value, …)`
 /// with more values.
+#[macro_export]
 macro_rules! tn {
     ($key:literal, $n:expr) => {
         $crate::lang::counted($key, u64::try_from($n).unwrap_or(u64::MAX), &[])
@@ -220,7 +222,11 @@ mod tests {
     /// Every key the code uses, from its `t!("…")`s.
     fn used_keys() -> Vec<String> {
         let mut keys = Vec::new();
-        let mut stack = vec![std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))];
+        // This crate's code and the app's (the workspace's root crate).
+        let mut stack = vec![
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../src")),
+        ];
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(dir).unwrap().flatten() {
                 let path = entry.path();

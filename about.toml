@@ -25,3 +25,7 @@ ignore-dev-dependencies = true
 # Podelis itself (deny.toml limits AGPL to this crate too).
 [podelis]
 accepted = ["AGPL-3.0-only"]
+
+# Its core crate (the workspace's other member), the same.
+[podelis-core]
+accepted = ["AGPL-3.0-only"]

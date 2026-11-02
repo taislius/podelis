@@ -7,7 +7,7 @@ mod plan;
 pub(super) mod cells;
 #[cfg(feature = "postgres")]
 pub(super) mod connect;
-#[cfg(all(test, feature = "postgres"))]
+#[cfg(all(any(test, feature = "test-support"), feature = "postgres"))]
 pub(in crate::db) mod db_tests;
 #[cfg(feature = "postgres")]
 mod copy;
