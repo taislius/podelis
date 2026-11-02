@@ -11,6 +11,10 @@ on:
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
+# The token may read the code, nothing more.
+permissions:
+  contents: read
+
 jobs:
   deny:
     name: cargo-deny
