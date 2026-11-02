@@ -17,6 +17,28 @@ examine_globs = [
 ]
 # The core's rules are tested in the app's crate (src/agents/engines.rs).
 test_workspace = true
-# The keychain's error wording by OS (no Secret Service on Linux): no test
-# can make the keyring crate fail that way.
-exclude_re = ["keyring_entry"]
+# Not worth a test, each for its reason:
+exclude_re = [
+    # The keychain's error wording by OS (no Secret Service on Linux): no
+    # test can make the keyring crate fail that way.
+    "keyring_entry",
+    # A print to stderr that may fail, and `podelis mcp`'s process entry
+    # (it copies bytes between the agent and the gateway).
+    "eprintln_safe",
+    "agents/mcp.rs:.*replace run -> i32",
+    # The gateway gives clients a second to read that it stops before the
+    # process ends: in a test the process goes on, so it can't be seen.
+    "let_clients_read",
+    # Only which error is told when an old socket file can't be removed:
+    # binding fails right after anyway.
+    "in bind$",
+    # The schema's size limit, `>` or `>=`: they differ at one exact byte
+    # count of a schema's text (the cut itself is tested).
+    "replace > with >= in Server::schema",
+]
+# Reported as missed, and equivalent: two mutants of how a sandbox's
+# savepoints are numbered (leaving `calls` out of its update, and
+# `calls + 1` as `calls * 1`): they then all have one name, which behaves
+# the same. Not excluded: cargo-mutants doesn't apply `exclude_re` to a
+# deleted struct field, and the second reads like the sandbox's own number
+# (`+ 1` a few lines up), which the tests do catch.
