@@ -2,7 +2,8 @@ use super::*;
 use std::time::Instant;
 
 use crate::config::keys::Action;
-use crate::db::tests::{file_engine, file_profile};
+use crate::config::store::file_profile;
+use crate::db::tests::file_engine;
 use crate::db::{ConnectionMode, SslMode, TxnState};
 
 mod agents;

@@ -538,6 +538,28 @@ pub fn store_password(account: &str, password: &str) -> Result<()> {
 }
 
 #[cfg(test)]
+/// A saved connection `name` to the file database at `path`.
+pub(crate) fn file_profile(name: &str, path: &std::path::Path) -> ConnectionProfile {
+    ConnectionProfile {
+        unknown: Unknown::default(),
+        name: name.into(),
+        engine: crate::db::tests::file_engine(),
+        host: path.to_string_lossy().into_owned(),
+        port: String::new(),
+        user: String::new(),
+        database: String::new(),
+        ssl_mode: crate::db::SslMode::Disable,
+        mode: crate::db::ConnectionMode::Normal,
+        transaction: None,
+        ssh: String::new(),
+        timeout: String::new(),
+        password_command: Vec::new(),
+        agents: crate::db::AgentAccess::None,
+        legacy_keychain: false,
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

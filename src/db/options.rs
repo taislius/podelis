@@ -322,12 +322,18 @@ impl ConnectParams {
 mod debug_tests {
     #[test]
     fn debug_output_hides_the_password() {
-        let mut params = crate::config::draft::ConnectionDraft::from_address(&crate::config::draft::classify(
-            "postgres://bob:hunter2@db:5432/shop",
-        ))
-        .unwrap()
-        .params()
-        .unwrap();
+        let mut params = super::ConnectParams {
+            engine: super::Engine::Postgres,
+            host: "db".into(),
+            port: 5432,
+            user: "bob".into(),
+            password: "hunter2".into(),
+            database: "shop".into(),
+            ssl_mode: super::SslMode::Prefer,
+            read_only: false,
+            ssh: None,
+            password_command: Vec::new(),
+        };
         let shown = format!("{params:?}");
         assert!(!shown.contains("hunter2") && shown.contains("<hidden>") && shown.contains("bob"), "{shown}");
         params.password.clear();
