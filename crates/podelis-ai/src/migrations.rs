@@ -76,14 +76,10 @@ struct History {
 }
 
 /// The engine a project's migrations are written for: the one most of its
-/// connections use (with none, the first engine).
-pub fn engine_of(connections: &[crate::config::store::ConnectionProfile]) -> Engine {
+/// connections (`engines`, one per connection) use; with none, the first.
+pub fn engine_of(engines: &[Engine]) -> Engine {
     // Reversed, so a tie goes to the engine listed first.
-    Engine::ALL
-        .into_iter()
-        .rev()
-        .max_by_key(|e| connections.iter().filter(|c| c.engine == *e).count())
-        .unwrap_or(Engine::ALL[0])
+    Engine::ALL.into_iter().rev().max_by_key(|e| engines.iter().filter(|c| *c == e).count()).unwrap_or(Engine::ALL[0])
 }
 
 /// The facts in `files` (name, SQL), oldest first, read as `engine`'s SQL.

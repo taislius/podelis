@@ -4,7 +4,6 @@ pub(crate) mod draft;
 pub(crate) mod history;
 pub(crate) mod keys;
 pub(crate) mod library;
-pub(crate) mod models;
 pub(crate) mod settings;
 pub(crate) mod store;
 pub(crate) mod theme;

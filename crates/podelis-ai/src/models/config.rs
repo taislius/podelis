@@ -1,6 +1,5 @@
-//! The models in `config.toml`'s `[[models]]`: what each entry says. The
-//! gateway (`gateway::models`) talks to them; the app and the settings
-//! only read these.
+//! The models in `config.toml`'s `[[models]]`: what each entry says (the
+//! app's settings read them; this crate's clients talk to them).
 
 use serde::Deserialize;
 
@@ -15,14 +14,14 @@ pub enum Api {
 }
 
 impl Api {
-    pub(crate) fn default_url(self) -> &'static str {
+    pub fn default_url(self) -> &'static str {
         match self {
             Api::Anthropic => "https://api.anthropic.com",
             Api::OpenAi => "https://api.openai.com/v1",
         }
     }
 
-    pub(crate) fn key_env(self) -> &'static str {
+    pub fn key_env(self) -> &'static str {
         match self {
             Api::Anthropic => "ANTHROPIC_API_KEY",
             Api::OpenAi => "OPENAI_API_KEY",
@@ -84,7 +83,7 @@ impl ModelConfig {
 
 /// Whether `url` points at this machine, where plain HTTP is fine and no
 /// key may be needed.
-pub(crate) fn is_local(url: &url::Url) -> bool {
+pub fn is_local(url: &url::Url) -> bool {
     match url.host() {
         Some(url::Host::Domain(d)) => d == "localhost",
         Some(url::Host::Ipv4(ip)) => ip.is_loopback(),

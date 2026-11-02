@@ -633,6 +633,4 @@ fn cut(text: &str) -> String {
 }
 
 #[cfg(test)]
-mod eval;
-#[cfg(test)]
 mod tests;

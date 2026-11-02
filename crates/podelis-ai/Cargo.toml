@@ -1,0 +1,41 @@
+[package]
+name = "podelis-ai"
+description = "Podėlis's AI: the models and their keys, the context a model is shown of a database, a project's memory, migrations read into facts, and a model's SQL checked against the schema"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+podelis-core = { path = "../podelis-core", default-features = false }
+chrono.workspace = true
+futures-util.workspace = true
+# The models' APIs; rustls on aws-lc-rs, as sqlx.
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# A project's memory is a SQLite file (with an FTS5 index).
+sqlx.workspace = true
+# A model's SQL, parsed to check its names.
+sqlparser.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[features]
+# The core's engines, when this crate is built on its own (`cargo test -p
+# podelis-ai`): the core needs one. In the app they're the app's choice,
+# which turns these off.
+default = ["postgres", "mysql", "sqlite"]
+postgres = ["podelis-core/postgres"]
+mysql = ["podelis-core/mysql"]
+sqlite = ["podelis-core/sqlite"]
+
+[dev-dependencies]
+podelis-core = { path = "../podelis-core", default-features = false, features = ["test-support"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

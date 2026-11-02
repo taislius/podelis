@@ -107,7 +107,7 @@ pub struct Settings {
     /// stops (it's started again when needed); 0 keeps it running.
     pub gateway_idle: u64,
     /// The models the gateway may use, the default first (`[[models]]`).
-    pub models: Vec<crate::config::models::ModelConfig>,
+    pub models: Vec<podelis_ai::models::ModelConfig>,
     /// Key bindings by action name (see `keys.rs`).
     pub keys: HashMap<String, KeySpec>,
 }
@@ -377,5 +377,18 @@ mod tests {
         let (s, warning) = Settings::load(dir.path());
         assert_eq!(s, Settings::default());
         assert!(warning.unwrap().contains("Ignoring invalid"));
+    }
+
+    #[test]
+    fn settings_read_models_from_config_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml = "[[models]]\nname = \"claude\"\napi = \"anthropic\"\nmodel = \"claude-opus-5-5\"\n\n\
+                    [[models]]\nname = \"local\"\napi = \"openai\"\nurl = \"http://localhost:11434/v1\"\nmodel = \"qwen3:8b\"\n";
+        std::fs::write(dir.path().join("config.toml"), toml).unwrap();
+        let (settings, warning) = Settings::load(dir.path());
+        assert!(warning.is_none(), "{warning:?}");
+        let names: Vec<&str> = settings.models.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["claude", "local"]);
+        assert_eq!(settings.models[0].url(), "https://api.anthropic.com");
     }
 }

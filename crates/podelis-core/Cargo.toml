@@ -13,6 +13,8 @@ anyhow.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 futures-util.workspace = true
+# The OS keychain: `v1` (Keychain on macOS, Secret Service through zbus on Linux).
+keyring.workspace = true
 rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true

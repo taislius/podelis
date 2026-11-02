@@ -34,6 +34,7 @@ exceptions = [
     # permissive, so closed builds are possible.
     { allow = ["AGPL-3.0-only"], crate = "podelis" },
     { allow = ["AGPL-3.0-only"], crate = "podelis-core" },
+    { allow = ["AGPL-3.0-only"], crate = "podelis-ai" },
     # File-level copyleft, used unmodified (pulled in by `dirs`).
     { allow = ["MPL-2.0"], crate = "option-ext" },
 ]

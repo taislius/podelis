@@ -123,7 +123,7 @@ fn status_bar_says_whether_ai_is_on() {
     let status_bar = |app: &mut App| render(app, 140, 12).lines().last().unwrap().to_string();
     app.settings.models.clear();
     assert!(status_bar(&mut app).contains("AI off"), "{}", status_bar(&mut app));
-    let model = |url: &str| -> crate::config::models::ModelConfig {
+    let model = |url: &str| -> podelis_ai::models::ModelConfig {
         toml::from_str(&format!("name = \"claude\"\napi = \"anthropic\"\nmodel = \"claude-opus-5-5\"\nurl = \"{url}\""))
             .unwrap()
     };

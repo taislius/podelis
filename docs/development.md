@@ -76,7 +76,7 @@ installed. Windows isn't supported.
 
 **The context's eval.** `cargo test retrieval -- --nocapture` prints
 recall, precision and the context's size per database for the gold set
-in `src/gateway/context/eval/questions.txt` (`PODELIS_EVAL_ALL=1` also
+in `src/gateway/eval/questions.txt` (`PODELIS_EVAL_ALL=1` also
 lists each question's extra tables and why they came); it fails under
 the floors in `eval.rs`, to raise as the builder improves. The schemas
 are snapshots (`eval/<database>.json`, no rows); to make them again from

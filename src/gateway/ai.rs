@@ -305,7 +305,7 @@ async fn built_for(
 }
 
 /// The context for `question` once memory's been read: what `ask` builds,
-/// and what the retrieval eval (`context/eval.rs`) measures.
+/// and what the retrieval eval (`gateway/eval.rs`) measures.
 pub(super) fn context_for(
     schema: &Schema,
     question: &str,
@@ -810,7 +810,8 @@ pub async fn memory(
             let files = tokio::task::spawn_blocking(move || super::migrations::read_folder(&reading)).await;
             match files {
                 Ok(Ok(files)) => {
-                    let engine = super::migrations::engine_of(&project.connections);
+                    let engines: Vec<_> = project.connections.iter().map(|c| c.engine).collect();
+                    let engine = super::migrations::engine_of(&engines);
                     let learned = super::migrations::learn(&files, engine);
                     let source = format!("file:{}", folder.display());
                     mem::replace_source(&mut conn, &source, &learned)
