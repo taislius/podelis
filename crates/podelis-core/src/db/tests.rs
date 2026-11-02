@@ -29,9 +29,10 @@ pub(in crate::db) fn server_params(engine: Engine, prefix: &str, user: &str) -> 
     })
 }
 
-/// The engine's test server, if one is set (none for a file database).
+/// The engine's test server, if one is set (none for a file database, nor
+/// for an engine this build leaves out).
 pub(in crate::db) fn live_params(engine: Engine) -> Option<ConnectParams> {
-    on_driver!(engine, engine::db_tests::live_params())
+    on_driver!(engine, engine::db_tests::live_params(), other => None)
 }
 
 pub async fn live_db(engine: Engine) -> Option<Database> {
@@ -41,9 +42,10 @@ pub async fn live_db(engine: Engine) -> Option<Database> {
 
 /// A database of the test's own, `name`, on `engine`, and how to reach it
 /// again: on its test server (none set: `None`), or a new file. For the
-/// tests every engine shares, so each runs on each engine there is.
+/// tests every engine shares, so each runs on each engine there is; none
+/// for an engine this build leaves out.
 pub async fn own_live_db(engine: Engine, name: &str) -> Option<(Database, ConnectParams)> {
-    on_driver!(engine, engine::db_tests::own_live_db(name).await)
+    on_driver!(engine, engine::db_tests::own_live_db(name).await, other => None)
 }
 
 /// A new SQLite file named after the test (each test its own name), in

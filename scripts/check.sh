@@ -15,6 +15,11 @@ echo "==> clippy"
 cargo clippy --all-targets --locked -- -D warnings
 echo "==> tests"
 cargo test --locked
+# As CI: again with fewer engines (the README's build), so nothing assumes
+# MySQL is there.
+echo "==> clippy and tests with PostgreSQL and SQLite only"
+cargo clippy --all-targets --locked --no-default-features --features postgres,sqlite -- -D warnings
+cargo test --locked --no-default-features --features postgres,sqlite
 echo "==> cargo-deny"
 cargo deny check
 # The scripts are POSIX sh (Debian's /bin/sh is dash, not bash): checked

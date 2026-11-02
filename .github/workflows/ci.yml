@@ -21,7 +21,8 @@ jobs:
   check:
     name: Lint & test (live PostgreSQL, MySQL, SQLite)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Two builds: every engine, then the README's fewer.
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17
@@ -50,3 +51,9 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
+      # The build README.md shows with fewer engines (no MySQL): code and
+      # tests mustn't assume an engine is there. Clippy as well, as what
+      # goes unused with fewer engines is allowed only in such a build.
+      # The same servers: PostgreSQL's live tests run here too.
+      - run: cargo clippy --all-targets --locked --no-default-features --features postgres,sqlite -- -D warnings
+      - run: cargo test --locked --no-default-features --features postgres,sqlite
