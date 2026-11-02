@@ -87,12 +87,29 @@ impl Dialect for MySql {
 
     /// `float` is a 4-byte float here; `timestamp` a moment in time (stored
     /// in UTC, shown in the session's zone).
-    fn type_kind(&self, base: &str) -> Option<crate::db::TypeKind> {
-        match base {
-            "float" => Some(crate::db::TypeKind::Float4),
-            "timestamp" => Some(crate::db::TypeKind::TimestampTz),
-            _ => None,
+    fn type_kind(&self, ty: &str) -> Option<crate::db::TypeKind> {
+        use crate::db::TypeKind as Kind;
+        use crate::db::types::{arguments, base};
+        // Nothing elsewhere holds an unsigned integer's range.
+        if ty.contains("unsigned") {
+            return Some(Kind::Other(ty.to_string()));
         }
+        Some(match base(ty) {
+            // `tinyint(1)` is what `boolean` becomes.
+            "tinyint" if arguments(ty) == [1] => Kind::Bool,
+            "tinyint" => Kind::Int(1),
+            "mediumint" => Kind::Int(3),
+            "float" => Kind::Float4,
+            // `real` is a `double` unless REAL_AS_FLOAT is set.
+            "double" | "real" => Kind::Float8,
+            "tinytext" | "mediumtext" | "longtext" => Kind::Text,
+            "datetime" => Kind::Timestamp,
+            // Stored in UTC, shown in the session's zone: a moment in time.
+            "timestamp" => Kind::TimestampTz,
+            "tinyblob" | "mediumblob" | "longblob" => Kind::Binary,
+            "json" => Kind::Json,
+            _ => return None,
+        })
     }
 
     fn type_name(&self, kind: &crate::db::TypeKind) -> Option<String> {

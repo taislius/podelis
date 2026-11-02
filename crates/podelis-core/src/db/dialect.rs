@@ -288,10 +288,10 @@ pub trait Dialect: Sync {
     fn container_login(&self, _var: &dyn Fn(&str) -> Option<String>) -> Option<ContainerLogin> {
         None
     }
-    /// What a type name means here when it means something else than
-    /// elsewhere (MySQL's `timestamp` is a moment in time); `None` for the
-    /// common meaning (`db::types`).
-    fn type_kind(&self, _base: &str) -> Option<super::TypeKind> {
+    /// What type `ty` (as the catalog reports it, lowercase) means here:
+    /// this engine's own names, and the standard's it reads otherwise;
+    /// `None` leaves it to the standard's meaning (`db::types`).
+    fn type_kind(&self, _ty: &str) -> Option<super::TypeKind> {
         None
     }
     /// How this engine writes a type of `kind`; `None` if it has nothing

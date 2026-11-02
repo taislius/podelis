@@ -571,3 +571,74 @@ fn the_statements_podelis_writes() {
     let copy = Engine::ALL.into_iter().find(|e| e.is_file_based()).and_then(|e| e.dialect().copy_into("/tmp/o'k.db"));
     assert_eq!(copy.as_deref(), Some("VACUUM INTO '/tmp/o''k.db'"), "the path quoted as a literal");
 }
+
+// Column types across engines (`db::types`): each engine's names from its
+// dialect, the standard's shared.
+#[cfg(test)]
+mod types {
+    use super::super::types::{same_type, translate_type};
+    use super::*;
+
+    const PG: Engine = Engine::Postgres;
+    const MY: Engine = Engine::MySql;
+    const LITE: Engine = Engine::Sqlite;
+    #[test]
+    fn the_same_types_under_other_names() {
+        // What the catalogs report for the same CREATE TABLE.
+        for (pg, my) in [
+            ("int4", "int"),
+            ("int8", "bigint"),
+            ("int2", "smallint"),
+            ("varchar(120)", "varchar(120)"),
+            ("char(3)", "char(3)"),
+            ("numeric(10,2)", "decimal(10,2)"),
+            ("float4", "float"),
+            ("float8", "double"),
+            ("bool", "tinyint(1)"),
+            ("timestamp", "datetime(6)"),
+            ("timestamptz", "timestamp(3)"),
+            ("bytea", "longblob"),
+            ("jsonb", "json"),
+            ("text", "mediumtext"),
+        ] {
+            assert!(same_type(PG, pg, MY, my), "{pg} = {my}");
+        }
+        for (pg, my) in [("varchar(120)", "varchar(255)"), ("int4", "int unsigned"), ("timestamp", "timestamp")] {
+            assert!(!same_type(PG, pg, MY, my), "{pg} ≠ {my}");
+        }
+        // SQLite keeps only the affinity.
+        assert!(same_type(LITE, "INTEGER", PG, "int4") && same_type(LITE, "NVARCHAR(120)", MY, "varchar(40)"));
+        assert!(!same_type(LITE, "INTEGER", PG, "text"));
+    }
+
+    #[test]
+    fn types_as_another_engine_writes_them() {
+        let to = |from, ty, to| translate_type(from, ty, to);
+        assert_eq!(to(PG, "varchar(120)", MY).as_deref(), Some("varchar(120)"));
+        assert_eq!(to(PG, "varchar", MY).as_deref(), Some("longtext"));
+        assert_eq!(to(PG, "numeric", MY).as_deref(), Some("decimal(65,30)"));
+        assert_eq!(to(PG, "timestamptz", MY).as_deref(), Some("timestamp(6)"));
+        assert_eq!(to(MY, "tinyint(1)", PG).as_deref(), Some("boolean"));
+        assert_eq!(to(MY, "datetime", PG).as_deref(), Some("timestamp"));
+        assert_eq!(to(MY, "timestamp", PG).as_deref(), Some("timestamptz"));
+        assert_eq!(to(LITE, "NVARCHAR(120)", PG).as_deref(), Some("varchar(120)"));
+        assert_eq!(to(PG, "int4[]", LITE).as_deref(), Some("int4[]"), "SQLite takes any name");
+        assert_eq!(to(MY, "int unsigned", PG), None);
+        assert_eq!(to(PG, "int4[]", MY), None);
+        assert_eq!(to(MY, "enum('a','b')", PG), None);
+        assert_eq!(to(PG, "money", PG).as_deref(), Some("money"), "the same engine keeps it");
+    }
+
+    /// An engine's own names are its dialect's: another engine's
+    /// reading of them is the standard's, or none.
+    #[test]
+    fn each_engine_reads_its_own_type_names() {
+        assert!(same_type(PG, "int8", LITE, "UNSIGNED BIG INT"));
+        assert!(same_type(MY, "real", PG, "float8"), "MySQL's real is a double");
+        assert!(same_type(PG, "real", MY, "float"));
+        assert!(same_type(PG, "bpchar(3)", MY, "char(3)"));
+        assert_eq!(translate_type(MY, "int8", PG), None, "not MySQL's");
+        assert_eq!(translate_type(PG, "datetime", MY), None, "not PostgreSQL's");
+        assert_eq!(translate_type(LITE, "DATETIME", PG).as_deref(), Some("timestamp"));
+    }
+}
