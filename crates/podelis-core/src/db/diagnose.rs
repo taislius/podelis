@@ -16,9 +16,19 @@ pub fn is_auth_failure(message: &str) -> bool {
         || (m.contains("access denied for user") && m.contains("using password:"))
 }
 
-/// A plain-language hint for a connection error message, if there is one.
+/// A plain-language hint for a connection error message, if there is one:
+/// the network's, SSH's and TLS's here, and each engine's own errors from
+/// its dialect (`Dialect::connect_hint`; each engine words its own).
 pub fn hint(message: &str) -> Option<&'static str> {
     let m = message.to_lowercase();
+    network_hint(&m)
+        .or_else(|| Engine::ALL.into_iter().find_map(|e| e.dialect().connect_hint(&m)))
+        .or_else(|| tls_hint(&m))
+}
+
+/// What goes wrong on the way to any server: timeouts, refusals, SSH, routes
+/// and names (`m` in lower case).
+fn network_hint(m: &str) -> Option<&'static str> {
     let has = |s: &str| m.contains(s);
     Some(if has("the connection's limit") {
         // A query that ran too long, on a server that answered.
@@ -42,28 +52,18 @@ pub fn hint(message: &str) -> Option<&'static str> {
         || has("temporary failure in name resolution")
     {
         "the host name doesn't resolve: check its spelling, your DNS or VPN"
-    } else if has("password authentication failed") {
-        "wrong or missing password for this user: from the form (or the keychain), the password command, ~/.pgpass or PGPASSWORD"
-    } else if has("no pg_hba.conf entry") {
-        "the server doesn't let this user/database in from your address: it needs a pg_hba.conf entry (or SSL, if only hostssl is allowed)"
-    } else if has("role") && has("does not exist") {
-        "there's no such user on the server"
-    } else if (has("database") && has("does not exist")) || has("unknown database") {
-        "no database by that name: check it, or leave Database empty for the default"
-    } else if has("access denied for user") && has("using password: no") {
-        "the server wants a password: enter it, give the connection a password command, or put it in ~/.my.cnf (with host = this server, unless it's local)"
-    } else if has("access denied for user") {
-        "wrong user or password, or this user isn't allowed to connect from your host"
-    } else if has("certificate") || has("unknownissuer") || has("invalid peer") {
+    } else {
+        return None;
+    })
+}
+
+/// TLS's disagreements, and SSH missing (`m` in lower case).
+fn tls_hint(m: &str) -> Option<&'static str> {
+    let has = |s: &str| m.contains(s);
+    Some(if has("certificate") || has("unknownissuer") || has("invalid peer") {
         "the server's TLS certificate isn't trusted: SSL mode `require` encrypts without verifying it, or trust its CA"
     } else if has("ssl") && (has("required") || has("not support") || has("rejected")) {
         "the server and the SSL mode disagree: try another SSL mode (`require` to insist on TLS, `disable` for none)"
-    } else if has("too many connections") || has("remaining connection slots") {
-        "the server has no free connections: close some, or raise its connection limit"
-    } else if has("starting up") || has("shutting down") || has("in recovery mode") {
-        "the server is starting up or shutting down: try again in a moment"
-    } else if has("unable to open database file") {
-        "can't open that file: check the path and that you may write to its folder"
     } else if has("failed to start ssh") {
         "install OpenSSH (the `ssh` command) to use tunnels"
     } else {

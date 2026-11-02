@@ -68,6 +68,24 @@ impl Dialect for Postgres {
         Some(crate::db::ContainerLogin { user, database, password })
     }
 
+    fn connect_hint(&self, message: &str) -> Option<&'static str> {
+        let has = |s: &str| message.contains(s);
+        Some(if has("password authentication failed") {
+            "wrong or missing password for this user: from the form (or the keychain), the password command, ~/.pgpass or PGPASSWORD"
+        } else if has("no pg_hba.conf entry") {
+            "the server doesn't let this user/database in from your address: it needs a pg_hba.conf entry (or SSL, if only hostssl is allowed)"
+        } else if has("role") && has("does not exist") {
+            "there's no such user on the server"
+        } else if has("database") && has("does not exist") {
+            "no database by that name: check it, or leave Database empty for the default"
+        } else if has("remaining connection slots") {
+            "the server has no free connections: close some, or raise its connection limit"
+        } else if has("starting up") || has("shutting down") || has("in recovery mode") {
+            "the server is starting up or shutting down: try again in a moment"
+        } else {
+            return None;
+        })
+    }
     /// `real` is a 4-byte float here (MySQL's is a double).
     fn type_kind(&self, ty: &str) -> Option<crate::db::TypeKind> {
         use crate::db::TypeKind as Kind;

@@ -60,6 +60,11 @@ impl Dialect for Sqlite {
         })
     }
 
+    fn connect_hint(&self, message: &str) -> Option<&'static str> {
+        message
+            .contains("unable to open database file")
+            .then_some("can't open that file: check the path and that you may write to its folder")
+    }
     /// SQLite keeps any name it's given; these are the ones its
     /// documentation lists (Datatypes In SQLite, 3.1.1) beside the
     /// standard's.

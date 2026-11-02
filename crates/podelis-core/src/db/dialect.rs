@@ -244,6 +244,12 @@ pub trait Dialect: Sync {
     fn keywords(&self) -> &'static [&'static str] {
         &[]
     }
+    /// A plain-language hint for one of this engine's own connection errors
+    /// (`message` in lower case), as it words them; the network's, SSH's and
+    /// TLS's are `diagnose::hint`'s.
+    fn connect_hint(&self, _message: &str) -> Option<&'static str> {
+        None
+    }
     /// The cheapest query that shows the connection answers.
     fn ping(&self) -> &'static str {
         "SELECT 1"
