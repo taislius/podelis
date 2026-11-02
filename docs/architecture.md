@@ -238,7 +238,11 @@ expands to a `match` over the engines whose arms bring each engine's module
 in as `engine`, so calls stay static (no boxed futures for async). An
 engine missing a function fails to compile, naming its module.
 
-Outside `db/`, code doesn't name an engine except in tests.
+Outside `db/`, code doesn't name an engine except in tests. Not even to
+say "every engine is built": `build.rs` sets the `every_engine` cfg when
+each engine's feature is on, and passes it to the app's build script
+through `links` metadata, so the lints allowed only with fewer engines
+(`lib.rs`, `main.rs`) follow the folders.
 
 ### Adding an engine
 
@@ -298,6 +302,11 @@ src/gateway/
   ai.rs         the `models`, `complete`, `context`, `ask` and `memory.*`
                 methods
   eval_snapshots.rs  the eval's schema snapshots, made from live databases
+crates/podelis-ai/
+  prompts/      what models are told, a Markdown file each (system prompts,
+                the lookup tools' descriptions, the names check's feedback),
+                compiled in by src/prompts.rs: one-pass {name}s, snapshot
+                tests of each; its README says how to change one
 crates/podelis-ai/src/
   memory.rs     a project's facts ("thing, relation, value", who said it,
                 confirmed or not) in `memory/<project-id>.db`, with an FTS5
