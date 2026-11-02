@@ -1,16 +1,16 @@
 //! The words the code says against `lang/en.toml` (in `podelis-core`):
-//! every `t!`/`tn!` key in the three crates is there, and nothing there is
+//! every `t!`/`tn!` key in the workspace's crates is there, and nothing there is
 //! unused. Here, in the app's crate, because it reads every crate's code.
 
 /// Every key the code uses, from its `t!("…")`s.
 fn used_keys() -> Vec<String> {
     let mut keys = Vec::new();
-    // The workspace's three crates.
-    let mut stack = vec![
-        std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
-        std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/crates/podelis-core/src")),
-        std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/crates/podelis-ai/src")),
-    ];
+    // Every crate of the workspace: the app's, and each of `crates/`.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut stack = vec![root.join("src")];
+    for entry in std::fs::read_dir(root.join("crates")).unwrap().flatten() {
+        stack.push(entry.path().join("src"));
+    }
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(dir).unwrap().flatten() {
             let path = entry.path();

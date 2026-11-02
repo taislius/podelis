@@ -13,14 +13,15 @@ impl ClientHandler for TestAgent {
     }
 }
 
+/// A shared file connection (a quick query timeout).
 #[cfg(feature = "sqlite")]
 fn file_connection(name: &str, path: &std::path::Path, agents: AgentAccess, mode: ConnectionMode) -> ConnectionProfile {
-    connection(name, crate::db::tests::file_engine(), &path.to_string_lossy(), agents, mode)
+    ConnectionProfile { agents, mode, timeout: "1".into(), ..crate::config::store::file_profile(name, path) }
 }
 
-/// A shared connection `name` on `engine` at `host` (a server's port, user
-/// and database left empty).
-fn connection(
+/// A shared connection `name` to a server of `engine` at `host` (its port,
+/// user and database left for the caller), with a quick query timeout.
+fn server_connection(
     name: &str,
     engine: crate::db::Engine,
     host: &str,
@@ -391,7 +392,7 @@ async fn live_agents_on_servers() {
             user: params.user.clone(),
             database: params.database.clone(),
             password_command: vec!["printf".into(), "%s".into(), params.password.clone()],
-            ..connection(name, engine, &params.host, agents, mode)
+            ..server_connection(name, engine, &params.host, agents, mode)
         };
         let dir = tempfile::tempdir().unwrap();
         let server = Server::new(

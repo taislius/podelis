@@ -290,6 +290,28 @@ fn move_requires_another_project() {
     assert_eq!(app.profiles().len(), 1);
 }
 
+/// `m` takes a connection's saved password along: under the new
+/// project's account, gone from the old one (the tests' in-memory
+/// keychain). A server's connection: a file has no password.
+#[cfg(any(feature = "postgres", feature = "mysql"))]
+#[test]
+fn moving_a_connection_moves_its_password() {
+    let (mut app, _dir) = test_app();
+    let id = project_id(&app);
+    let profile = ConnectionDraft { name: "x".into(), ..ConnectionDraft::new() }.to_profile();
+    app.store.upsert(&id, None, profile.clone()).unwrap();
+    let other = app.store.add_project("other").unwrap();
+    let old = crate::config::store::keychain_account(&id, &profile);
+    crate::db::keychain::store_password(&old, "s3cret").unwrap();
+    app.handle_key(key(KeyCode::Char('m')));
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.profiles().is_empty(), "{:?}", app.manager.connection_message);
+    let new = crate::config::store::project_account(&other, "x");
+    assert_eq!(crate::db::keychain::get_password(&new).unwrap(), "s3cret");
+    assert_eq!(crate::db::keychain::get_password(&old).unwrap(), "");
+    crate::db::keychain::delete_password(&new).unwrap();
+}
+
 #[test]
 fn a_rejected_password_is_ready_to_type_again() {
     let (mut app, _dir) = test_app();

@@ -15,12 +15,14 @@ echo "==> clippy"
 cargo clippy --all-targets --locked -- -D warnings
 echo "==> tests"
 cargo test --locked
-# As CI's engines job, by choice (a second build: time and disk): again
-# with fewer engines (the README's), so nothing assumes MySQL is there.
+# As CI's engines job, by choice (four more builds: time and disk): with
+# fewer engines, so nothing assumes an engine is there.
 if [ "${PODELIS_CHECK_ENGINES:-}" = 1 ]; then
-    echo "==> clippy and tests with PostgreSQL and SQLite only"
-    cargo clippy --all-targets --locked --no-default-features --features postgres,sqlite -- -D warnings
-    cargo test --locked --no-default-features --features postgres,sqlite
+    for features in postgres,sqlite postgres mysql sqlite; do
+        echo "==> clippy and tests with $features only"
+        cargo clippy --all-targets --locked --no-default-features --features "$features" -- -D warnings
+        cargo test --locked --no-default-features --features "$features"
+    done
 fi
 echo "==> cargo-deny"
 cargo deny check
