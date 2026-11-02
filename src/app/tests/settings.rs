@@ -10,17 +10,17 @@ fn settings_change_in_place_and_are_saved_keeping_the_file() {
     app.screen = Screen::Query;
     app.handle_key(ctrl('k'));
     app.handle_key(key(KeyCode::Char(',')));
-    assert!(app.settings_view.is_some());
+    assert!(app.popups.settings_view.is_some());
     // Lint: Enter turns it off, at once, and it's saved.
     let at = |field| Field::ALL.iter().position(|f| *f == field).unwrap();
-    app.settings_view.as_mut().unwrap().selected = at(Field::Lint);
+    app.popups.settings_view.as_mut().unwrap().selected = at(Field::Lint);
     assert!(app.settings.lint);
     app.handle_key(key(KeyCode::Enter));
     assert!(!app.settings.lint);
     let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
     assert!(text.starts_with("# my settings\nrow_limit = 500\n") && text.contains("lint = false"), "{text}");
     // A number is typed: Enter, the new one, Enter.
-    app.settings_view.as_mut().unwrap().selected = at(Field::RowLimit);
+    app.popups.settings_view.as_mut().unwrap().selected = at(Field::RowLimit);
     app.handle_key(key(KeyCode::Enter));
     app.handle_key(ctrl('u'));
     type_text(&mut app, "2000");
@@ -33,13 +33,13 @@ fn settings_change_in_place_and_are_saved_keeping_the_file() {
     type_text(&mut app, "x");
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.settings.row_limit, 2000);
-    assert!(app.settings_view.as_ref().unwrap().said.as_ref().is_some_and(|(_, error)| *error));
+    assert!(app.popups.settings_view.as_ref().unwrap().said.as_ref().is_some_and(|(_, error)| *error));
     // The theme changes at once; Esc closes.
-    app.settings_view.as_mut().unwrap().selected = at(Field::Theme);
+    app.popups.settings_view.as_mut().unwrap().selected = at(Field::Theme);
     app.handle_key(key(KeyCode::Right));
     assert_eq!(app.settings.theme, crate::config::settings::ThemeName::Light);
     app.handle_key(key(KeyCode::Right));
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.settings_view.is_none());
+    assert!(app.popups.settings_view.is_none());
     assert_eq!(app.setting_shown(Field::Theme), "dark");
 }

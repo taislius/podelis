@@ -108,14 +108,14 @@ impl Command {
     /// What the palette lists: the description, with the tab's name.
     pub fn text(self, app: &App) -> String {
         match self {
-            Command::SwitchTab(i) if app.palette.as_ref().is_some_and(|p| p.tabs_only) => app.tab_entry(i),
+            Command::SwitchTab(i) if app.popups.palette.as_ref().is_some_and(|p| p.tabs_only) => app.tab_entry(i),
             Command::SwitchTab(i) => {
                 format!("{}: {}", t!("palette.switch_tab"), app.tabs.get(i).map_or("", |t| t.name.as_str()))
             }
             Command::GoToConnection(id) => app.connection_entry(id),
             Command::Watch(0) => t!("palette.stop_watch").to_string(),
             Command::Watch(s) => t!("palette.watch_every", s = s),
-            Command::CompareSnapshot(i) => match app.palette.as_ref().and_then(|p| p.snapshots.get(i)) {
+            Command::CompareSnapshot(i) => match app.popups.palette.as_ref().and_then(|p| p.snapshots.get(i)) {
                 Some(s) => t!("palette.compare_with_snapshot", connection = s.connection, taken = s.taken),
                 None => self.describe().to_string(),
             },
@@ -194,7 +194,7 @@ pub struct Palette {
 impl App {
     /// Waits for a letter; `menu_now` shows the menu at once (for `?`).
     pub(super) fn open_palette(&mut self, menu_now: bool) {
-        self.palette = Some(Palette {
+        self.popups.palette = Some(Palette {
             query: LineInput::default(),
             selected: 0,
             searching: false,
@@ -240,7 +240,7 @@ impl App {
             return Some(t!("tab_list.running", time = mm_ss(secs)));
         }
         let Some(id) = tab.conn else { return Some(t!("tab_list.no_connection").to_string()) };
-        if self.conns.active == Some(id) && self.connection_lost {
+        if self.conns.active == Some(id) && self.keepalive.connection_lost {
             return Some(t!("tab_list.lost").to_string());
         }
         (self.conn_txn(id) == Some(TxnState::Open)).then(|| t!("tab_list.in_transaction").to_string())
@@ -249,7 +249,7 @@ impl App {
     /// Ctrl+K g: every tab in a list to search and pick from, the shown
     /// one selected (the tab row only has room for so many).
     pub(super) fn open_tab_list(&mut self) {
-        self.palette = Some(Palette {
+        self.popups.palette = Some(Palette {
             query: LineInput::default(),
             selected: self.active_tab,
             searching: true,
@@ -295,7 +295,7 @@ impl App {
         if conn_texts.is_empty() {
             return self.set_status(t!("tab_list.no_connection").to_string(), false);
         }
-        self.palette = Some(Palette {
+        self.popups.palette = Some(Palette {
             query: LineInput::default(),
             selected: 0,
             searching: true,
@@ -320,7 +320,7 @@ impl App {
         let running = tabs.iter().find_map(|&i| self.tab_run(i).filter(|r| r.executing).map(|r| (i, r)));
         let status = if let Some((_, run)) = running {
             Some(t!("tab_list.running", time = mm_ss(run.since.map_or(0, |s| s.elapsed().as_secs()))))
-        } else if self.conns.active == Some(id) && self.connection_lost {
+        } else if self.conns.active == Some(id) && self.keepalive.connection_lost {
             Some(t!("tab_list.lost").to_string())
         } else {
             (self.conn_txn(id) == Some(TxnState::Open)).then(|| t!("tab_list.in_transaction").to_string())
@@ -332,13 +332,13 @@ impl App {
 
     /// When the waiting Ctrl+K should show its menu.
     pub fn palette_menu_due(&self) -> Option<Instant> {
-        let palette = self.palette.as_ref().filter(|_| self.settings.leader_menu);
+        let palette = self.popups.palette.as_ref().filter(|_| self.settings.leader_menu);
         palette.filter(|p| !p.searching && !p.menu).map(|p| p.opened + MENU_DELAY)
     }
 
     /// No letter came: show the menu.
     pub fn show_palette_menu(&mut self) {
-        if let Some(palette) = &mut self.palette {
+        if let Some(palette) = &mut self.popups.palette {
             palette.menu = true;
         }
         self.notes.status.clear();
@@ -346,8 +346,8 @@ impl App {
 
     /// Commands whose description contains every word typed.
     pub fn palette_items(&self) -> Vec<Command> {
-        let query = self.palette.as_ref().map(|p| p.query.text().to_lowercase()).unwrap_or_default();
-        if let Some(palette) = self.palette.as_ref().filter(|p| p.conns_only) {
+        let query = self.popups.palette.as_ref().map(|p| p.query.text().to_lowercase()).unwrap_or_default();
+        if let Some(palette) = self.popups.palette.as_ref().filter(|p| p.conns_only) {
             return (palette.conn_texts.iter())
                 .filter(|(id, text)| {
                     self.conn_name(*id).is_some() && query.split_whitespace().all(|w| text.contains(w))
@@ -355,7 +355,7 @@ impl App {
                 .map(|(id, _)| Command::GoToConnection(*id))
                 .collect();
         }
-        if let Some(palette) = self.palette.as_ref().filter(|p| p.tabs_only) {
+        if let Some(palette) = self.popups.palette.as_ref().filter(|p| p.tabs_only) {
             // A tab by its name, its connection, or the SQL in it.
             return (palette.tab_texts.iter().enumerate())
                 .filter(|(_, text)| query.split_whitespace().all(|w| text.contains(w)))
@@ -371,7 +371,7 @@ impl App {
         };
         let compare = others.iter().flat_map(|id| [Command::CompareSchema(*id), Command::CompareRows(*id)]);
         // The newest saved schema snapshots, one entry each.
-        let saved = self.palette.as_ref().map_or(0, |p| p.snapshots.len());
+        let saved = self.popups.palette.as_ref().map_or(0, |p| p.snapshots.len());
         let snapshots = (0..saved.min(20)).map(Command::CompareSnapshot);
         // While watching, a way to stop that isn't Esc (vim's in the editor).
         let watch = if self.watch.is_some() { vec![0] } else { watch::EVERY.to_vec() };
@@ -391,11 +391,11 @@ impl App {
 
     pub(super) fn handle_palette_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        if self.palette.as_ref().is_some_and(|p| !p.searching) {
+        if self.popups.palette.as_ref().is_some_and(|p| !p.searching) {
             return self.handle_leader_key(key, ctrl);
         }
         let count = self.palette_items().len();
-        let Some(palette) = &mut self.palette else { return };
+        let Some(palette) = &mut self.popups.palette else { return };
         if let Some(i) = list::step(palette.selected, count, key, Nav::SEARCHED) {
             palette.selected = i;
             return;
@@ -409,7 +409,7 @@ impl App {
             return;
         }
         match key.code {
-            KeyCode::Esc => self.palette = None,
+            KeyCode::Esc => self.popups.palette = None,
             // Back to the letters.
             // (Not from the tab list: it has no letters to go back to.)
             KeyCode::Backspace if palette.query.is_empty() && !palette.tabs_only && !palette.conns_only => {
@@ -418,7 +418,7 @@ impl App {
             KeyCode::Enter => {
                 let selected = palette.selected;
                 let chosen = self.palette_items().get(selected).copied();
-                self.palette = None;
+                self.popups.palette = None;
                 if let Some(command) = chosen {
                     self.run_command(command);
                 }
@@ -434,9 +434,9 @@ impl App {
     /// A key in the menu of letters: run its action, or start searching.
     fn handle_leader_key(&mut self, key: KeyEvent, ctrl: bool) {
         let again = self.keymap.action(key) == Some(Action::Palette);
-        let Some(palette) = &mut self.palette else { return };
+        let Some(palette) = &mut self.popups.palette else { return };
         match key.code {
-            KeyCode::Esc => self.palette = None,
+            KeyCode::Esc => self.popups.palette = None,
             // Ctrl+Shift+K (where the terminal tells it apart): the menu.
             _ if again && key.modifiers.contains(KeyModifiers::SHIFT) => palette.menu = true,
             // Ctrl+K again, or arrows/Enter: the full list.
@@ -444,7 +444,7 @@ impl App {
             KeyCode::Up | KeyCode::Down | KeyCode::Enter => palette.searching = true,
             KeyCode::Char(c) if !ctrl => {
                 if let Some(n) = c.to_digit(10).filter(|n| *n > 0) {
-                    self.palette = None;
+                    self.popups.palette = None;
                     return self.switch_tab((n as usize - 1).min(self.tabs.len() - 1));
                 }
                 // `?`: with no menu coming by itself, the menu; then (or
@@ -455,12 +455,12 @@ impl App {
                     return;
                 }
                 if c == '?' {
-                    self.palette = None;
+                    self.popups.palette = None;
                     self.help_visible = true;
                     return;
                 }
                 if let Some(action) = self.keymap.leader(c) {
-                    self.palette = None;
+                    self.popups.palette = None;
                     return self.run_action(action);
                 }
                 palette.searching = true;

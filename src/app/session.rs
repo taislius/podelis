@@ -9,6 +9,24 @@ use serde::{Deserialize, Serialize};
 
 use super::*;
 
+/// Keeping an idle connection alive, and noticing it's gone.
+pub struct KeepAlive {
+    /// When the connection was last used.
+    pub(super) last_activity: Instant,
+    /// A check is running.
+    pub(super) pinging: bool,
+    /// The last check of the connection failed (shown in the top bar).
+    pub connection_lost: bool,
+    /// The heartbeat interval to go back to when it's switched on again.
+    pub(super) heartbeat_secs: u64,
+}
+
+impl Default for KeepAlive {
+    fn default() -> Self {
+        Self { last_activity: Instant::now(), pinging: false, connection_lost: false, heartbeat_secs: 30 }
+    }
+}
+
 /// A connection and what goes with it: its form, modes, transaction,
 /// navigator, summary and connect time. The shown one is `App::connection`.
 #[derive(Default)]
@@ -135,7 +153,7 @@ impl App {
             return self.set_status(t!("session.wait").to_string(), true);
         }
         if self.any_open_transaction() {
-            self.confirm = Some(Confirm {
+            self.popups.confirm = Some(Confirm {
                 message: t!("session.leave_rollback").to_string(),
                 details: vec![],
                 danger: true,
@@ -168,7 +186,7 @@ impl App {
     pub(super) fn leave_project(&mut self) {
         // Its answer would go to a tab of another project.
         self.stop_asking();
-        self.memory_view = None;
+        self.popups.memory_view = None;
         self.save_draft();
         if let Some(id) = &self.current_project {
             self.manager.project_selected = self.store.projects.iter().position(|p| &p.id == id).unwrap_or(0);
@@ -177,7 +195,7 @@ impl App {
         self.reset_agents();
         // Opening it again reloads its tabs and session from disk.
         self.manager.left_project = self.current_project.take();
-        self.menu = None;
+        self.popups.menu = None;
         self.panes.zoomed = false;
         self.screen = Screen::Projects;
     }
@@ -209,11 +227,11 @@ impl App {
             return;
         }
         self.swap_conns(target);
-        self.connection_lost = false;
+        self.keepalive.connection_lost = false;
         // Events from the other connection's background work no longer
         // apply; restart what was cut short.
         // (A check on its way is for the connection before: see `pinging`.)
-        self.pinging = false;
+        self.keepalive.pinging = false;
         self.generation += 1;
         self.tab.syntax_hint = None;
         match &mut self.connection.schema {
@@ -249,7 +267,7 @@ impl App {
         } else {
             self.conns.parked.get(&id).map(|s| &s.form)
         };
-        form.map(ConnectForm::summary).unwrap_or_default()
+        form.map(|f| f.summary()).unwrap_or_default()
     }
 
     /// From the connections list: to the shown tab if it's on `id`, else
@@ -270,15 +288,15 @@ impl App {
         let Some(name) = self.conn_name(id) else { return };
         let tabs: Vec<usize> = (0..self.tabs.len()).filter(|&i| self.tabs[i].conn == Some(id)).collect();
         if let Some(&busy) = tabs.iter().find(|&&i| self.tab_running(i)) {
-            self.palette = None;
+            self.popups.palette = None;
             let tab = self.tabs[busy].name.clone();
             return self.set_status(t!("conn_list.busy", name = name, tab = tab), true);
         }
         let names: Vec<&str> = tabs.iter().map(|&i| self.tabs[i].name.as_str()).collect();
         let names = if names.is_empty() { t!("conn_list.no_tabs").to_string() } else { names.join(", ") };
         let open = self.conn_txn(id) == Some(TxnState::Open);
-        self.palette = None;
-        self.confirm = Some(Confirm {
+        self.popups.palette = None;
+        self.popups.confirm = Some(Confirm {
             message: if open {
                 t!("conn_list.close_rollback", name = name, tabs = names)
             } else {
@@ -315,7 +333,7 @@ impl App {
         }
         if self.conns.active == Some(id) {
             self.switch_conn(None);
-            self.connection_lost = false;
+            self.keepalive.connection_lost = false;
         }
         self.release_unused_conns();
         self.save_draft();
@@ -505,10 +523,10 @@ impl App {
         {
             self.open_project(&id);
         }
-        let target = crate::cli::classify(connection);
+        let target = crate::config::draft::classify(connection);
         // An address with no project yet (the first run): one called
         // "default" keeps its tabs and history, as any session's.
-        if self.current_project.is_none() && !matches!(target, crate::cli::Target::Saved(_)) {
+        if self.current_project.is_none() && !matches!(target, crate::config::draft::Target::Saved(_)) {
             let id = match self.store.project_by_name(DEFAULT_PROJECT) {
                 Some(p) => Ok(p.id.clone()),
                 None => self.store.add_project(DEFAULT_PROJECT),
@@ -522,7 +540,7 @@ impl App {
             }
         }
         match target {
-            crate::cli::Target::Saved(name) => {
+            crate::config::draft::Target::Saved(name) => {
                 let profile = self.profiles().iter().find(|p| p.name.eq_ignore_ascii_case(&name)).cloned();
                 if let Some(profile) = profile {
                     self.conns.auto_connect = true;
@@ -536,7 +554,7 @@ impl App {
                     }
                 }
             }
-            address => match crate::cli::form_for_address(&address) {
+            address => match ConnectionDraft::from_address(&address).map(ConnectForm::from) {
                 Ok(form) => {
                     self.connection.form = form;
                     self.screen = Screen::Connect;
@@ -637,7 +655,7 @@ impl App {
                     Ok(params) => Database::connect(params).await.map_err(|e| crate::db::error_message(&e)),
                     Err(e) => Err(e),
                 };
-                send(DbEventKind::Restored { project_id, form: Box::new(form), result });
+                send(Background::Restored { project_id, form: Box::new(form), result }.into());
             });
         }
     }

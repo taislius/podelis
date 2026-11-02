@@ -27,7 +27,7 @@ fn agent_activity_by_session() {
     use crate::agents::{Entry, append, log_path};
     let (mut app, dir) = test_app();
     app.set_data_dir(dir.path().to_path_buf());
-    let shared = ConnectForm { name: "dev".into(), agents: crate::db::AgentAccess::Read, ..ConnectForm::new() };
+    let shared = ConnectionDraft { name: "dev".into(), agents: crate::db::AgentAccess::Read, ..ConnectionDraft::new() };
     app.store.upsert(&project_id(&app), None, shared.to_profile()).unwrap();
     let log = log_path(dir.path(), &project_id(&app));
     let entry = |session: &str, at: &str, sql: &str| Entry {
@@ -72,10 +72,10 @@ fn agent_activity_by_session() {
     let calls: Vec<&str> = app.agents_rows().iter().map(|&i| app.agents.log[i].entry.sql.as_str()).collect();
     assert_eq!(calls, ["delete from users", "select 1"]);
     app.handle_agents_key(key(KeyCode::Enter));
-    let detail = &app.cell_view.as_ref().unwrap().text;
+    let detail = &app.popups.cell_view.as_ref().unwrap().text;
     assert!(detail.contains("Agent       claude-code 2.0") && detail.contains("Refused: destructive"), "{detail}");
     assert_eq!(app.top_overlay(), Some(Overlay::CellView), "in front of the window");
-    app.cell_view = None;
+    app.popups.cell_view = None;
 
     // Open in a tab: named for the agent; the status says where it ran.
     app.handle_agents_key(key(KeyCode::Char('o')));
@@ -104,7 +104,8 @@ fn agent_writes_wait_for_your_answer() {
     use crate::agents::{Request, answer, ask, pending_dir, read_answer};
     let (mut app, dir) = test_app();
     app.set_data_dir(dir.path().to_path_buf());
-    let shared = ConnectForm { name: "prod".into(), agents: crate::db::AgentAccess::Approve, ..ConnectForm::new() };
+    let shared =
+        ConnectionDraft { name: "prod".into(), agents: crate::db::AgentAccess::Approve, ..ConnectionDraft::new() };
     app.store.upsert(&project_id(&app), None, shared.to_profile()).unwrap();
     let pending = pending_dir(dir.path(), &project_id(&app));
     let request = |id: &str| Request {
@@ -125,7 +126,7 @@ fn agent_writes_wait_for_your_answer() {
     app.handle_key(key(KeyCode::Char('x')));
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(read_answer(&pending, "1"), None);
-    let confirm = app.confirm.as_ref().unwrap();
+    let confirm = app.popups.confirm.as_ref().unwrap();
     assert_eq!(confirm.message, "billing asks to write on prod (PRODUCTION). Allow it?");
     assert_eq!(
         confirm.details,
@@ -141,7 +142,7 @@ fn agent_writes_wait_for_your_answer() {
     app.handle_key(key(KeyCode::Esc));
     assert_eq!(read_answer(&pending, "2"), Some(false));
     app.approvals_tick();
-    assert!(app.confirm.is_none());
+    assert!(app.popups.confirm.is_none());
     // The agent gave up while the question was up.
     ask(&pending, &request("3")).unwrap();
     app.approvals_tick();
@@ -159,7 +160,7 @@ fn agent_window_stays_put() {
     use crate::agents::{Entry, append, log_path};
     let (mut app, dir) = test_app();
     app.set_data_dir(dir.path().to_path_buf());
-    let shared = ConnectForm { name: "dev".into(), agents: crate::db::AgentAccess::Read, ..ConnectForm::new() };
+    let shared = ConnectionDraft { name: "dev".into(), agents: crate::db::AgentAccess::Read, ..ConnectionDraft::new() };
     app.store.upsert(&project_id(&app), None, shared.to_profile()).unwrap();
     let log = log_path(dir.path(), &project_id(&app));
     for (session, at, name) in [("a", "09", "alpha"), ("b", "10", "billing"), ("c", "11", "cron")] {
@@ -203,10 +204,10 @@ async fn a_question_puts_the_models_sql_in_the_editor_without_running_it() {
     let _gateway = crate::gateway::tests::start(dir.path(), None);
     app.tab.editor.set_text("select 1;");
     app.run_action(Action::Ask);
-    assert!(app.ask_prompt.is_some());
+    assert!(app.popups.ask_prompt.is_some());
     type_text(&mut app, "orders per country");
     app.handle_key(key(KeyCode::Enter));
-    assert!(app.asking.is_some() && said(&app).starts_with("Asking…"));
+    assert!(app.ask.asking.is_some() && said(&app).starts_with("Asking…"));
     until_answered(&mut app).await;
     assert_eq!(
         app.tab.editor.text(),
@@ -223,7 +224,7 @@ fn asking_needs_a_saved_connection() {
     let (mut app, _dir) = test_app();
     app.screen = Screen::Query;
     app.run_action(Action::Ask);
-    assert!(app.ask_prompt.is_none());
+    assert!(app.popups.ask_prompt.is_none());
     assert!(said_error(&app), "{}", said(&app));
 }
 
@@ -238,30 +239,30 @@ async fn the_memory_window_adds_confirms_and_forgets_facts() {
     drop(conn);
     app.run_action(Action::Memory);
     until_memory_loaded(&mut app, 1).await;
-    assert_eq!(app.memory_view.as_ref().unwrap().facts[0]["confirmed"], serde_json::json!(false));
+    assert_eq!(app.popups.memory_view.as_ref().unwrap().facts[0]["confirmed"], serde_json::json!(false));
     // `a`: as `podelis memory add`.
     app.handle_key(key(KeyCode::Char('a')));
     type_text(&mut app, "revenue is orders.total minus refunds");
     app.handle_key(key(KeyCode::Enter));
     until_memory_loaded(&mut app, 2).await;
-    let added = &app.memory_view.as_ref().unwrap().facts[1];
+    let added = &app.popups.memory_view.as_ref().unwrap().facts[1];
     assert_eq!((added["relation"].as_str(), added["value"].as_str()), (Some("is"), Some("orders.total minus refunds")));
     // `c` on the guess confirms it.
     app.handle_key(key(KeyCode::Char('c')));
     for _ in 0..50 {
-        if app.memory_view.as_ref().unwrap().facts[0]["confirmed"] == serde_json::json!(true) {
+        if app.popups.memory_view.as_ref().unwrap().facts[0]["confirmed"] == serde_json::json!(true) {
             break;
         }
         let event = tokio::time::timeout(Duration::from_secs(10), app.poll_db_event()).await.unwrap().unwrap();
         app.handle_db_event(event);
     }
-    assert_eq!(app.memory_view.as_ref().unwrap().facts[0]["confirmed"], serde_json::json!(true));
+    assert_eq!(app.popups.memory_view.as_ref().unwrap().facts[0]["confirmed"], serde_json::json!(true));
     // `d` forgets the selected one.
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Char('d')));
     until_memory_loaded(&mut app, 1).await;
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.memory_view.is_none());
+    assert!(app.popups.memory_view.is_none());
 }
 
 #[tokio::test]
@@ -278,14 +279,14 @@ async fn allowing_the_schema_asks_again_about_the_tab_it_came_from() {
     app.switch_conn(None);
     assert_eq!(app.active_tab, 1);
     until_answered(&mut app).await;
-    assert!(app.confirm.is_some());
+    assert!(app.popups.confirm.is_some());
     settle(&mut app);
     app.handle_key(key(KeyCode::Char('y')));
-    let asking = app.asking.as_ref().expect("asked again");
+    let asking = app.ask.asking.as_ref().expect("asked again");
     assert_eq!((asking.question.tab, asking.question.connection.as_str()), (0, "shop"));
     // Leaving the project stops it: no answer for a tab of another one.
     app.leave_project();
-    assert!(app.asking.is_none());
+    assert!(app.ask.asking.is_none());
 }
 
 #[tokio::test]
@@ -298,7 +299,7 @@ async fn the_sharing_question_waits_for_a_confirmation_already_open() {
     type_text(&mut app, "customers by country");
     app.handle_key(key(KeyCode::Enter));
     // Meanwhile, the user asks to close the tab (it asks first).
-    app.confirm = Some(Confirm {
+    app.popups.confirm = Some(Confirm {
         message: "Close?".into(),
         details: Vec::new(),
         danger: false,
@@ -306,10 +307,10 @@ async fn the_sharing_question_waits_for_a_confirmation_already_open() {
         offer_transaction: false,
     });
     until_answered(&mut app).await;
-    assert!(matches!(app.confirm.as_ref().unwrap().action, ConfirmAction::CloseTab), "not replaced");
+    assert!(matches!(app.popups.confirm.as_ref().unwrap().action, ConfirmAction::CloseTab), "not replaced");
     // Answered: then the sharing question shows, at once.
     app.handle_key(key(KeyCode::Char('n')));
-    assert!(matches!(app.confirm.as_ref().unwrap().action, ConfirmAction::ShareSchema { .. }));
+    assert!(matches!(app.popups.confirm.as_ref().unwrap().action, ConfirmAction::ShareSchema { .. }));
 }
 
 #[tokio::test]
@@ -324,15 +325,15 @@ async fn esc_while_asking_does_its_own_job_first() {
     app.run_action(Action::Ask);
     type_text(&mut app, "customers");
     app.handle_key(key(KeyCode::Enter));
-    assert!(app.asking.is_some());
+    assert!(app.ask.asking.is_some());
     // A selection in the editor: Esc drops it, the question goes on.
     app.tab.editor.set_text("select 1");
     app.tab.editor.select_all();
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.asking.is_some() && app.tab.editor.selection().is_none());
+    assert!(app.ask.asking.is_some() && app.tab.editor.selection().is_none());
     // Nothing else to do: Esc stops asking, and says so.
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.asking.is_none());
+    assert!(app.ask.asking.is_none());
     assert_eq!(said(&app), "Stopped asking");
 }
 
@@ -340,14 +341,14 @@ async fn esc_while_asking_does_its_own_job_first() {
 fn a_late_memory_answer_for_another_project_is_dropped() {
     let (mut app, _dir) = test_app();
     let shown = app.current_project.clone().unwrap();
-    app.memory_view = Some(crate::app::memory_view::MemoryView { project_id: shown, ..Default::default() });
+    app.popups.memory_view = Some(crate::app::memory_view::MemoryView { project_id: shown, ..Default::default() });
     let facts = serde_json::json!({ "facts": [{ "id": 1, "subject": "x" }] });
     let other = crate::app::memory_view::GatewayPurpose::MemoryList("another-project".into());
     app.gateway_done(other, Ok(facts.clone()));
-    assert!(app.memory_view.as_ref().unwrap().facts.is_empty());
+    assert!(app.popups.memory_view.as_ref().unwrap().facts.is_empty());
     let mine = crate::app::memory_view::GatewayPurpose::MemoryList(app.current_project.clone().unwrap());
     app.gateway_done(mine, Ok(facts));
-    assert_eq!(app.memory_view.as_ref().unwrap().facts.len(), 1);
+    assert_eq!(app.popups.memory_view.as_ref().unwrap().facts.len(), 1);
 }
 
 #[test]
@@ -381,15 +382,15 @@ async fn closing_another_tab_while_asking_keeps_the_question() {
     app.run_action(Action::Ask);
     type_text(&mut app, "customers");
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.asking.as_ref().unwrap().question.tab, 1);
+    assert_eq!(app.ask.asking.as_ref().unwrap().question.tab, 1);
     // Tab 0 closes: the question follows its tab to place 0.
     app.switch_tab(0);
     app.close_tab();
-    assert_eq!(app.asking.as_ref().map(|a| a.question.tab), Some(0));
+    assert_eq!(app.ask.asking.as_ref().map(|a| a.question.tab), Some(0));
     // Its own tab closes: it stops.
     app.switch_tab(0);
     app.close_tab();
-    assert!(app.asking.is_none());
+    assert!(app.ask.asking.is_none());
 }
 
 /// What an agent wrote in its sandbox comes back as a script: its writes
@@ -399,7 +400,8 @@ fn an_agents_sandbox_writes_become_a_script() {
     use crate::agents::{Entry, append, log_path};
     let (mut app, dir) = test_app();
     app.set_data_dir(dir.path().to_path_buf());
-    let shared = ConnectForm { name: "dev".into(), agents: crate::db::AgentAccess::Sandbox, ..ConnectForm::new() };
+    let shared =
+        ConnectionDraft { name: "dev".into(), agents: crate::db::AgentAccess::Sandbox, ..ConnectionDraft::new() };
     app.store.upsert(&project_id(&app), None, shared.to_profile()).unwrap();
     let log = log_path(dir.path(), &project_id(&app));
     let call = |at: &str, sql: &str| Entry {

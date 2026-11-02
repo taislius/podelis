@@ -179,7 +179,7 @@ fn number_or_off(n: u64) -> String {
 impl App {
     /// Ctrl+K ,: the settings, the first selected.
     pub(super) fn open_settings(&mut self) {
-        self.settings_view = Some(SettingsView { selected: 0, editing: None, said: None });
+        self.popups.settings_view = Some(SettingsView { selected: 0, editing: None, said: None });
     }
 
     /// A setting's value as the screen shows it.
@@ -228,13 +228,13 @@ impl App {
     }
 
     pub(super) fn handle_settings_key(&mut self, key: KeyEvent) {
-        let Some(selected) = self.settings_view.as_ref().map(|v| v.selected) else { return };
+        let Some(selected) = self.popups.settings_view.as_ref().map(|v| v.selected) else { return };
         let field = Field::ALL[selected.min(Field::ALL.len() - 1)];
         let typed = match field {
             Field::ExportDir => self.settings.export_dir.clone().unwrap_or_default(),
             _ => self.setting_number(field).to_string(),
         };
-        let Some(view) = &mut self.settings_view else { return };
+        let Some(view) = &mut self.popups.settings_view else { return };
         if let Some(input) = &mut view.editing {
             match input.handle(key) {
                 InputResult::Cancel => view.editing = None,
@@ -253,7 +253,7 @@ impl App {
             return;
         }
         match key.code {
-            KeyCode::Esc => self.settings_view = None,
+            KeyCode::Esc => self.popups.settings_view = None,
             KeyCode::Left | KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => {
                 let forward = key.code != KeyCode::Left;
                 match field.kind() {
@@ -270,7 +270,7 @@ impl App {
 
     /// Pasted text goes into the value being typed.
     pub(super) fn paste_setting(&mut self, text: &str) {
-        if let Some(input) = self.settings_view.as_mut().and_then(|v| v.editing.as_mut()) {
+        if let Some(input) = self.popups.settings_view.as_mut().and_then(|v| v.editing.as_mut()) {
             input.insert_str(text);
         }
     }
@@ -340,7 +340,7 @@ impl App {
             (!text.is_empty()).then(|| text.into())
         } else {
             let Some(n) = text.parse::<u64>().ok().filter(|n| field != Field::RowLimit || *n > 0) else {
-                if let Some(view) = &mut self.settings_view {
+                if let Some(view) = &mut self.popups.settings_view {
                     view.said = Some((t!("settings.need_number").to_string(), true));
                 }
                 return;
@@ -371,7 +371,7 @@ impl App {
             },
             None => (t!("settings.saved").to_string(), false),
         };
-        if let Some(view) = &mut self.settings_view {
+        if let Some(view) = &mut self.popups.settings_view {
             view.said = Some(said);
         }
     }

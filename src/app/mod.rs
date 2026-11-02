@@ -13,8 +13,8 @@ use crate::config::history::{self, History};
 use crate::config::settings::{EditorMode, Settings};
 use crate::config::store::{self, ConnectionProfile, ConnectionStore, Project};
 use crate::db::{
-    CheckOutcome, ColumnInfo, ConnectParams, ConnectionMode, Database, Engine, ErrorPos, Page, QueryOutcome,
-    RoutineInfo, RowStream, SslMode, TableDetails, TableInfo, TxnState,
+    CheckOutcome, ColumnInfo, ConnectionMode, Database, Engine, ErrorPos, Page, QueryOutcome, RoutineInfo, RowStream,
+    TableDetails, TableInfo, TxnState,
 };
 use crate::editor::{Pos, TextEditor};
 use crate::sql;
@@ -76,7 +76,7 @@ mod tests;
 mod vim;
 mod watch;
 
-use connections::looks_like_url;
+use crate::config::draft::{ConnectionDraft, looks_like_url};
 pub use connections::{ConnectField, ConnectForm, fields_for};
 pub use results::{NULL_TEXT, display_prefix, format_elapsed, visible_columns};
 use results::{column_widths, compute_view, one_line, pretty_value, widen_columns};
@@ -350,10 +350,6 @@ enum DbEventKind {
     /// Another page of a streamed result; true when `M` asked for it (the
     /// first of its rows gets selected, so they're seen arriving).
     MoreRows(Page, bool),
-    /// Rows written so far by "export all rows".
-    ExportProgress(u64),
-    /// "Export all rows" finished: the file, and how many rows (or why not).
-    ExportDone(PathBuf, Result<u64, String>),
     MoreFailed(String),
     /// Why, where, the transaction after it, and whether it's a syntax
     /// error or unknown function (maybe a feature the server lacks).
@@ -367,14 +363,6 @@ enum DbEventKind {
         table: String,
         result: Result<TableDetails, String>,
     },
-    /// A connection reopened at startup.
-    Restored {
-        project_id: String,
-        form: Box<ConnectForm>,
-        result: Result<Database, String>,
-    },
-    /// The running database containers, or why they couldn't be listed.
-    ContainersFound(u64, Result<Vec<crate::system::containers::Container>, String>),
     /// The server's sessions, for the activity view.
     ActivityLoaded(Result<Vec<crate::db::Activity>, String>),
     /// A session's query was cancelled or the session ended.
@@ -387,19 +375,8 @@ enum DbEventKind {
     Diagnosed(String, String),
     /// The output of piping rows through a command.
     PipeDone(String, Result<String, String>),
-    /// Characters of an answer being written, for ask `n`.
-    AskProgress(u64, usize),
-    /// Ask `n`'s key is slow to come: the keychain (or a password
-    /// manager) is asking the user.
-    AskWaitingKey(u64),
-    /// The locks a sandbox's session holds (or why that can't be seen).
-    SandboxLocks(String),
     /// A SQLite file's copy for a sandbox, opened (or why not).
     SandboxCopied(Result<(Database, PathBuf), String>),
-    /// Ask `n`'s answer: the SQL and what the model said, or why not.
-    AskDone(u64, Box<Result<serde_json::Value, ask::AskFailure>>),
-    /// A gateway call's answer (the memory window's).
-    GatewayDone(memory_view::GatewayPurpose, Box<Result<serde_json::Value, ask::AskFailure>>),
     /// A definition to show (title, text).
     Definition(String, Result<String, String>),
     /// Rows opened in an app (what, the command), or why they couldn't be.
@@ -442,6 +419,40 @@ enum DbEventKind {
         other: compare::Other,
         result: Box<Result<(QueryOutcome, QueryOutcome), String>>,
     },
+    /// Not about the connection shown: see [`Background`].
+    Background(Background),
+}
+
+/// Events that go on while other tabs and connections are used: reopening
+/// the session's connections (matched by name), container searches (by
+/// their own number), an export, a question to the gateway, the sandbox's
+/// locks. None is dropped for a newer generation.
+enum Background {
+    /// Rows written so far by "export all rows".
+    ExportProgress(u64),
+    /// "Export all rows" finished: the file, and how many rows (or why not).
+    ExportDone(PathBuf, Result<u64, String>),
+    /// A connection reopened at startup.
+    Restored { project_id: String, form: Box<ConnectForm>, result: Result<Database, String> },
+    /// The running database containers, or why they couldn't be listed.
+    ContainersFound(u64, Result<Vec<crate::system::containers::Container>, String>),
+    /// Characters of an answer being written, for ask `n`.
+    AskProgress(u64, usize),
+    /// Ask `n`'s key is slow to come: the keychain (or a password
+    /// manager) is asking the user.
+    AskWaitingKey(u64),
+    /// The locks a sandbox's session holds (or why that can't be seen).
+    SandboxLocks(String),
+    /// Ask `n`'s answer: the SQL and what the model said, or why not.
+    AskDone(u64, Box<Result<serde_json::Value, ask::AskFailure>>),
+    /// A gateway call's answer (the memory window's).
+    GatewayDone(memory_view::GatewayPurpose, Box<Result<serde_json::Value, ask::AskFailure>>),
+}
+
+impl From<Background> for DbEventKind {
+    fn from(event: Background) -> Self {
+        DbEventKind::Background(event)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -749,20 +760,24 @@ pub struct Confirm {
 }
 
 pub struct App {
+    /// The popups that can open over the screens.
+    pub popups: overlay::Popups,
+    /// `Ctrl+K q`'s question being answered, and what goes with it.
+    pub ask: ask::AskState,
+    /// What's said about the run starting now.
+    next_run: runs::NextRun,
+    /// Keeping the connection alive.
+    pub keepalive: session::KeepAlive,
     /// What's said to the user.
     pub notes: messages::Notes,
     /// The panes' layout.
     pub panes: panes::Panes,
     /// The projects and connections screen's state.
     pub manager: projects::Manager,
-    /// The settings screen (Ctrl+K ,).
-    pub settings_view: Option<settings_view::SettingsView>,
     /// The shown tab's connection; the other tabs' are parked (`Conns`).
     pub connection: session::Connection,
     /// What agents did and asked for (the agents view).
     pub agents: Agents,
-    /// The sharing question, waiting while another confirmation is open.
-    pending_share: Option<Confirm>,
     pub screen: Screen,
     pub store: ConnectionStore,
     /// Id of the open project.
@@ -770,37 +785,15 @@ pub struct App {
     /// Config folder holding per-project history and editor drafts; `None`
     /// disables persistence (tests).
     data_dir: Option<PathBuf>,
-    pub param_form: Option<ParamForm>,
-    /// Asking to commit or roll back writes run in a transaction.
-    pub review: Option<review::Review>,
-    /// The sandbox's window (`Ctrl+K x` while one is open).
-    pub sandbox_view: Option<sandbox::SandboxView>,
     /// Where a sandbox's script goes once it's rolled back.
     sandbox_then: Option<sandbox::Then>,
     /// A sandbox's first step, waiting for the file's copy to be made.
     sandbox_waiting: Option<(String, usize, Option<Filled>, RunPurpose)>,
     /// The find/replace bar (Ctrl+F).
     pub find: Option<find::FindBar>,
-    /// A pop-up menu of what can be done in the focused pane.
-    pub menu: Option<menu::Menu>,
-    /// The add-row form (`a`).
-    pub row_form: Option<rows::RowForm>,
-    /// The command the rows are piped through (`|`), being typed.
-    pub pipe_prompt: Option<LineInput>,
-    /// `Ctrl+K q`: the question being typed, and one being answered.
-    pub ask_prompt: Option<LineInput>,
-    pub asking: Option<ask::Asking>,
-    /// `Ctrl+K k`: the project's memory.
-    pub memory_view: Option<memory_view::MemoryView>,
-    /// Numbers the asks, so a stopped one's answer is dropped.
-    ask_count: u64,
     last_pipe: String,
     /// A viewer to run with the terminal (`o`), picked up by the main loop.
     external: Option<pipes::External>,
-    /// The activity monitor.
-    pub activity: Option<activity::ActivityView>,
-    /// The command palette (Ctrl+K).
-    pub palette: Option<palette::Palette>,
     /// When and where the editor last got a typed Space, for
     /// `leader_double_space`.
     last_space: Option<(Instant, Pos)>,
@@ -822,8 +815,6 @@ pub struct App {
     pub keymap: crate::config::keys::KeyMap,
     history: History,
     pub focus: Focus,
-    /// Full-value popup for the selected cell.
-    pub cell_view: Option<CellView>,
     pub help_visible: bool,
     /// Reopening the session's connections (Esc or any key hides it).
     pub splash: Option<session::Splash>,
@@ -843,17 +834,8 @@ pub struct App {
     pub active_tab: usize,
     /// The project's saved queries.
     pub library: crate::config::library::Library,
-    /// The F3 library/search window.
-    pub library_view: Option<LibraryView>,
-    /// Save-as / rename prompt.
-    pub tab_prompt: Option<TabPrompt>,
     /// Watch mode: the last query run again every few seconds.
     pub watch: Option<watch::Watch>,
-    /// The run starting now is watch mode's (others stop it).
-    watch_rerun: bool,
-    /// The run starting now is the shown result's again (`M`, after a
-    /// row change): it replaces that result instead of keeping a new one.
-    same_result: bool,
     /// "Export all rows" in progress: what stops it, and the file it writes.
     export_task: Option<(tokio::sync::oneshot::Sender<()>, PathBuf)>,
     /// The last run id handed out ([`App::next_run_id`]).
@@ -861,27 +843,12 @@ pub struct App {
     /// While a hidden tab's event is applied (`apply_in_tab`): that tab,
     /// whose run ending is announced even with the terminal in front.
     hidden_tab: Option<usize>,
-    pub completion: Option<Completion>,
-    /// Row limit for the next run only.
-    next_row_limit: Option<usize>,
     /// A function's definition on its way is for the navigator's popup.
     routine_definition_pending: bool,
     /// Clickable areas from the last frame.
     pub hits: Hits,
-    /// When the connection was last used (for keep-alive checks), and
-    /// whether a check is running.
-    last_activity: Instant,
-    pinging: bool,
-    /// The last check of the connection failed (shown in the top bar).
-    pub connection_lost: bool,
-    /// The heartbeat interval to go back to when it's switched on again.
-    heartbeat_secs: u64,
     /// `f` is waiting for the result table's foreign keys to load.
     pending_follow: bool,
-    /// Picking the write mode: the highlighted one.
-    pub tx_picker: Option<TxMode>,
-    /// A question waiting for y/n.
-    pub confirm: Option<Confirm>,
     pub should_quit: bool,
     clipboard: Option<String>,
     /// A long query ended: announced by the main loop (bell, notification).
@@ -914,30 +881,22 @@ impl App {
             store.migrated_project.as_ref().map(|_| (t!("projects.migrated", project = store::DEFAULT_PROJECT), false))
         });
         Self {
+            popups: overlay::Popups::default(),
+            ask: ask::AskState::default(),
+            next_run: runs::NextRun::default(),
+            keepalive: session::KeepAlive::default(),
             screen: Screen::Projects,
             store,
             current_project: None,
             history: History::load_from(None),
             data_dir,
-            menu: None,
-            row_form: None,
-            pipe_prompt: None,
-            ask_prompt: None,
-            asking: None,
-            memory_view: None,
-            ask_count: 0,
             last_pipe: String::new(),
             external: None,
-            activity: None,
-            palette: None,
             last_space: None,
             esc_then_tab: false,
             find: None,
-            review: None,
-            sandbox_view: None,
             sandbox_then: None,
             sandbox_waiting: None,
-            param_form: None,
             param_values: HashMap::new(),
             drafts: tabs::Drafts::default(),
             #[cfg(test)]
@@ -947,7 +906,6 @@ impl App {
             settings: Settings::default(),
             keymap: crate::config::keys::KeyMap::default(),
             focus: Focus::Editor,
-            cell_view: None,
             help_visible: false,
             splash: None,
             connect_started: None,
@@ -959,25 +917,13 @@ impl App {
             parked: vec![None],
             active_tab: 0,
             library: crate::config::library::Library::load_from(None),
-            library_view: None,
-            tab_prompt: None,
             watch: None,
-            watch_rerun: false,
-            same_result: false,
             export_task: None,
             run_ids: 0,
             hidden_tab: None,
-            completion: None,
-            next_row_limit: None,
             hits: Hits::default(),
-            last_activity: Instant::now(),
-            connection_lost: false,
-            heartbeat_secs: 30,
-            pinging: false,
             pending_follow: false,
             routine_definition_pending: false,
-            tx_picker: None,
-            confirm: None,
             should_quit: false,
             clipboard: None,
             notification: None,
@@ -985,7 +931,6 @@ impl App {
             generation: 0,
             notes: messages::Notes::default(),
             panes: panes::Panes { editor_percent: 40, editor_height: 1, ..panes::Panes::default() },
-            settings_view: None,
             manager: projects::Manager {
                 project_selected: projects_selected,
                 project_message: projects_message,
@@ -999,7 +944,6 @@ impl App {
                 ..session::Connection::default()
             },
             agents: Agents::default(),
-            pending_share: None,
             db_tx,
             db_rx,
         }
@@ -1059,7 +1003,7 @@ impl App {
         let Some(model) = self.settings.models.first() else {
             return AiState::Off;
         };
-        let shared = crate::gateway::models::on_this_machine(model)
+        let shared = crate::config::models::on_this_machine(model)
             || self.project().is_some_and(|p| p.share_schema == crate::config::store::ShareSchema::All);
         AiState::On { model: model.name.clone(), asks_to_share: !shared }
     }
@@ -1193,7 +1137,7 @@ impl App {
         self.tab.run.db = None;
         // A check on its way is for the connection before: its answer will
         // be dropped (another generation), so it's no longer awaited.
-        self.pinging = false;
+        self.keepalive.pinging = false;
         self.generation += 1;
         self.tab.run.id = self.next_run_id();
         self.tab.run.queued_plan = None;
@@ -1276,7 +1220,7 @@ impl App {
             self.should_quit = true;
             return;
         }
-        self.confirm = Some(Confirm {
+        self.popups.confirm = Some(Confirm {
             message: t!("app.quit_rollback").to_string(),
             details: vec![],
             danger: true,
@@ -1405,7 +1349,7 @@ impl App {
 
     /// The popups about one cell of the old result.
     fn close_cell_popups(&mut self) {
-        self.cell_view = None;
+        self.popups.cell_view = None;
         self.cell_edit = None;
     }
 
@@ -1502,7 +1446,7 @@ impl App {
                     return self.answer_agent(&request, approve);
                 }
                 _ => {
-                    self.confirm = Some(confirm);
+                    self.popups.confirm = Some(confirm);
                     return;
                 }
             }
@@ -1523,7 +1467,7 @@ impl App {
                 }
                 Some(None) if settled => return self.set_status(t!("app.not_sent").into(), false),
                 _ => {
-                    self.confirm = Some(confirm);
+                    self.popups.confirm = Some(confirm);
                     return;
                 }
             }
@@ -1593,7 +1537,7 @@ impl App {
         let ctrl_c = key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');
         // Ctrl+Q quits from anywhere (on the query screen Ctrl+C copies).
         let ctrl_q = key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q');
-        if let Some(confirm) = self.confirm.take() {
+        if let Some(confirm) = self.popups.confirm.take() {
             self.answer_confirm(confirm, key, ctrl_c || ctrl_q);
             // A sharing question waiting behind it comes next.
             return self.share_tick();

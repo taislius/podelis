@@ -87,7 +87,7 @@ impl App {
         if outcome.rows.len() > MAX_ROWS {
             let _ = write!(text, "\n{}", t!("follow.and_more"));
         }
-        self.cell_view = Some(CellView {
+        self.popups.cell_view = Some(CellView {
             follow: Some((found.tab_name, found.sql)),
             ..CellView::new(format!("→ {}", found.title), text)
         });
@@ -95,7 +95,7 @@ impl App {
 
     /// `e` in the pop-over: the lookup in a tab of its own, run.
     pub(super) fn open_followed(&mut self, tab: String, sql: &str) {
-        self.cell_view = None;
+        self.popups.cell_view = None;
         self.new_tab(Some(tab), sql, None);
         self.execute_all();
     }

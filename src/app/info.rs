@@ -57,7 +57,7 @@ impl App {
     /// Facts for a bug report: versions, terminal, settings, the kind of
     /// connection. No hosts, users, passwords or SQL.
     pub(super) fn diagnostics(&self) -> String {
-        let mut rows = crate::cli::doctor::environment(&self.settings);
+        let mut rows = crate::system::environment::environment(&self.settings);
         if let Some(db) = &self.connection.database {
             let form = &self.connection.form;
             let ssh = if form.ssh.trim().is_empty() { "" } else { ", via SSH" };
@@ -84,19 +84,19 @@ impl App {
     /// keep-alive checks are on, the connection is lost…).
     pub fn wants_ticks(&self) -> bool {
         !self.running_tabs().is_empty()
-            || self.activity.is_some()
+            || self.popups.activity.is_some()
             // An open sandbox's age, said once it's long.
             || self.connection.sandbox.is_some()
             || (self.settings.keepalive > 0 && self.connection.database.is_some())
             // A lost connection, checked again until it's back.
-            || (self.connection_lost && self.connection.database.is_some())
+            || (self.keepalive.connection_lost && self.connection.database.is_some())
             // A plan's age, kept current.
             || (self.tab.result_tab == ResultTab::Plan && self.tab.plan_source.is_some())
             // What agents did, for the status bar's note.
             || self.watching_agents()
             || self.watch.is_some()
             // The sharing question, waiting behind another confirmation.
-            || self.pending_share.is_some()
+            || self.ask.pending_share.is_some()
     }
 
     /// Pings an idle connection every `keepalive` seconds: notices a dropped
@@ -105,8 +105,13 @@ impl App {
     pub(super) fn keepalive_tick(&mut self) {
         // A lost connection is checked again every few seconds, heartbeat
         // or not, so it's said as soon as it's back (and reconnected).
-        let every = if self.connection_lost { LOST_RECHECK } else { Duration::from_secs(self.settings.keepalive) };
-        if every.is_zero() || self.conn_busy() || self.pinging || self.last_activity.elapsed() < every {
+        let every =
+            if self.keepalive.connection_lost { LOST_RECHECK } else { Duration::from_secs(self.settings.keepalive) };
+        if every.is_zero()
+            || self.conn_busy()
+            || self.keepalive.pinging
+            || self.keepalive.last_activity.elapsed() < every
+        {
             return;
         }
         self.ping();
@@ -115,10 +120,10 @@ impl App {
     /// Something done while the connection is lost (a key, a click):
     /// checks it again now rather than at the next tick, once in a while.
     pub(super) fn recheck_lost_connection(&mut self) {
-        if self.connection_lost
+        if self.keepalive.connection_lost
             && !self.conn_busy()
-            && !self.pinging
-            && self.last_activity.elapsed() >= LOST_RECHECK_AFTER_INPUT
+            && !self.keepalive.pinging
+            && self.keepalive.last_activity.elapsed() >= LOST_RECHECK_AFTER_INPUT
         {
             self.ping();
         }
@@ -129,8 +134,8 @@ impl App {
     /// session is given up for it is `pinged`'s to decide.
     fn ping(&mut self) {
         let Some(db) = self.connection.database.clone() else { return };
-        self.pinging = true;
-        self.last_activity = Instant::now();
+        self.keepalive.pinging = true;
+        self.keepalive.last_activity = Instant::now();
         let send = self.sender();
         tokio::spawn(async move {
             let started = Instant::now();
@@ -150,14 +155,15 @@ impl App {
     /// default.
     pub(super) fn toggle_heartbeat(&mut self) {
         if self.settings.keepalive > 0 {
-            self.heartbeat_secs = self.settings.keepalive;
+            self.keepalive.heartbeat_secs = self.settings.keepalive;
             self.settings.keepalive = 0;
             self.set_status(t!("info.heartbeat_off").to_string(), false);
         } else {
-            self.settings.keepalive = self.heartbeat_secs.max(1);
+            self.settings.keepalive = self.keepalive.heartbeat_secs.max(1);
             // Check right away.
-            self.last_activity =
-                Instant::now().checked_sub(Duration::from_secs(self.settings.keepalive)).unwrap_or(self.last_activity);
+            self.keepalive.last_activity = Instant::now()
+                .checked_sub(Duration::from_secs(self.settings.keepalive))
+                .unwrap_or(self.keepalive.last_activity);
             let msg = t!("info.heartbeat_on", s = self.settings.keepalive);
             self.set_status(msg, false);
             self.keepalive_tick();
@@ -165,8 +171,8 @@ impl App {
     }
 
     pub(super) fn pinged(&mut self, result: Result<(Duration, bool), (String, Ping)>) {
-        self.pinging = false;
-        let was_lost = std::mem::replace(&mut self.connection_lost, result.is_err());
+        self.keepalive.pinging = false;
+        let was_lost = std::mem::replace(&mut self.keepalive.connection_lost, result.is_err());
         // No answer while rechecking a lost connection: the session is
         // given up (the next check opens a new one rather than waiting on
         // a dead link), unless a query now runs on it or a transaction is

@@ -31,7 +31,7 @@ impl App {
         }
         self.tab.editor.backspace();
         self.edited();
-        self.completion = None;
+        self.popups.completion = None;
         true
     }
 
@@ -68,7 +68,7 @@ impl App {
         if let Some(movement) = movement {
             ed.prepare_move(shift);
             movement(ed);
-            self.completion = None;
+            self.popups.completion = None;
             return;
         }
         match key.code {
@@ -102,8 +102,9 @@ impl App {
         self.edited();
         // Keep an open popup in sync with the word being typed; a `.` opens
         // it for `table.` / `alias.` / `schema.`.
-        let keep_open = self.completion.is_some() && self.word_before_cursor();
-        self.completion = if keep_open || key.code == KeyCode::Char('.') { self.compute_completion() } else { None };
+        let keep_open = self.popups.completion.is_some() && self.word_before_cursor();
+        self.popups.completion =
+            if keep_open || key.code == KeyCode::Char('.') { self.compute_completion() } else { None };
     }
 
     /// Whether Tab in the editor would complete a word rather than move
@@ -161,8 +162,8 @@ impl App {
     }
 
     pub(in crate::app) fn open_completion(&mut self) {
-        self.completion = self.compute_completion();
-        if self.completion.is_none() {
+        self.popups.completion = self.compute_completion();
+        if self.popups.completion.is_none() {
             let loading = self.connection.schema.as_ref().is_some_and(|s| s.loading);
             let msg = if loading { t!("editor.no_completions_yet") } else { t!("editor.no_completions") };
             self.notes.editor_note = Some(msg.to_string());
@@ -173,17 +174,17 @@ impl App {
     /// Keys for the open popup. Returns false for keys it doesn't handle
     /// (they go to the editor and the popup refilters).
     pub(in crate::app) fn handle_completion_key(&mut self, key: KeyEvent) -> bool {
-        let Some(c) = &mut self.completion else { return false };
+        let Some(c) = &mut self.popups.completion else { return false };
         if let Some(i) = list::step(c.selected, c.items.len(), key, Nav::COMPLETION) {
             c.selected = i;
             return true;
         }
         match key.code {
-            KeyCode::Esc => self.completion = None,
+            KeyCode::Esc => self.popups.completion = None,
             KeyCode::Tab | KeyCode::Enter => {
                 let item = c.items[c.selected].insert.clone();
                 let len = c.prefix_len;
-                self.completion = None;
+                self.popups.completion = None;
                 // Already typed in full: Enter is a new line, not a choice.
                 let line = &self.tab.editor.lines[self.tab.editor.cursor_row];
                 let typed: String = line

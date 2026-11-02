@@ -107,9 +107,9 @@ impl App {
             return self.stop_watch(&format!(": {}", t!("watch.changed_query")));
         }
         let filled = self.tab.last_filled.clone();
-        self.watch_rerun = true;
+        self.next_run.watch = true;
         self.run_now(sql, offset, infos, RunPurpose::Query, filled);
-        self.watch_rerun = false;
+        self.next_run.watch = false;
     }
 
     /// After a watched run: marks what changed, keeps the place in the grid,

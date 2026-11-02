@@ -108,7 +108,7 @@ impl App {
             text = format!("{text}\n\n{}", diff.sql);
         }
         let sql = (!diff.sql.is_empty()).then_some((diff.sql, other.id));
-        self.cell_view = Some(CellView {
+        self.popups.cell_view = Some(CellView {
             sql,
             ..CellView::new(format!("{} · {this} ↔ {}", t!("compare.schema_title"), other.name), text)
         });
@@ -208,7 +208,7 @@ impl App {
         if !diff.sql.is_empty() {
             text = format!("{text}\n\n{}\n\n{}", t!("compare.changes_as_sql"), diff.sql);
         }
-        self.cell_view = Some(CellView::new(format!("{} · {this} ↔ {then}", t!("compare.schema_title")), text));
+        self.popups.cell_view = Some(CellView::new(format!("{} · {this} ↔ {then}", t!("compare.schema_title")), text));
     }
 
     /// Runs the selection, or the statement at the cursor, on this and

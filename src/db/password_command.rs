@@ -203,7 +203,7 @@ fn words<const N: usize>(w: [&str; N]) -> Vec<String> {
     w.iter().map(|s| (*s).to_string()).collect()
 }
 
-/// The tools that `found` says are installed (see `doctor::on_path`).
+/// The tools that `found` says are installed (see `system::programs::on_path`).
 pub fn installed(found: impl Fn(&str) -> bool) -> Vec<&'static Tool> {
     TOOLS.iter().filter(|t| found(t.program)).collect()
 }

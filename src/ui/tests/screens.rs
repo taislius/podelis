@@ -38,7 +38,7 @@ fn production_confirmation_dialog_and_badges() {
     let (mut app, _dir) = query_app();
     app.connection.mode = ConnectionMode::Production;
     app.connection.txn = TxnState::Open;
-    app.confirm = Some(Confirm {
+    app.popups.confirm = Some(Confirm {
         message: "PRODUCTION: 1 statement(s) will change data. Run?".into(),
         details: vec!["DELETE without WHERE: delete from users".into()],
         danger: true,
@@ -70,7 +70,7 @@ fn status_bar_shows_the_connection_heartbeat_and_lost_connection() {
     assert!(bar.contains("♥ prod") && bar.contains("MySQL"), "{bar}");
     // The top bar no longer repeats it.
     assert!(!render(&mut app, 120, 12).lines().next().unwrap().contains("prod /"));
-    app.connection_lost = true;
+    app.keepalive.connection_lost = true;
     assert!(status_bar(&mut app).contains("connection lost"));
 }
 
@@ -79,14 +79,14 @@ fn tx_mode_picker() {
     let (mut app, _dir) = query_app();
     app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
-    assert_eq!(app.tx_picker, Some(crate::app::TxMode::AutoCommit));
+    assert_eq!(app.popups.tx_picker, Some(crate::app::TxMode::AutoCommit));
     app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     let screen = render(&mut app, 90, 20);
     assert!(screen.contains("TRANSACTION MODE") && screen.contains("always rolled back"), "{screen}");
     assert_snapshot!(screen);
     // Enter picks the highlighted mode.
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(app.tx_picker.is_none() && app.connection.tx_mode == crate::app::TxMode::Manual);
+    assert!(app.popups.tx_picker.is_none() && app.connection.tx_mode == crate::app::TxMode::Manual);
 }
 
 #[test]
@@ -123,7 +123,7 @@ fn status_bar_says_whether_ai_is_on() {
     let status_bar = |app: &mut App| render(app, 140, 12).lines().last().unwrap().to_string();
     app.settings.models.clear();
     assert!(status_bar(&mut app).contains("AI off"), "{}", status_bar(&mut app));
-    let model = |url: &str| -> crate::gateway::models::ModelConfig {
+    let model = |url: &str| -> crate::config::models::ModelConfig {
         toml::from_str(&format!("name = \"claude\"\napi = \"anthropic\"\nmodel = \"claude-opus-5-5\"\nurl = \"{url}\""))
             .unwrap()
     };

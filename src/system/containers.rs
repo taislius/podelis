@@ -27,7 +27,7 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 /// The running database containers. Blocks: call it off the async runtime.
 /// Docker first, then Podman (if Docker isn't installed or not running).
 pub fn find() -> Result<Vec<Container>, String> {
-    let tools: Vec<&str> = ["docker", "podman"].into_iter().filter(|t| crate::cli::doctor::on_path(t)).collect();
+    let tools: Vec<&str> = ["docker", "podman"].into_iter().filter(|t| crate::system::programs::on_path(t)).collect();
     let mut error = "Neither docker nor podman is installed (or on PATH)".to_string();
     for tool in tools {
         match find_with(tool) {

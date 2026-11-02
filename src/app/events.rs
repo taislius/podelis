@@ -6,25 +6,10 @@ use crate::config::keys::Action;
 
 impl App {
     pub fn handle_db_event(&mut self, event: DbEvent) {
-        // Reopened connections are matched to tabs by name, not generation.
-        if let DbEventKind::Restored { project_id, form, result } = event.kind {
-            return self.apply_restored(&project_id, *form, result);
-        }
-        // Container searches by their own number: nothing else cancels them.
-        if let DbEventKind::ContainersFound(request, result) = event.kind {
-            return self.containers_found(request, result);
-        }
-        // An export, or a question, goes on while other tabs are used.
-        match event.kind {
-            DbEventKind::ExportProgress(rows) => return self.export_progress(rows),
-            DbEventKind::ExportDone(path, result) => return self.export_done(&path, result),
-            DbEventKind::AskProgress(id, chars) => return self.ask_progress(id, chars),
-            DbEventKind::AskWaitingKey(id) => return self.ask_waiting_key(id),
-            DbEventKind::SandboxLocks(said) => return self.sandbox_locks(said),
-            DbEventKind::AskDone(id, result) => return self.ask_done(id, *result),
-            DbEventKind::GatewayDone(purpose, result) => return self.gateway_done(purpose, *result),
-            _ => {}
-        }
+        let kind = match event.kind {
+            DbEventKind::Background(background) => return self.apply_background(background),
+            kind => kind,
+        };
         match event.run {
             // A run's outcome: for the tab it ran in (by its run id, unique
             // across the tabs), even if another is shown; none for a run
@@ -33,11 +18,11 @@ impl App {
                 let Some(tab) = (0..self.tabs.len()).find(|&i| self.tab_run(i).is_some_and(|r| r.id == run)) else {
                     return;
                 };
-                return self.apply_in_tab(tab, event.kind);
+                return self.apply_in_tab(tab, kind);
             }
             None if event.generation != self.generation => {
                 // A connection that finished after being cancelled is still open.
-                if let DbEventKind::Connected(db) = event.kind {
+                if let DbEventKind::Connected(db) = kind {
                     tokio::spawn(async move { db.close().await });
                 }
                 return;
@@ -45,12 +30,27 @@ impl App {
             None => {}
         }
         // A plan made beside a running query: for the tab it was asked in.
-        if let DbEventKind::PlanAside { tab, .. } = &event.kind
+        if let DbEventKind::PlanAside { tab, .. } = &kind
             && *tab < self.tabs.len()
         {
-            return self.apply_in_tab(*tab, event.kind);
+            return self.apply_in_tab(*tab, kind);
         }
-        self.apply_shown(event.kind);
+        self.apply_shown(kind);
+    }
+
+    /// See [`Background`]: each kind finds what it's for on its own.
+    fn apply_background(&mut self, event: Background) {
+        match event {
+            Background::Restored { project_id, form, result } => self.apply_restored(&project_id, *form, result),
+            Background::ContainersFound(request, result) => self.containers_found(request, result),
+            Background::ExportProgress(rows) => self.export_progress(rows),
+            Background::ExportDone(path, result) => self.export_done(&path, result),
+            Background::AskProgress(id, chars) => self.ask_progress(id, chars),
+            Background::AskWaitingKey(id) => self.ask_waiting_key(id),
+            Background::SandboxLocks(said) => self.sandbox_locks(said),
+            Background::AskDone(id, result) => self.ask_done(id, *result),
+            Background::GatewayDone(purpose, result) => self.gateway_done(purpose, *result),
+        }
     }
 
     fn apply_shown(&mut self, kind: DbEventKind) {
@@ -149,8 +149,8 @@ impl App {
             }
             DbEventKind::PlanAside { stmt, line, plan, .. } => self.plan_aside(stmt, line, plan),
             DbEventKind::MoreRows(page, show) => self.append_rows(page, show),
-            DbEventKind::ExportProgress(rows) => self.export_progress(rows),
-            DbEventKind::ExportDone(path, result) => self.export_done(&path, result),
+            // `handle_db_event` gives these to `apply_background` first.
+            DbEventKind::Background(_) => {}
             DbEventKind::MoreFailed(err) => {
                 self.tab.run.fetching_more = false;
                 // (set_stream below forgets a waiting `M`.)
@@ -167,21 +167,13 @@ impl App {
                 }
             }
             DbEventKind::Catalog(result) => self.apply_catalog(result),
-            // Handled before the generation check.
-            DbEventKind::Restored { .. }
-            | DbEventKind::ContainersFound(..)
-            | DbEventKind::AskProgress(..)
-            | DbEventKind::AskWaitingKey(..)
-            | DbEventKind::SandboxLocks(..)
-            | DbEventKind::AskDone(..)
-            | DbEventKind::GatewayDone(..) => {}
             DbEventKind::Pinged(result) => self.pinged(result),
             DbEventKind::SandboxCopied(copied) => self.sandbox_copied(copied),
             DbEventKind::ActivityLoaded(result) => self.activity_loaded(result),
             DbEventKind::SessionStopped(result) => self.session_stopped(result),
             DbEventKind::Diagnosed(title, report) => {
                 self.connection.form.info = None;
-                self.cell_view = Some(CellView::new(title, report));
+                self.popups.cell_view = Some(CellView::new(title, report));
             }
             DbEventKind::PipeDone(command, result) => self.pipe_done(&command, result),
             DbEventKind::Routines(routines) => {
@@ -205,8 +197,8 @@ impl App {
             DbEventKind::Definition(title, result) => {
                 let browse = std::mem::take(&mut self.routine_definition_pending);
                 match result {
-                    Ok(text) if browse => self.cell_view = Some(CellView::definition(title, text)),
-                    Ok(text) => self.cell_view = Some(CellView::new(title, text)),
+                    Ok(text) if browse => self.popups.cell_view = Some(CellView::definition(title, text)),
+                    Ok(text) => self.popups.cell_view = Some(CellView::new(title, text)),
                     Err(e) => self.set_status(e, true),
                 }
             }
@@ -222,7 +214,7 @@ impl App {
         // query still runs, Esc again stops waiting for it.
         let stuck = self.tab.run.executing && unreachable;
         self.tab.run.cancel_failed = stuck;
-        self.connection_lost |= stuck;
+        self.keepalive.connection_lost |= stuck;
         let again = if stuck { format!("{} · ", t!("run.esc_again")) } else { String::new() };
         let status = t!("run.cancel_failed", again = again, err = one_line(err));
         self.log(status.clone(), true);
@@ -285,7 +277,7 @@ impl App {
         }
         self.connection.txn = txn.unwrap_or_else(|| self.tracked_txn_state());
         let rows_affected = outcome.rows_affected.unwrap_or(0);
-        self.connection_lost = false;
+        self.keepalive.connection_lost = false;
         self.tab.run.cancel_failed = false;
         tracing::debug!(
             rows = outcome.rows.len(),
@@ -370,7 +362,7 @@ impl App {
         let ran_on = self.tab.run.db.take();
         self.stop_watch(&format!(": {}", t!("run.query_failed")));
         if err.contains("couldn't reconnect") || err.contains("the server doesn't answer") {
-            self.connection_lost = true;
+            self.keepalive.connection_lost = true;
         }
         self.tab.run.cancel_failed = false;
         tracing::debug!(error = err, "query failed");

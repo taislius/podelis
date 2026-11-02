@@ -18,7 +18,7 @@ use rmcp::{ErrorData, Peer, RoleServer, ServerHandler, ServiceExt, schemars, too
 use serde::Deserialize;
 
 use crate::agents::{self, Entry, Verdict, Wrap};
-use crate::app::ConnectForm;
+use crate::config::draft::ConnectionDraft;
 use crate::config::store::{self, ConnectionProfile, ConnectionStore};
 use crate::db::{AgentAccess, ConnectionMode, Database, Engine, QueryOutcome, RunError};
 
@@ -506,7 +506,7 @@ impl Server {
         // A relative SQLite file is the agent's, from where it started (the
         // gateway runs elsewhere).
         let opened = store::opened_from(&profile, self.dir.as_deref());
-        let mut params = ConnectForm::from_profile(&opened, password).params()?;
+        let mut params = ConnectionDraft::from_profile(&opened, password).params()?;
         params.read_only |= !matches!(profile.agents, AgentAccess::Write | AgentAccess::Approve | AgentAccess::Sandbox)
             || profile.mode == ConnectionMode::ReadOnly;
         let db = Database::connect(params).await.map_err(|e| crate::db::with_hint(&crate::db::error_message(&e)))?;
@@ -822,7 +822,7 @@ async fn end_sandbox(db: &Database) {
 
 /// How long one call may run: the connection's Timeout, else 30 s.
 fn call_timeout(profile: &ConnectionProfile) -> Duration {
-    ConnectForm::from_profile(profile, String::new()).query_timeout().ok().flatten().unwrap_or(DEFAULT_TIMEOUT)
+    ConnectionDraft::from_profile(profile, String::new()).query_timeout().ok().flatten().unwrap_or(DEFAULT_TIMEOUT)
 }
 
 /// Why a call's SQL didn't run, for the agent.

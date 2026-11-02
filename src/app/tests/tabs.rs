@@ -201,15 +201,15 @@ async fn result_tabs_messages_and_help() {
     assert!(!app.help_visible);
     // `?` outside the editor is Ctrl+K; `?` in its menu shows every key.
     app.handle_key(key(KeyCode::Char('?')));
-    assert!(app.palette.as_ref().is_some_and(|p| !p.searching));
+    assert!(app.popups.palette.as_ref().is_some_and(|p| !p.searching));
     app.handle_key(key(KeyCode::Char('?')));
-    assert!(app.palette.is_none() && app.help_visible);
+    assert!(app.popups.palette.is_none() && app.help_visible);
     app.handle_key(key(KeyCode::Esc));
     // In the editor `?` is just a character.
     app.focus = Focus::Editor;
     app.tab.editor.set_text("");
     app.handle_key(key(KeyCode::Char('?')));
-    assert!(!app.help_visible && app.palette.is_none() && app.tab.editor.text() == "?");
+    assert!(!app.help_visible && app.popups.palette.is_none() && app.tab.editor.text() == "?");
 }
 
 #[tokio::test]
@@ -230,7 +230,7 @@ async fn tabs_keep_their_own_sql_and_results() {
 
     // Closing a tab with unsaved text asks first.
     app.handle_key(ctrl('w'));
-    assert!(matches!(app.confirm.as_ref().unwrap().action, ConfirmAction::CloseTab));
+    assert!(matches!(app.popups.confirm.as_ref().unwrap().action, ConfirmAction::CloseTab));
     app.handle_key(key(KeyCode::Char('y')));
     assert_eq!((app.tabs.len(), app.active_tab), (1, 0));
     assert_eq!(app.tab.editor.text(), "select 1 as one");
@@ -245,7 +245,7 @@ async fn save_rename_group_and_search_queries() {
     app.load_tabs(&project);
     app.tab.editor.set_text("select * from customers where status = 'paused'");
     app.handle_key(ctrl('s'));
-    assert!(app.tab_prompt.is_some());
+    assert!(app.popups.tab_prompt.is_some());
     type_text(&mut app, "reports/churn");
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.tabs[0].name, "churn");
@@ -253,11 +253,11 @@ async fn save_rename_group_and_search_queries() {
     app.tab.editor.set_text("select 1");
     assert!(app.tab_dirty(0));
     app.handle_key(ctrl('s')); // saves in place, no prompt
-    assert!(app.tab_prompt.is_none() && !app.tab_dirty(0));
+    assert!(app.popups.tab_prompt.is_none() && !app.tab_dirty(0));
 
     // F4 renames and moves it to another group.
     app.handle_key(key(KeyCode::F(4)));
-    assert_eq!(app.tab_prompt.as_ref().unwrap().text.text(), "reports/churn");
+    assert_eq!(app.popups.tab_prompt.as_ref().unwrap().text.text(), "reports/churn");
     for _ in 0.."reports/churn".len() {
         app.handle_key(key(KeyCode::Backspace));
     }
@@ -311,7 +311,7 @@ async fn deleting_a_saved_query_unlinks_its_tab() {
     assert!(app.library.queries.is_empty());
     assert_eq!(app.tabs[0].saved_id, None);
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.library_view.is_none());
+    assert!(app.popups.library_view.is_none());
 }
 
 #[test]
@@ -383,7 +383,7 @@ fn the_tab_list_finds_a_tab_by_name_connection_or_sql() {
     }
     app.handle_key(ctrl('k'));
     app.handle_key(key(KeyCode::Char('g')));
-    let palette = app.palette.as_ref().expect("the tab list");
+    let palette = app.popups.palette.as_ref().expect("the tab list");
     assert!(palette.tabs_only && palette.selected == app.active_tab);
     // All of them, the shown one marked.
     assert_eq!(app.palette_items().len(), 12);
@@ -392,7 +392,7 @@ fn the_tab_list_finds_a_tab_by_name_connection_or_sql() {
     type_text(&mut app, "orders_7");
     assert_eq!(app.palette_items(), [crate::app::palette::Command::SwitchTab(6)]);
     app.handle_key(key(KeyCode::Enter));
-    assert!(app.palette.is_none());
+    assert!(app.popups.palette.is_none());
     assert_eq!((app.active_tab, app.tabs[app.active_tab].name.as_str()), (6, "report 7"));
     // By name, then Esc keeps the tab.
     app.handle_key(ctrl('k'));
@@ -403,7 +403,7 @@ fn the_tab_list_finds_a_tab_by_name_connection_or_sql() {
     for _ in 0..12 {
         app.handle_key(key(KeyCode::Backspace));
     }
-    assert!(app.palette.as_ref().is_some_and(|p| p.tabs_only && p.searching));
+    assert!(app.popups.palette.as_ref().is_some_and(|p| p.tabs_only && p.searching));
     app.handle_key(key(KeyCode::Esc));
     assert_eq!(app.active_tab, 6);
 }
@@ -456,12 +456,12 @@ fn snippets_start_with_everything_when_there_is_no_snippets_group() {
     app.screen = Screen::Query;
     app.library.add("adhoc/top", "select * from orders").unwrap();
     app.run_action(Action::InsertSnippet);
-    assert_eq!(app.library_view.as_ref().unwrap().query.text(), "");
+    assert_eq!(app.popups.library_view.as_ref().unwrap().query.text(), "");
     assert_eq!(app.library_items().len(), 1);
-    app.library_view = None;
+    app.popups.library_view = None;
     app.library.add("snippets/now", "select now()").unwrap();
     app.run_action(Action::InsertSnippet);
-    assert_eq!(app.library_view.as_ref().unwrap().query.text(), "snippets");
+    assert_eq!(app.popups.library_view.as_ref().unwrap().query.text(), "snippets");
 }
 
 #[test]
@@ -478,7 +478,7 @@ fn the_library_finds_by_date() {
     assert_eq!(items.len(), 2, "{items:?}");
     assert!(items.iter().any(|i| matches!(i, LibraryItem::History(sql, Some(_)) if sql == "select 3")));
     assert!(matches!(&items[0], LibraryItem::Saved(id) if app.library.get(id).is_some_and(|q| q.changed.is_some())));
-    app.library_view = None;
+    app.popups.library_view = None;
     app.open_library();
     type_text(&mut app, "@2020-09 select");
     let items = app.library_items();
@@ -525,11 +525,11 @@ fn renaming_a_tab_copies_and_pastes() {
     app.screen = Screen::Query;
     app.tabs[0].name = "monthly churn".into();
     app.run_action(Action::RenameTab);
-    assert!(app.tab_prompt.is_some());
+    assert!(app.popups.tab_prompt.is_some());
     // Ctrl+C copies what's typed (not the editor behind it, not quitting).
     app.handle_key(ctrl('c'));
     assert_eq!(app.clipboard.as_deref(), Some("monthly churn"));
-    assert!(app.confirm.is_none() && app.tab_prompt.is_some());
+    assert!(app.popups.confirm.is_none() && app.popups.tab_prompt.is_some());
     // A paste (the terminal's, or Ctrl+V's from the clipboard) goes in.
     app.handle_key(ctrl('u'));
     app.handle_paste("weekly churn");
@@ -544,11 +544,11 @@ fn a_paste_doesnt_reach_the_library_search_behind_its_delete_question() {
     app.library.add("adhoc/top", "select * from orders").unwrap();
     app.run_action(Action::Library);
     app.handle_paste("top");
-    assert_eq!(app.library_view.as_ref().unwrap().query.text(), "top");
+    assert_eq!(app.popups.library_view.as_ref().unwrap().query.text(), "top");
     app.handle_key(ctrl('d'));
-    assert!(app.library_view.as_ref().unwrap().confirm_delete);
+    assert!(app.popups.library_view.as_ref().unwrap().confirm_delete);
     // Pasted while asked: the search stays, and nothing's copied from it.
     app.handle_paste("other");
-    assert_eq!(app.library_view.as_ref().unwrap().query.text(), "top");
+    assert_eq!(app.popups.library_view.as_ref().unwrap().query.text(), "top");
     assert!(app.prompt_text().is_none());
 }

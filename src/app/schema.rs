@@ -53,12 +53,12 @@ impl App {
         if table.details.is_none() {
             panel.show_definition_of = Some((table.info.schema.clone(), table.info.name.clone()));
             // Browsing: the popup says so rather than showing the last one.
-            if self.cell_view.as_ref().is_some_and(|v| v.browse) {
-                self.cell_view = Some(CellView::definition(title, "Loading…".to_string()));
+            if self.popups.cell_view.as_ref().is_some_and(|v| v.browse) {
+                self.popups.cell_view = Some(CellView::definition(title, "Loading…".to_string()));
             }
             return self.request_details(t);
         }
-        self.cell_view = Some(CellView::definition(title, table_definition(engine, table)));
+        self.popups.cell_view = Some(CellView::definition(title, table_definition(engine, table)));
     }
 
     /// `f` in the navigator: the table's neighbours through foreign keys,
@@ -94,7 +94,7 @@ impl App {
         match nodes[i] {
             SchemaNode::Table(t) => self.show_table_definition(t),
             SchemaNode::Routine(r) => {
-                if let Some(view) = &mut self.cell_view {
+                if let Some(view) = &mut self.popups.cell_view {
                     view.text = "Loading…".to_string();
                     view.scroll = 0;
                 }

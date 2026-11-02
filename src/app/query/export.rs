@@ -66,7 +66,7 @@ impl App {
         match crate::chart::chart(results, &self.tab.grid.view, col) {
             Ok(text) => {
                 let title = format!("{} · {}", t!("export.chart"), results.columns.get(col).map_or("", String::as_str));
-                self.cell_view = Some(CellView::new(title, text));
+                self.popups.cell_view = Some(CellView::new(title, text));
             }
             Err(e) => self.set_status(e, true),
         }
@@ -116,7 +116,7 @@ impl App {
                     };
                     let done = page.done;
                     out.page(page.rows)?;
-                    send(DbEventKind::ExportProgress(out.rows));
+                    send(Background::ExportProgress(out.rows).into());
                     if done {
                         break;
                     }
@@ -132,7 +132,7 @@ impl App {
             if written.is_err() {
                 let _ = std::fs::remove_file(&target);
             }
-            send(DbEventKind::ExportDone(target, written.map_err(|e| format!("{e:#}"))));
+            send(Background::ExportDone(target, written.map_err(|e| format!("{e:#}"))).into());
         });
         self.export_task = Some((stop, path));
         self.set_status(t!("export.exporting").to_string(), false);

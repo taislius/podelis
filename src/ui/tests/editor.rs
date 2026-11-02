@@ -78,7 +78,7 @@ fn completion_popup() {
         kind,
         detail: detail.into(),
     };
-    app.completion = Some(Completion {
+    app.popups.completion = Some(Completion {
         items: vec![
             cand("email", CandKind::Column, "text · users"),
             cand("employee_id", CandKind::Column, "integer · orders"),
@@ -155,9 +155,9 @@ fn the_active_tab_shows_its_whole_name_and_stays_in_sight() {
         row: app.hits.tabs_y,
         modifiers: KeyModifiers::NONE,
     });
-    assert!(app.palette.as_ref().is_some_and(|p| p.tabs_only), "the tab list");
+    assert!(app.popups.palette.as_ref().is_some_and(|p| p.tabs_only), "the tab list");
     assert_eq!(app.active_tab, 10, "no tab picked yet");
-    app.palette = None;
+    app.popups.palette = None;
     // Whatever is beside the name (a saved query's " ●", wide characters,
     // the left line after "‹N"), a narrow row keeps the active tab and `+`.
     let active = app.active_tab;
@@ -211,7 +211,7 @@ fn ctrl_k_menu_shows_letters_and_the_panes_keys() {
     assert_snapshot!(screen);
     // A letter runs its action.
     app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
-    assert!(app.panes.zoomed && app.palette.is_none());
+    assert!(app.panes.zoomed && app.popups.palette.is_none());
     // Anything else (or `/`) searches every command.
     app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     for c in "/export".chars() {
@@ -224,7 +224,7 @@ fn ctrl_k_menu_shows_letters_and_the_panes_keys() {
     app.panes.zoomed = false;
     app.focus = Focus::Editor;
     app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
-    if let Some(palette) = &mut app.palette {
+    if let Some(palette) = &mut app.popups.palette {
         palette.menu = true;
     }
     let screen = render(&mut app, 90, 30);
@@ -278,7 +278,7 @@ fn ctrl_k_lists_the_tabs_and_finds_them_by_name() {
     assert_snapshot!(screen);
     // The number switches.
     app.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
-    assert!(app.active_tab == 0 && app.palette.is_none());
+    assert!(app.active_tab == 0 && app.popups.palette.is_none());
     // Searching finds the other tab by name.
     app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
@@ -304,5 +304,5 @@ fn clicking_the_editor_tabs_focuses_the_editor() {
     // A right-click there opens the editor's menu, not the results'.
     app.focus = Focus::Results;
     app.handle_mouse(click(MouseEventKind::Down(MouseButton::Right), tab, y));
-    assert_eq!(app.menu.as_ref().map(|m| m.title), Some("EDITOR"));
+    assert_eq!(app.popups.menu.as_ref().map(|m| m.title), Some("EDITOR"));
 }

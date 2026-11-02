@@ -25,7 +25,7 @@ impl App {
         if !self.engine().capabilities().activity {
             return self.set_status(t!("activity.no_sessions").to_string(), true);
         }
-        self.activity = Some(ActivityView {
+        self.popups.activity = Some(ActivityView {
             rows: Vec::new(),
             selected: 0,
             error: None,
@@ -38,7 +38,7 @@ impl App {
 
     fn refresh_activity(&mut self) {
         let Some(db) = self.connection.database.clone() else { return };
-        let Some(view) = &mut self.activity else { return };
+        let Some(view) = &mut self.popups.activity else { return };
         if view.loading {
             return;
         }
@@ -51,13 +51,13 @@ impl App {
 
     /// Called every second: refreshes the open activity view.
     pub(super) fn activity_tick(&mut self) {
-        if self.activity.as_ref().is_some_and(|v| v.refreshed.is_none_or(|t| t.elapsed() >= REFRESH)) {
+        if self.popups.activity.as_ref().is_some_and(|v| v.refreshed.is_none_or(|t| t.elapsed() >= REFRESH)) {
             self.refresh_activity();
         }
     }
 
     pub(super) fn activity_loaded(&mut self, result: Result<Vec<Activity>, String>) {
-        let Some(view) = &mut self.activity else { return };
+        let Some(view) = &mut self.popups.activity else { return };
         view.loading = false;
         view.refreshed = Some(Instant::now());
         match result {
@@ -76,7 +76,7 @@ impl App {
     }
 
     pub(super) fn handle_activity_key(&mut self, key: KeyEvent) {
-        let Some(view) = &mut self.activity else { return };
+        let Some(view) = &mut self.popups.activity else { return };
         if let Some((id, kill)) = view.confirm.take() {
             if matches!(key.code, KeyCode::Char('y' | 'Y')) {
                 self.stop_session(id, kill);
@@ -88,7 +88,7 @@ impl App {
             return;
         }
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.activity = None,
+            KeyCode::Esc | KeyCode::Char('q') => self.popups.activity = None,
             KeyCode::Char('r') => {
                 view.refreshed = None;
                 self.refresh_activity();
@@ -97,14 +97,14 @@ impl App {
                 if let Some(a) = view.rows.get(view.selected) {
                     let title = format!("{} {} · {}@{}", t!("activity.session"), a.id, a.user, a.client);
                     let text = if a.query.is_empty() { t!("activity.no_query").to_string() } else { a.query.clone() };
-                    self.cell_view = Some(CellView::new(title, text));
+                    self.popups.cell_view = Some(CellView::new(title, text));
                 }
             }
             KeyCode::Char(c @ ('c' | 'x')) => {
                 if self.connection.mode == ConnectionMode::ReadOnly {
                     return self.set_status(t!("activity.read_only").to_string(), true);
                 }
-                let Some(view) = &mut self.activity else { return };
+                let Some(view) = &mut self.popups.activity else { return };
                 if let Some(a) = view.rows.get(view.selected) {
                     view.confirm = Some((a.id.clone(), c == 'x'));
                 }
@@ -131,7 +131,7 @@ impl App {
             }
             Err(e) => self.set_status(t!("activity.stop_failed", e = e), true),
         }
-        if let Some(view) = &mut self.activity {
+        if let Some(view) = &mut self.popups.activity {
             view.refreshed = None;
         }
         self.refresh_activity();
@@ -168,7 +168,7 @@ impl App {
             format!("SAVEPOINT podelis_explain;\n{explain};\nROLLBACK TO SAVEPOINT podelis_explain")
         };
         let action = ConfirmAction::Run { sql, offset: 0, infos, purpose: RunPurpose::Explain, filled: None };
-        self.confirm = Some(Confirm {
+        self.popups.confirm = Some(Confirm {
             message: t!("activity.analyze_runs").into(),
             details: vec![stmt.lines().next().unwrap_or_default().to_string()],
             danger: self.connection.mode == ConnectionMode::Production,

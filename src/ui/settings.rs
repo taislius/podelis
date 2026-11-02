@@ -7,7 +7,7 @@ use crate::app::settings_view::{Field, Kind};
 
 pub(super) fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let Some(view) = &app.settings_view else { return };
+    let Some(view) = &app.popups.settings_view else { return };
     let label_w = Field::ALL.iter().map(|f| f.label().chars().count()).max().unwrap_or(0);
     let width = fit(78, 40, area.width);
     let value_w = usize::from(width).saturating_sub(label_w + 10);

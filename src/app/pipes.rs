@@ -43,15 +43,17 @@ impl App {
         if self.tab.grid.results.as_ref().is_none_or(|r| r.columns.is_empty()) {
             return self.set_status(t!("pipes.no_rows").to_string(), true);
         }
-        self.pipe_prompt = Some(LineInput::new(self.last_pipe.clone()));
+        self.popups.pipe_prompt = Some(LineInput::new(self.last_pipe.clone()));
     }
 
     pub(super) fn handle_pipe_prompt_key(&mut self, key: KeyEvent) {
-        let Some(input) = &mut self.pipe_prompt else { return };
+        let Some(input) = &mut self.popups.pipe_prompt else { return };
         match input.handle(key) {
-            InputResult::Cancel => self.pipe_prompt = None,
+            InputResult::Cancel => self.popups.pipe_prompt = None,
             InputResult::Submit => {
-                let Some(command) = self.pipe_prompt.take().filter(|c| !c.text().trim().is_empty()) else { return };
+                let Some(command) = self.popups.pipe_prompt.take().filter(|c| !c.text().trim().is_empty()) else {
+                    return;
+                };
                 self.run_pipe(command.text().to_string());
             }
             InputResult::Changed | InputResult::Moved | InputResult::Ignored => {}
@@ -85,7 +87,7 @@ impl App {
                 self.set_status(String::new(), false);
                 let text =
                     if output.is_empty() { t!("pipes.no_output").to_string() } else { export::align_tabs(&output) };
-                self.cell_view = Some(CellView::new(format!("| {command}"), text));
+                self.popups.cell_view = Some(CellView::new(format!("| {command}"), text));
             }
             Err(e) => self.set_status(format!("| {command}: {e}"), true),
         }

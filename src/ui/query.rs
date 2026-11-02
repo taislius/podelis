@@ -96,7 +96,7 @@ pub(super) fn draw_query(f: &mut Frame, app: &mut App, body: Rect) {
             Overlay::Palette => draw_palette(f, app, area),
             Overlay::RowForm => draw_row_form(f, app, area),
             Overlay::PipePrompt => {
-                let command = app.pipe_prompt.clone().unwrap_or_default();
+                let command = app.popups.pipe_prompt.clone().unwrap_or_default();
                 draw_pipe_prompt(f, &command, area);
             }
             Overlay::AskPrompt => draw_ask_prompt(f, app, area),
@@ -110,7 +110,7 @@ pub(super) fn draw_query(f: &mut Frame, app: &mut App, body: Rect) {
 /// A pop-up menu: what can be done here, each with its key.
 fn draw_menu(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
-    let Some(menu) = &app.menu else { return };
+    let Some(menu) = &app.popups.menu else { return };
     let label_w = menu.items.iter().map(|i| i.label.chars().count()).max().unwrap_or(0);
     let keys_w = menu.items.iter().map(|i| i.keys.chars().count()).max().unwrap_or(0);
     let width = ((label_w + keys_w + 6) as u16).min(area.width);
@@ -145,7 +145,7 @@ fn draw_menu(f: &mut Frame, app: &mut App, area: Rect) {
 /// The F3 window: search box, then saved queries (★) and history (↺).
 fn draw_library(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
-    let Some(view) = &app.library_view else { return };
+    let Some(view) = &app.popups.library_view else { return };
     let rect = centered_box(area, fit(area.width * 4 / 5, 30, area.width), fit(area.height * 4 / 5, 8, area.height));
     f.render_widget(Clear, rect);
     let block = popup(t!("library.title"), t.accent);
@@ -230,7 +230,7 @@ fn draw_library(f: &mut Frame, app: &mut App, area: Rect) {
         let mut state = ListState::default().with_selected(Some(selected)).with_offset(offset);
         f.render_stateful_widget(List::new(rows).highlight_style(Style::default().bg(t.active)), list, &mut state);
         app.hits.library_list = (list, state.offset());
-        if let Some(view) = &mut app.library_view {
+        if let Some(view) = &mut app.popups.library_view {
             view.offset = state.offset();
         }
     }
@@ -240,7 +240,7 @@ fn draw_library(f: &mut Frame, app: &mut App, area: Rect) {
         lines.extend(preview.iter().map(|l| Line::from(Span::styled(truncate(&l.replace('\t', "    "), w), muted()))));
         f.render_widget(Paragraph::new(lines), preview_area);
     }
-    let Some(view) = &app.library_view else { return };
+    let Some(view) = &app.popups.library_view else { return };
 
     let hint = if view.confirm_delete {
         Line::from(Span::styled(format!(" {}", t!("library.delete")), bold(t.warn)))
@@ -270,7 +270,7 @@ fn when_label(at: i64, now: chrono::DateTime<chrono::Local>) -> String {
 /// The activity monitor: one line per session on the server.
 fn draw_activity(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let Some(view) = &app.activity else { return };
+    let Some(view) = &app.popups.activity else { return };
     let rect = centered_box(area, area.width.saturating_sub(6).max(40), area.height.saturating_sub(4).max(8));
     f.render_widget(Clear, rect);
     let title = format!("{} · {}", t!("activity.title"), tn!("activity.sessions", view.rows.len()));
@@ -350,7 +350,7 @@ fn draw_activity(f: &mut Frame, app: &App, area: Rect) {
 /// The add-row form: one line per column, with its type.
 fn draw_row_form(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let Some(form) = &app.row_form else { return };
+    let Some(form) = &app.popups.row_form else { return };
     let label_w = form.columns.iter().map(|c| c.name.chars().count()).max().unwrap_or(0).min(24);
     let width = fit(80, 30, area.width);
     let type_w = 14;
@@ -408,7 +408,7 @@ fn draw_pipe_prompt(f: &mut Frame, command: &LineInput, area: Rect) {
 /// `Ctrl+K q`: the question for a model, about the tab's connection.
 fn draw_ask_prompt(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let Some(question) = &app.ask_prompt else { return };
+    let Some(question) = &app.popups.ask_prompt else { return };
     let rect = centered_box(area, fit(80, 30, area.width), 6);
     f.render_widget(Clear, rect);
     let lines = vec![
@@ -425,7 +425,7 @@ fn draw_ask_prompt(f: &mut Frame, app: &App, area: Rect) {
 /// suggestions, waiting to be confirmed, in orange.
 fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let Some(view) = &app.memory_view else { return };
+    let Some(view) = &app.popups.memory_view else { return };
     let width = fit(100, 40, area.width.saturating_sub(4));
     let height = fit(view.facts.len() as u16 + 7, 10, area.height.saturating_sub(2));
     let rect = centered_box(area, width, height);
@@ -480,7 +480,7 @@ fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
 /// The save-as / rename prompt.
 fn draw_tab_prompt(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let Some(prompt) = &app.tab_prompt else { return };
+    let Some(prompt) = &app.popups.tab_prompt else { return };
     let title = match prompt.kind {
         TabPromptKind::SaveAs => t!("tab_prompt.save"),
         TabPromptKind::SaveStatement(_) => t!("tab_prompt.save_statement"),
@@ -621,7 +621,7 @@ fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let Some(palette) = &app.palette else { return };
+    let Some(palette) = &app.popups.palette else { return };
     if !palette.searching {
         // Until the menu is due, only the status bar says Ctrl+K is waiting.
         if palette.menu {
@@ -695,7 +695,7 @@ fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
 /// Ctrl+K x: auto-commit, manual commit or rollback-only.
 fn draw_tx_picker(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let Some(highlighted) = app.tx_picker else { return };
+    let Some(highlighted) = app.popups.tx_picker else { return };
     let mut lines: Vec<Line> = TxMode::ALL
         .iter()
         .map(|&mode| {
@@ -719,7 +719,7 @@ fn draw_tx_picker(f: &mut Frame, app: &App, area: Rect) {
 /// The sandbox: its steps, what they changed per table, and how to end it.
 fn draw_sandbox(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let (Some(view), Some(sandbox)) = (&app.sandbox_view, &app.connection.sandbox) else { return };
+    let (Some(view), Some(sandbox)) = (&app.popups.sandbox_view, &app.connection.sandbox) else { return };
     let width = fit(area.width.saturating_sub(8).min(100), 40, area.width);
     let w = usize::from(width.saturating_sub(4));
     let mut lines = vec![Line::from(Span::styled(format!(" {}", t!("sandbox.steps")), bold(t.accent)))];
@@ -771,7 +771,7 @@ fn draw_sandbox(f: &mut Frame, app: &App, area: Rect) {
 /// After writes ran in a transaction: commit or roll back?
 fn draw_review(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let Some(review) = &app.review else { return };
+    let Some(review) = &app.popups.review else { return };
     let rows = review.rows_affected;
     let lines = vec![
         Line::from(Span::styled(tn!("review.changed", rows), bold(t.warn))),
@@ -794,7 +794,7 @@ fn draw_review(f: &mut Frame, app: &App, area: Rect) {
 /// The query parameters form: one line per placeholder.
 fn draw_param_form(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let Some(form) = &app.param_form else { return };
+    let Some(form) = &app.popups.param_form else { return };
     let label_w = form.params.iter().map(|p| p.name.chars().count()).max().unwrap_or(0).min(24);
     let width = fit(72, 30, area.width);
     let value_w = (width as usize).saturating_sub(label_w + 8);
@@ -864,7 +864,7 @@ pub(super) fn draw_cell_view(f: &mut Frame, app: &mut App, area: Rect) {
     // The navigator on screen, for definitions to sit beside.
     let navigator =
         app.hits.schema.filter(|_| app.panes.schema_shown && !app.panes.zoomed && app.screen == Screen::Query);
-    let Some(view) = &mut app.cell_view else { return };
+    let Some(view) = &mut app.popups.cell_view else { return };
     // As big as the text needs, up to nearly the whole screen. Stepping
     // through tables or rows (←/→), one size for all, so it doesn't jump.
     let steps = view.browse || view.record;
@@ -901,7 +901,7 @@ pub(super) fn draw_cell_view(f: &mut Frame, app: &mut App, area: Rect) {
 
 pub(super) fn draw_confirm(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
-    let Some(confirm) = &app.confirm else { return };
+    let Some(confirm) = &app.popups.confirm else { return };
     let color = if confirm.danger { t.error } else { t.accent };
     let mut lines = vec![Line::from(Span::styled(confirm.message.clone(), bold(color))), Line::default()];
     // The details are wrapped below, once the width is known.

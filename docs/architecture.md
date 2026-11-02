@@ -24,11 +24,35 @@ src/
                          JSON, INSERTs, a text table, an ASCII table: for exports, pipes and -e
                          alike), comparing connections, result snapshots
   config/                on disk: projects and connections (store),
-                         settings, keys, themes, history, the query library
+                         settings, keys, themes, history, the query library,
+                         `[[models]]` entries (models); a connection as typed
+                         (draft: `ConnectionDraft`, URL and file arguments)
   system/                the clipboard, database containers, crash reports,
-                         the debug log
+                         the debug log, installed programs, the install's
+                         facts for bug reports, password prompts on a tty
   editor.rs              the text editor (TextEditor)
 ```
+
+### Layers
+
+Each module uses only those to its left (lower):
+
+```
+lang, editor  →  sql, db (related, chart)  →  config  →  system  →  transfer  →  agents, gateway  →  app  →  ui  →  cli, main.rs
+```
+
+`tests/layers.rs` checks it in the code that ships (items marked
+`#[cfg(test)]` may reach across): a `crate::app` in `gateway/`, or a
+`use crate::{app::…}`, fails `cargo test`. Two
+exceptions remain, still to go: `sql` and `db` use each other (`Engine`
+and the lexer rules one way, statement analysis the other), and `sql`
+borrows `editor::is_word_char`. `agents` and `gateway` share a level: the
+gateway serves agents' MCP sessions, and `podelis mcp` starts the gateway.
+
+Whoever connects (the app, `-e`, the gateway, agents) turns a saved
+profile into `ConnectParams` through `config::draft::ConnectionDraft`;
+the app's `ConnectForm` is a draft plus the form's own state (focus,
+messages, connecting), and derefs to it.
 
 The app owns all state; the UI only draws it (and records where it drew
 clickable things, for the mouse). Background work (connecting, queries,
@@ -42,7 +66,10 @@ generation so results from a superseded connection are ignored.
 connection, `Connection`: parked per tab and swapped in, like tabs), `run`
 (the query running), `notes` (what's said), `panes` (the layout),
 `manager` (the projects and connections screen), `agents` (the agents
-view) and `hits` (where the UI drew what can be clicked).
+view), `popups` (each popup's state), `ask` (a question being answered),
+`next_run` (what applies to the run starting now only), `keepalive`
+(checking an idle connection) and `hits` (where the UI drew what can be
+clicked).
 
 A few pieces in `app/` are shared, so the same thing works the same way
 everywhere:
@@ -61,9 +88,17 @@ everywhere:
   keeps the engine it ran on; a script's result set is shown with (and
   links to) its own statement, split from it once (`PlanSource::statement`),
   and only when the script split into as many statements as it ran.
-- **Popups** (`overlay.rs`): `App::overlays()` lists the open popups front
-  first. Key handling, drawing (back to front), mouse blocking and "is the
-  user typing" all read it, so a new popup is added in one place.
+- **Popups** (`overlay.rs`): their state is `App::popups` (`Popups`, one
+  `Option` each), and `App::overlays()` lists the open ones front first.
+  Key handling, drawing (back to front), mouse blocking and "is the user
+  typing" all read it, so a new popup is a field there and a line in
+  `overlay_states`.
+- **Background events** (`events.rs`): a task's outcome is a `DbEvent`,
+  dropped when its generation is old, or found its tab by run id. What
+  isn't about the connection shown (reopening the session, container
+  searches, exports, the gateway's answers, a sandbox's locks) is a
+  `Background` event instead, applied wherever it is and never dropped:
+  `handle_db_event` sends those to `apply_background` before anything else.
 - **Text inputs** (`input.rs`): `LineInput` is one line with a cursor and
   the same keys everywhere (←/→, Home/End, Ctrl+U, Ctrl+W, paste). Its
   `handle` reports `Changed`, `Moved`, `Submit`, `Cancel` or `Ignored`, and
@@ -241,8 +276,9 @@ gateway/
                 their foreign-key neighbours, partitions as their parent,
                 rendered within a budget (see "The context, in the
                 field's terms")
-  models/       the models: `[[models]]` in config.toml, keys (keychain,
-                key_command, environment), retries
+  models/       the models (their `[[models]]` entries are
+                `config::models`): keys (keychain, key_command,
+                environment), retries
     anthropic.rs  Anthropic's Messages API, streamed
     openai.rs     OpenAI's Chat Completions format (GPT, Ollama, llama.cpp…)
     sse.rs        server-sent events, as both stream answers

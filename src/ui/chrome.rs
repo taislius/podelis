@@ -100,12 +100,13 @@ fn connection_status(app: &App, room: usize) -> Vec<Span<'static>> {
             vec![Span::styled(format!("◌ {}  ", t!("bar.reconnecting")), bold(t.warn))]
         };
     }
-    let (dot, name_style) = if app.connection_lost { (fg(t.error), bold(t.error)) } else { (fg(t.ok), bold(t.ok)) };
+    let (dot, name_style) =
+        if app.keepalive.connection_lost { (fg(t.error), bold(t.error)) } else { (fg(t.ok), bold(t.ok)) };
     let mut spans = vec![
         Span::styled(if app.settings.keepalive > 0 { "♥ " } else { "● " }, dot),
         Span::styled(app.connection.form.short_name(), name_style),
     ];
-    if app.connection_lost {
+    if app.keepalive.connection_lost {
         spans.push(Span::styled(format!(" · {}", t!("bar.connection_lost")), bold(t.error)));
     }
     match app.connection.mode {

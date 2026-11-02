@@ -123,22 +123,22 @@ async fn parameters_are_asked_for_and_remembered() {
     app.tab.editor.set_text("select name from t where id = :id or name = :name");
     app.handle_key(key(KeyCode::F(5)));
     assert!(!app.tab.run.executing);
-    let form = app.param_form.as_ref().unwrap();
+    let form = app.popups.param_form.as_ref().unwrap();
     assert_eq!(form.params.len(), 2);
     type_text(&mut app, "2");
     app.handle_key(key(KeyCode::Down));
     app.handle_paste("O'Brien");
     app.handle_key(key(KeyCode::Enter));
     finish(&mut app).await;
-    assert!(app.param_form.is_none());
+    assert!(app.popups.param_form.is_none());
     let results = app.tab.grid.results.as_ref().unwrap();
     assert_eq!(results.rows, vec![vec![Some("b".to_string())]]);
 
     // Values come back next time; Esc cancels without running.
     app.handle_key(key(KeyCode::F(5)));
-    assert_eq!(app.param_form.as_ref().unwrap().values, ["2", "O'Brien"]);
+    assert_eq!(app.popups.param_form.as_ref().unwrap().values, ["2", "O'Brien"]);
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.param_form.is_none() && !app.tab.run.executing);
+    assert!(app.popups.param_form.is_none() && !app.tab.run.executing);
 
     // An error in the filled SQL is marked at the right place in the editor.
     app.tab.editor.set_text("select :v from nope");
@@ -236,7 +236,7 @@ async fn disconnecting_while_a_query_runs_says_it_is_cancelled() {
     app.handle_key(key(KeyCode::F(5)));
     assert!(app.tab.run.executing);
     app.request_disconnect();
-    let confirm = app.confirm.as_ref().expect("asks first");
+    let confirm = app.popups.confirm.as_ref().expect("asks first");
     assert!(confirm.danger && confirm.details.iter().any(|d| d.contains("cancelled")), "{:?}", confirm.details);
     app.cancel_query();
 }
@@ -255,7 +255,7 @@ async fn a_long_query_says_how_to_cancel_it() {
     app.tab.run.since = Instant::now().checked_sub(Duration::from_secs(2));
     app.tick_running();
     assert!(app.notes.status.contains("its query has run 0:02. Esc there cancels it"), "{}", app.notes.status);
-    assert!(app.confirm.is_none(), "no question");
+    assert!(app.popups.confirm.is_none(), "no question");
     // Typing goes on into the editor; a `y` cancels nothing.
     app.focus = Focus::Editor;
     app.handle_key(key(KeyCode::Char('y')));

@@ -1,67 +1,17 @@
 //! `podelis doctor`: checks the local setup (config files, keychain, ssh,
 //! terminal, viewer, logs) and optionally tests saved connections. The
-//! environment part is also what "Copy diagnostics" puts in bug reports.
+//! environment part (`system::environment`) is also what "Copy
+//! diagnostics" puts in bug reports.
 
 use std::fmt::Write as _;
-use std::path::Path;
 
 use crate::config::settings::Settings;
 use crate::config::store::{self, ConnectionStore};
 use crate::db::{Step, StepState};
+use crate::system::environment::terminal_description;
 
 fn step(name: &'static str, state: StepState, detail: impl Into<String>, hint: Option<&'static str>) -> Step {
     Step { name, state, detail: detail.into(), elapsed: None, hint }
-}
-
-/// Whether `program` is on the PATH (or is a path that exists).
-pub(crate) fn on_path(program: &str) -> bool {
-    if program.contains('/') {
-        return Path::new(program).is_file();
-    }
-    std::env::var_os("PATH").is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
-}
-
-/// The terminal as the environment describes it.
-pub fn terminal_description() -> String {
-    let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
-    let mut parts = Vec::new();
-    if let Some(program) = var("TERM_PROGRAM") {
-        parts.push(var("TERM_PROGRAM_VERSION").map_or(program.clone(), |v| format!("{program} {v}")));
-    }
-    parts.push(format!("TERM={}", var("TERM").unwrap_or_else(|| "unset".into())));
-    if let Some(c) = var("COLORTERM") {
-        parts.push(format!("COLORTERM={c}"));
-    }
-    if var("TMUX").is_some() {
-        parts.push("in tmux".into());
-    }
-    parts.join(", ")
-}
-
-/// Facts about this install for bug reports: no hosts, users or SQL.
-pub fn environment(settings: &Settings) -> Vec<(String, String)> {
-    let mut out = vec![
-        ("Podėlis".to_string(), env!("CARGO_PKG_VERSION").to_string()),
-        ("OS".to_string(), format!("{} {}", std::env::consts::OS, std::env::consts::ARCH)),
-        ("Terminal".to_string(), terminal_description()),
-        (
-            "Settings".to_string(),
-            format!(
-                "theme {:?}, editor {:?}, mouse {}, restore_session {}, keepalive {} s, {} custom key(s)",
-                settings.theme,
-                settings.editor_mode,
-                settings.mouse,
-                settings.restore_session,
-                settings.keepalive,
-                settings.keys.len()
-            ),
-        ),
-    ];
-    let crash = crate::system::crash::log_path();
-    if let Ok(meta) = std::fs::metadata(&crash) {
-        out.push(("Crash log".to_string(), format!("{} ({} bytes)", crash.display(), meta.len())));
-    }
-    out
 }
 
 /// Checks the local setup. `connections`: also test the saved connections
@@ -131,7 +81,7 @@ pub async fn run(
     });
 
     // Optional: any of them can supply passwords as a password command.
-    let tools = crate::db::password_command::installed(on_path);
+    let tools = crate::db::password_command::installed(crate::system::programs::on_path);
     steps.push(if tools.is_empty() {
         step("Passwords", StepState::Skipped, "no password manager CLI found (pass, op, bw, vault…)", None)
     } else {
@@ -181,7 +131,8 @@ fn environment_checks(settings: &Settings) -> Vec<Step> {
     let mut programs: Vec<String> = chosen.iter().map(|(_, v)| program(v)).collect();
     programs.sort();
     programs.dedup();
-    let missing: Vec<&str> = programs.iter().map(String::as_str).filter(|p| !on_path(p)).collect();
+    let missing: Vec<&str> =
+        programs.iter().map(String::as_str).filter(|p| !crate::system::programs::on_path(p)).collect();
     let said: Vec<String> = programs
         .iter()
         .map(|p| {
@@ -229,7 +180,7 @@ async fn test_connections(store: &ConnectionStore, project: Option<&str>, out: &
         Some(project) => {
             for profile in &project.connections {
                 let (password, _) = store::saved_password(&project.id, profile);
-                let form = crate::app::ConnectForm::from_profile(profile, password);
+                let form = crate::config::draft::ConnectionDraft::from_profile(profile, password);
                 let _ = writeln!(out, "\n{} · {}", profile.name, form.summary());
                 match form.params() {
                     Ok(params) => {
@@ -299,18 +250,5 @@ mod tests {
         let mut out = String::new();
         assert!(test_connections(&store, Some("p"), &mut out).await, "{out}");
         assert!(out.contains("doesn't exist") && !path.exists(), "{out}");
-    }
-
-    #[test]
-    fn finds_programs_on_the_path() {
-        assert!(on_path("sh"));
-        assert!(!on_path("surely-not-a-real-program-podelis"));
-    }
-
-    #[test]
-    fn environment_has_no_secrets() {
-        let env = environment(&Settings::default());
-        assert_eq!(env[0].1, env!("CARGO_PKG_VERSION"));
-        assert!(env.iter().any(|(k, _)| k == "Terminal"));
     }
 }

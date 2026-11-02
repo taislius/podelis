@@ -367,7 +367,7 @@ async fn load(
         tokio::task::spawn_blocking(move || crate::config::store::saved_password(&project_id, &for_password))
             .await
             .map_err(|e| e.to_string())?;
-    let mut params = crate::app::ConnectForm::from_profile(&profile, password).params()?;
+    let mut params = crate::config::draft::ConnectionDraft::from_profile(&profile, password).params()?;
     // Reading the catalog is all it does.
     params.read_only = true;
     let db =
