@@ -241,7 +241,8 @@ Outside `db/`, code doesn't name an engine except in tests.
    `crates/podelis-core/Cargo.toml` (turning on its sqlx driver) and the
    root `Cargo.toml` (passing it on: `<engine> = ["podelis-core/<engine>"]`),
    in each one's `default` list (and in `crates/podelis-ai/Cargo.toml`,
-   which passes them on only when it's built alone),
+   which passes them on only when it's built alone, and in CI's
+   `engines` matrix, `.github/workflows/ci.yml`, to be built alone there),
    `mod.rs` (a `Dialect` impl, `DriverPool`, `DriverConnection`,
    `DIALECT`, `cell`), `connect.rs`, `queries.rs`, `cells.rs`,
    `passwords.rs`, `agent_constraints.rs` and `db_tests.rs`, modelled on

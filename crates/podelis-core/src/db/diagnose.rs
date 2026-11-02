@@ -352,6 +352,7 @@ mod tests {
         assert_eq!(with_hint("weird"), "weird");
     }
 
+    #[cfg(feature = "sqlite")]
     #[tokio::test]
     async fn diagnoses_a_refused_port_and_a_sqlite_file() {
         // Port 1 (tcpmux) is practically never served; a freed random

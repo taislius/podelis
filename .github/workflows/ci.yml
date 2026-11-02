@@ -21,8 +21,7 @@ jobs:
   check:
     name: Lint & test (live PostgreSQL, MySQL, SQLite)
     runs-on: ubuntu-24.04
-    # Two builds: every engine, then the README's fewer.
-    timeout-minutes: 30
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17
@@ -51,9 +50,47 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
-      # The build README.md shows with fewer engines (no MySQL): code and
-      # tests mustn't assume an engine is there. Clippy as well, as what
-      # goes unused with fewer engines is allowed only in such a build.
-      # The same servers: PostgreSQL's live tests run here too.
-      - run: cargo clippy --all-targets --locked --no-default-features --features postgres,sqlite -- -D warnings
-      - run: cargo test --locked --no-default-features --features postgres,sqlite
+
+  # Built with fewer engines (`--no-default-features --features …`): the
+  # README's PostgreSQL and SQLite, and each engine alone. Code and tests
+  # mustn't assume an engine is there (a test that needs SQLite's files
+  # says so with `#[cfg(feature = "sqlite")]`); clippy as well, as what goes
+  # unused with fewer engines is allowed only in such builds. Beside the
+  # job above, so a run takes no longer; the same servers, so each build's
+  # live tests run.
+  engines:
+    name: Fewer engines (${{ matrix.features }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        features: ["postgres,sqlite", "postgres", "mysql", "sqlite"]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -proot" --health-interval 2s --health-timeout 5s --health-retries 60
+    env:
+      PODELIS_TEST_PG_PORT: 5432
+      PODELIS_TEST_PG_PASSWORD: postgres
+      PODELIS_TEST_MYSQL_PORT: 3306
+      PODELIS_TEST_MYSQL_PASSWORD: root
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.features }}
+      - run: cargo clippy --all-targets --locked --no-default-features --features ${{ matrix.features }} -- -D warnings
+      - run: cargo test --locked --no-default-features --features ${{ matrix.features }}

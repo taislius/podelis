@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn f7_shows_the_plan_without_running() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -41,6 +42,7 @@ async fn f7_during_a_slow_query_shows_the_plan_at_once() {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn explain_moves_focus_to_the_plan() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;

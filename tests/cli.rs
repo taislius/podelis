@@ -2,6 +2,9 @@
 //! program, a scratch config folder and a SQLite file. What it prints, on
 //! which stream, and its exit codes (see `podelis --help`).
 
+// It runs the program on a SQLite file: built without SQLite there's none
+// (its `--help` is checked in every other build).
+#![cfg(feature = "sqlite")]
 #![expect(clippy::unwrap_used, reason = "tests: a panic is the failed assertion")]
 
 use std::io::Write as _;
@@ -124,11 +127,15 @@ fn exit_codes_tell_what_happened() {
     assert_eq!(text(&s.run(&["-e", "select count(*) from pets", "-f", "csv"]).stdout), "count(*)\r\n3\r\n");
     // With --yes it runs.
     assert_eq!(s.run(&["-e", "delete from pets where id = 3", "--yes"]).status.code(), Some(0));
-    // 4: nothing answers at that address.
-    let unreachable = podelis(s.dir.path()).args(["postgres://u:p@127.0.0.1:1/x", "-e", "select 1"]).output().unwrap();
-    let (status, said) = code(unreachable);
-    assert_eq!(status, Some(4), "{said}");
-    assert!(said.contains("hint:"), "{said}");
+    // 4: nothing answers at that address (a server's, of an engine built).
+    #[cfg(any(feature = "postgres", feature = "mysql"))]
+    {
+        let url = if cfg!(feature = "postgres") { "postgres://u:p@127.0.0.1:1/x" } else { "mysql://u:p@127.0.0.1:1/x" };
+        let unreachable = podelis(s.dir.path()).args([url, "-e", "select 1"]).output().unwrap();
+        let (status, said) = code(unreachable);
+        assert_eq!(status, Some(4), "{said}");
+        assert!(said.contains("hint:"), "{said}");
+    }
 }
 
 #[test]

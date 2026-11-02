@@ -345,6 +345,7 @@ pub(crate) async fn saved_shop(dir: &Path) {
     store.upsert(&project, None, profile).unwrap();
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn context_shows_the_tables_a_question_needs_from_a_saved_connection() {
     let dir = tempfile::tempdir().unwrap();
@@ -394,6 +395,7 @@ pub(crate) fn claude_answer(text: &str) -> String {
     ])
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn ask_checks_the_models_sql_against_the_schema_and_never_runs_it() {
     let first = claude_answer(
@@ -443,6 +445,7 @@ async fn ask_checks_the_models_sql_against_the_schema_and_never_runs_it() {
 
 /// A model that may look for itself asks for a table it wasn't shown;
 /// it gets the table's columns (never rows), and says what it looked at.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn ask_lets_the_model_look_up_a_table_it_was_not_shown() {
     let lookup = sse(&[
@@ -483,6 +486,7 @@ async fn ask_lets_the_model_look_up_a_table_it_was_not_shown() {
     assert_eq!(entry["looked_up"], json!(1));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn ask_shows_a_schema_to_a_far_model_only_if_the_project_shares_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -505,6 +509,7 @@ async fn ask_shows_a_schema_to_a_far_model_only_if_the_project_shares_it() {
     crate::db::keychain::delete_password("model:far").unwrap();
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn the_teams_facts_go_to_the_model_with_the_tables_they_are_about() {
     let answer = claude_answer("```sql\nSELECT count(*) FROM orders\n```\nCounts orders.");
@@ -565,6 +570,7 @@ async fn the_teams_facts_go_to_the_model_with_the_tables_they_are_about() {
     assert!(log.contains("\"method\":\"memory.add\"") && !log.contains("VAT"), "{log}");
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn migrations_teach_the_memory_and_a_models_guesses_wait_for_the_user() {
     let first = claude_answer(
@@ -625,6 +631,7 @@ async fn migrations_teach_the_memory_and_a_models_guesses_wait_for_the_user() {
     assert!(requests[0].contains("FACT: subject | relation | value"));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn an_agent_gets_its_tools_from_the_gateway_through_mcp_open() {
     use rmcp::ServiceExt as _;
@@ -852,6 +859,7 @@ async fn projects_differing_only_in_case_are_told_apart_by_id() {
     assert_eq!(super::ai::find_project(dir.path(), Some(&format!("id:{first}"))).unwrap().id, first);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_relative_sqlite_file_is_the_askers() {
     let dir = tempfile::tempdir().unwrap();

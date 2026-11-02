@@ -116,6 +116,7 @@ fn messages_can_be_selected_copied_and_opened() {
     assert!(app.take_clipboard().is_some_and(|c| c.starts_with("relation")));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn the_statement_at_the_cursor_is_selected_or_zoomed_alone() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -152,6 +153,7 @@ async fn the_statement_at_the_cursor_is_selected_or_zoomed_alone() {
     assert!(app.panes.zoomed && !app.panes.statement_zoom);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn autocomplete_from_catalog() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -184,6 +186,7 @@ async fn autocomplete_from_catalog() {
     assert_eq!(app.focus, Focus::Results);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn rebound_keys_take_effect() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -263,6 +266,7 @@ fn command_palette_finds_and_runs_commands() {
     assert!(app.popups.palette.is_none());
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn following_a_foreign_key_shows_the_referenced_row() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -366,6 +370,7 @@ async fn following_a_foreign_key_shows_the_referenced_row() {
     assert!(app.popups.cell_view.is_none());
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn enter_after_a_fully_typed_name_is_a_new_line() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -380,6 +385,7 @@ async fn enter_after_a_fully_typed_name_is_a_new_line() {
     assert!(app.popups.completion.is_none());
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn menus_offer_what_each_pane_can_do() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -417,6 +423,7 @@ async fn menus_offer_what_each_pane_can_do() {
     assert_eq!((menu.title, menu.items[0].label), ("RESULTS", "Show the rows"));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn tab_and_shift_tab_go_round_the_panes() {
     let (mut app, dir) = test_app();

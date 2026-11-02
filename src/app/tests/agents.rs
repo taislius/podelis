@@ -192,6 +192,7 @@ fn agent_window_stays_put() {
     assert_eq!(app.agents.sessions[rows[view.selected]].label(), "billing");
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_question_puts_the_models_sql_in_the_editor_without_running_it() {
     let answer = "```sql\nSELECT c.country, count(*) AS orders FROM orders o JOIN customers c ON c.id = o.customer_id GROUP BY c.country\n```\nCounts orders per country.";
@@ -228,6 +229,7 @@ fn asking_needs_a_saved_connection() {
     assert!(said_error(&app), "{}", said(&app));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn the_memory_window_adds_confirms_and_forgets_facts() {
     let dir = tempfile::tempdir().unwrap();
@@ -265,6 +267,7 @@ async fn the_memory_window_adds_confirms_and_forgets_facts() {
     assert!(app.popups.memory_view.is_none());
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn allowing_the_schema_asks_again_about_the_tab_it_came_from() {
     let dir = tempfile::tempdir().unwrap();
@@ -289,6 +292,7 @@ async fn allowing_the_schema_asks_again_about_the_tab_it_came_from() {
     assert!(app.ask.asking.is_none());
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn the_sharing_question_waits_for_a_confirmation_already_open() {
     let dir = tempfile::tempdir().unwrap();
@@ -313,6 +317,7 @@ async fn the_sharing_question_waits_for_a_confirmation_already_open() {
     assert!(matches!(app.popups.confirm.as_ref().unwrap().action, ConfirmAction::ShareSchema { .. }));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn esc_while_asking_does_its_own_job_first() {
     let dir = tempfile::tempdir().unwrap();
@@ -366,6 +371,7 @@ fn deleting_a_project_deletes_its_memory() {
     assert!(!memory.exists());
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn closing_another_tab_while_asking_keeps_the_question() {
     let dir = tempfile::tempdir().unwrap();

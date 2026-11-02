@@ -749,6 +749,7 @@ mod tests {
         assert_eq!(render_all(&script, Format::Table), "n\n-\n1\n(1 row)\n\nn\n-\n2\n(1 row)\n");
     }
 
+    #[cfg(feature = "sqlite")]
     #[tokio::test]
     async fn executes_against_a_sqlite_file() {
         let dir = tempfile::tempdir().unwrap();

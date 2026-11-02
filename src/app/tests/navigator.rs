@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn schema_details_load_on_expand_and_definitions_open() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -46,6 +47,7 @@ async fn schema_details_load_on_expand_and_definitions_open() {
     assert!(app.popups.cell_view.as_ref().is_some_and(|v| v.text.contains("CREATE TABLE parent")));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn system_tables_toggle_in_their_own_section() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -72,6 +74,7 @@ async fn system_tables_toggle_in_their_own_section() {
 
 /// A schema snapshot saved, then the schema changed: comparing with the
 /// snapshot shows what changed since, and the SQL for it.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn schema_snapshots_show_what_changed_since() {
     let (mut app, dir) = connected_app(ConnectionMode::Normal).await;
@@ -176,6 +179,7 @@ fn arrows_in_a_definition_go_to_the_next_table() {
     assert!(app.take_clipboard().is_some_and(|t| t.contains("main")));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn s_in_the_navigator_runs_only_its_select() {
     let (mut app, _dir) = Box::pin(connected_app(ConnectionMode::Normal)).await;
@@ -201,6 +205,7 @@ async fn s_in_the_navigator_runs_only_its_select() {
     assert_eq!(results.statements, 1, "just the SELECT");
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_far_model_sees_the_schema_once_allowed_and_always_saves_it() {
     let dir = tempfile::tempdir().unwrap();

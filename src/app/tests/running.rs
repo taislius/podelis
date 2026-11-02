@@ -1,5 +1,7 @@
 use super::*;
 
+/// A server's form (the first engine is one when the build has one).
+#[cfg(any(feature = "postgres", feature = "mysql"))]
 #[test]
 fn params_validation() {
     let mut form = ConnectForm::new();
@@ -32,6 +34,7 @@ fn stale_events_are_ignored() {
 }
 
 /// Statements that set a password aren't kept in the history.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn history_leaves_out_passwords() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -42,6 +45,7 @@ async fn history_leaves_out_passwords() {
     assert!(kept.iter().any(|q| q == "select 2") && !kept.iter().any(|q| q.contains("hunter2")), "{kept:?}");
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn long_queries_announce_their_end_unless_you_are_watching() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -67,6 +71,7 @@ async fn long_queries_announce_their_end_unless_you_are_watching() {
     assert_eq!(app.take_notification(), None);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn lint_warnings_after_a_syntax_check_finds_nothing() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -116,6 +121,7 @@ fn next_warning_steps_through_lints_and_wraps() {
     assert!(app.notes.status.contains("No lint warnings"), "{}", app.notes.status);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn parameters_are_asked_for_and_remembered() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -151,6 +157,7 @@ async fn parameters_are_asked_for_and_remembered() {
 
 /// Watch mode runs the query again, marks the rows that changed, and stops
 /// on Esc or when another query runs.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn watch_mode_marks_what_changed() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -209,6 +216,7 @@ async fn watch_mode_marks_what_changed() {
     assert!(app.watch.is_none() && !app.tab.run.executing, "{}", app.notes.status);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn esc_leaves_a_zoom_before_it_cancels_the_query() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -229,6 +237,7 @@ async fn esc_leaves_a_zoom_before_it_cancels_the_query() {
     assert!(app.tab.run.cancelling || !app.tab.run.executing);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn disconnecting_while_a_query_runs_says_it_is_cancelled() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -243,6 +252,7 @@ async fn disconnecting_while_a_query_runs_says_it_is_cancelled() {
 
 /// A query running past `long_query` says once how to cancel it, without
 /// a question that would take the keys being typed.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_long_query_says_how_to_cancel_it() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -267,6 +277,7 @@ async fn a_long_query_says_how_to_cancel_it() {
 }
 
 /// `query_timeout` cancels a query on a connection without a Timeout.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn the_query_timeout_for_every_connection() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;

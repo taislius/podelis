@@ -504,6 +504,7 @@ pub(crate) mod tests {
 
     /// Separators, decimal commas, `.gz` files and what's said when a file
     /// doesn't fit.
+    #[cfg(feature = "sqlite")]
     #[tokio::test]
     async fn imports_files_as_they_come() {
         let dir = tempfile::tempdir().unwrap();
@@ -614,6 +615,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(feature = "sqlite")]
     #[tokio::test]
     async fn imports_into_a_new_then_an_existing_table() {
         let dir = tempfile::tempdir().unwrap();
