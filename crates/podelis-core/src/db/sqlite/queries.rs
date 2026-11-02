@@ -26,12 +26,12 @@ pub(in crate::db) async fn column_rows(db: &Database, system: bool) -> Result<Ve
     Ok({
         let mut c = db.sqlite_session().await?;
         let rows: Vec<(String, String, String, i64, i64)> = sqlx::query_as(
-            "SELECT m.name, p.name, p.type, p.\"notnull\", p.pk
+            r#"SELECT m.name, p.name, p.type, p."notnull", p.pk
                      FROM (SELECT name FROM sqlite_master
                            WHERE type IN ('table', 'view') AND (?1 OR name NOT LIKE 'sqlite_%')
                            UNION ALL SELECT 'sqlite_schema' WHERE ?1) m
                      JOIN pragma_table_info(m.name) p
-                     ORDER BY m.name, p.cid",
+                     ORDER BY m.name, p.cid"#,
         )
         .bind(system)
         .fetch_all(&mut **c)
@@ -88,7 +88,7 @@ pub(in crate::db) async fn column_info_rows(
     Ok({
         let mut c = db.sqlite_session().await?;
         let rows: Vec<(String, String, i64)> =
-            sqlx::query_as("SELECT name, type, \"notnull\" FROM pragma_table_info(?)")
+            sqlx::query_as(r#"SELECT name, type, "notnull" FROM pragma_table_info(?)"#)
                 .bind(table)
                 .fetch_all(&mut **c)
                 .await?;
@@ -104,10 +104,10 @@ pub(in crate::db) async fn link_rows(
     let mut c = db.sqlite_session().await?;
     let c: &mut sqlx::SqliteConnection = &mut c;
     Ok(sqlx::query_as(
-        "SELECT 'main', m.name, p.\"from\", 'main', p.\"table\", p.\"to\"
+        r#"SELECT 'main', m.name, p."from", 'main', p."table", p."to"
              FROM sqlite_schema m JOIN pragma_foreign_key_list(m.name) p
              WHERE m.type = 'table'
-             ORDER BY m.name, p.id, p.seq",
+             ORDER BY m.name, p.id, p.seq"#,
     )
     .fetch_all(&mut *c)
     .await?)
@@ -117,17 +117,17 @@ pub(in crate::db) async fn table_details(db: &Database, _schema: &str, table: &s
     let mut c = db.sqlite_session().await?;
     let c: &mut sqlx::SqliteConnection = &mut c;
     let indexes: Vec<SqliteIndexRow> = sqlx::query_as(
-        "SELECT il.name, il.\"unique\", il.origin,
+        r#"SELECT il.name, il."unique", il.origin,
                     (SELECT group_concat(name, ', ') FROM pragma_index_info(il.name)),
                     (SELECT sql FROM sqlite_master WHERE type = 'index' AND name = il.name)
              FROM pragma_index_list(?1) il
-             ORDER BY il.origin = 'pk' DESC, il.name",
+             ORDER BY il.origin = 'pk' DESC, il.name"#,
     )
     .bind(table)
     .fetch_all(&mut *c)
     .await?;
     let fks: Vec<(String, String, Option<String>)> =
-        sqlx::query_as("SELECT \"from\", \"table\", \"to\" FROM pragma_foreign_key_list(?1) ORDER BY id, seq")
+        sqlx::query_as(r#"SELECT "from", "table", "to" FROM pragma_foreign_key_list(?1) ORDER BY id, seq"#)
             .bind(table)
             .fetch_all(&mut *c)
             .await?;

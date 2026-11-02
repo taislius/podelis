@@ -431,6 +431,10 @@ fn significant(text: &str, engine: Engine) -> Vec<(TokenKind, &str)> {
         .collect()
 }
 
+/// The words SQL has on every engine, for highlighting and completion: the
+/// ones people type as SQL, not every word an engine reserves (that would
+/// mark names like `name` or `data`). Each engine adds its own
+/// (`Dialect::keywords`). Upper case, sorted.
 pub const KEYWORDS: &[&str] = &[
     "ADD",
     "ALL",
@@ -455,7 +459,6 @@ pub const KEYWORDS: &[&str] = &[
     "DEFAULT",
     "DELETE",
     "DESC",
-    "DESCRIBE",
     "DISTINCT",
     "DROP",
     "ELSE",
@@ -464,16 +467,11 @@ pub const KEYWORDS: &[&str] = &[
     "EXISTS",
     "EXPLAIN",
     "FALSE",
-    "FETCH",
     "FOREIGN",
     "FROM",
-    "FULL",
-    "FUNCTION",
-    "GRANT",
     "GROUP",
     "HAVING",
     "IF",
-    "ILIKE",
     "IN",
     "INDEX",
     "INNER",
@@ -483,7 +481,6 @@ pub const KEYWORDS: &[&str] = &[
     "IS",
     "JOIN",
     "KEY",
-    "LATERAL",
     "LEFT",
     "LIKE",
     "LIMIT",
@@ -498,24 +495,18 @@ pub const KEYWORDS: &[&str] = &[
     "PARTITION",
     "PRIMARY",
     "REFERENCES",
-    "RETURNING",
-    "REVOKE",
     "RIGHT",
     "ROLLBACK",
-    "SCHEMA",
     "SELECT",
     "SET",
-    "SHOW",
     "TABLE",
     "THEN",
     "TO",
     "TRANSACTION",
     "TRUE",
-    "TRUNCATE",
     "UNION",
     "UNIQUE",
     "UPDATE",
-    "USE",
     "USING",
     "VALUES",
     "VIEW",
@@ -575,7 +566,7 @@ pub fn highlight_lines_and_starts(text: &str, engine: Engine) -> (HighlightedLin
             TokenKind::Comment => Highlight::Comment,
             TokenKind::String => Highlight::String,
             TokenKind::Number => Highlight::Number,
-            TokenKind::Word | TokenKind::QuotedIdent if tok.kind == TokenKind::Word && is_keyword(frag) => {
+            TokenKind::Word | TokenKind::QuotedIdent if tok.kind == TokenKind::Word && is_keyword(frag, engine) => {
                 Highlight::Keyword
             }
             TokenKind::Word | TokenKind::QuotedIdent => {
@@ -607,8 +598,17 @@ pub fn highlight_lines_and_starts(text: &str, engine: Engine) -> (HighlightedLin
     (lines, clean_starts)
 }
 
-fn is_keyword(word: &str) -> bool {
-    word.len() <= 11 && KEYWORDS.binary_search(&word.to_ascii_uppercase().as_str()).is_ok()
+/// Whether `word` is a keyword on `engine`: SQL's own, or the engine's.
+pub fn is_keyword(word: &str, engine: Engine) -> bool {
+    // Upper case and sorted lists, so no upper-cased copy of the word.
+    let found =
+        |list: &[&str]| list.binary_search_by(|k| k.bytes().cmp(word.bytes().map(|b| b.to_ascii_uppercase()))).is_ok();
+    found(KEYWORDS) || found(engine.dialect().keywords())
+}
+
+/// Every keyword on `engine`, for completion: SQL's, then the engine's.
+pub fn keywords(engine: Engine) -> impl Iterator<Item = &'static str> {
+    KEYWORDS.iter().chain(engine.dialect().keywords()).copied()
 }
 
 #[cfg(test)]
@@ -618,9 +618,33 @@ mod tests {
     const PG: Engine = Engine::Postgres;
     const MY: Engine = Engine::MySql;
 
+    /// SQL's words and each engine's: upper case and sorted (they're
+    /// searched), and an engine adds only words SQL's list hasn't.
     #[test]
-    fn keywords_are_sorted_for_binary_search() {
-        assert!(KEYWORDS.windows(2).all(|w| w[0] < w[1]));
+    fn keywords_are_sorted_and_each_engine_adds_its_own() {
+        let upper_sorted =
+            |list: &[&str]| list.windows(2).all(|w| w[0] < w[1]) && list.iter().all(|k| *k == k.to_ascii_uppercase());
+        assert!(upper_sorted(KEYWORDS));
+        for engine in Engine::ALL {
+            let own = engine.dialect().keywords();
+            assert!(upper_sorted(own), "{engine:?}: {own:?}");
+            assert!(own.iter().all(|k| !KEYWORDS.contains(k)), "{engine:?} repeats SQL's words: {own:?}");
+            for k in own {
+                assert!(is_keyword(k, engine) && is_keyword(&k.to_ascii_lowercase(), engine), "{engine:?}: {k}");
+            }
+        }
+        assert!(is_keyword("select", MY) && is_keyword("TRANSACTION", MY) && !is_keyword("TRANSACTIONS", MY));
+    }
+
+    /// An engine's own words are its alone: `ILIKE` is PostgreSQL's,
+    /// `PRAGMA` SQLite's, `DESCRIBE` MySQL's.
+    #[test]
+    fn engine_words_are_only_their_engines() {
+        let on = |word: &str| Engine::ALL.into_iter().filter(|e| is_keyword(word, *e)).collect::<Vec<_>>();
+        assert_eq!(on("ilike"), [Engine::Postgres]);
+        assert_eq!(on("PRAGMA"), [Engine::Sqlite]);
+        assert_eq!(on("describe"), [Engine::MySql]);
+        assert_eq!(on("select").len(), Engine::ALL.len());
     }
 
     #[test]

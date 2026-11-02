@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// Two tables joined by a foreign key, `child.parent_id` → `parent.id`
+/// (`tests/fixtures/linked_tables.sql`), made afresh on `db`.
+pub async fn linked_tables(db: &Database, parent: &str, child: &str) {
+    run_fixture(db, include_str!("../../tests/fixtures/linked_tables.sql"), parent, child).await;
+}
+
+/// What [`linked_tables`] made, dropped (`drop_linked_tables.sql`).
+pub async fn drop_linked_tables(db: &Database, parent: &str, child: &str) {
+    run_fixture(db, include_str!("../../tests/fixtures/drop_linked_tables.sql"), parent, child).await;
+}
+
+/// A fixture's statements, one by one, with its `{parent}` and `{child}`.
+async fn run_fixture(db: &Database, sql: &str, parent: &str, child: &str) {
+    let sql = sql.replace("{parent}", parent).replace("{child}", child);
+    for statement in crate::sql::split_statements(&sql, db.engine()) {
+        db.run(statement, 1).await.unwrap_or_else(|e| panic!("{statement}: {e:#}"));
+    }
+}
+
 /// Live-database tests run where an engine's test server is set, by its
 /// own variables (each engine's `db_tests::live_params`): e.g.
 /// `PODELIS_TEST_MYSQL_PORT`, with `_HOST`, `_USER`, `_PASSWORD` and `_DB`
@@ -403,15 +422,7 @@ async fn binary_values_show_in_hex_and_go_back_as_literals() {
 async fn links_on_each_engine() {
     for engine in Engine::BUILT {
         let Some((db, _)) = own_live_db(engine, "podelis_links").await else { continue };
-        db.run("DROP TABLE IF EXISTS link_child", 1).await.unwrap();
-        db.run("DROP TABLE IF EXISTS link_parent", 1).await.unwrap();
-        db.run("CREATE TABLE link_parent (id INT PRIMARY KEY)", 1).await.unwrap();
-        db.run(
-            "CREATE TABLE link_child (id INT PRIMARY KEY, parent_id INT, FOREIGN KEY (parent_id) REFERENCES link_parent (id))",
-            1,
-        )
-        .await
-        .unwrap();
+        linked_tables(&db, "link_parent", "link_child").await;
         let links = db.links().await.unwrap();
         let link = links.iter().find(|l| l.table == "link_child").unwrap_or_else(|| panic!("{engine:?}: {links:?}"));
         assert_eq!(
@@ -419,8 +430,7 @@ async fn links_on_each_engine() {
             ("parent_id", "link_parent", Some("id")),
             "{engine:?}"
         );
-        db.run("DROP TABLE link_child", 1).await.unwrap();
-        db.run("DROP TABLE link_parent", 1).await.unwrap();
+        drop_linked_tables(&db, "link_parent", "link_child").await;
     }
 }
 
@@ -532,4 +542,32 @@ async fn a_session_given_up_on_is_opened_again() {
     // A read is run again, and says it reconnected.
     db.abandon_session();
     assert!(db.run("select 1", 10).await.unwrap().reconnected);
+}
+
+/// The statements Podėlis writes itself, in each engine's dialect: ending a
+/// transaction, savepoints, the ping, a sandbox's session (MySQL's
+/// autocommit), a file database's copy, and the statements for rows.
+#[test]
+fn the_statements_podelis_writes() {
+    for engine in Engine::ALL {
+        let d = engine.dialect();
+        assert_eq!((d.end(TxEnd::Commit), d.end(TxEnd::Rollback)), ("COMMIT", "ROLLBACK"), "{engine:?}");
+        assert_eq!(d.savepoint("p_1"), "SAVEPOINT p_1");
+        assert_eq!(d.rollback_to_savepoint("p_1"), "ROLLBACK TO SAVEPOINT p_1");
+        assert_eq!(d.ping(), "SELECT 1");
+        assert_eq!(d.sandbox_session().is_some(), d.capabilities().ddl_commits, "{engine:?}: MySQL's autocommit");
+        assert_eq!(d.copy_into("/tmp/x.db").is_some(), engine.is_file_based(), "{engine:?}");
+        assert_eq!(d.select_rows("t", None, None), "SELECT * FROM t");
+        assert_eq!(d.select_rows("t", Some("a = 1"), Some(100)), "SELECT * FROM t WHERE a = 1 LIMIT 100");
+        let columns = ["a".to_string(), "b".to_string()];
+        assert_eq!(
+            d.insert("t", &columns, &["(1, 2)".into(), "(3, 4)".into()]),
+            "INSERT INTO t (a, b) VALUES (1, 2), (3, 4)"
+        );
+        let set = [("a".to_string(), "1".to_string()), ("b".to_string(), "NULL".to_string())];
+        assert_eq!(d.update("t", &set, "id = 7"), "UPDATE t SET a = 1, b = NULL WHERE id = 7");
+        assert_eq!(d.delete("t", "(id = 7) OR (id = 8)"), "DELETE FROM t WHERE (id = 7) OR (id = 8)");
+    }
+    let copy = Engine::ALL.into_iter().find(|e| e.is_file_based()).and_then(|e| e.dialect().copy_into("/tmp/o'k.db"));
+    assert_eq!(copy.as_deref(), Some("VACUUM INTO '/tmp/o''k.db'"), "the path quoted as a literal");
 }

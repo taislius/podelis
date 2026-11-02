@@ -7,6 +7,10 @@ use super::super::*;
 use sqlx::PgPool;
 use sqlx::postgres::PgDatabaseError;
 
+/// Stops a session's running query: for the activity monitor's stop and for
+/// cancelling our own (one statement, so the two can't drift apart).
+const CANCEL_BACKEND: &str = "SELECT pg_cancel_backend($1)";
+
 use super::cells::pg_cell;
 use super::DriverConnection;
 use super::super::dialect::Scan;
@@ -307,7 +311,7 @@ pub(in crate::db) async fn activity(db: &Database) -> Result<Vec<Activity>> {
 
 pub(in crate::db) async fn stop_session(db: &Database, id: i64, terminate: bool) -> Result<()> {
     let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
-    let sql = if terminate { "SELECT pg_terminate_backend($1)" } else { "SELECT pg_cancel_backend($1)" };
+    let sql = if terminate { "SELECT pg_terminate_backend($1)" } else { CANCEL_BACKEND };
     let (done,): (bool,) = sqlx::query_as(sql).bind(id as i32).fetch_one(p).await?;
     anyhow::ensure!(done, "the server didn't stop it (no permission, or it already ended)");
     Ok(())
@@ -359,7 +363,7 @@ pub(in crate::db) fn prepare_problem(err: &dyn sqlx::error::DatabaseError) -> Op
 /// Cancels backend `id`'s running query.
 pub(in crate::db) async fn cancel(db: &Database, id: i64) -> Result<()> {
     let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
-    sqlx::query("SELECT pg_cancel_backend($1)").bind(id as i32).execute(p).await?;
+    sqlx::query(CANCEL_BACKEND).bind(id as i32).execute(p).await?;
     Ok(())
 }
 

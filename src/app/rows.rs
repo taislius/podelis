@@ -175,7 +175,7 @@ impl App {
             engine.dialect().insert_defaults(&form.table_sql)
         } else {
             let (cols, vals): (Vec<String>, Vec<String>) = filled.into_iter().unzip();
-            format!("INSERT INTO {} ({}) VALUES ({})", form.table_sql, cols.join(", "), vals.join(", "))
+            engine.dialect().insert(&form.table_sql, &cols, &[format!("({})", vals.join(", "))])
         };
         self.execute_with(sql, 0, RunPurpose::RowChange(t!("rows.added")));
     }
@@ -197,7 +197,7 @@ impl App {
                 Err(why) => return self.set_status(t!("rows.cant_delete", why = why), true),
             }
         }
-        let sql = format!("DELETE FROM {} WHERE {}", table.sql_name, conditions.join(" OR "));
+        let sql = self.engine().dialect().delete(&table.sql_name, &conditions.join(" OR "));
         let mut details: Vec<String> =
             conditions.iter().take(5).map(|c| c.trim_matches(['(', ')']).to_string()).collect();
         if conditions.len() > 5 {

@@ -321,7 +321,7 @@ impl App {
             }
             RunPurpose::Explain => self.show_plan(outcome),
             RunPurpose::CellEdit { row, col, value } => self.apply_cell_edit(&outcome, row, col, value),
-            RunPurpose::TxControl(command) => self.transaction_ended(command),
+            RunPurpose::TxControl(how) => self.transaction_ended(how),
             RunPurpose::RowChange(what) => self.rows_changed(what, &outcome),
             RunPurpose::SandboxBack { number, undo } => self.sandbox_went_back(number, undo),
         }

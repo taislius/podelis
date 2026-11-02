@@ -20,7 +20,7 @@ use serde::Deserialize;
 use crate::agents::{self, Entry, Verdict, Wrap};
 use crate::config::draft::ConnectionDraft;
 use crate::config::store::{self, ConnectionProfile, ConnectionStore};
-use crate::db::{AgentAccess, ConnectionMode, Database, Engine, QueryOutcome, RunError};
+use crate::db::{AgentAccess, ConnectionMode, Database, Engine, QueryOutcome, RunError, TxEnd};
 
 /// Rows a query returns unless the agent asks for more, and the most it can.
 const DEFAULT_ROWS: usize = 100;
@@ -579,8 +579,8 @@ impl Server {
             if let Some(why) = unrollable(db).await {
                 return Err(why);
             }
-            if db.engine() == crate::db::Engine::MySql {
-                db.run_once("SET autocommit = 0", 1).await.map_err(failed)?;
+            if let Some((before, _)) = db.engine().dialect().sandbox_session() {
+                db.run_once(before, 1).await.map_err(failed)?;
             }
             db.run_once(db.engine().dialect().begin(false), 1).await.map_err(failed)?;
             let number = self.sandbox_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
@@ -594,7 +594,8 @@ impl Server {
         };
         let n = open.calls + 1;
         // No savepoint: the transaction is gone.
-        if let Err(e) = db.run_once(&format!("SAVEPOINT podelis_{n}"), 1).await {
+        let savepoint = format!("podelis_{n}");
+        if let Err(e) = db.run_once(&db.engine().dialect().savepoint(&savepoint), 1).await {
             self.forget_sandbox(db, &profile.name).await;
             return Err(format!("{} ({LOST})", failed(e)));
         }
@@ -602,7 +603,7 @@ impl Server {
         // A failed call goes back to before it; if even that fails, the
         // transaction is gone (a deadlock rolls all of it back on MySQL).
         if let Err(e) = &result
-            && db.run_once(&format!("ROLLBACK TO SAVEPOINT podelis_{n}"), 1).await.is_err()
+            && db.run_once(&db.engine().dialect().rollback_to_savepoint(&savepoint), 1).await.is_err()
         {
             self.forget_sandbox(db, &profile.name).await;
             return Err(format!("{e} ({LOST})"));
@@ -798,7 +799,8 @@ async fn run_wrapped(
     let begin = db.engine().dialect().begin(wrap == Wrap::ReadOnly);
     db.run_once(begin, 1).await.map_err(|e| crate::db::error_message(&e))?;
     let result = db.run_within(sql, limit, Some(call_timeout(profile)), false).await.map_err(|e| ran_error(&e));
-    let end = if wrap == Wrap::Commit && result.is_ok() { "COMMIT" } else { "ROLLBACK" };
+    let how = if wrap == Wrap::Commit && result.is_ok() { TxEnd::Commit } else { TxEnd::Rollback };
+    let end = db.engine().dialect().end(how);
     let ended = db.run_once(end, 1).await;
     let outcome = result?;
     ended.map_err(|e| format!("couldn't {}: {}", end.to_lowercase(), crate::db::error_message(&e)))?;
@@ -809,11 +811,13 @@ async fn run_wrapped(
 const LOST: &str = "the sandbox was lost (the connection was opened again, or the server rolled it back): \
     what it held is gone; the next call starts a new one";
 
-/// A sandbox's end on `db`: rolled back, and MySQL's autocommit on again.
+/// A sandbox's end on `db`: rolled back, and the session as before it
+/// (MySQL's autocommit on again).
 async fn end_sandbox(db: &Database) {
-    let _ = db.run_once("ROLLBACK", 1).await;
-    if db.engine() == crate::db::Engine::MySql {
-        let _ = db.run_once("SET autocommit = 1", 1).await;
+    let dialect = db.engine().dialect();
+    let _ = db.run_once(dialect.end(TxEnd::Rollback), 1).await;
+    if let Some((_, after)) = dialect.sandbox_session() {
+        let _ = db.run_once(after, 1).await;
     }
 }
 

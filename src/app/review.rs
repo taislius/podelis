@@ -27,7 +27,8 @@ impl App {
     /// (or, in a dry run, are rolled back as soon as it finishes).
     pub(super) fn run_in_transaction(&mut self, sql: &str, offset: usize, filled: Option<Filled>, purpose: RunPurpose) {
         let original = filled.as_ref().map_or_else(|| sql.to_string(), |f| f.original.clone());
-        let wrapped = Filled::prefixed(filled, &original, "BEGIN;\n");
+        let begin = format!("{};\n", self.engine().dialect().begin(false));
+        let wrapped = Filled::prefixed(filled, &original, &begin);
         let infos = analyze::analyze(&parse(&wrapped.sql, self.engine()));
         if self.connection.tx_mode == TxMode::RollbackOnly {
             self.tab.run.extra.dry_run = Some(DryRun::Running);
@@ -175,11 +176,11 @@ impl App {
         match key.code {
             KeyCode::Char('c' | 'C') => {
                 self.popups.review = None;
-                self.end_transaction("COMMIT");
+                self.end_transaction(TxEnd::Commit);
             }
             KeyCode::Char('r' | 'R') => {
                 self.popups.review = None;
-                self.end_transaction("ROLLBACK");
+                self.end_transaction(TxEnd::Rollback);
             }
             KeyCode::Esc => {
                 self.popups.review = None;
@@ -195,15 +196,16 @@ impl App {
     }
 
     /// Commits or rolls back the open transaction, keeping the results.
-    pub(super) fn end_transaction(&mut self, command: &'static str) {
+    pub(super) fn end_transaction(&mut self, how: TxEnd) {
         if self.tab.run.executing || self.connection.database.is_none() {
             return;
         }
         if self.connection.txn == TxnState::Idle {
             return self.set_status(t!("review.none_open").to_string(), true);
         }
+        let command = self.engine().dialect().end(how);
         let infos = analyze::analyze(&parse(command, self.engine()));
-        self.run_now(command.to_string(), 0, infos, RunPurpose::TxControl(command), None);
+        self.run_now(command.to_string(), 0, infos, RunPurpose::TxControl(how), None);
     }
 
     /// A dry run finished: roll it back.
@@ -214,18 +216,18 @@ impl App {
             self.tab.run.extra.dry_run = None;
             return;
         }
-        self.end_transaction("ROLLBACK");
+        self.end_transaction(TxEnd::Rollback);
     }
 
-    pub(super) fn transaction_ended(&mut self, command: &str) {
+    pub(super) fn transaction_ended(&mut self, how: TxEnd) {
         if self.connection.sandbox.is_some() || self.sandbox_then.is_some() {
-            self.transaction_ended_plainly(command);
+            self.transaction_ended_plainly(how);
             return self.sandbox_ended();
         }
-        self.transaction_ended_plainly(command);
+        self.transaction_ended_plainly(how);
     }
 
-    fn transaction_ended_plainly(&mut self, command: &str) {
+    fn transaction_ended_plainly(&mut self, how: TxEnd) {
         if let Some(dry_run) = self.tab.run.extra.dry_run.take() {
             self.tab.grid.result_note = Some(t!("run.rolled_back").to_string());
             return match dry_run {
@@ -238,9 +240,9 @@ impl App {
                 }
             };
         }
-        let msg = if command == "COMMIT" { t!("review.committed") } else { t!("review.rolled_back") };
+        let msg = if how == TxEnd::Commit { t!("review.committed") } else { t!("review.rolled_back") };
         // The shown "N rows affected" no longer stands after a rollback.
-        if command == "ROLLBACK" {
+        if how == TxEnd::Rollback {
             self.tab.grid.result_note = Some(t!("review.rolled_back_note").to_string());
         }
         self.log(msg.to_string(), false);

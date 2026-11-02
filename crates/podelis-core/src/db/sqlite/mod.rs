@@ -32,6 +32,10 @@ pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::Sqlite>;
 pub(super) static DIALECT: Sqlite = Sqlite;
 
 impl Dialect for Sqlite {
+    fn copy_into(&self, path: &str) -> Option<String> {
+        Some(format!("VACUUM INTO {}", crate::db::sql_literal(path, crate::db::Engine::Sqlite)))
+    }
+
     fn hidden_columns(&self) -> &'static [&'static str] {
         &["rowid", "oid", "_rowid_"]
     }
@@ -114,8 +118,11 @@ impl Dialect for Sqlite {
             dollar_quotes: false,
         }
     }
+    fn keywords(&self) -> &'static [&'static str] {
+        &["FULL", "PRAGMA", "RETURNING"]
+    }
     fn placeholders(&self) -> Placeholders {
-        Placeholders { dollar: false, question: true, sqlite: true }
+        Placeholders { question: true, question_number: true, at_name: true, dollar_name: true, ..Placeholders::default() }
     }
     fn is_system_table(&self, _schema: &str, table: &str) -> bool {
         table.starts_with("sqlite_")

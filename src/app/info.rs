@@ -39,7 +39,7 @@ impl App {
         let send = self.sender();
         tokio::spawn(async move {
             let started = Instant::now();
-            let _ = db.run("SELECT 1", 1).await;
+            let _ = db.run(db.engine().dialect().ping(), 1).await;
             let ping = started.elapsed();
             let mut rows = local;
             rows.retain(|(k, _)| k != "Latency");
@@ -139,13 +139,14 @@ impl App {
         let send = self.sender();
         tokio::spawn(async move {
             let started = Instant::now();
-            let result = if let Ok(result) = tokio::time::timeout(PING_WITHIN, db.run("SELECT 1", 1)).await {
-                result
-                    .map(|o| (started.elapsed(), o.reconnected))
-                    .map_err(|e| (crate::db::error_message(&e), Ping::Failed))
-            } else {
-                Err((t!("info.no_answer", s = PING_WITHIN.as_secs()), Ping::NoAnswer))
-            };
+            let result =
+                if let Ok(result) = tokio::time::timeout(PING_WITHIN, db.run(db.engine().dialect().ping(), 1)).await {
+                    result
+                        .map(|o| (started.elapsed(), o.reconnected))
+                        .map_err(|e| (crate::db::error_message(&e), Ping::Failed))
+                } else {
+                    Err((t!("info.no_answer", s = PING_WITHIN.as_secs()), Ping::NoAnswer))
+                };
             send(DbEventKind::Pinged(result));
         });
     }

@@ -14,7 +14,7 @@ use crate::config::settings::{EditorMode, Settings};
 use crate::config::store::{self, ConnectionProfile, ConnectionStore, Project};
 use crate::db::{
     CheckOutcome, ColumnInfo, ConnectionMode, Database, Engine, ErrorPos, Page, QueryOutcome, RoutineInfo, RowStream,
-    TableDetails, TableInfo, TxnState,
+    TableDetails, TableInfo, TxEnd, TxnState,
 };
 use crate::editor::{Pos, TextEditor};
 use crate::sql;

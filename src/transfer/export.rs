@@ -107,7 +107,6 @@ pub fn sql_inserts(outcome: &QueryOutcome, view: &[usize], table: &str, engine: 
         ["INT", "NUMERIC", "DECIMAL", "FLOAT", "DOUBLE", "REAL"].iter().any(|n| ty.contains(n))
     };
     let columns: Vec<String> = outcome.columns.iter().map(|c| engine.quote_ident(c)).collect();
-    let columns = columns.join(", ");
     let mut out = String::new();
     for &r in view {
         let values: Vec<String> = outcome.rows[r]
@@ -119,7 +118,7 @@ pub fn sql_inserts(outcome: &QueryOutcome, view: &[usize], table: &str, engine: 
                 Some(v) => crate::db::value_literal(v, outcome.column_types.get(i).map_or("", |t| t), engine),
             })
             .collect();
-        let _ = writeln!(out, "INSERT INTO {table} ({columns}) VALUES ({});", values.join(", "));
+        let _ = writeln!(out, "{};", engine.dialect().insert(table, &columns, &[format!("({})", values.join(", "))]));
     }
     out
 }

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use crate::db::{ColumnInfo, Engine};
-use crate::sql::{self, KEYWORDS, TokenKind};
+use crate::sql::{self, TokenKind};
 
 /// A table as completion sees it.
 pub struct TableRef<'a> {
@@ -141,7 +141,7 @@ pub fn complete(text: &str, cursor: usize, engine: Engine, tables: &[TableRef]) 
     }
     if !prefix.is_empty() {
         let lower = prefix.chars().all(|c| !c.is_ascii_uppercase());
-        out.extend(KEYWORDS.iter().filter(|k| matches_prefix(k, prefix)).map(|k| {
+        out.extend(sql::keywords(engine).filter(|k| matches_prefix(k, prefix)).map(|k| {
             let word = if lower { k.to_ascii_lowercase() } else { k.to_string() };
             Candidate { label: word.clone(), insert: word, kind: CandKind::Keyword, detail: String::new() }
         }));
@@ -260,6 +260,8 @@ struct Tok {
     kind: TokenKind,
     text: String,
     range: Range<usize>,
+    /// A keyword on the statement's engine.
+    keyword: bool,
 }
 
 impl Tok {
@@ -268,7 +270,7 @@ impl Tok {
     }
 
     fn is_ident(&self) -> bool {
-        self.kind == TokenKind::QuotedIdent || (self.kind == TokenKind::Word && !is_keyword(&self.text))
+        self.kind == TokenKind::QuotedIdent || (self.kind == TokenKind::Word && !self.keyword)
     }
 }
 
@@ -286,7 +288,8 @@ fn sig_tokens(statement: &str, engine: Engine) -> Vec<Tok> {
             } else {
                 raw.to_string()
             };
-            Tok { kind: t.kind, text, range: t.range }
+            let keyword = t.kind == TokenKind::Word && sql::is_keyword(&text, engine);
+            Tok { kind: t.kind, text, range: t.range, keyword }
         })
         .collect()
 }
@@ -549,10 +552,6 @@ fn refs_in_from(toks: &[Tok]) -> bool {
         .is_some_and(|w| w == "FROM")
 }
 
-fn is_keyword(word: &str) -> bool {
-    KEYWORDS.binary_search(&word.to_ascii_uppercase().as_str()).is_ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -670,6 +669,15 @@ mod tests {
         let t = tables(&f);
         let _ = complete("select * from \"", 15, Engine::Postgres, &t);
         let _ = complete("select * from `", 15, Engine::MySql, &t);
+    }
+
+    #[test]
+    fn completion_offers_the_engines_own_words() {
+        let offered = |text: &str, engine: Engine| {
+            complete(text, text.len(), engine, &[]).1.into_iter().any(|c| c.label.eq_ignore_ascii_case("ILIKE"))
+        };
+        assert!(offered("select * from t where name ilik", Engine::Postgres));
+        assert!(!offered("select * from t where name ilik", Engine::MySql), "not MySQL's");
     }
 
     #[test]

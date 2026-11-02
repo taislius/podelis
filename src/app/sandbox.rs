@@ -158,9 +158,12 @@ impl App {
             return self.copy_for_sandbox(sql.to_string(), offset, filled, purpose);
         }
         let number = self.connection.sandbox.as_ref().map_or(0, |s| s.steps.len()) + 1;
-        let begin = if self.connection.txn == TxnState::Idle { "BEGIN;\n" } else { "" };
+        let dialect = self.engine().dialect();
+        let begin =
+            if self.connection.txn == TxnState::Idle { format!("{};\n", dialect.begin(false)) } else { String::new() };
         let original = filled.as_ref().map_or_else(|| sql.to_string(), |f| f.original.clone());
-        let wrapped = Filled::prefixed(filled, &original, &format!("{begin}SAVEPOINT podelis_{number};\n"));
+        let savepoint = dialect.savepoint(&format!("podelis_{number}"));
+        let wrapped = Filled::prefixed(filled, &original, &format!("{begin}{savepoint};\n"));
         let engine = self.engine();
         let infos = analyze::analyze(&parse(&wrapped.sql, engine));
         let step = Step {
@@ -197,8 +200,9 @@ impl App {
                 // Copies left by a sandbox that never ended (a crash) go first.
                 let _ = std::fs::remove_dir_all(&dir);
                 std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-                let target = crate::db::sql_literal(&path.to_string_lossy(), crate::db::Engine::Sqlite);
-                db.run_once(&format!("VACUUM INTO {target}"), 1).await.map_err(|e| crate::db::error_message(&e))?;
+                let copy = db.engine().dialect().copy_into(&path.to_string_lossy());
+                let copy = copy.ok_or_else(|| format!("{} can't copy its database", db.engine().label()))?;
+                db.run_once(&copy, 1).await.map_err(|e| crate::db::error_message(&e))?;
                 let copy = Database::connect(params).await.map_err(|e| crate::db::error_message(&e))?;
                 Ok::<_, String>((copy, path))
             };
@@ -243,7 +247,7 @@ impl App {
         }
         if pending.number == 1 && self.connection.sandbox.as_ref().is_none_or(|s| s.steps.is_empty()) {
             // Its BEGIN ran: end the empty transaction.
-            return self.end_transaction("ROLLBACK");
+            return self.end_transaction(TxEnd::Rollback);
         }
         self.sandbox_back_to(pending.number, false);
     }
@@ -251,7 +255,7 @@ impl App {
     /// Back to before step `number` (`ROLLBACK TO SAVEPOINT`): a failed one,
     /// or the last one undone.
     fn sandbox_back_to(&mut self, number: usize, undo: bool) {
-        let sql = format!("ROLLBACK TO SAVEPOINT podelis_{number}");
+        let sql = self.engine().dialect().rollback_to_savepoint(&format!("podelis_{number}"));
         let infos = analyze::analyze(&parse(&sql, self.engine()));
         self.run_now(sql, 0, infos, RunPurpose::SandboxBack { number, undo }, None);
     }
@@ -336,7 +340,7 @@ impl App {
             }
             KeyCode::Char('d') => {
                 self.popups.sandbox_view = None;
-                self.end_transaction("ROLLBACK");
+                self.end_transaction(TxEnd::Rollback);
             }
             KeyCode::Char('s') => {
                 self.popups.sandbox_view = None;
@@ -363,7 +367,7 @@ impl App {
     fn keep_sandbox_as_script(&mut self) {
         let Some(sandbox) = &self.connection.sandbox else { return };
         self.sandbox_then = Some(Then::Tab(sandbox.script(&self.connection.form.short_name())));
-        self.end_transaction("ROLLBACK");
+        self.end_transaction(TxEnd::Rollback);
     }
 
     /// `r`: rolled back, then the script runs again in manual commit (the
@@ -371,7 +375,7 @@ impl App {
     fn run_sandbox_for_real(&mut self) {
         let Some(sandbox) = &self.connection.sandbox else { return };
         self.sandbox_then = Some(Then::ForReal(sandbox.script(&self.connection.form.short_name())));
-        self.end_transaction("ROLLBACK");
+        self.end_transaction(TxEnd::Rollback);
     }
 
     /// The sandbox's transaction ended: the sandbox with it; its script
