@@ -110,7 +110,7 @@ fn messages_can_be_selected_copied_and_opened() {
             .is_some_and(|c| c.starts_with(&format!("{}  Connected\n", app.notes.log[0].time)) && c.contains("LINE 1:"))
     );
     app.handle_key(key(KeyCode::Enter));
-    let view = app.cell_view.as_ref().unwrap();
+    let view = app.popups.cell_view.as_ref().unwrap();
     assert!(view.title.contains("error") && view.text.contains("LINE 1:"));
     app.handle_key(key(KeyCode::Char('y')));
     assert!(app.take_clipboard().is_some_and(|c| c.starts_with("relation")));
@@ -164,17 +164,17 @@ async fn autocomplete_from_catalog() {
 
     app.tab.editor.set_text("select em");
     app.handle_key(key(KeyCode::Tab));
-    let c = app.completion.as_ref().expect("Tab after a word opens completion");
+    let c = app.popups.completion.as_ref().expect("Tab after a word opens completion");
     assert_eq!(c.items[0].label, "email");
     app.handle_key(key(KeyCode::Tab));
     assert_eq!(app.tab.editor.text(), "select email");
-    assert!(app.completion.is_none());
+    assert!(app.popups.completion.is_none());
 
     type_text(&mut app, " from users u where u.");
-    let labels: Vec<_> = app.completion.as_ref().unwrap().items.iter().map(|i| i.label.as_str()).collect();
+    let labels: Vec<_> = app.popups.completion.as_ref().unwrap().items.iter().map(|i| i.label.as_str()).collect();
     assert_eq!(labels, ["email", "id"]);
     type_text(&mut app, "i");
-    assert_eq!(app.completion.as_ref().unwrap().items.len(), 1);
+    assert_eq!(app.popups.completion.as_ref().unwrap().items.len(), 1);
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.tab.editor.text(), "select email from users u where u.id");
 
@@ -245,22 +245,22 @@ fn command_palette_finds_and_runs_commands() {
     app.tab.editor.set_text("select a,b from t");
     // Ctrl+K waits for a letter; its menu shows only after a pause.
     app.handle_key(ctrl('k'));
-    assert!(app.palette.as_ref().is_some_and(|p| !p.menu) && app.notes.status == "^K…");
+    assert!(app.popups.palette.as_ref().is_some_and(|p| !p.menu) && app.notes.status == "^K…");
     assert!(app.palette_menu_due().is_some_and(|due| due > Instant::now()));
     app.show_palette_menu();
-    assert!(app.palette.as_ref().is_some_and(|p| p.menu) && app.palette_menu_due().is_none());
+    assert!(app.popups.palette.as_ref().is_some_and(|p| p.menu) && app.palette_menu_due().is_none());
     // `/` searches (a letter alone would run its Ctrl+K action).
     type_text(&mut app, "/form sql");
     let items = app.palette_items();
     assert_eq!(items.len(), 1);
     app.handle_key(key(KeyCode::Enter));
-    assert!(app.palette.is_none());
+    assert!(app.popups.palette.is_none());
     assert_eq!(app.tab.editor.text(), "select a, b\nfrom t");
     app.handle_key(ctrl('k'));
     type_text(&mut app, "/zzz");
     assert!(app.palette_items().is_empty());
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.palette.is_none());
+    assert!(app.popups.palette.is_none());
 }
 
 #[tokio::test]
@@ -279,11 +279,11 @@ async fn following_a_foreign_key_shows_the_referenced_row() {
     app.tab.grid.selected_col = 1;
     app.handle_key(key(KeyCode::Char('f')));
     // The foreign keys load first, then the row, in a pop-over: no new tab.
-    while app.cell_view.is_none() {
+    while app.popups.cell_view.is_none() {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
-    let view = app.cell_view.as_ref().unwrap();
+    let view = app.popups.cell_view.as_ref().unwrap();
     assert_eq!(view.title, "→ parent · id = 2");
     assert!(view.text.contains("id    2") && view.text.contains("name  two"), "{}", view.text);
     assert_eq!(app.tabs.len(), 1);
@@ -306,10 +306,10 @@ async fn following_a_foreign_key_shows_the_referenced_row() {
     assert!(app.tab.run.stream.is_some(), "still streaming");
     app.focus = Focus::Results;
     app.tab.grid.selected_col = 1;
-    app.cell_view = None;
+    app.popups.cell_view = None;
     app.handle_key(key(KeyCode::Char('f')));
     let shown = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while app.cell_view.is_none() {
+        while app.popups.cell_view.is_none() {
             let event = app.poll_db_event().await.unwrap();
             app.handle_db_event(event);
         }
@@ -319,43 +319,43 @@ async fn following_a_foreign_key_shows_the_referenced_row() {
     assert!(app.tab.run.stream.is_none());
 
     // From a join too: the column is a foreign key in one of its tables.
-    app.cell_view = None;
+    app.popups.cell_view = None;
     run_sql(&mut app, "select c.id, c.parent_id, p.name from child c join parent p on p.id = c.parent_id").await;
     app.focus = Focus::Results;
     app.tab.grid.selected_col = 1;
-    app.cell_view = None;
+    app.popups.cell_view = None;
     app.handle_key(key(KeyCode::Char('f')));
     let got = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while app.cell_view.is_none() {
+        while app.popups.cell_view.is_none() {
             let event = app.poll_db_event().await.unwrap();
             app.handle_db_event(event);
         }
     })
     .await;
     assert!(got.is_ok(), "{:?}", said(&app));
-    assert_eq!(app.cell_view.as_ref().unwrap().title, "→ parent · id = 2");
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().title, "→ parent · id = 2");
 
     // Not a foreign key: says so, and which ones are.
-    app.cell_view = None;
+    app.popups.cell_view = None;
     app.focus = Focus::Results;
     app.tab.grid.selected_col = 2;
     app.handle_key(key(KeyCode::Char('f')));
     assert_eq!(said(&app), "Can't follow: name isn't a foreign key; these are: parent_id → parent");
 
     // A table written two ways (a self-join) is one table, not two.
-    app.cell_view = None;
+    app.popups.cell_view = None;
     run_sql(&mut app, "select c.id, c.parent_id from main.child c join child d on d.id = c.id").await;
     app.focus = Focus::Results;
     app.tab.grid.selected_col = 1;
     app.handle_key(key(KeyCode::Char('f')));
-    while app.cell_view.is_none() {
+    while app.popups.cell_view.is_none() {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
-    assert_eq!(app.cell_view.as_ref().unwrap().title, "→ parent · id = 2");
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().title, "→ parent · id = 2");
     // An answer for another tab (or connection) than the one now shown:
     // dropped, so `e` can't run it on the wrong database.
-    app.cell_view = None;
+    app.popups.cell_view = None;
     let found = crate::app::follow::Followed {
         title: "parent · id = 2".into(),
         tab_name: "→ parent".into(),
@@ -363,7 +363,7 @@ async fn following_a_foreign_key_shows_the_referenced_row() {
         asked_from: (app.active_tab + 1, None),
     };
     app.followed(found, Ok(outcome(&["id"], &[&[Some("2")]])));
-    assert!(app.cell_view.is_none());
+    assert!(app.popups.cell_view.is_none());
 }
 
 #[tokio::test]
@@ -374,10 +374,10 @@ async fn enter_after_a_fully_typed_name_is_a_new_line() {
     app.tab.editor.set_text("select * from users u where ");
     app.focus = Focus::Editor;
     type_text(&mut app, "u.id");
-    assert!(app.completion.is_some());
+    assert!(app.popups.completion.is_some());
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.tab.editor.text(), "select * from users u where u.id\n");
-    assert!(app.completion.is_none());
+    assert!(app.popups.completion.is_none());
 }
 
 #[tokio::test]
@@ -386,26 +386,26 @@ async fn menus_offer_what_each_pane_can_do() {
     run_sql(&mut app, "select 1 as a, 'x' as b union all select 2, 'y'").await;
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Char('m')));
-    let menu = app.menu.as_ref().expect("results menu");
+    let menu = app.popups.menu.as_ref().expect("results menu");
     assert_eq!(menu.title, "RESULTS");
     assert!(menu.items.iter().any(|i| i.label == "Copy rows as a Markdown table" && i.keys == "C"));
     // An item's key works inside the menu, doing what the key does.
     app.handle_key(key(KeyCode::Char('Y')));
-    assert!(app.menu.is_none());
+    assert!(app.popups.menu.is_none());
     assert_eq!(app.take_clipboard().as_deref(), Some("1\tx"));
     // Esc closes; the editor menu lists actions with their keys.
     app.focus = Focus::Editor;
     app.handle_key(KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT));
-    let menu = app.menu.as_ref().unwrap();
+    let menu = app.popups.menu.as_ref().unwrap();
     let labels: Vec<_> = menu.items.iter().map(|i| (i.label, i.keys.as_str())).collect();
     assert_eq!(menu.title, "EDITOR");
     assert_eq!(labels[..2], [("Paste", "Ctrl+V"), ("Run (the selection, or everything)", "F5 · Ctrl+R · Ctrl+Enter")]);
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.menu.is_none());
+    assert!(app.popups.menu.is_none());
     // With a selection, Copy and Cut come first; Copy copies it.
     app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
     app.handle_key(KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT));
-    let labels: Vec<_> = app.menu.as_ref().unwrap().items.iter().map(|i| i.label).collect();
+    let labels: Vec<_> = app.popups.menu.as_ref().unwrap().items.iter().map(|i| i.label).collect();
     assert_eq!(labels[..3], ["Copy", "Cut", "Paste"]);
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.take_clipboard(), Some(app.tab.editor.text()));
@@ -413,7 +413,7 @@ async fn menus_offer_what_each_pane_can_do() {
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Char('2')));
     app.handle_key(key(KeyCode::Char('m')));
-    let menu = app.menu.as_ref().unwrap();
+    let menu = app.popups.menu.as_ref().unwrap();
     assert_eq!((menu.title, menu.items[0].label), ("RESULTS", "Show the rows"));
 }
 
@@ -462,7 +462,7 @@ fn no_completions_is_said_in_the_editor_footer() {
     app.screen = Screen::Query;
     type_text(&mut app, "select zzqx");
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
-    assert!(app.completion.is_none());
+    assert!(app.popups.completion.is_none());
     assert_eq!(app.notes.editor_note.as_deref(), Some("No completions"));
     assert!(app.notes.status.is_empty(), "not in the status bar: {}", app.notes.status);
     // Gone with the next key.
@@ -494,7 +494,7 @@ fn space_twice_opens_the_command_menu_when_enabled() {
     space(&mut app);
     space(&mut app);
     assert_eq!(app.tab.editor.text(), "select  ");
-    assert!(app.palette.is_none());
+    assert!(app.popups.palette.is_none());
 
     // On: the second takes the first back and opens the menu.
     app.settings.leader_double_space = true;
@@ -503,7 +503,7 @@ fn space_twice_opens_the_command_menu_when_enabled() {
     space(&mut app);
     space(&mut app);
     assert_eq!(app.tab.editor.text(), "select");
-    assert!(app.palette.is_some());
+    assert!(app.popups.palette.is_some());
     app.handle_key(key(KeyCode::Esc));
 
     // Not when something was typed in between, or after a pause.
@@ -514,7 +514,7 @@ fn space_twice_opens_the_command_menu_when_enabled() {
         app.last_space.map(|(at, pos)| (at.checked_sub(std::time::Duration::from_millis(500)).unwrap(), pos));
     space(&mut app);
     assert_eq!(app.tab.editor.text(), "select a  ");
-    assert!(app.palette.is_none());
+    assert!(app.popups.palette.is_none());
 }
 
 #[test]
@@ -525,7 +525,7 @@ fn esc_then_tab_leaves_the_editor_after_a_word() {
     assert!(app.tab_completes());
     app.handle_key(key(KeyCode::Tab));
     assert_eq!(app.focus, Focus::Editor, "Tab after a word completes");
-    app.completion = None;
+    app.popups.completion = None;
 
     app.handle_key(key(KeyCode::Esc));
     assert!(!app.tab_completes(), "the hint now says Tab moves on");
@@ -546,30 +546,30 @@ fn the_popup_in_front_takes_the_keys() {
     app.screen = Screen::Query;
     assert_eq!(app.top_overlay(), None);
     // A session's full query opens over the activity monitor.
-    app.activity = Some(activity::ActivityView::default());
-    app.cell_view = Some(CellView::new("Query".into(), "select 1".into()));
+    app.popups.activity = Some(activity::ActivityView::default());
+    app.popups.cell_view = Some(CellView::new("Query".into(), "select 1".into()));
     assert_eq!(app.overlays(), [Overlay::CellView, Overlay::Activity]);
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.cell_view.is_none() && app.activity.is_some());
+    assert!(app.popups.cell_view.is_none() && app.popups.activity.is_some());
     // A pipe prompt over the activity monitor gets the typing.
-    app.pipe_prompt = Some(LineInput::default());
+    app.popups.pipe_prompt = Some(LineInput::default());
     app.handle_key(key(KeyCode::Char('?')));
-    assert_eq!(app.pipe_prompt.as_ref().map(LineInput::text), Some("?"));
-    assert!(app.palette.is_none() && app.popup_open());
+    assert_eq!(app.popups.pipe_prompt.as_ref().map(LineInput::text), Some("?"));
+    assert!(app.popups.palette.is_none() && app.popup_open());
 }
 
 #[test]
 fn pastes_go_to_the_input_in_front() {
     let (mut app, _dir) = test_app();
     app.screen = Screen::Query;
-    app.tab_prompt = Some(TabPrompt { kind: TabPromptKind::SaveAs, text: LineInput::new("reports/") });
+    app.popups.tab_prompt = Some(TabPrompt { kind: TabPromptKind::SaveAs, text: LineInput::new("reports/") });
     app.handle_paste("churn\n");
-    assert_eq!(app.tab_prompt.as_ref().unwrap().text.text(), "reports/churn");
+    assert_eq!(app.popups.tab_prompt.as_ref().unwrap().text.text(), "reports/churn");
     assert_eq!(app.tab.editor.text(), "", "nothing reached the editor behind it");
-    app.tab_prompt = None;
-    app.pipe_prompt = Some(LineInput::default());
+    app.popups.tab_prompt = None;
+    app.popups.pipe_prompt = Some(LineInput::default());
     app.handle_paste("grep -i\tvilnius");
-    assert_eq!(app.pipe_prompt.as_ref().map(LineInput::text), Some("grep -i vilnius"));
+    assert_eq!(app.popups.pipe_prompt.as_ref().map(LineInput::text), Some("grep -i vilnius"));
 }
 
 #[test]
@@ -606,7 +606,7 @@ fn ctrl_k_can_wait_quietly_and_ctrl_shift_k_shows_the_menu_at_once() {
     // With the menu coming by itself, Ctrl+K ? is every key, as before.
     app.handle_key(ctrl('k'));
     app.handle_key(key(KeyCode::Char('?')));
-    assert!(app.palette.is_none() && app.help_visible);
+    assert!(app.popups.palette.is_none() && app.help_visible);
     app.help_visible = false;
     app.settings.leader_menu = false;
     app.handle_key(ctrl('k'));
@@ -614,10 +614,10 @@ fn ctrl_k_can_wait_quietly_and_ctrl_shift_k_shows_the_menu_at_once() {
     assert_eq!(app.notes.status, "^K… (? shows the menu)");
     // `?` shows it, then `?` again every key.
     app.handle_key(key(KeyCode::Char('?')));
-    assert!(app.palette.as_ref().is_some_and(|p| p.menu));
+    assert!(app.popups.palette.as_ref().is_some_and(|p| p.menu));
     app.handle_key(key(KeyCode::Char('?')));
-    assert!(app.palette.is_none() && app.help_visible);
+    assert!(app.popups.palette.is_none() && app.help_visible);
     app.help_visible = false;
     app.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::CONTROL | KeyModifiers::SHIFT));
-    assert!(app.palette.as_ref().is_some_and(|p| p.menu && !p.searching));
+    assert!(app.popups.palette.as_ref().is_some_and(|p| p.menu && !p.searching));
 }

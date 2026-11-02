@@ -114,8 +114,8 @@ impl App {
         }
         let pane = self.hits.result_rows;
         let at = at.unwrap_or((pane.x + 2, pane.y + 1));
-        self.completion = None;
-        self.menu = Some(Menu { title: t!("menu.export_title"), items, selected: 0, at });
+        self.popups.completion = None;
+        self.popups.menu = Some(Menu { title: t!("menu.export_title"), items, selected: 0, at });
     }
 
     /// `o`: the formats to open the rows in, each with what opens it.
@@ -143,8 +143,9 @@ impl App {
             })
             .collect();
         let pane = self.hits.result_rows;
-        self.completion = None;
-        self.menu = Some(Menu { title: t!("menu.open_title"), items, selected: 0, at: (pane.x + 2, pane.y + 1) });
+        self.popups.completion = None;
+        self.popups.menu =
+            Some(Menu { title: t!("menu.open_title"), items, selected: 0, at: (pane.x + 2, pane.y + 1) });
     }
 
     /// The results kept from earlier runs: to switch between and pin.
@@ -274,19 +275,19 @@ impl App {
             Focus::Editor => self.hits.editor_text,
         };
         let at = at.unwrap_or((pane.x + 2, pane.y + 1));
-        self.completion = None;
-        self.menu = Some(Menu { title, items, selected: 0, at });
+        self.popups.completion = None;
+        self.popups.menu = Some(Menu { title, items, selected: 0, at });
     }
 
     pub(super) fn handle_menu_key(&mut self, key: KeyEvent) {
-        let Some(menu) = &mut self.menu else { return };
+        let Some(menu) = &mut self.popups.menu else { return };
         if let Some(i) = list::step(menu.selected, menu.items.len(), key, Nav::MENU) {
             menu.selected = i;
             return;
         }
         let chosen = match key.code {
             KeyCode::Esc | KeyCode::Char('m') => {
-                self.menu = None;
+                self.popups.menu = None;
                 return;
             }
             KeyCode::Enter => menu.items.get(menu.selected).cloned(),
@@ -295,7 +296,7 @@ impl App {
             _ => None,
         };
         let Some(item) = chosen else { return };
-        self.menu = None;
+        self.popups.menu = None;
         match item.action {
             MenuAction::Action(a) => self.run_action(a),
             MenuAction::Command(command) => self.run_command(command),
@@ -310,16 +311,16 @@ impl App {
     /// Clicks on the menu: choose an item, or close it when clicking
     /// outside. `rect` is where the UI drew it.
     pub(super) fn click_menu(&mut self, x: u16, y: u16) {
-        let Some(menu) = &self.menu else { return };
+        let Some(menu) = &self.popups.menu else { return };
         let r = self.hits.menu;
         let inside = x >= r.x && x < r.x + r.width && y > r.y && y < r.y + r.height.saturating_sub(1);
         if !inside {
-            self.menu = None;
+            self.popups.menu = None;
             return;
         }
         let index = (y - r.y - 1) as usize;
         if index < menu.items.len() {
-            if let Some(m) = &mut self.menu {
+            if let Some(m) = &mut self.popups.menu {
                 m.selected = index;
             }
             self.handle_menu_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));

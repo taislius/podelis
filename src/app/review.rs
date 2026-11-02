@@ -116,7 +116,7 @@ impl App {
             return self.open_sandbox_view();
         }
         if self.tx_mode_changeable() {
-            self.tx_picker = Some(self.connection.tx_mode);
+            self.popups.tx_picker = Some(self.connection.tx_mode);
         }
     }
 
@@ -130,14 +130,14 @@ impl App {
 
     /// `s` / `r` / `d` (or ↑↓ and Enter) pick; Esc keeps the mode.
     pub(super) fn handle_tx_picker_key(&mut self, key: KeyEvent) {
-        let Some(highlighted) = self.tx_picker else { return };
+        let Some(highlighted) = self.popups.tx_picker else { return };
         let chosen = match key.code {
             KeyCode::Esc => {
-                self.tx_picker = None;
+                self.popups.tx_picker = None;
                 return;
             }
-            KeyCode::Down | KeyCode::Tab => return self.tx_picker = Some(highlighted.next()),
-            KeyCode::Up | KeyCode::BackTab => return self.tx_picker = Some(highlighted.next().next()),
+            KeyCode::Down | KeyCode::Tab => return self.popups.tx_picker = Some(highlighted.next()),
+            KeyCode::Up | KeyCode::BackTab => return self.popups.tx_picker = Some(highlighted.next().next()),
             KeyCode::Enter => highlighted,
             KeyCode::Char(c) => match TxMode::ALL.iter().find(|m| m.letter() == c.to_ascii_lowercase()) {
                 Some(mode) => *mode,
@@ -145,7 +145,7 @@ impl App {
             },
             _ => return,
         };
-        self.tx_picker = None;
+        self.popups.tx_picker = None;
         self.set_tx_mode(chosen);
     }
 
@@ -168,21 +168,21 @@ impl App {
         if self.connection.txn == TxnState::Idle {
             return;
         }
-        self.review = Some(Review { rows_affected });
+        self.popups.review = Some(Review { rows_affected });
     }
 
     pub(super) fn handle_review_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('c' | 'C') => {
-                self.review = None;
+                self.popups.review = None;
                 self.end_transaction("COMMIT");
             }
             KeyCode::Char('r' | 'R') => {
-                self.review = None;
+                self.popups.review = None;
                 self.end_transaction("ROLLBACK");
             }
             KeyCode::Esc => {
-                self.review = None;
+                self.popups.review = None;
                 let msg = format!(
                     "Transaction left open: check with SELECTs, then {} commits, {} rolls back",
                     self.keymap.label(Action::Commit),

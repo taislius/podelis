@@ -42,7 +42,8 @@ impl App {
         let Some(project_id) = self.current_project.clone() else {
             return self.set_status(t!("memory.need_project").into(), true);
         };
-        self.memory_view = Some(MemoryView { project_id: project_id.clone(), loading: true, ..MemoryView::default() });
+        self.popups.memory_view =
+            Some(MemoryView { project_id: project_id.clone(), loading: true, ..MemoryView::default() });
         self.load_memory(project_id);
     }
 
@@ -70,7 +71,7 @@ impl App {
                     AskFailure { code: None, message: t!("ask.gateway_unreachable", e = e), data: None }
                 }
             });
-            send(DbEventKind::GatewayDone(purpose, Box::new(result)));
+            send(Background::GatewayDone(purpose, Box::new(result)).into());
         });
     }
 
@@ -82,10 +83,10 @@ impl App {
         if self.current_project.as_deref() != Some(project.as_str()) {
             return;
         }
-        let same_window = self.memory_view.as_ref().is_some_and(|v| v.project_id == project);
+        let same_window = self.popups.memory_view.as_ref().is_some_and(|v| v.project_id == project);
         match (purpose, result) {
             (GatewayPurpose::MemoryList(_), Ok(listed)) => {
-                if let Some(view) = self.memory_view.as_mut().filter(|_| same_window) {
+                if let Some(view) = self.popups.memory_view.as_mut().filter(|_| same_window) {
                     view.facts = listed["facts"].as_array().cloned().unwrap_or_default();
                     view.selected = view.selected.min(view.facts.len().saturating_sub(1));
                     view.loading = false;
@@ -99,7 +100,7 @@ impl App {
                 }
             }
             (_, Err(e)) => {
-                if let Some(view) = &mut self.memory_view {
+                if let Some(view) = &mut self.popups.memory_view {
                     view.loading = false;
                 }
                 self.set_status(t!("memory.failed", e = e.message), true);
@@ -108,7 +109,7 @@ impl App {
     }
 
     pub(super) fn handle_memory_key(&mut self, key: KeyEvent) {
-        let Some(view) = &mut self.memory_view else { return };
+        let Some(view) = &mut self.popups.memory_view else { return };
         if let Some(input) = &mut view.adding {
             match input.handle(key) {
                 InputResult::Cancel => {
@@ -139,7 +140,7 @@ impl App {
         let shown = view.facts.get(view.selected).and_then(fact_text);
         let project = view.project_id.clone();
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.memory_view = None,
+            KeyCode::Esc | KeyCode::Char('q') => self.popups.memory_view = None,
             KeyCode::Char('a') => {
                 view.adding = Some(LineInput::new(""));
                 view.editing = None;

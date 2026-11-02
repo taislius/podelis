@@ -201,7 +201,7 @@ impl App {
                     self.vim.mode = VimMode::Normal;
                     self.tab.editor.prepare_move(false);
                     self.tab.editor.move_left();
-                    self.completion = None;
+                    self.popups.completion = None;
                 } else {
                     // Everything else edits like the standard editor.
                     self.handle_standard_editor_key(key);
@@ -647,9 +647,9 @@ mod tests {
     fn space_in_normal_mode_opens_the_ctrl_k_menu() {
         let (mut app, _dir) = vim_app("select 1");
         keys(&mut app, " ");
-        assert!(app.palette.as_ref().is_some_and(|p| !p.searching));
+        assert!(app.popups.palette.as_ref().is_some_and(|p| !p.searching));
         keys(&mut app, "\u{1b}i ");
-        assert!(app.palette.is_none() && app.tab.editor.text() == " select 1", "Insert mode types it");
+        assert!(app.popups.palette.is_none() && app.tab.editor.text() == " select 1", "Insert mode types it");
     }
 
     fn run(text: &str, input: &str) -> (String, Pos, VimMode) {

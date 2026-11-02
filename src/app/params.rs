@@ -21,18 +21,19 @@ impl App {
             return false;
         }
         let values = found.iter().map(|p| self.param_values.get(&p.name).cloned().unwrap_or_default()).collect();
-        self.param_form = Some(ParamForm { sql: sql.to_string(), offset, explain, params: found, values, field: 0 });
+        self.popups.param_form =
+            Some(ParamForm { sql: sql.to_string(), offset, explain, params: found, values, field: 0 });
         true
     }
 
     pub(super) fn handle_param_key(&mut self, key: KeyEvent) {
-        let Some(form) = &mut self.param_form else { return };
+        let Some(form) = &mut self.popups.param_form else { return };
         if let Some(i) = list::step(form.field, form.params.len(), key, Nav::FIELDS) {
             form.field = i;
             return;
         }
         match key.code {
-            KeyCode::Esc => self.param_form = None,
+            KeyCode::Esc => self.popups.param_form = None,
             KeyCode::Enter => self.submit_params(),
             _ => {
                 input::edit_at_end(&mut form.values[form.field], key);
@@ -42,13 +43,13 @@ impl App {
 
     /// Pastes into the focused field (newlines become spaces).
     pub(super) fn paste_param(&mut self, text: &str) {
-        if let Some(form) = &mut self.param_form {
+        if let Some(form) = &mut self.popups.param_form {
             input::paste_at_end(&mut form.values[form.field], text);
         }
     }
 
     fn submit_params(&mut self) {
-        let Some(form) = self.param_form.take() else { return };
+        let Some(form) = self.popups.param_form.take() else { return };
         for (p, v) in form.params.iter().zip(&form.values) {
             self.param_values.insert(p.name.clone(), v.clone());
         }

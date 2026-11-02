@@ -9,7 +9,24 @@ use serde_json::{Value, json};
 
 use super::client::{CallError, Client, connect_or_start, spawn_gateway};
 use super::server::{Ended, Options, serve};
-use crate::cli::GatewayCommand;
+
+/// What `podelis gateway` was asked to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GatewayCommand {
+    /// Run it here, in the foreground.
+    Run,
+    Status,
+    Start,
+    Stop,
+    Models,
+    /// Store a model's key (its name; empty until given).
+    Key(String),
+    /// Ask a model (the default one when `None`) for one word.
+    Test(Option<String>),
+    /// What a model would be shown for a question: the connection, then
+    /// the question's words.
+    Context(Vec<String>),
+}
 
 /// Does `command` for `config_dir` (and `project`, where it's about
 /// one); returns the exit code.
@@ -156,7 +173,7 @@ fn store_key(config_dir: &Path, name: &str) -> i32 {
         return say(&format!("No model `{name}` in config.toml (there: {known})."), 2);
     }
     let key = if std::io::stdin().is_terminal() {
-        let Some(key) = crate::cli::prompt_password(&format!("API key for {name} (not shown): ")) else {
+        let Some(key) = crate::system::tty::prompt_password(&format!("API key for {name} (not shown): ")) else {
             return say("Nothing stored.", 1);
         };
         key

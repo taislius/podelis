@@ -11,6 +11,17 @@ use super::*;
 use crate::gateway::client::{CallError, connect_or_start, spawn_gateway};
 use crate::gateway::protocol::code;
 
+/// What `Ctrl+K q` keeps besides its prompt (a popup).
+#[derive(Default)]
+pub struct AskState {
+    /// The question being answered.
+    pub asking: Option<Asking>,
+    /// Numbers the asks, so a stopped one's answer is dropped.
+    pub(super) count: u64,
+    /// The sharing question, waiting while another confirmation is open.
+    pub(super) pending_share: Option<Confirm>,
+}
+
 /// A question, and where it was asked: the tab (where the SQL goes) and
 /// its saved connection then. Kept whole, so asking it again (after the
 /// user allowed the schema to go) asks about the same thing.
@@ -48,7 +59,7 @@ impl App {
         if let Some(why) = self.why_cant_ask() {
             return self.set_status(why, true);
         }
-        self.ask_prompt = Some(LineInput::new(String::new()));
+        self.popups.ask_prompt = Some(LineInput::new(String::new()));
     }
 
     /// `Ctrl+K y`: the statement at the cursor (or the selection) goes to
@@ -68,7 +79,7 @@ impl App {
 
     /// Why asking can't start here, if it can't.
     fn why_cant_ask(&self) -> Option<String> {
-        if self.asking.is_some() {
+        if self.ask.asking.is_some() {
             return Some(t!("ask.busy").into());
         }
         if !self.connected() {
@@ -82,11 +93,11 @@ impl App {
     }
 
     pub(super) fn handle_ask_prompt_key(&mut self, key: KeyEvent) {
-        let Some(input) = &mut self.ask_prompt else { return };
+        let Some(input) = &mut self.popups.ask_prompt else { return };
         match input.handle(key) {
-            InputResult::Cancel => self.ask_prompt = None,
+            InputResult::Cancel => self.popups.ask_prompt = None,
             InputResult::Submit => {
-                let Some(text) = self.ask_prompt.take().map(|q| q.text().trim().to_string()) else { return };
+                let Some(text) = self.popups.ask_prompt.take().map(|q| q.text().trim().to_string()) else { return };
                 if !text.is_empty() {
                     let question = Question {
                         text,
@@ -111,8 +122,8 @@ impl App {
         let project = self.current_project.as_ref().map(|id| format!("id:{id}")).unwrap_or_default();
         let connection = question.connection.clone();
         let config_dir = self.data_dir.clone().unwrap_or_else(crate::config::store::config_dir);
-        self.ask_count += 1;
-        let id = self.ask_count;
+        self.ask.count += 1;
+        let id = self.ask.count;
         let tx = self.db_tx.clone();
         let generation = self.generation;
         let send = move |kind| {
@@ -136,9 +147,9 @@ impl App {
                         .call_streaming("ask", params, |method, note| {
                             if method == "ask.delta" {
                                 let chars = note["text"].as_str().map_or(0, |t| t.chars().count());
-                                send(DbEventKind::AskProgress(id, chars));
+                                send(Background::AskProgress(id, chars).into());
                             } else if method == "key.waiting" {
-                                send(DbEventKind::AskWaitingKey(id));
+                                send(Background::AskWaitingKey(id).into());
                             }
                         })
                         .await
@@ -151,9 +162,9 @@ impl App {
                     AskFailure { code: None, message: t!("ask.gateway_unreachable", e = e), data: None }
                 }
             });
-            send(DbEventKind::AskDone(id, Box::new(result)));
+            send(Background::AskDone(id, Box::new(result)).into());
         });
-        self.asking = Some(Asking { id, question, chars: 0, started: Instant::now(), task });
+        self.ask.asking = Some(Asking { id, question, chars: 0, started: Instant::now(), task });
         self.say_asking(t!("ask.asking").into());
     }
 
@@ -171,8 +182,8 @@ impl App {
     /// and one asked from a tab after it follows that tab's new place.
     pub(super) fn tab_closing(&mut self, closing: usize) {
         // (An explanation goes to a pop-over, not the tab: it goes on.)
-        if self.asking.as_ref().is_some_and(|a| a.question.tab == closing && !a.question.explain)
-            || matches!(&self.pending_share, Some(Confirm { action: ConfirmAction::ShareSchema { question, .. }, .. }) if question.tab == closing)
+        if self.ask.asking.as_ref().is_some_and(|a| a.question.tab == closing && !a.question.explain)
+            || matches!(&self.ask.pending_share, Some(Confirm { action: ConfirmAction::ShareSchema { question, .. }, .. }) if question.tab == closing)
         {
             return self.stop_asking();
         }
@@ -181,10 +192,10 @@ impl App {
                 *tab -= 1;
             }
         };
-        if let Some(asking) = &mut self.asking {
+        if let Some(asking) = &mut self.ask.asking {
             shift(&mut asking.question.tab);
         }
-        if let Some(Confirm { action: ConfirmAction::ShareSchema { question, .. }, .. }) = &mut self.pending_share {
+        if let Some(Confirm { action: ConfirmAction::ShareSchema { question, .. }, .. }) = &mut self.ask.pending_share {
             shift(&mut question.tab);
         }
     }
@@ -193,11 +204,11 @@ impl App {
     pub(super) fn stop_asking(&mut self) {
         // A sharing question waiting to be shown goes too: its tab, or its
         // project, is no longer the one it was about.
-        self.pending_share = None;
-        if let Some(ConfirmAction::ShareSchema { .. }) = self.confirm.as_ref().map(|c| &c.action) {
-            self.confirm = None;
+        self.ask.pending_share = None;
+        if let Some(ConfirmAction::ShareSchema { .. }) = self.popups.confirm.as_ref().map(|c| &c.action) {
+            self.popups.confirm = None;
         }
-        if let Some(asking) = self.asking.take() {
+        if let Some(asking) = self.ask.asking.take() {
             asking.task.abort();
             self.set_status(t!("ask.stopped").into(), false);
         }
@@ -205,13 +216,13 @@ impl App {
 
     /// The key for the model is slow: most likely a dialog to answer.
     pub(super) fn ask_waiting_key(&mut self, id: u64) {
-        if self.asking.as_ref().is_some_and(|a| a.id == id) {
+        if self.ask.asking.as_ref().is_some_and(|a| a.id == id) {
             self.say_asking(t!("ask.waiting_key").to_string());
         }
     }
 
     pub(super) fn ask_progress(&mut self, id: u64, chars: usize) {
-        let Some(asking) = self.asking.as_mut().filter(|a| a.id == id) else { return };
+        let Some(asking) = self.ask.asking.as_mut().filter(|a| a.id == id) else { return };
         asking.chars += chars;
         let secs = asking.started.elapsed().as_secs();
         let status = t!("ask.asking_progress", chars = asking.chars, secs = secs);
@@ -219,10 +230,10 @@ impl App {
     }
 
     pub(super) fn ask_done(&mut self, id: u64, result: Result<serde_json::Value, AskFailure>) {
-        if self.asking.as_ref().is_none_or(|a| a.id != id) {
+        if self.ask.asking.as_ref().is_none_or(|a| a.id != id) {
             return;
         }
-        let Some(asking) = self.asking.take() else { return };
+        let Some(asking) = self.ask.asking.take() else { return };
         self.say_asking(String::new());
         match result {
             Ok(answer) => {
@@ -238,7 +249,7 @@ impl App {
                 let project =
                     e.data.as_ref().and_then(|d| d["project"].as_str()).unwrap_or(t!("ask.this_project")).to_string();
                 // Shown once no other confirmation is open (`share_tick`).
-                self.pending_share = Some(Confirm {
+                self.ask.pending_share = Some(Confirm {
                     message: t!("ask.share_schema", project = project),
                     details: vec![e.message, t!("ask.rows_never_sent").into()],
                     danger: false,
@@ -261,12 +272,12 @@ impl App {
     /// The sharing question, once no other confirmation is open (one the
     /// user is answering, or an agent's write, isn't replaced).
     pub(super) fn share_tick(&mut self) {
-        if self.confirm.is_none()
-            && let Some(question) = self.pending_share.take()
+        if self.popups.confirm.is_none()
+            && let Some(question) = self.ask.pending_share.take()
         {
             // A question that came by itself: a moment before keys count.
             self.agents.asked = Some(Instant::now());
-            self.confirm = Some(question);
+            self.popups.confirm = Some(question);
         }
     }
 
@@ -313,7 +324,7 @@ impl App {
             }
         }
         let title = t!("ask.explained_by", model = model);
-        self.cell_view = Some(CellView::new(title, text.trim_end().to_string()));
+        self.popups.cell_view = Some(CellView::new(title, text.trim_end().to_string()));
         let tokens = &answer["usage"];
         let status = t!(
             "ask.explained",

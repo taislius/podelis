@@ -88,7 +88,7 @@ impl App {
         let error = if m.is_error { format!(" · {}", t!("messages.error")) } else { String::new() };
         let title = format!("{} · {}{error}", t!("messages.title"), m.time);
         let view = CellView { copies_text: Some(t!("copy.message")), ..CellView::new(title, m.text.clone()) };
-        self.cell_view = Some(view);
+        self.popups.cell_view = Some(view);
     }
 
     /// A click on MESSAGES line `y`: selects its message; twice opens it.

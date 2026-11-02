@@ -9,17 +9,17 @@ fn stepping_through_definitions_keeps_the_popup_size() {
         let bottom = top + lines[top..].iter().position(|l| l.contains("Esc close")).unwrap();
         (bottom - top, lines[top].matches('─').count())
     };
-    app.cell_view = Some(crate::app::CellView::definition("TABLE a".into(), "id int".into()));
+    app.popups.cell_view = Some(crate::app::CellView::definition("TABLE a".into(), "id int".into()));
     let small = size(&render(&mut app, 120, 40));
     let long = (0..20).map(|i| format!("column_with_a_long_name_{i}  varchar(255) not null")).collect::<Vec<_>>();
-    app.cell_view = Some(crate::app::CellView::definition("TABLE b".into(), long.join("\n")));
+    app.popups.cell_view = Some(crate::app::CellView::definition("TABLE b".into(), long.join("\n")));
     assert_eq!(size(&render(&mut app, 120, 40)), small);
 }
 
 #[test]
 fn a_definition_sits_beside_the_navigator() {
     let (mut app, _dir) = query_app();
-    app.cell_view = Some(crate::app::CellView::definition("TABLE users".into(), "id int".into()));
+    app.popups.cell_view = Some(crate::app::CellView::definition("TABLE users".into(), "id int".into()));
     let screen = render(&mut app, 120, 40);
     let nav = app.hits.schema.unwrap();
     let top = screen.lines().find(|l| l.contains("┌ TABLE users")).unwrap_or_else(|| panic!("{screen}"));

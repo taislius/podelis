@@ -64,37 +64,27 @@ async fn main() -> Result<()> {
     let log_path = system::logging::init();
     config::store::secure_config_dir();
     let (store, store_warning) = ConnectionStore::load();
-    if args.mcp {
-        let name = args.name.clone().or_else(|| std::env::var("PODELIS_AGENT").ok());
-        std::process::exit(agents::mcp::run(&config::store::config_dir(), args.project.as_deref(), name).await);
-    }
-    if let Some(words) = &args.memory {
-        std::process::exit(
-            gateway::command::memory(&config::store::config_dir(), args.project.as_deref(), words).await,
-        );
-    }
-    if let Some(words) = &args.ask {
-        let (project, model) = (args.project.as_deref(), args.model.as_deref());
-        std::process::exit(gateway::command::ask(&config::store::config_dir(), project, model, words).await);
-    }
-    if let Some(command) = args.gateway.clone() {
-        std::process::exit(gateway::command::run(command, &config::store::config_dir(), args.project.as_deref()).await);
-    }
-    if args.doctor {
-        let code =
-            cli::doctor::run(&store, store_warning.as_deref(), args.project.as_deref(), args.test_connections).await;
+    let config_dir = config::store::config_dir();
+    let (project, dir) = (args.project.as_deref(), config_dir.as_path());
+    let code = match args.command() {
+        cli::Command::Tui => None,
+        cli::Command::Mcp => {
+            let name = args.name.clone().or_else(|| std::env::var("PODELIS_AGENT").ok());
+            Some(agents::mcp::run(dir, project, name).await)
+        }
+        cli::Command::Memory(words) => Some(gateway::command::memory(dir, project, &words).await),
+        cli::Command::Ask(words) => Some(gateway::command::ask(dir, project, args.model.as_deref(), &words).await),
+        cli::Command::Gateway(command) => Some(gateway::command::run(command, dir, project).await),
+        cli::Command::Doctor => {
+            Some(cli::doctor::run(&store, store_warning.as_deref(), project, args.test_connections).await)
+        }
+        cli::Command::Test => Some(cli::test(&args, &store).await),
+        cli::Command::Import => Some(cli::import(&args, &store).await),
+        cli::Command::Execute => Some(cli::execute(&args, &store).await),
+    };
+    if let Some(code) = code {
         std::process::exit(code);
     }
-    if args.test {
-        std::process::exit(cli::test(&args, &store).await);
-    }
-    if args.import.is_some() {
-        std::process::exit(cli::import(&args, &store).await);
-    }
-    if args.execute.is_some() {
-        std::process::exit(cli::execute(&args, &store).await);
-    }
-    let config_dir = config::store::config_dir();
     if let Some(id) = &store.migrated_project {
         config::history::migrate_legacy(&config_dir.join("history.jsonl"), &config_dir.join("history"), id);
     }

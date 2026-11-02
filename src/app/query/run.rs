@@ -101,7 +101,7 @@ impl App {
                 && self.connection.txn == TxnState::Idle
                 && matches!(purpose, RunPurpose::Query | RunPurpose::RowChange(_));
             let action = ConfirmAction::Run { sql, offset, infos, purpose, filled };
-            self.confirm = Some(Confirm { message, details, danger: true, action, offer_transaction });
+            self.popups.confirm = Some(Confirm { message, details, danger: true, action, offer_transaction });
             return;
         }
         // A read on production that would read a whole big table asks
@@ -153,7 +153,7 @@ impl App {
             return self.run_writes(sql, offset, infos, RunPurpose::Query, filled);
         }
         self.set_status(String::new(), false);
-        self.confirm = Some(Confirm {
+        self.popups.confirm = Some(Confirm {
             message: t!("run.big_read").to_string(),
             details: heavy,
             danger: true,
@@ -183,7 +183,7 @@ impl App {
             return self.set_status(t!("run.reads_only_more").to_string(), true);
         }
         let Some((sql, offset)) = self.tab.last_sql.clone() else { return };
-        self.next_row_limit = Some((results.rows.len() * 10).min(MAX_ROW_LIMIT));
+        self.next_run.row_limit = Some((results.rows.len() * 10).min(MAX_ROW_LIMIT));
         let infos = self.tab.last_query_infos.clone();
         self.rerun_shown(sql, offset, infos);
     }
@@ -229,10 +229,10 @@ impl App {
     ) {
         // A query's own result, unless it's the shown one run again.
         // (Taken whatever runs, so it can't outlive the run it was for.)
-        let same_result = std::mem::take(&mut self.same_result);
-        let new_result = matches!(purpose, RunPurpose::Query) && !self.watch_rerun && !same_result;
+        let same_result = std::mem::take(&mut self.next_run.same_result);
+        let new_result = matches!(purpose, RunPurpose::Query) && !self.next_run.watch && !same_result;
         // Anything else run stops watch mode.
-        if !self.watch_rerun {
+        if !self.next_run.watch {
             self.stop_watch(&format!(": {}", t!("run.another_query")));
             // The tab for what's coming, while it runs.
             match purpose {
@@ -246,7 +246,7 @@ impl App {
         // cancels it on the server) so this run can start; so does an export.
         self.stop_export();
         self.close_stream();
-        self.completion = None;
+        self.popups.completion = None;
         // One read-only statement can be streamed page by page.
         let stream = matches!(purpose, RunPurpose::Query) && infos.len() == 1 && infos[0].kind == Kind::Read;
         self.tab.run.infos = infos;
@@ -278,8 +278,8 @@ impl App {
         // After a quiet while (or a lost connection), the server is asked
         // to answer first: a link that died meanwhile fails in seconds
         // rather than leaving the run waiting.
-        let check_first = self.connection_lost || self.last_activity.elapsed() >= CHECK_AFTER_IDLE;
-        self.last_activity = Instant::now();
+        let check_first = self.keepalive.connection_lost || self.keepalive.last_activity.elapsed() >= CHECK_AFTER_IDLE;
+        self.keepalive.last_activity = Instant::now();
         self.tab.run.extra.timed_out = None;
         self.tab.run.extra.started = Some(Instant::now());
         // The connection's own timeout (0 there lets its queries run), else
@@ -307,7 +307,7 @@ impl App {
         self.tab.run.holds_tabs = !free;
         self.set_result_status(t!("tabs.running").to_string(), false);
         let send = self.run_sender();
-        let row_limit = self.next_row_limit.take().unwrap_or(self.settings.row_limit);
+        let row_limit = self.next_run.row_limit.take().unwrap_or(self.settings.row_limit);
         tracing::debug!(statements = self.tab.run.infos.len(), stream, row_limit, "run");
         let sql = if self.tab.run.extra.vertical { sql::without_vertical(&sql, self.engine()) } else { sql };
         self.tab.run.task = Some(tokio::spawn(async move {
@@ -455,7 +455,7 @@ impl App {
         // `d` (a table's definition), and it drops the session.
         let idle = self.connection.txn == TxnState::Idle;
         let running = self.running_here();
-        self.confirm = Some(Confirm {
+        self.popups.confirm = Some(Confirm {
             message: if idle {
                 t!("run.disconnect_ask", name = self.connection.form.short_name())
             } else {

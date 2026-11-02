@@ -6,9 +6,10 @@
 pub(crate) mod doctor;
 use std::io::{IsTerminal as _, Read as _, Write as _};
 
-use crate::app::ConnectForm;
+use crate::config::draft::{ConnectionDraft, Target, classify};
 use crate::config::store::{self, ConnectionStore};
 use crate::db::{ConnectionMode, Database, QueryOutcome};
+use crate::gateway::command::GatewayCommand;
 use crate::sql::analyze::{self, Kind};
 use crate::transfer::export::{self, Format};
 
@@ -130,22 +131,44 @@ pub struct Args {
     pub memory: Option<Vec<String>>,
 }
 
-/// What `podelis gateway` was asked to do.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GatewayCommand {
-    /// Run it here, in the foreground.
-    Run,
-    Status,
-    Start,
-    Stop,
-    Models,
-    /// Store a model's key (its name; empty until given).
-    Key(String),
-    /// Ask a model (the default one when `None`) for one word.
-    Test(Option<String>),
-    /// What a model would be shown for a question: the connection, then
-    /// the question's words.
-    Context(Vec<String>),
+/// What the command line asked for: the TUI, or one of the commands that
+/// run without it (and exit with its code).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Command {
+    Tui,
+    Mcp,
+    Memory(Vec<String>),
+    Ask(Vec<String>),
+    Gateway(GatewayCommand),
+    Doctor,
+    Test,
+    Import,
+    Execute,
+}
+
+impl Args {
+    /// The command these arguments are, the first that applies.
+    pub fn command(&self) -> Command {
+        if self.mcp {
+            Command::Mcp
+        } else if let Some(words) = &self.memory {
+            Command::Memory(words.clone())
+        } else if let Some(words) = &self.ask {
+            Command::Ask(words.clone())
+        } else if let Some(command) = &self.gateway {
+            Command::Gateway(command.clone())
+        } else if self.doctor {
+            Command::Doctor
+        } else if self.test {
+            Command::Test
+        } else if self.import.is_some() {
+            Command::Import
+        } else if self.execute.is_some() {
+            Command::Execute
+        } else {
+            Command::Tui
+        }
+    }
 }
 
 /// What to do instead of starting normally.
@@ -312,39 +335,6 @@ fn gateway_word(out: &mut Args, word: &str) -> bool {
     true
 }
 
-/// How a CONNECTION argument is meant.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Target {
-    Url(String),
-    /// A SQLite database file (or `:memory:`).
-    File(String),
-    /// A saved connection's name.
-    Saved(String),
-}
-
-pub fn classify(arg: &str) -> Target {
-    let lower = arg.to_ascii_lowercase();
-    if lower.contains("://") || lower.starts_with("sqlite:") {
-        return Target::Url(arg.to_string());
-    }
-    let looks_like_file = [".db", ".sqlite", ".sqlite3", ".db3"].iter().any(|ext| lower.ends_with(ext))
-        || arg == ":memory:"
-        || arg.contains('/')
-        || std::path::Path::new(arg).is_file();
-    if looks_like_file { Target::File(arg.to_string()) } else { Target::Saved(arg.to_string()) }
-}
-
-/// The connect form for a URL or file target.
-pub fn form_for_address(target: &Target) -> Result<ConnectForm, String> {
-    let mut form = ConnectForm::new();
-    match target {
-        Target::Url(url) => form.apply_url(url)?,
-        Target::File(path) => form.apply_url(&format!("sqlite:{path}"))?,
-        Target::Saved(_) => return Err("not an address".into()),
-    }
-    Ok(form)
-}
-
 /// Exit codes of `-e`, `--import` and `--test`, so a script can tell what
 /// went wrong (and whether trying again could help).
 pub mod exit {
@@ -489,7 +479,7 @@ fn printed_sets(outcome: &QueryOutcome, format: Format) -> Vec<&QueryOutcome> {
 
 /// Connects for `-e` or `--import`. A wrong or missing password is asked
 /// for once, as psql does, when someone is at the terminal.
-async fn connect(form: &ConnectForm, args: &Args) -> Result<Database, Failure> {
+async fn connect(form: &ConnectionDraft, args: &Args) -> Result<Database, Failure> {
     let params = params_creating(form, args).map_err(Failure::usage)?;
     let message = match Database::connect(params.clone()).await {
         Ok(db) => return Ok(db),
@@ -507,61 +497,18 @@ async fn connect(form: &ConnectForm, args: &Args) -> Result<Database, Failure> {
     } else {
         format!("Password for {}@{}: ", params.user, params.host)
     };
-    let Some(password) = tokio::task::spawn_blocking(move || prompt_password(&label)).await.ok().flatten() else {
+    let Some(password) =
+        tokio::task::spawn_blocking(move || crate::system::tty::prompt_password(&label)).await.ok().flatten()
+    else {
         return Err(Failure::connect("no password entered"));
     };
     let retry = crate::db::ConnectParams { password, ..params };
     Database::connect(retry).await.map_err(|e| Failure::connect(crate::db::error_message(&e)))
 }
 
-/// Reads a password from the terminal without showing it; None if
-/// cancelled (Esc, Ctrl+C) or the terminal can't be put in raw mode.
-pub(crate) fn prompt_password(label: &str) -> Option<String> {
-    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, read};
-    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-    let mut err = std::io::stderr();
-    let _ = write!(err, "{label}");
-    let _ = err.flush();
-    /// Leaves raw mode however the prompt ends, a panic included.
-    struct Raw;
-    impl Drop for Raw {
-        fn drop(&mut self) {
-            let _ = disable_raw_mode();
-            let _ = writeln!(std::io::stderr());
-        }
-    }
-    enable_raw_mode().ok()?;
-    let raw = Raw;
-    let mut password = String::new();
-    let entered = loop {
-        // The terminal went away (a dropped SSH session): give up.
-        let Ok(event) = read() else { break false };
-        let Event::Key(key) = event else { continue };
-        if key.kind == KeyEventKind::Release {
-            continue;
-        }
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Enter => break true,
-            KeyCode::Esc => break false,
-            KeyCode::Char('c' | 'd') if ctrl => break false,
-            KeyCode::Char('u' | 'w') if ctrl => password.clear(),
-            // Other Ctrl/Alt keys aren't typing: never part of the password.
-            KeyCode::Char(_) if ctrl || key.modifiers.contains(KeyModifiers::ALT) => {}
-            KeyCode::Char(c) => password.push(c),
-            KeyCode::Backspace => {
-                password.pop();
-            }
-            _ => {}
-        }
-    };
-    drop(raw);
-    (entered && !password.is_empty()).then_some(password)
-}
-
 /// The form's connection parameters, refusing to create a missing SQLite
 /// file (usually a typo) unless `--create` says so.
-fn params_creating(form: &ConnectForm, args: &Args) -> Result<crate::db::ConnectParams, String> {
+fn params_creating(form: &ConnectionDraft, args: &Args) -> Result<crate::db::ConnectParams, String> {
     let params = form.params()?;
     if let Some(path) = params.file_to_create()
         && !args.create
@@ -572,7 +519,7 @@ fn params_creating(form: &ConnectForm, args: &Args) -> Result<crate::db::Connect
 }
 
 /// The connection the arguments name (or `$DATABASE_URL`).
-fn resolve(args: &Args, store: &ConnectionStore) -> Result<ConnectForm, Failure> {
+fn resolve(args: &Args, store: &ConnectionStore) -> Result<ConnectionDraft, Failure> {
     let connection =
         args.connection
             .clone()
@@ -580,7 +527,7 @@ fn resolve(args: &Args, store: &ConnectionStore) -> Result<ConnectForm, Failure>
             .ok_or_else(|| Failure::usage("no connection: pass one (URL, file or saved name) or set DATABASE_URL"))?;
     match classify(&connection) {
         Target::Saved(name) => saved_form(store, args.project.as_deref(), &name),
-        address => form_for_address(&address).map_err(Failure::usage),
+        address => ConnectionDraft::from_address(&address).map_err(Failure::usage),
     }
 }
 
@@ -637,7 +584,7 @@ pub async fn test(args: &Args, store: &ConnectionStore) -> i32 {
 /// A saved connection of the project (the last one opened by default),
 /// with its password from the keychain. A keychain that can't be read is
 /// only a warning: the database's own sources may have the password.
-fn saved_form(store: &ConnectionStore, project: Option<&str>, name: &str) -> Result<ConnectForm, Failure> {
+fn saved_form(store: &ConnectionStore, project: Option<&str>, name: &str) -> Result<ConnectionDraft, Failure> {
     let project = match project {
         Some(p) => store.project_by_name(p).ok_or_else(|| Failure::usage(format!("no project named '{p}'")))?,
         None => store
@@ -655,7 +602,7 @@ fn saved_form(store: &ConnectionStore, project: Option<&str>, name: &str) -> Res
     if let Some(note) = note {
         let _ = writeln!(std::io::stderr(), "podelis: no saved password ({note}); connecting without it");
     }
-    Ok(ConnectForm::from_profile(profile, password))
+    Ok(ConnectionDraft::from_profile(profile, password))
 }
 
 #[cfg(test)]
@@ -693,6 +640,20 @@ mod tests {
         };
         assert_eq!([";", "|", "tab", "\\t", "\t"].map(delimiter), (*b";|\t\t\t").map(Some));
         assert!(matches!(args(&["--delimiter", "ab"]), ParseOutcome::Exit(2, _)));
+    }
+
+    #[test]
+    fn arguments_name_one_command() {
+        let command = |args: &[&str]| match parse(args.iter().map(|a| (*a).to_string())) {
+            ParseOutcome::Run(a) => a.command(),
+            ParseOutcome::Exit(code, text) => panic!("{code}: {text}"),
+        };
+        assert_eq!(command(&[]), Command::Tui);
+        assert_eq!(command(&["-c", "prod"]), Command::Tui);
+        assert_eq!(command(&["doctor"]), Command::Doctor);
+        assert_eq!(command(&["gateway", "stop"]), Command::Gateway(GatewayCommand::Stop));
+        assert_eq!(command(&["-e", "select 1", "app.db"]), Command::Execute);
+        assert_eq!(command(&["mcp"]), Command::Mcp);
     }
 
     #[test]
@@ -755,7 +716,7 @@ mod tests {
         assert_eq!(classify("./data/app.sqlite"), Target::File("./data/app.sqlite".into()));
         assert_eq!(classify("app.db"), Target::File("app.db".into()));
         assert_eq!(classify("prod"), Target::Saved("prod".into()));
-        let form = form_for_address(&Target::File("w.db".into())).unwrap();
+        let form = ConnectionDraft::from_address(&Target::File("w.db".into())).unwrap();
         assert_eq!((form.engine, form.host.as_str()), (crate::db::Engine::Sqlite, "w.db"));
     }
 

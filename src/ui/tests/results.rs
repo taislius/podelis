@@ -48,7 +48,7 @@ fn the_row_view_steps_to_the_next_row_with_arrows() {
     let press = |app: &mut App, code| app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
     press(&mut app, KeyCode::Char('x'));
     let screen = render(&mut app, 100, 30);
-    assert_eq!(app.cell_view.as_ref().unwrap().title, "ROW 1 of 3");
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().title, "ROW 1 of 3");
     // Its keys are on a line of its own inside it, not the status bar.
     let lines: Vec<&str> = screen.lines().collect();
     let keys = lines.iter().position(|l| l.contains("↑↓ scroll, next row")).unwrap_or_else(|| panic!("{screen}"));
@@ -61,15 +61,15 @@ fn the_row_view_steps_to_the_next_row_with_arrows() {
     press(&mut app, KeyCode::Right);
     let _ = render(&mut app, 100, 30);
     press(&mut app, KeyCode::Down);
-    assert_eq!(app.cell_view.as_ref().unwrap().title, "ROW 3 of 3", "stays on the last row");
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().title, "ROW 3 of 3", "stays on the last row");
     press(&mut app, KeyCode::Up);
-    assert_eq!(app.cell_view.as_ref().unwrap().title, "ROW 2 of 3");
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().title, "ROW 2 of 3");
     // A row taller than the popup scrolls first.
     let _ = render(&mut app, 100, 9);
-    assert!(app.cell_view.as_ref().unwrap().max_scroll > 0);
+    assert!(app.popups.cell_view.as_ref().unwrap().max_scroll > 0);
     press(&mut app, KeyCode::Down);
-    assert_eq!(app.cell_view.as_ref().unwrap().title, "ROW 2 of 3");
-    assert_eq!(app.cell_view.as_ref().unwrap().scroll, 1);
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().title, "ROW 2 of 3");
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().scroll, 1);
 }
 
 #[test]
@@ -132,14 +132,14 @@ fn a_scripts_result_sets() {
 #[test]
 fn cell_view_popup() {
     let (mut app, _dir) = query_app();
-    app.cell_view = Some(CellView::new("note".into(), "{\n  \"vip\": true\n}".into()));
+    app.popups.cell_view = Some(CellView::new("note".into(), "{\n  \"vip\": true\n}".into()));
     assert_snapshot!(render(&mut app, 70, 16));
 }
 
 #[test]
 fn a_followed_rows_popover_says_it_opens_in_a_tab() {
     let (mut app, _dir) = query_app();
-    app.cell_view = Some(crate::app::CellView {
+    app.popups.cell_view = Some(crate::app::CellView {
         follow: Some(("→ customers".into(), "SELECT * FROM customers WHERE id = 1;".into())),
         ..crate::app::CellView::new("→ customers · id = 1".into(), "id    1\nname  Ona\n".into())
     });

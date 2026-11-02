@@ -32,7 +32,7 @@ async fn schema_details_load_on_expand_and_definitions_open() {
 
     // `d` shows the table's CREATE statement (SQLite keeps it).
     app.handle_key(key(KeyCode::Char('d')));
-    let view = app.cell_view.as_ref().expect("definition shown");
+    let view = app.popups.cell_view.as_ref().expect("definition shown");
     assert!(view.title.contains("child") && view.text.contains("references parent"), "{}", view.text);
     app.handle_key(key(KeyCode::Esc));
 
@@ -41,9 +41,9 @@ async fn schema_details_load_on_expand_and_definitions_open() {
     let parent = panel.tables.iter().position(|t| t.info.name == "parent").unwrap();
     panel.selected = panel.nodes().iter().position(|n| *n == SchemaNode::Table(parent)).unwrap();
     app.handle_key(key(KeyCode::Char('d')));
-    assert!(app.cell_view.is_none());
+    assert!(app.popups.cell_view.is_none());
     wait_details(&mut app).await;
-    assert!(app.cell_view.as_ref().is_some_and(|v| v.text.contains("CREATE TABLE parent")));
+    assert!(app.popups.cell_view.as_ref().is_some_and(|v| v.text.contains("CREATE TABLE parent")));
 }
 
 #[tokio::test]
@@ -83,14 +83,14 @@ async fn schema_snapshots_show_what_changed_since() {
     assert_eq!(app.snapshots().len(), 1);
     app.open_palette(false);
     let entry = app.palette_command_text(crate::app::palette::Command::CompareSnapshot(0));
-    app.palette = None;
+    app.popups.palette = None;
     assert!(entry.starts_with("Compare the schema with the snapshot: "), "{entry}");
 
     run_sql(&mut app, "alter table people add column email text; create table orders (id integer primary key)").await;
     app.compare_snapshot(0);
     until_event(&mut app, |k| matches!(k, DbEventKind::SnapshotCompared(_))).await;
     assert!(app.notes.status.starts_with("2 changes since the snapshot"), "{}", app.notes.status);
-    let text = &app.cell_view.as_ref().unwrap().text;
+    let text = &app.popups.cell_view.as_ref().unwrap().text;
     assert!(text.contains("ONLY HERE\n  table orders") && text.contains("column email TEXT: only here"), "{text}");
     assert!(text.contains("people ADD COLUMN email TEXT;"), "{text}");
 }
@@ -100,16 +100,16 @@ fn space_in_the_schema_opens_the_command_menu() {
     let (mut app, _dir) = test_app();
     app.screen = Screen::Query;
     app.handle_key(ctrl('k'));
-    assert!(app.palette.as_ref().is_some_and(|p| !p.searching));
+    assert!(app.popups.palette.as_ref().is_some_and(|p| !p.searching));
     // The same key again searches every command.
     app.handle_key(ctrl('k'));
-    assert!(app.palette.as_ref().unwrap().searching);
+    assert!(app.popups.palette.as_ref().unwrap().searching);
     app.handle_key(key(KeyCode::Esc));
 
     app.connection.schema = Some(SchemaPanel::default());
     app.focus = Focus::Schema;
     app.handle_key(key(KeyCode::Char(' ')));
-    assert!(app.palette.is_some());
+    assert!(app.popups.palette.is_some());
 }
 
 #[test]
@@ -164,14 +164,14 @@ fn arrows_in_a_definition_go_to_the_next_table() {
         Some(SchemaPanel { tables: vec![table("a"), table("b")], selected: 1, ..SchemaPanel::default() });
     app.focus = Focus::Schema;
     app.handle_schema_key(key(KeyCode::Char('d')));
-    assert_eq!(app.cell_view.as_ref().unwrap().title, "TABLE a");
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().title, "TABLE a");
     app.handle_cell_view_key(key(KeyCode::Right));
-    assert_eq!(app.cell_view.as_ref().unwrap().title, "TABLE b");
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().title, "TABLE b");
     assert_eq!(app.connection.schema.as_ref().unwrap().selected, 2, "the navigator follows");
     app.handle_cell_view_key(key(KeyCode::Right));
-    assert_eq!(app.cell_view.as_ref().unwrap().title, "TABLE b", "stays on the last");
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().title, "TABLE b", "stays on the last");
     app.handle_cell_view_key(key(KeyCode::Left));
-    assert_eq!(app.cell_view.as_ref().unwrap().title, "TABLE a");
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().title, "TABLE a");
     app.handle_cell_view_key(key(KeyCode::Char('y')));
     assert!(app.take_clipboard().is_some_and(|t| t.contains("main")));
 }
@@ -211,13 +211,13 @@ async fn a_far_model_sees_the_schema_once_allowed_and_always_saves_it() {
     type_text(&mut app, "customers by country");
     app.handle_key(key(KeyCode::Enter));
     until_answered(&mut app).await;
-    let confirm = app.confirm.as_ref().expect("asks whether to send the schema");
+    let confirm = app.popups.confirm.as_ref().expect("asks whether to send the schema");
     assert!(matches!(confirm.action, ConfirmAction::ShareSchema { .. }));
     assert!(confirm.message.contains("Send p's table and column names"), "{}", confirm.message);
     // Keys typed as it appears don't answer it; nor do others.
     app.handle_key(key(KeyCode::Char('a')));
     app.handle_key(key(KeyCode::Char('x')));
-    assert!(app.confirm.is_some() && app.asking.is_none());
+    assert!(app.popups.confirm.is_some() && app.ask.asking.is_none());
     assert_eq!(app.store.project_by_name("p").unwrap().share_schema, crate::config::store::ShareSchema::Local);
     settle(&mut app);
     // `a`: always, for the project; the question goes again.
@@ -225,7 +225,7 @@ async fn a_far_model_sees_the_schema_once_allowed_and_always_saves_it() {
     assert_eq!(app.store.project_by_name("p").unwrap().share_schema, crate::config::store::ShareSchema::All);
     let (saved, _) = ConnectionStore::load_from(dir.path().join("connections.toml"));
     assert_eq!(saved.project_by_name("p").unwrap().share_schema, crate::config::store::ShareSchema::All);
-    assert!(app.asking.is_some());
+    assert!(app.ask.asking.is_some());
     until_answered(&mut app).await;
     // (The address is made up: it fails, but it was sent.)
     assert!(said(&app).starts_with("Couldn't ask") && said(&app).contains("models.invalid"), "{}", said(&app));

@@ -32,7 +32,7 @@ impl App {
         // Ctrl+U and Ctrl+W edit the input being typed in, before any key
         // binding (Ctrl+W also closes the tab).
         let edit_key = key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char('u' | 'w'));
-        if edit_key && self.cell_view.is_none() {
+        if edit_key && self.popups.cell_view.is_none() {
             let schema_filter = self.connection.schema.as_ref().is_some_and(|s| s.filter_editing);
             if self.cell_edit.is_some() {
                 return self.handle_cell_edit_key(key);
@@ -55,7 +55,7 @@ impl App {
         if self.handle_tab_key(key) {
             return;
         }
-        if self.cell_view.is_some() {
+        if self.popups.cell_view.is_some() {
             return self.handle_cell_view_key(key);
         }
         if self.focus == Focus::Results && self.tab.grid.filter_editing {
@@ -64,7 +64,7 @@ impl App {
         if self.cell_edit.is_some() {
             return self.handle_cell_edit_key(key);
         }
-        if self.focus == Focus::Editor && self.completion.is_some() && self.handle_completion_key(key) {
+        if self.focus == Focus::Editor && self.popups.completion.is_some() && self.handle_completion_key(key) {
             return;
         }
         // Tab after a partial word completes it; otherwise (or after Esc)
@@ -111,7 +111,7 @@ impl App {
             // A question being answered: Esc stops it once it has nothing
             // else to do here (the zooms, cancelling a query, watch mode,
             // a filter, vim's modes, a selection come first).
-            KeyCode::Esc if self.asking.is_some() && !self.esc_has_a_job() => return self.stop_asking(),
+            KeyCode::Esc if self.ask.asking.is_some() && !self.esc_has_a_job() => return self.stop_asking(),
             // Another tab's query on this connection isn't stopped from
             // here: Esc says whose it is and how to get there.
             KeyCode::Esc if self.busy_conn_tab().is_some() && !self.esc_has_a_job() => {
@@ -174,35 +174,35 @@ impl App {
     pub(in crate::app) fn paste_on_query_screen(&mut self, text: &str) {
         match self.top_overlay() {
             Some(Overlay::PipePrompt) => {
-                if let Some(input) = &mut self.pipe_prompt {
+                if let Some(input) = &mut self.popups.pipe_prompt {
                     input.insert_str(text);
                 }
             }
             Some(Overlay::AskPrompt) => {
-                if let Some(input) = &mut self.ask_prompt {
+                if let Some(input) = &mut self.popups.ask_prompt {
                     input.insert_str(text);
                 }
             }
             Some(Overlay::Memory) => {
-                if let Some(input) = self.memory_view.as_mut().and_then(|v| v.adding.as_mut()) {
+                if let Some(input) = self.popups.memory_view.as_mut().and_then(|v| v.adding.as_mut()) {
                     input.insert_str(text);
                 }
             }
             Some(Overlay::Palette) => {
-                if let Some(palette) = &mut self.palette {
+                if let Some(palette) = &mut self.popups.palette {
                     palette.searching = true;
                     palette.query.insert_str(text);
                     palette.selected = 0;
                 }
             }
             Some(Overlay::TabPrompt) => {
-                if let Some(prompt) = &mut self.tab_prompt {
+                if let Some(prompt) = &mut self.popups.tab_prompt {
                     prompt.text.insert_str(text);
                 }
             }
             Some(Overlay::Library) => {
                 // Not behind "delete this saved query?".
-                if let Some(view) = self.library_view.as_mut().filter(|v| !v.confirm_delete) {
+                if let Some(view) = self.popups.library_view.as_mut().filter(|v| !v.confirm_delete) {
                     view.query.insert_str(text);
                     view.selected = 0;
                 }
@@ -229,12 +229,12 @@ impl App {
     /// copies there.
     pub(in crate::app) fn prompt_text(&self) -> Option<String> {
         let text = match self.top_overlay()? {
-            Overlay::PipePrompt => self.pipe_prompt.as_ref()?.text(),
-            Overlay::AskPrompt => self.ask_prompt.as_ref()?.text(),
-            Overlay::TabPrompt => self.tab_prompt.as_ref()?.text.text(),
-            Overlay::Palette => self.palette.as_ref().filter(|p| p.searching)?.query.text(),
-            Overlay::Library => self.library_view.as_ref().filter(|v| !v.confirm_delete)?.query.text(),
-            Overlay::Memory => self.memory_view.as_ref()?.adding.as_ref()?.text(),
+            Overlay::PipePrompt => self.popups.pipe_prompt.as_ref()?.text(),
+            Overlay::AskPrompt => self.popups.ask_prompt.as_ref()?.text(),
+            Overlay::TabPrompt => self.popups.tab_prompt.as_ref()?.text.text(),
+            Overlay::Palette => self.popups.palette.as_ref().filter(|p| p.searching)?.query.text(),
+            Overlay::Library => self.popups.library_view.as_ref().filter(|v| !v.confirm_delete)?.query.text(),
+            Overlay::Memory => self.popups.memory_view.as_ref()?.adding.as_ref()?.text(),
             _ => return None,
         };
         Some(text.to_string())
@@ -245,7 +245,7 @@ impl App {
     fn takes_paste(&self) -> bool {
         match self.top_overlay() {
             Some(Overlay::ParamForm | Overlay::RowForm) => true,
-            Some(Overlay::Settings) => self.settings_view.as_ref().is_some_and(|v| v.editing.is_some()),
+            Some(Overlay::Settings) => self.popups.settings_view.as_ref().is_some_and(|v| v.editing.is_some()),
             _ => self.prompt_text().is_some(),
         }
     }
@@ -254,7 +254,7 @@ impl App {
     /// the results row (or the marked rows), the navigator's name, or what's
     /// typed in a prompt.
     pub(in crate::app) fn copy_focused(&mut self) {
-        if self.cell_view.is_some() {
+        if self.popups.cell_view.is_some() {
             return self.copy_cell();
         }
         // A one-line prompt in front: its text (it has no selection).
@@ -471,7 +471,7 @@ impl App {
     pub(in crate::app) fn toggle_zoom(&mut self) {
         self.panes.zoomed = !self.panes.zoomed;
         self.panes.statement_zoom = false;
-        self.completion = None;
+        self.popups.completion = None;
         let msg =
             if self.panes.zoomed { t!("zoom.pane", key = self.keymap.label(Action::Zoom)) } else { String::new() };
         self.set_status(msg, false);
@@ -498,7 +498,7 @@ impl App {
     pub(in crate::app) fn toggle_statement_zoom(&mut self) {
         self.panes.statement_zoom = !self.panes.statement_zoom;
         self.panes.zoomed = false;
-        self.completion = None;
+        self.popups.completion = None;
         if self.panes.statement_zoom {
             self.focus = Focus::Editor;
             self.set_status(t!("zoom.statement", key = self.keymap.label(Action::ZoomStatement)), false);
@@ -515,7 +515,7 @@ impl App {
             return self.set_status(t!("editor.no_statement_here").into(), true);
         };
         self.focus = Focus::Editor;
-        self.completion = None;
+        self.popups.completion = None;
         self.tab.editor.select_offsets(range.start, range.end);
         let which = sql::Statements::of(&text, self.engine()).position(range.start);
         let said = which.map_or_else(String::new, |(n, of)| format!(" ({})", t!("editor.n_of", n = n, of = of)));

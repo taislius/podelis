@@ -46,7 +46,7 @@ pub(super) fn app() -> (App, tempfile::TempDir) {
         app.connection.form.engine = engine;
         app.connection.form.host = host.into();
         app.connection.form.port = engine.default_port().into();
-        let mut profile = app.connection.form.to_profile_for_tests();
+        let mut profile = app.connection.form.to_profile();
         profile.database = "shop".into();
         app.store.upsert(&shop, None, profile).unwrap();
     }

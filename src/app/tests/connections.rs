@@ -41,7 +41,7 @@ fn password_command_replaces_the_password() {
     assert_eq!(params.password, "");
     assert_eq!(params.password_command, ["op", "read", "op://My Vault/db/password"]);
     // Saved as words, shown again as typed.
-    let profile = form.to_profile_for_tests();
+    let profile = form.to_profile();
     assert_eq!(profile.password_command, params.password_command);
     assert_eq!(ConnectForm::from_profile(&profile, String::new()).password_command, form.password_command);
     form.password_command = "pass show 'db".into();
@@ -128,7 +128,7 @@ async fn picking_a_database_container_fills_in_a_new_connection() {
     app.handle_key(key(KeyCode::Esc));
     assert!(app.manager.containers.is_none());
     // Picked again once saved: the saved connection, not a copy.
-    let saved = app.connection.form.to_profile_for_tests();
+    let saved = app.connection.form.to_profile();
     app.store.upsert(&project_id(&app), None, saved.clone()).unwrap();
     app.handle_key(key(KeyCode::Char('c')));
     let again = crate::system::containers::Container {
@@ -225,7 +225,7 @@ fn projects_keep_separate_connections_and_history() {
     let (mut store, _) = ConnectionStore::load_from(dir.path().join("c.toml"));
     let a = store.add_project("a").unwrap();
     let b = store.add_project("b").unwrap();
-    let conn = |name: &str| ConnectForm { name: name.into(), ..ConnectForm::new() }.to_profile();
+    let conn = |name: &str| ConnectionDraft { name: name.into(), ..ConnectionDraft::new() }.to_profile();
     store.upsert(&a, None, conn("local")).unwrap();
     store.upsert(&b, None, conn("local")).unwrap();
     store.upsert(&b, None, conn("staging")).unwrap();
@@ -265,7 +265,7 @@ fn new_app_preselects_last_project_and_reports_migration() {
 fn move_requires_another_project() {
     let (mut app, _dir) = test_app();
     let id = project_id(&app);
-    app.store.upsert(&id, None, ConnectForm { name: "x".into(), ..ConnectForm::new() }.to_profile()).unwrap();
+    app.store.upsert(&id, None, ConnectionDraft { name: "x".into(), ..ConnectionDraft::new() }.to_profile()).unwrap();
     app.handle_key(key(KeyCode::Char('m')));
     assert!(app.manager.moving_to.is_none());
     assert!(app.manager.connection_message.as_ref().unwrap().1);
@@ -343,20 +343,20 @@ async fn a_cancel_the_server_cant_be_told_lets_esc_stop_waiting() {
     // A server that answers and refuses (no privilege): just said.
     let refused = DbEventKind::CancelFailed("Access denied; you need the PROCESS privilege".into(), false);
     app.handle_db_event(DbEvent { generation, run: None, kind: refused });
-    assert!(!app.tab.run.cancel_failed && !app.connection_lost && app.tab.run.executing);
+    assert!(!app.tab.run.cancel_failed && !app.keepalive.connection_lost && app.tab.run.executing);
     app.handle_key(key(KeyCode::Esc));
     let failed = DbEventKind::CancelFailed("pool timed out while waiting for an open connection".into(), true);
     app.handle_db_event(DbEvent { generation, run: None, kind: failed });
-    assert!(app.tab.run.cancel_failed && app.connection_lost && app.tab.run.executing);
+    assert!(app.tab.run.cancel_failed && app.keepalive.connection_lost && app.tab.run.executing);
     assert!(said(&app).starts_with("Couldn't cancel: Esc again stops waiting"), "{}", said(&app));
     // Esc again: no longer waiting; the next run checks the server first.
     app.handle_key(key(KeyCode::Esc));
     assert!(!app.tab.run.executing && app.tab.run.task.is_none() && !app.tab.run.cancel_failed);
     assert!(app.tab.run_error.as_ref().is_some_and(|e| e.contains("stopped waiting")));
-    assert!(app.connection_lost);
+    assert!(app.keepalive.connection_lost);
     run_sql(&mut app, "select 7").await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("7".to_string())]]);
-    assert!(!app.connection_lost);
+    assert!(!app.keepalive.connection_lost);
     // A query that ends after a failed cancel leaves nothing armed.
     app.tab.run.executing = true;
     app.tab.run.task = Some(tokio::spawn(std::future::pending()));
@@ -372,17 +372,17 @@ async fn a_cancel_the_server_cant_be_told_lets_esc_stop_waiting() {
 #[tokio::test]
 async fn a_lost_connection_is_checked_again_and_said_when_back() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
-    app.connection_lost = true;
+    app.keepalive.connection_lost = true;
     // Ticks go on for it, heartbeat or not; something done checks it now.
     assert!(app.settings.keepalive == 0 && app.wants_ticks());
-    app.last_activity = Instant::now().checked_sub(Duration::from_secs(3)).unwrap();
+    app.keepalive.last_activity = Instant::now().checked_sub(Duration::from_secs(3)).unwrap();
     app.handle_key(key(KeyCode::Down));
-    assert!(app.pinging);
-    while app.pinging {
+    assert!(app.keepalive.pinging);
+    while app.keepalive.pinging {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
-    assert!(!app.connection_lost && !app.wants_ticks());
+    assert!(!app.keepalive.connection_lost && !app.wants_ticks());
     assert_eq!(said(&app), "The connection is back");
 }
 
@@ -527,7 +527,7 @@ async fn each_tab_keeps_its_own_connection() {
     app.handle_key(alt('3'));
     app.handle_key(ctrl('d'));
     // Asked first (Ctrl+K d is easily pressed for the navigator's `d`).
-    assert!(matches!(app.confirm.as_ref().unwrap().action, ConfirmAction::Disconnect));
+    assert!(matches!(app.popups.confirm.as_ref().unwrap().action, ConfirmAction::Disconnect));
     app.handle_key(key(KeyCode::Char('y')));
     assert!(matches!(app.screen, Screen::Connections));
     assert!(app.tabs[2].conn.is_none() && app.tabs[0].conn.is_some());
@@ -598,7 +598,7 @@ async fn compare_schemas_and_rows_with_another_tabs_connection() {
 
     app.compare_schema(None);
     until_event(&mut app, |k| matches!(k, DbEventKind::SchemaCompared { .. })).await;
-    let view = app.cell_view.as_ref().expect("the comparison");
+    let view = app.popups.cell_view.as_ref().expect("the comparison");
     assert!(view.text.contains("column plan TEXT: only here"), "{}", view.text);
     assert!(view.text.contains("index users_email (email): only here"), "{}", view.text);
     assert!(view.text.contains("ALTER TABLE main.users ADD COLUMN plan TEXT;"), "{}", view.text);
@@ -740,22 +740,22 @@ async fn queries_are_cancelled_at_the_connection_timeout() {
 async fn connection_info_keepalive_and_diagnostics() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
     app.show_connection_info();
-    while app.cell_view.is_none() {
+    while app.popups.cell_view.is_none() {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
-    let info = &app.cell_view.as_ref().unwrap().text;
+    let info = &app.popups.cell_view.as_ref().unwrap().text;
     assert!(info.contains("Journal mode") && info.contains("Latency"), "{info}");
-    app.cell_view = None;
+    app.popups.cell_view = None;
 
     // Keep-alive: an idle connection gets checked, and the latency updated.
     app.settings.keepalive = 1;
-    app.last_activity = Instant::now().checked_sub(std::time::Duration::from_secs(5)).unwrap();
+    app.keepalive.last_activity = Instant::now().checked_sub(std::time::Duration::from_secs(5)).unwrap();
     app.connection.latency = None;
     assert!(app.wants_ticks());
     app.tick_running();
-    assert!(app.pinging);
-    while app.pinging {
+    assert!(app.keepalive.pinging);
+    while app.keepalive.pinging {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
@@ -772,31 +772,31 @@ async fn heartbeat_can_be_switched_on_and_reports_a_lost_connection() {
     assert_eq!(app.settings.keepalive, 0, "off by default");
     app.run_action(crate::config::keys::Action::Heartbeat);
     assert_eq!(app.settings.keepalive, 30);
-    assert!(app.pinging, "checks right away");
-    while app.pinging {
+    assert!(app.keepalive.pinging, "checks right away");
+    while app.keepalive.pinging {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
-    assert!(app.connection.latency.is_some() && !app.connection_lost);
+    assert!(app.connection.latency.is_some() && !app.keepalive.connection_lost);
     // A failed check marks the connection lost until something succeeds.
     app.pinged(Err(("connection refused".into(), crate::app::Ping::Failed)));
-    assert!(app.connection_lost && app.notes.status.contains("hint:"), "{}", app.notes.status);
+    assert!(app.keepalive.connection_lost && app.notes.status.contains("hint:"), "{}", app.notes.status);
     run_sql(&mut app, "select 1").await;
-    assert!(!app.connection_lost);
+    assert!(!app.keepalive.connection_lost);
     // A heartbeat with no answer once: said, the session kept (an open
     // transaction would go with it).
     run_sql(&mut app, "create table hb (x int); begin; insert into hb values (1)").await;
     assert_eq!(app.connection.txn, TxnState::Open);
     app.pinged(Err(("no answer in 5 s".into(), crate::app::Ping::NoAnswer)));
     app.pinged(Err(("no answer in 5 s".into(), crate::app::Ping::NoAnswer)));
-    assert!(app.connection_lost);
+    assert!(app.keepalive.connection_lost);
     run_sql(&mut app, "select count(*) from hb").await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("1".to_string())]], "still its transaction");
     // A check on its way when the connection shown changes isn't waited
     // for any more (its answer is dropped).
-    app.pinging = true;
+    app.keepalive.pinging = true;
     app.switch_conn(None);
-    assert!(!app.pinging);
+    assert!(!app.keepalive.pinging);
     app.run_action(crate::config::keys::Action::Heartbeat);
     assert_eq!(app.settings.keepalive, 0);
 }
@@ -1047,7 +1047,7 @@ async fn open_connections_are_listed_gone_to_and_closed() {
     app.handle_key(ctrl('k'));
     app.handle_key(key(KeyCode::Char('j')));
     let items = app.palette_items();
-    assert!(app.palette.as_ref().is_some_and(|p| p.conns_only));
+    assert!(app.popups.palette.as_ref().is_some_and(|p| p.conns_only));
     assert_eq!(items.len(), 2);
     let entries: Vec<String> = items.iter().map(|c| app.palette_command_text(*c)).collect();
     assert!(
@@ -1066,7 +1066,7 @@ async fn open_connections_are_listed_gone_to_and_closed() {
     app.handle_key(key(KeyCode::Char('j')));
     app.handle_key(key(KeyCode::Down));
     app.handle_key(ctrl('d'));
-    let confirm = app.confirm.as_ref().expect("asked first");
+    let confirm = app.popups.confirm.as_ref().expect("asked first");
     assert!(matches!(confirm.action, ConfirmAction::CloseConnection(_)), "{}", confirm.message);
     assert!(confirm.message.contains("beta") && confirm.message.contains("users"), "{}", confirm.message);
     app.handle_key(key(KeyCode::Char('y')));
@@ -1086,7 +1086,7 @@ async fn open_connections_are_listed_gone_to_and_closed() {
     // Nothing open: the list says so instead of opening empty.
     app.handle_key(ctrl('k'));
     app.handle_key(key(KeyCode::Char('j')));
-    assert!(app.palette.is_none());
+    assert!(app.popups.palette.is_none());
 }
 
 #[tokio::test]
@@ -1099,6 +1099,6 @@ async fn closing_a_connection_says_its_transaction_goes() {
     let entry = app.palette_command_text(app.palette_items()[0]);
     assert!(entry.contains("transaction open"), "{entry}");
     app.handle_key(ctrl('d'));
-    let confirm = app.confirm.as_ref().unwrap();
+    let confirm = app.popups.confirm.as_ref().unwrap();
     assert!(confirm.danger && confirm.message.contains("rolled back"), "{}", confirm.message);
 }

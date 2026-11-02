@@ -124,7 +124,7 @@ impl App {
         match self.edit_table() {
             Ok(table) => {
                 let values = vec![String::new(); table.columns.len()];
-                self.row_form = Some(RowForm {
+                self.popups.row_form = Some(RowForm {
                     table: table.name,
                     table_sql: table.sql_name,
                     columns: table.columns,
@@ -137,13 +137,13 @@ impl App {
     }
 
     pub(super) fn handle_row_form_key(&mut self, key: KeyEvent) {
-        let Some(form) = &mut self.row_form else { return };
+        let Some(form) = &mut self.popups.row_form else { return };
         if let Some(i) = list::step(form.field, form.columns.len(), key, Nav::FIELDS) {
             form.field = i;
             return;
         }
         match key.code {
-            KeyCode::Esc => self.row_form = None,
+            KeyCode::Esc => self.popups.row_form = None,
             KeyCode::Enter => self.submit_row_insert(),
             _ => {
                 input::edit_at_end(&mut form.values[form.field], key);
@@ -152,7 +152,7 @@ impl App {
     }
 
     pub(super) fn paste_row_form(&mut self, text: &str) {
-        if let Some(form) = &mut self.row_form {
+        if let Some(form) = &mut self.popups.row_form {
             input::paste_at_end(&mut form.values[form.field], text);
         }
     }
@@ -162,7 +162,7 @@ impl App {
         if self.conn_busy() {
             return self.set_status(t!("rows.wait_for_query").to_string(), true);
         }
-        let Some(form) = self.row_form.take() else { return };
+        let Some(form) = self.popups.row_form.take() else { return };
         let engine = self.engine();
         let filled: Vec<(String, String)> = form
             .columns
@@ -205,7 +205,7 @@ impl App {
         }
         let infos = analyze::analyze(&parse(&sql, self.engine()));
         let offer_transaction = self.connection.txn == TxnState::Idle;
-        self.confirm = Some(Confirm {
+        self.popups.confirm = Some(Confirm {
             message: tn!("rows.delete_from", rows.len(), table = table.name),
             details,
             danger: true,

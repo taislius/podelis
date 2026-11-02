@@ -322,10 +322,12 @@ impl ConnectParams {
 mod debug_tests {
     #[test]
     fn debug_output_hides_the_password() {
-        let mut params = crate::cli::form_for_address(&crate::cli::classify("postgres://bob:hunter2@db:5432/shop"))
-            .unwrap()
-            .params()
-            .unwrap();
+        let mut params = crate::config::draft::ConnectionDraft::from_address(&crate::config::draft::classify(
+            "postgres://bob:hunter2@db:5432/shop",
+        ))
+        .unwrap()
+        .params()
+        .unwrap();
         let shown = format!("{params:?}");
         assert!(!shown.contains("hunter2") && shown.contains("<hidden>") && shown.contains("bob"), "{shown}");
         params.password.clear();

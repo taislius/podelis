@@ -430,8 +430,8 @@ impl App {
         self.stop_watch(&format!(": {}", t!("tabs.another_tab")));
         // An open stream would hold the session while its tab is hidden.
         self.close_stream();
-        self.completion = None;
-        self.cell_view = None;
+        self.popups.completion = None;
+        self.popups.cell_view = None;
         self.cell_edit = None;
         let mut incoming = self.parked[i].take().unwrap_or_default();
         swap_tab(self, &mut incoming);
@@ -487,7 +487,7 @@ impl App {
     /// Closes the active tab, asking first if it has unsaved changes.
     pub(super) fn request_close_tab(&mut self) {
         if self.tab_dirty(self.active_tab) {
-            self.confirm = Some(Confirm {
+            self.popups.confirm = Some(Confirm {
                 message: t!("tabs.close_unsaved", name = self.tabs[self.active_tab].name),
                 details: vec![t!("tabs.save_first").into()],
                 danger: false,
@@ -539,7 +539,7 @@ impl App {
         let Some(id) = self.tabs[self.active_tab].saved_id.clone() else {
             let name = self.tabs[self.active_tab].name.clone();
             let text = if is_default_tab_name(&name) { String::new() } else { name };
-            self.tab_prompt = Some(TabPrompt { kind: TabPromptKind::SaveAs, text: LineInput::new(text) });
+            self.popups.tab_prompt = Some(TabPrompt { kind: TabPromptKind::SaveAs, text: LineInput::new(text) });
             return;
         };
         match self.library.update_sql(&id, &text) {
@@ -567,7 +567,8 @@ impl App {
         let Some(sql) = self.statement_or_selection() else {
             return self.set_status(t!("editor.no_statement_here").into(), true);
         };
-        self.tab_prompt = Some(TabPrompt { kind: TabPromptKind::SaveStatement(sql), text: LineInput::default() });
+        self.popups.tab_prompt =
+            Some(TabPrompt { kind: TabPromptKind::SaveStatement(sql), text: LineInput::default() });
     }
 
     /// F4: rename the tab (and its saved query, as "group/name").
@@ -578,18 +579,18 @@ impl App {
             .as_ref()
             .and_then(|id| self.library.get(id))
             .map_or_else(|| meta.name.clone(), library::SavedQuery::path);
-        self.tab_prompt = Some(TabPrompt { kind: TabPromptKind::Rename, text: LineInput::new(text) });
+        self.popups.tab_prompt = Some(TabPrompt { kind: TabPromptKind::Rename, text: LineInput::new(text) });
     }
 
     pub(super) fn handle_tab_prompt_key(&mut self, key: KeyEvent) {
-        let Some(prompt) = &mut self.tab_prompt else { return };
+        let Some(prompt) = &mut self.popups.tab_prompt else { return };
         match prompt.text.handle(key) {
-            InputResult::Cancel => self.tab_prompt = None,
+            InputResult::Cancel => self.popups.tab_prompt = None,
             InputResult::Submit => {
-                let Some(prompt) = self.tab_prompt.take() else { return };
+                let Some(prompt) = self.popups.tab_prompt.take() else { return };
                 if let Err(e) = self.submit_tab_prompt(&prompt) {
                     self.set_status(e, true);
-                    self.tab_prompt = Some(prompt);
+                    self.popups.tab_prompt = Some(prompt);
                 } else {
                     self.save_draft();
                 }
@@ -633,7 +634,7 @@ impl App {
     // ------------------------------------------------------------- library
 
     pub(super) fn open_library(&mut self) {
-        self.library_view = Some(LibraryView {
+        self.popups.library_view = Some(LibraryView {
             query: LineInput::default(),
             selected: 0,
             confirm_delete: false,
@@ -648,7 +649,7 @@ impl App {
     /// there showed nothing to pick until it was cleared).
     pub(super) fn open_snippets(&mut self) {
         let snippets = self.library.queries.iter().any(|q| q.group.eq_ignore_ascii_case(library::SNIPPETS));
-        self.library_view = Some(LibraryView {
+        self.popups.library_view = Some(LibraryView {
             query: LineInput::new(if snippets { library::SNIPPETS } else { "" }),
             selected: 0,
             confirm_delete: false,
@@ -661,7 +662,7 @@ impl App {
     /// Rows of the library window for its search text: matching saved
     /// queries, then matching history (newest first, without duplicates).
     pub fn library_items(&self) -> Vec<LibraryItem> {
-        let query = self.library_view.as_ref().map_or("", |v| v.query.text());
+        let query = self.popups.library_view.as_ref().map_or("", |v| v.query.text());
         let (words, when) = library::split_dates(query, chrono::Local::now());
         let mut items: Vec<LibraryItem> =
             self.library.search_in(&words, when).into_iter().map(|q| LibraryItem::Saved(q.id.clone())).collect();
@@ -690,7 +691,7 @@ impl App {
 
     pub(super) fn handle_library_key(&mut self, key: KeyEvent) {
         let items = self.library_items();
-        let Some(view) = &mut self.library_view else { return };
+        let Some(view) = &mut self.popups.library_view else { return };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if view.confirm_delete {
             view.confirm_delete = false;
@@ -712,7 +713,7 @@ impl App {
             return;
         }
         match key.code {
-            KeyCode::Esc => self.library_view = None,
+            KeyCode::Esc => self.popups.library_view = None,
             KeyCode::Char('d') if ctrl => {
                 if matches!(items.get(view.selected), Some(LibraryItem::Saved(_))) {
                     view.confirm_delete = true;
@@ -721,14 +722,14 @@ impl App {
             KeyCode::F(4) => {
                 if let Some(LibraryItem::Saved(id)) = items.get(view.selected) {
                     let text = self.library.get(id).map(library::SavedQuery::path).unwrap_or_default();
-                    self.tab_prompt =
+                    self.popups.tab_prompt =
                         Some(TabPrompt { kind: TabPromptKind::RenameSaved(id.clone()), text: LineInput::new(text) });
                 }
             }
             KeyCode::Enter => {
                 let Some(item) = items.get(view.selected).cloned() else { return };
                 let insert = view.insert;
-                self.library_view = None;
+                self.popups.library_view = None;
                 if insert {
                     self.insert_library_item(&item);
                 } else {

@@ -4,7 +4,7 @@ use super::*;
 fn delete_requires_confirmation() {
     let (mut app, _dir) = test_app();
     let id = project_id(&app);
-    app.store.upsert(&id, None, ConnectForm { name: "x".into(), ..ConnectForm::new() }.to_profile()).unwrap();
+    app.store.upsert(&id, None, ConnectionDraft { name: "x".into(), ..ConnectionDraft::new() }.to_profile()).unwrap();
     app.handle_key(key(KeyCode::Char('d')));
     assert!(app.manager.confirm_delete);
     app.handle_key(key(KeyCode::Char('n')));
@@ -16,7 +16,7 @@ fn delete_requires_confirmation() {
 async fn read_only_mode_refuses_writes() {
     let (mut app, _dir) = connected_app(ConnectionMode::ReadOnly).await;
     run_sql(&mut app, "select 1; delete from t where id = 1").await;
-    assert!(!app.tab.run.executing && app.confirm.is_none());
+    assert!(!app.tab.run.executing && app.popups.confirm.is_none());
     assert!(app.notes.editor_note_is_error && said(&app).contains("Read-only"), "{}", said(&app));
     run_sql(&mut app, "select 42").await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("42".to_string())]]);
@@ -26,13 +26,13 @@ async fn read_only_mode_refuses_writes() {
 async fn destructive_statements_need_confirmation() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
     run_sql(&mut app, "create table t (id int); insert into t values (1), (2)").await;
-    assert!(app.confirm.is_none(), "plain writes run directly in normal mode");
+    assert!(app.popups.confirm.is_none(), "plain writes run directly in normal mode");
 
     run_sql(&mut app, "delete from t").await;
-    let confirm = app.confirm.as_ref().expect("asks first");
+    let confirm = app.popups.confirm.as_ref().expect("asks first");
     assert!(confirm.details[0].starts_with("DELETE without WHERE"));
     app.handle_key(key(KeyCode::Char('n')));
-    assert!(app.confirm.is_none() && !app.tab.run.executing);
+    assert!(app.popups.confirm.is_none() && !app.tab.run.executing);
 
     run_sql(&mut app, "delete from t").await;
     app.handle_key(key(KeyCode::Char('y')));
@@ -44,9 +44,9 @@ async fn destructive_statements_need_confirmation() {
 async fn production_mode_confirms_every_write() {
     let (mut app, _dir) = connected_app(ConnectionMode::Production).await;
     run_sql(&mut app, "select 1").await;
-    assert!(app.confirm.is_none());
+    assert!(app.popups.confirm.is_none());
     run_sql(&mut app, "create table t (id int)").await;
-    assert!(app.confirm.as_ref().unwrap().message.contains("PRODUCTION"));
+    assert!(app.popups.confirm.as_ref().unwrap().message.contains("PRODUCTION"));
 }
 
 #[tokio::test]
@@ -66,16 +66,16 @@ async fn tx_modes_auto_manual_and_rollback_only() {
     tx_mode(&mut app, 'm');
     assert_eq!(app.connection.tx_mode, TxMode::Manual);
     run_sql(&mut app, "insert into t values (3)").await;
-    assert!(app.review.is_some() && app.connection.txn == TxnState::Open);
+    assert!(app.popups.review.is_some() && app.connection.txn == TxnState::Open);
     // Can't change the mode with a transaction open.
-    app.review = None;
+    app.popups.review = None;
     tx_mode(&mut app, 'r');
-    assert!(app.tx_picker.is_none() && app.connection.tx_mode == TxMode::Manual);
+    assert!(app.popups.tx_picker.is_none() && app.connection.tx_mode == TxMode::Manual);
     app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT));
     finish(&mut app).await;
     run_sql(&mut app, "select count(*) from t").await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("2".to_string())]]);
-    assert!(app.review.is_none(), "reads don't open a review");
+    assert!(app.popups.review.is_none(), "reads don't open a review");
     // Scripts with their own transaction control are refused.
     run_sql(&mut app, "begin; delete from t where id = 1; commit").await;
     assert!(app.notes.editor_note_is_error && said(&app).contains("BEGIN/COMMIT"), "{}", said(&app));
@@ -117,12 +117,12 @@ async fn transaction_tracking_and_disconnect_confirmation() {
 
     let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
     app.handle_key(ctrl('d'));
-    assert!(matches!(app.confirm.as_ref().unwrap().action, ConfirmAction::Disconnect));
+    assert!(matches!(app.popups.confirm.as_ref().unwrap().action, ConfirmAction::Disconnect));
     app.handle_key(key(KeyCode::Esc));
     assert!(matches!(app.screen, Screen::Query));
 
     app.handle_key(ctrl('q'));
-    assert!(matches!(app.confirm.as_ref().unwrap().action, ConfirmAction::Quit));
+    assert!(matches!(app.popups.confirm.as_ref().unwrap().action, ConfirmAction::Quit));
     app.handle_key(key(KeyCode::Char('n')));
     assert!(!app.should_quit);
 
@@ -130,10 +130,10 @@ async fn transaction_tracking_and_disconnect_confirmation() {
     assert_eq!(app.connection.txn, TxnState::Idle);
     // With no transaction it's still asked, without the warning colour.
     app.handle_key(ctrl('d'));
-    let confirm = app.confirm.as_ref().expect("asked");
+    let confirm = app.popups.confirm.as_ref().expect("asked");
     assert!(!confirm.danger && confirm.message.starts_with("Disconnect this tab from"), "{}", confirm.message);
     app.handle_key(key(KeyCode::Char('n')));
-    assert!(app.confirm.is_none() && app.connected(), "no: still connected");
+    assert!(app.popups.confirm.is_none() && app.connected(), "no: still connected");
     app.handle_key(ctrl('d'));
     app.handle_key(key(KeyCode::Char('y')));
     assert!(matches!(app.screen, Screen::Connections));
@@ -150,7 +150,7 @@ async fn null_refused_on_not_null_column_and_production_confirms() {
     let (mut app, _dir) = Box::pin(edit_cell(ConnectionMode::Production, "select * from people", 1)).await;
     type_text(&mut app, "2");
     app.handle_key(key(KeyCode::Enter));
-    let confirm = app.confirm.as_ref().expect("production asks first");
+    let confirm = app.popups.confirm.as_ref().expect("production asks first");
     assert!(confirm.details[0].starts_with("UPDATE people SET name = 'Ben2'"), "{:?}", confirm.details);
     app.handle_key(key(KeyCode::Char('y')));
     finish(&mut app).await;
@@ -165,14 +165,14 @@ async fn heavy_reads_on_production_ask_first() {
     app.settings.guard_rows = 1000;
     let infos = analyze::analyze(&parse("select 7", Engine::Sqlite));
     app.guarded("select 7".into(), 0, infos.clone(), None, &[("orders".into(), 52_000_000.0)]);
-    let confirm = app.confirm.as_ref().unwrap();
+    let confirm = app.popups.confirm.as_ref().unwrap();
     assert_eq!(confirm.details, ["orders: about 52.0M rows, read in full"]);
     app.handle_key(key(KeyCode::Char('y')));
     finish(&mut app).await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][0].as_deref(), Some("7"));
     // Small: no question.
     app.guarded("select 8".into(), 0, infos, None, &[("tiny".into(), 10.0)]);
-    assert!(app.confirm.is_none());
+    assert!(app.popups.confirm.is_none());
     finish(&mut app).await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][0].as_deref(), Some("8"));
 }
@@ -183,7 +183,7 @@ async fn writes_can_be_reviewed_in_a_transaction() {
     // In save mode the confirmation offers `t` (review mode needs no asking).
     app.connection.tx_mode = TxMode::AutoCommit;
     let value = async |app: &mut App| {
-        app.confirm = None;
+        app.popups.confirm = None;
         app.tab.editor.set_text("select x from t");
         app.handle_key(key(KeyCode::F(5)));
         finish(app).await;
@@ -197,10 +197,10 @@ async fn writes_can_be_reviewed_in_a_transaction() {
     // `t` runs it after BEGIN and asks to commit or roll back.
     app.tab.editor.set_text("update t set x = 2 where x = 1");
     app.handle_key(key(KeyCode::F(5)));
-    assert!(app.confirm.as_ref().is_some_and(|c| c.offer_transaction));
+    assert!(app.popups.confirm.as_ref().is_some_and(|c| c.offer_transaction));
     app.handle_key(key(KeyCode::Char('t')));
     finish(&mut app).await;
-    assert_eq!(app.review.as_ref().map(|r| r.rows_affected), Some(1));
+    assert_eq!(app.popups.review.as_ref().map(|r| r.rows_affected), Some(1));
     assert_eq!(app.connection.txn, TxnState::Open);
     app.handle_key(key(KeyCode::Char('r')));
     finish(&mut app).await;
@@ -215,7 +215,7 @@ async fn writes_can_be_reviewed_in_a_transaction() {
     app.handle_key(key(KeyCode::Char('t')));
     finish(&mut app).await;
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.review.is_none() && app.connection.txn == TxnState::Open);
+    assert!(app.popups.review.is_none() && app.connection.txn == TxnState::Open);
     assert_eq!(value(&mut app).await, "3");
     app.handle_key(key(KeyCode::F(8)));
     finish(&mut app).await;
@@ -236,7 +236,7 @@ async fn explain_analyze_of_a_write_is_rolled_back() {
         run_sql(&mut app, "create temporary table ea (x int); insert into ea values (1)").await;
         app.tab.editor.set_text("update ea set x = 2");
         app.handle_key(KeyEvent::new(KeyCode::F(7), KeyModifiers::SHIFT));
-        assert!(app.confirm.is_some(), "{engine:?}: a write asks first");
+        assert!(app.popups.confirm.is_some(), "{engine:?}: a write asks first");
         app.handle_key(key(KeyCode::Char('y')));
         finish(&mut app).await;
         let plan = app.tab.plan.clone().unwrap_or_default().text;
@@ -258,12 +258,12 @@ async fn quitting_from_the_panes_asks_about_an_open_transaction() {
     for quit in [key(KeyCode::Char('q')), ctrl('c')] {
         app.handle_key(quit);
         assert!(!app.should_quit);
-        assert!(matches!(app.confirm.as_ref().unwrap().action, ConfirmAction::Quit));
+        assert!(matches!(app.popups.confirm.as_ref().unwrap().action, ConfirmAction::Quit));
         app.handle_key(key(KeyCode::Char('n')));
     }
     app.handle_key(key(KeyCode::Right));
     app.handle_key(key(KeyCode::Char('q')));
-    assert!(!app.should_quit && app.confirm.is_some());
+    assert!(!app.should_quit && app.popups.confirm.is_some());
 }
 
 #[test]
@@ -274,13 +274,13 @@ fn connect_form_sets_the_transaction_mode() {
     form.cycle_mode(true);
     assert_eq!((form.mode, form.tx_mode()), (ConnectionMode::Production, TxMode::Manual));
     // Only a choice is saved; the mode's default isn't.
-    assert_eq!(form.to_profile_for_tests().transaction, None);
+    assert_eq!(form.to_profile().transaction, None);
     form.cycle_transaction(true);
     assert_eq!(form.tx_mode(), TxMode::RollbackOnly);
     // A choice stays when the mode changes.
     form.cycle_mode(false);
     assert_eq!((form.mode, form.tx_mode()), (ConnectionMode::Normal, TxMode::RollbackOnly));
-    let profile = form.to_profile_for_tests();
+    let profile = form.to_profile();
     assert_eq!(profile.transaction, Some(TxMode::RollbackOnly));
     assert_eq!(ConnectForm::from_profile(&profile, String::new()).tx_mode(), TxMode::RollbackOnly);
 }
@@ -329,8 +329,8 @@ async fn a_sandbox_keeps_steps_until_it_is_ended() {
     assert!(app.notes.status.is_empty(), "once");
     // Ctrl+K x shows it, with what it holds; `u` undoes the last step.
     app.run_action(Action::TxMode);
-    assert!(app.sandbox_view.is_some());
-    let locks = app.sandbox_view.as_ref().unwrap().locks.clone().unwrap_or_default();
+    assert!(app.popups.sandbox_view.is_some());
+    let locks = app.popups.sandbox_view.as_ref().unwrap().locks.clone().unwrap_or_default();
     assert!(locks.contains("write lock"), "{locks}");
     app.handle_key(key(KeyCode::Char('u')));
     finish(&mut app).await;
@@ -354,7 +354,7 @@ async fn a_sandbox_keeps_steps_until_it_is_ended() {
     app.handle_key(key(KeyCode::Char('r')));
     finish(&mut app).await;
     assert_eq!(app.connection.tx_mode, TxMode::Manual);
-    assert!(app.review.is_some(), "commit or roll back?");
+    assert!(app.popups.review.is_some(), "commit or roll back?");
     app.handle_key(key(KeyCode::Char('c')));
     finish(&mut app).await;
     run_sql(&mut app, "select count(*) from t").await;
@@ -387,8 +387,8 @@ async fn a_sandbox_on_the_servers() {
         // Its window says what locks the session holds (MySQL: if it may
         // read performance_schema).
         app.run_action(Action::TxMode);
-        until_event(&mut app, |k| matches!(k, DbEventKind::SandboxLocks(_))).await;
-        let locks = app.sandbox_view.as_ref().unwrap().locks.clone().unwrap();
+        until_event(&mut app, |k| matches!(k, DbEventKind::Background(Background::SandboxLocks(_)))).await;
+        let locks = app.popups.sandbox_view.as_ref().unwrap().locks.clone().unwrap();
         assert!(locks.contains("holds") || locks.contains("can't be seen"), "{engine:?}: {locks}");
         if engine == Engine::Postgres {
             assert!(!locks.contains("holds 0"), "{locks}");
@@ -435,7 +435,7 @@ async fn a_sqlite_files_sandbox_works_on_a_copy() {
     app.handle_key(key(KeyCode::Char('r')));
     finish(&mut app).await;
     assert!(app.connection.sandbox.is_none());
-    assert!(app.review.is_some(), "commit or roll back?");
+    assert!(app.popups.review.is_some(), "commit or roll back?");
     app.handle_key(key(KeyCode::Char('c')));
     finish(&mut app).await;
     assert_eq!(outside.run("select count(*) from t", 1).await.unwrap().rows[0][0].as_deref(), Some("1"));

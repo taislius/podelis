@@ -6,7 +6,7 @@ async fn f7_shows_the_plan_without_running() {
     run_sql(&mut app, "create table t (id integer primary key, v text); insert into t values (1, 'a')").await;
     app.tab.editor.set_text("delete from t where id = 1");
     app.handle_key(key(KeyCode::F(7)));
-    assert!(app.confirm.is_none(), "EXPLAIN of a DELETE runs nothing, so no confirmation");
+    assert!(app.popups.confirm.is_none(), "EXPLAIN of a DELETE runs nothing, so no confirmation");
     finish(&mut app).await;
     // The plan goes to the QUERY PLAN tab; the row is still there.
     assert_eq!(app.tab.result_tab, ResultTab::Plan);

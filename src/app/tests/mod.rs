@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use crate::config::keys::Action;
 use crate::db::tests::{file_engine, file_profile};
-use crate::db::{ConnectionMode, TxnState};
+use crate::db::{ConnectionMode, SslMode, TxnState};
 
 mod agents;
 mod connections;
@@ -231,7 +231,7 @@ pub(super) fn settle(app: &mut App) {
 
 /// Handles events until the question is answered.
 pub(super) async fn until_answered(app: &mut App) {
-    while app.asking.is_some() {
+    while app.ask.asking.is_some() {
         let event = tokio::time::timeout(Duration::from_secs(10), app.poll_db_event()).await.unwrap().unwrap();
         app.handle_db_event(event);
     }
@@ -240,7 +240,7 @@ pub(super) async fn until_answered(app: &mut App) {
 /// Handles events until the memory window has its facts again.
 pub(super) async fn until_memory_loaded(app: &mut App, facts: usize) {
     for _ in 0..50 {
-        if app.memory_view.as_ref().is_some_and(|v| !v.loading && v.facts.len() == facts) {
+        if app.popups.memory_view.as_ref().is_some_and(|v| !v.loading && v.facts.len() == facts) {
             return;
         }
         let event = tokio::time::timeout(Duration::from_secs(10), app.poll_db_event()).await.unwrap().unwrap();

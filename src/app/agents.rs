@@ -176,7 +176,7 @@ impl App {
     /// Every second: an agent's write waiting for the user's answer is
     /// asked about (once nothing else is).
     pub(super) fn approvals_tick(&mut self) {
-        if self.confirm.is_some() {
+        if self.popups.confirm.is_some() {
             return;
         }
         let Some(dir) = self.pending_dir() else { return };
@@ -190,7 +190,7 @@ impl App {
         details.push(request.dry_run.clone());
         self.notification = Some(t!("agent_log.asks", agent = request.agent, connection = request.connection));
         self.agents.asked = Some(Instant::now());
-        self.confirm = Some(Confirm {
+        self.popups.confirm = Some(Confirm {
             message: t!("agent_log.asks_allow", agent = request.agent, connection = request.connection, place = place),
             details,
             danger: request.production,
@@ -369,7 +369,7 @@ impl App {
             KeyCode::Enter => {
                 if let Some(i) = row {
                     let text = self.agent_query_text(i);
-                    self.cell_view = Some(CellView::new(t!("agent_log.query_title").to_string(), text));
+                    self.popups.cell_view = Some(CellView::new(t!("agent_log.query_title").to_string(), text));
                 }
             }
             KeyCode::Char('o') if view.session.is_some() => {

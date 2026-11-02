@@ -272,7 +272,7 @@ impl App {
     /// Ctrl+K x while a sandbox is open: its window, and (asked of the
     /// server meanwhile) the locks it holds.
     pub(super) fn open_sandbox_view(&mut self) {
-        self.sandbox_view = Some(SandboxView::default());
+        self.popups.sandbox_view = Some(SandboxView::default());
         let engine = self.engine();
         if engine.is_file_based() {
             let copied = self.connection.sandbox.as_ref().is_some_and(|s| s.copy.is_some());
@@ -295,13 +295,13 @@ impl App {
                 }
                 Err(e) => t!("sandbox.locks_unseen", e = crate::db::error_message(&e)),
             };
-            send(DbEventKind::SandboxLocks(said));
+            send(Background::SandboxLocks(said).into());
         });
     }
 
     /// What the sandbox holds, for its window.
     pub(super) fn sandbox_locks(&mut self, said: String) {
-        if let Some(view) = &mut self.sandbox_view {
+        if let Some(view) = &mut self.popups.sandbox_view {
             view.locks = Some(said);
         }
     }
@@ -325,25 +325,25 @@ impl App {
     }
 
     pub(super) fn handle_sandbox_key(&mut self, key: KeyEvent) {
-        let Some(view) = &mut self.sandbox_view else { return };
+        let Some(view) = &mut self.popups.sandbox_view else { return };
         match key.code {
-            KeyCode::Esc => self.sandbox_view = None,
+            KeyCode::Esc => self.popups.sandbox_view = None,
             KeyCode::Down | KeyCode::Char('j') => view.scroll = view.scroll.saturating_add(1),
             KeyCode::Up | KeyCode::Char('k') => view.scroll = view.scroll.saturating_sub(1),
             KeyCode::Char('u') => {
-                self.sandbox_view = None;
+                self.popups.sandbox_view = None;
                 self.undo_sandbox_step();
             }
             KeyCode::Char('d') => {
-                self.sandbox_view = None;
+                self.popups.sandbox_view = None;
                 self.end_transaction("ROLLBACK");
             }
             KeyCode::Char('s') => {
-                self.sandbox_view = None;
+                self.popups.sandbox_view = None;
                 self.keep_sandbox_as_script();
             }
             KeyCode::Char('r') => {
-                self.sandbox_view = None;
+                self.popups.sandbox_view = None;
                 self.run_sandbox_for_real();
             }
             _ => {}

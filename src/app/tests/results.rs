@@ -144,7 +144,7 @@ async fn rows_open_in_the_app_for_their_format() {
     }
     assert_eq!(app.viewer_for(OpenFormat::Csv), Viewer::Command("libreoffice --calc".into()));
     app.open_viewer_menu();
-    let keys: Vec<String> = app.menu.as_ref().unwrap().items.iter().map(|i| i.keys.clone()).collect();
+    let keys: Vec<String> = app.popups.menu.as_ref().unwrap().items.iter().map(|i| i.keys.clone()).collect();
     assert_eq!(keys, ["libreoffice", "its app", "its app", "here: less", "its app", "its app"]);
     // One in the terminal: the main loop runs it, on a file of the user's alone.
     app.open_rows_as(OpenFormat::Tsv);
@@ -251,9 +251,9 @@ async fn results_filter_sort_view_and_load_more() {
     assert_eq!(app.tab.grid.view.len(), 1);
     app.handle_key(key(KeyCode::Right));
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.cell_view.as_ref().unwrap().text, "{\n  \"k\": 3\n}");
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().text, "{\n  \"k\": 3\n}");
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.cell_view.is_none());
+    assert!(app.popups.cell_view.is_none());
     app.handle_key(key(KeyCode::Esc));
     assert!(app.tab.grid.filter.is_empty() && app.tab.grid.view.len() == 5);
 
@@ -317,7 +317,7 @@ async fn export_all_rows_of_a_streamed_result() {
     // The export cleans up, then says it's done (and that's ignored).
     loop {
         let event = app.poll_db_event().await.unwrap();
-        let done = matches!(event.kind, DbEventKind::ExportDone(..));
+        let done = matches!(event.kind, DbEventKind::Background(Background::ExportDone(..)));
         app.handle_db_event(event);
         if done {
             break;
@@ -428,7 +428,7 @@ async fn edit_a_cell_by_primary_key() {
     let edit = app.cell_edit.as_ref().expect("prompt opens");
     assert_eq!((edit.column.as_str(), edit.text.text()), ("note", ""));
     type_text(&mut app, r"it's \ fine?");
-    assert!(app.palette.is_none(), "? is typed into the value, not the keys");
+    assert!(app.popups.palette.is_none(), "? is typed into the value, not the keys");
     app.handle_key(key(KeyCode::Enter));
     finish(&mut app).await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[1][2].as_deref(), Some(r"it's \ fine?"));
@@ -597,7 +597,7 @@ async fn chart_a_result_column() {
     assert!(said_error(&app) && said(&app).contains("day has no numbers"), "{}", said(&app));
     app.handle_key(key(KeyCode::Right));
     app.handle_key(key(KeyCode::Char('b')));
-    let view = app.cell_view.as_ref().unwrap();
+    let view = app.popups.cell_view.as_ref().unwrap();
     assert_eq!(view.title, "CHART · n");
     assert!(view.text.contains(&format!("b │{} 6", "█".repeat(40))), "{}", view.text);
 }
@@ -608,15 +608,15 @@ async fn record_view_shows_a_row_vertically() {
     run_sql(&mut app, "select 1 as id, 'Ana' as long_name, null as note union all select 2, 'Ben', 'a\nb'").await;
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Char('x')));
-    let view = app.cell_view.as_ref().unwrap();
+    let view = app.popups.cell_view.as_ref().unwrap();
     assert_eq!(view.title, "ROW 1 of 2");
     assert_eq!(view.text, "id         1\nlong_name  Ana\nnote       NULL\n");
     app.handle_key(key(KeyCode::Right));
-    let view = app.cell_view.as_ref().unwrap();
+    let view = app.popups.cell_view.as_ref().unwrap();
     assert_eq!(view.title, "ROW 2 of 2");
     assert!(view.text.ends_with("note       a\n           b\n"), "{:?}", view.text);
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.cell_view.is_none());
+    assert!(app.popups.cell_view.is_none());
 }
 
 #[tokio::test]
@@ -630,7 +630,7 @@ async fn add_mark_delete_and_copy_rows() {
 
     // `a` opens a form of the table's columns; empty ones get defaults.
     app.handle_key(key(KeyCode::Char('a')));
-    let form = app.row_form.as_ref().expect("add-row form");
+    let form = app.popups.row_form.as_ref().expect("add-row form");
     assert_eq!(form.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "name", "kind"]);
     app.handle_key(key(KeyCode::Down));
     type_text(&mut app, "Žąsis");
@@ -659,7 +659,7 @@ async fn add_mark_delete_and_copy_rows() {
     assert_eq!(app.take_clipboard().unwrap(), "1\tRex\tcat\n3\tKit\tcat");
     assert_eq!(said(&app), "Copied 2 rows (tab-separated, a line each)");
     app.handle_key(key(KeyCode::Char('d')));
-    let confirm = app.confirm.as_ref().expect("asks before deleting");
+    let confirm = app.popups.confirm.as_ref().expect("asks before deleting");
     assert_eq!(confirm.message, "Delete 2 rows from pets?");
     app.handle_key(key(KeyCode::Char('y')));
     finish(&mut app).await;
@@ -677,17 +677,17 @@ fn snippets_complete_by_name_and_insert() {
     app.library.add("reports/churn", "select 1").unwrap();
     app.tab.editor.set_text("rec");
     app.handle_key(key(KeyCode::Tab));
-    let c = app.completion.as_ref().expect("snippet offered");
+    let c = app.popups.completion.as_ref().expect("snippet offered");
     let snippet = c.items.iter().position(|i| i.kind == crate::sql::complete::CandKind::Snippet).unwrap();
     assert_eq!(c.items[snippet].label, "recent");
-    app.completion.as_mut().unwrap().selected = snippet;
+    app.popups.completion.as_mut().unwrap().selected = snippet;
     app.handle_key(key(KeyCode::Enter));
     assert!(app.tab.editor.text().starts_with("select *\nfrom orders"));
 
     // Ctrl+E inserts any saved query at the cursor.
     app.tab.editor.set_text("-- here: ");
     app.handle_key(ctrl('e'));
-    let view = app.library_view.as_ref().unwrap();
+    let view = app.popups.library_view.as_ref().unwrap();
     assert!(view.insert);
     for _ in 0.."snippets".len() {
         app.handle_key(key(KeyCode::Backspace));

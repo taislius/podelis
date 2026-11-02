@@ -50,11 +50,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     chrome::draw_status_bar(f, app, status);
     // Leaving the project with a transaction open asks first.
-    if !matches!(app.screen, Screen::Query) && app.confirm.is_some() {
+    if !matches!(app.screen, Screen::Query) && app.popups.confirm.is_some() {
         query::draw_confirm(f, app, area);
     }
     // The text view also shows over other screens (the connection test).
-    if !matches!(app.screen, Screen::Query) && app.cell_view.is_some() {
+    if !matches!(app.screen, Screen::Query) && app.popups.cell_view.is_some() {
         query::draw_cell_view(f, app, area);
     }
     if app.splash.as_ref().is_some_and(|s| s.shown) {

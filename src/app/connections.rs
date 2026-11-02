@@ -1,5 +1,4 @@
 use super::*;
-use crate::db::AgentAccess;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectField {
@@ -52,33 +51,17 @@ pub fn fields_for(engine: Engine) -> &'static [ConnectField] {
     if engine.is_file_based() { &FILE_FIELDS } else { &SERVER_FIELDS }
 }
 
+/// The connect form: a [`ConnectionDraft`] being edited, and the form's own
+/// state (which field has focus, what's said, whether it's connecting).
+/// It derefs to the draft, so `form.host` is the draft's.
 pub struct ConnectForm {
+    /// The connection's settings as typed.
+    pub draft: ConnectionDraft,
     /// Name of the saved profile this form was opened from, so saving under
     /// a new name renames it instead of creating a duplicate.
     pub original_name: Option<String>,
     /// The original profile's password is under the pre-projects keychain key.
     pub(super) original_legacy: bool,
-    pub name: String,
-    pub engine: Engine,
-    pub host: String,
-    pub port: String,
-    pub user: String,
-    pub password: String,
-    /// The password command as typed (see [`crate::db::password_command`]);
-    /// when set, it supplies the password instead of the Password field.
-    pub password_command: String,
-    pub database: String,
-    pub ssl_mode: SslMode,
-    pub mode: ConnectionMode,
-    /// The transaction mode chosen for the connection; None follows the
-    /// mode's default (see [`ConnectForm::tx_mode`]).
-    pub transaction: Option<TxMode>,
-    /// SSH destination to tunnel through; empty for a direct connection.
-    pub ssh: String,
-    /// Query timeout in seconds, as typed; empty for none.
-    pub timeout: String,
-    /// What AI agents may do on it (`podelis mcp`).
-    pub agents: AgentAccess,
     pub focus: ConnectField,
     pub error: Option<String>,
     pub info: Option<String>,
@@ -90,26 +73,26 @@ pub struct ConnectForm {
     pub keychain_note: Option<String>,
 }
 
-impl ConnectForm {
-    pub(crate) fn new() -> Self {
+impl std::ops::Deref for ConnectForm {
+    type Target = ConnectionDraft;
+
+    fn deref(&self) -> &ConnectionDraft {
+        &self.draft
+    }
+}
+
+impl std::ops::DerefMut for ConnectForm {
+    fn deref_mut(&mut self) -> &mut ConnectionDraft {
+        &mut self.draft
+    }
+}
+
+impl From<ConnectionDraft> for ConnectForm {
+    fn from(draft: ConnectionDraft) -> Self {
         Self {
+            draft,
             original_name: None,
             original_legacy: false,
-            name: String::new(),
-            // The first engine (by its `order`): PostgreSQL.
-            engine: Engine::BUILT[0],
-            host: "localhost".to_string(),
-            port: Engine::BUILT[0].default_port().to_string(),
-            user: String::new(),
-            password: String::new(),
-            password_command: String::new(),
-            database: String::new(),
-            ssl_mode: SslMode::default(),
-            mode: ConnectionMode::default(),
-            transaction: None,
-            ssh: String::new(),
-            timeout: String::new(),
-            agents: AgentAccess::None,
             focus: ConnectField::Name,
             error: None,
             info: None,
@@ -118,71 +101,38 @@ impl ConnectForm {
             keychain_note: None,
         }
     }
+}
+
+impl ConnectForm {
+    pub(crate) fn new() -> Self {
+        ConnectionDraft::new().into()
+    }
 
     pub(crate) fn from_profile(profile: &ConnectionProfile, password: String) -> Self {
         Self {
             original_name: Some(profile.name.clone()),
             original_legacy: profile.legacy_keychain,
-            name: profile.name.clone(),
-            engine: profile.engine,
-            host: profile.host.clone(),
-            port: profile.port.clone(),
-            user: profile.user.clone(),
-            password,
-            password_command: crate::db::password_command::join(&profile.password_command),
-            database: profile.database.clone(),
-            ssl_mode: profile.ssl_mode,
-            mode: profile.mode,
-            transaction: profile.transaction,
-            ssh: profile.ssh.clone(),
-            timeout: profile.timeout.clone(),
-            agents: profile.agents,
-            ..Self::new()
-        }
-    }
-
-    #[cfg(test)]
-    pub fn to_profile_for_tests(&self) -> ConnectionProfile {
-        self.to_profile()
-    }
-
-    pub(super) fn to_profile(&self) -> ConnectionProfile {
-        ConnectionProfile {
-            unknown: crate::config::store::Unknown::default(),
-            name: self.name.trim().to_string(),
-            engine: self.engine,
-            host: self.host.clone(),
-            port: self.port.clone(),
-            user: self.user.clone(),
-            database: self.database.clone(),
-            ssl_mode: self.ssl_mode,
-            mode: self.mode,
-            // Only a choice: the mode's default follows the mode.
-            transaction: self.transaction.filter(|t| *t != TxMode::for_connection(self.mode)),
-            ssh: self.ssh.trim().to_string(),
-            timeout: self.timeout.trim().to_string(),
-            agents: self.agents,
-            password_command: self.password_command_words().unwrap_or_default(),
-            legacy_keychain: false,
+            ..ConnectionDraft::from_profile(profile, password).into()
         }
     }
 
     pub(super) fn field_mut(&mut self, field: ConnectField) -> Option<&mut String> {
+        let draft = &mut self.draft;
         match field {
-            ConnectField::Name => Some(&mut self.name),
+            ConnectField::Name => Some(&mut draft.name),
             ConnectField::Engine
             | ConnectField::Ssl
             | ConnectField::Mode
             | ConnectField::Transaction
             | ConnectField::Agents => None,
-            ConnectField::Ssh => Some(&mut self.ssh),
-            ConnectField::Timeout => Some(&mut self.timeout),
-            ConnectField::Host => Some(&mut self.host),
-            ConnectField::Port => Some(&mut self.port),
-            ConnectField::User => Some(&mut self.user),
-            ConnectField::Password => Some(&mut self.password),
-            ConnectField::PasswordCommand => Some(&mut self.password_command),
-            ConnectField::Database => Some(&mut self.database),
+            ConnectField::Ssh => Some(&mut draft.ssh),
+            ConnectField::Timeout => Some(&mut draft.timeout),
+            ConnectField::Host => Some(&mut draft.host),
+            ConnectField::Port => Some(&mut draft.port),
+            ConnectField::User => Some(&mut draft.user),
+            ConnectField::Password => Some(&mut draft.password),
+            ConnectField::PasswordCommand => Some(&mut draft.password_command),
+            ConnectField::Database => Some(&mut draft.database),
         }
     }
 
@@ -194,18 +144,6 @@ impl ConnectForm {
             Some(note) if !supplied => t!("connections.no_saved_password", err = err, note = note),
             _ => err.to_string(),
         }
-    }
-
-    /// The password command's program and arguments (none for a file).
-    pub fn password_command_words(&self) -> Result<Vec<String>, String> {
-        if self.engine.is_file_based() {
-            return Ok(Vec::new());
-        }
-        let words = crate::db::password_command::split(&self.password_command)?;
-        if words.first().is_some_and(String::is_empty) {
-            return Err(t!("connections.empty_command").to_string());
-        }
-        Ok(words)
     }
 
     /// The fields shown for the selected engine, in order.
@@ -224,178 +162,6 @@ impl ConnectForm {
         let idx = fields.iter().position(|f| *f == self.focus).unwrap_or(0);
         self.focus = fields[(idx + fields.len() - 1) % fields.len()];
     }
-
-    /// The transaction mode the connection starts in: the one chosen, or
-    /// the mode's default (manual commit for production).
-    pub fn tx_mode(&self) -> TxMode {
-        self.transaction.unwrap_or_else(|| TxMode::for_connection(self.mode))
-    }
-
-    pub(super) fn cycle_mode(&mut self, forward: bool) {
-        self.mode = self.mode.cycle(forward);
-    }
-
-    pub(super) fn cycle_transaction(&mut self, forward: bool) {
-        let current = self.tx_mode();
-        self.transaction = Some(if forward { current.next() } else { current.next().next() });
-    }
-
-    pub(super) fn cycle_engine(&mut self, forward: bool) {
-        let old = self.engine;
-        self.engine = self.engine.cycle(forward);
-        if self.port == old.default_port() || self.port.is_empty() {
-            self.port = self.engine.default_port().to_string();
-        }
-        // A server host makes no sense as a file name and vice versa.
-        if self.engine.is_file_based() && self.host == "localhost" {
-            self.host.clear();
-        } else if old.is_file_based() && !self.engine.is_file_based() && self.host.is_empty() {
-            self.host = "localhost".to_string();
-        }
-    }
-
-    /// Fills the form from a connection URL such as
-    /// `postgres://user:pass@host:5432/db?sslmode=require`,
-    /// `mysql://user@host/db` or `sqlite:path/to/file.db`.
-    pub fn apply_url(&mut self, text: &str) -> Result<(), String> {
-        let url = url::Url::parse(text).map_err(|e| t!("connections.bad_url", e = e))?;
-        let decode = |s: &str| percent_decode(s).unwrap_or_else(|| s.to_string());
-        let engine =
-            Engine::from_scheme(url.scheme()).ok_or_else(|| t!("connections.bad_scheme", scheme = url.scheme()))?;
-        self.engine = engine;
-        if engine.is_file_based() {
-            // sqlite:file.db, sqlite://relative.db, sqlite:///abs/path.db
-            let rest = text.split_once(':').map_or("", |(_, r)| r);
-            let path = rest.strip_prefix("//").unwrap_or(rest);
-            let path = path.split('?').next().unwrap_or(path);
-            self.host = decode(path);
-            self.port.clear();
-            return Ok(());
-        }
-        self.host = url.host_str().unwrap_or("localhost").trim_start_matches('[').trim_end_matches(']').to_string();
-        self.port = url.port().map_or_else(|| engine.default_port().to_string(), |p| p.to_string());
-        self.user = decode(url.username());
-        self.password = url.password().map(decode).unwrap_or_default();
-        self.database = decode(url.path().trim_start_matches('/'));
-        for (key, value) in url.query_pairs() {
-            if matches!(key.as_ref(), "sslmode" | "ssl-mode" | "ssl_mode") {
-                self.ssl_mode = match value.to_ascii_lowercase().replace('_', "-").as_str() {
-                    "disable" | "disabled" => SslMode::Disable,
-                    "require" | "required" => SslMode::Require,
-                    "verify-ca" => SslMode::VerifyCa,
-                    "verify-full" | "verify-identity" => SslMode::VerifyFull,
-                    _ => SslMode::Prefer,
-                };
-            }
-        }
-        Ok(())
-    }
-
-    /// The query timeout, if one is set.
-    pub fn query_timeout(&self) -> Result<Option<Duration>, String> {
-        let text = self.timeout.trim().trim_end_matches('s').trim();
-        if text.is_empty() {
-            return Ok(None);
-        }
-        match text.parse::<u64>() {
-            Ok(0) => Ok(None),
-            Ok(secs) => Ok(Some(Duration::from_secs(secs))),
-            Err(_) => Err(t!("connections.bad_timeout").to_string()),
-        }
-    }
-
-    pub fn params(&self) -> Result<ConnectParams, String> {
-        self.query_timeout()?;
-        let host = self.host.trim();
-        let ssh = Some(self.ssh.trim().to_string()).filter(|s| !s.is_empty());
-        if self.engine.is_file_based() {
-            if host.is_empty() {
-                return Err(t!("connections.need_file").to_string());
-            }
-            return Ok(ConnectParams {
-                engine: self.engine,
-                host: host.to_string(),
-                port: 0,
-                user: String::new(),
-                password: String::new(),
-                database: String::new(),
-                ssl_mode: SslMode::Disable,
-                read_only: self.mode == ConnectionMode::ReadOnly,
-                ssh: None,
-                password_command: Vec::new(),
-            });
-        }
-        if host.is_empty() {
-            return Err(t!("connections.need_host").to_string());
-        }
-        let port = match self.port.trim().parse::<u16>() {
-            Ok(p) if p > 0 => p,
-            _ => return Err(t!("connections.bad_port").to_string()),
-        };
-        // A password command replaces the typed (or saved) password.
-        let password_command = self.password_command_words()?;
-        let password = if password_command.is_empty() { self.password.clone() } else { String::new() };
-        Ok(ConnectParams {
-            engine: self.engine,
-            host: host.to_string(),
-            port,
-            user: self.user.clone(),
-            password,
-            database: self.database.trim().to_string(),
-            ssl_mode: self.ssl_mode,
-            read_only: self.mode == ConnectionMode::ReadOnly,
-            ssh,
-            password_command,
-        })
-    }
-
-    /// Its name for the status bar and messages: the saved name, else
-    /// the file's name or `host/database`.
-    pub fn short_name(&self) -> String {
-        let name = self.name.trim();
-        if !name.is_empty() {
-            return name.to_string();
-        }
-        if self.engine.is_file_based() {
-            return std::path::Path::new(&self.host)
-                .file_name()
-                .map_or_else(|| self.host.clone(), |n| n.to_string_lossy().into_owned());
-        }
-        if self.database.is_empty() { self.host.clone() } else { format!("{}/{}", self.host, self.database) }
-    }
-
-    pub fn summary(&self) -> String {
-        if self.engine.is_file_based() {
-            return format!("{} {}", self.engine.label(), self.host);
-        }
-        let via = if self.ssh.trim().is_empty() { String::new() } else { format!(" via {}", self.ssh.trim()) };
-        format!("{} as {}@{}:{}/{}", self.engine.label(), self.user, self.host, self.port, self.database) + &via
-    }
-}
-
-fn percent_decode(s: &str) -> Option<String> {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            let hex = s.get(i + 1..i + 3)?;
-            out.push(u8::from_str_radix(hex, 16).ok()?);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(out).ok()
-}
-
-/// Whether pasted text is a connection URL rather than a field value.
-pub(super) fn looks_like_url(text: &str) -> bool {
-    let t = text.trim();
-    ["postgres://", "postgresql://", "mysql://", "mariadb://", "sqlite:", "sqlite3:"]
-        .iter()
-        .any(|p| t.len() > p.len() && t[..p.len()].eq_ignore_ascii_case(p))
 }
 
 impl App {
@@ -479,7 +245,7 @@ impl App {
         // No runtime in unit tests: they hand over what was found.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             drop(runtime.spawn_blocking(move || {
-                send(DbEventKind::ContainersFound(request, crate::system::containers::find()));
+                send(Background::ContainersFound(request, crate::system::containers::find()).into());
             }));
         }
     }
@@ -542,8 +308,7 @@ impl App {
         }
         profile.name = self.free_name(&project_id, &profile.name);
         self.new_connection();
-        self.connection.form =
-            ConnectForm { original_name: None, ..ConnectForm::from_profile(&profile, String::new()) };
+        self.connection.form = ConnectionDraft::from_profile(&profile, String::new()).into();
         self.connection.form.info = Some(t!("connections.from_container", container = container));
     }
 
@@ -692,7 +457,7 @@ impl App {
             return;
         }
 
-        if self.cell_view.is_some() {
+        if self.popups.cell_view.is_some() {
             return self.handle_cell_view_key(key);
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -806,7 +571,7 @@ impl App {
             && !keep.is_empty()
         {
             let pgpass = form.engine.dialect().password_files_note();
-            let instead = match crate::db::password_command::installed(crate::cli::doctor::on_path).first() {
+            let instead = match crate::db::password_command::installed(crate::system::programs::on_path).first() {
                 Some(tool) => {
                     t!("connections.tool_installed", tool = tool.label, example = tool.example(&name), pgpass = pgpass)
                 }

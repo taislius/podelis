@@ -68,13 +68,13 @@ fn agent_activity_window() {
 fn asking_in_plain_language_and_sharing_a_schema() {
     let (mut app, _dir) = query_app();
     app.connection.form.name = "prod".into();
-    app.ask_prompt = Some(crate::app::LineInput::new("revenue per country last month"));
+    app.popups.ask_prompt = Some(crate::app::LineInput::new("revenue per country last month"));
     let screen = render(&mut app, 110, 24);
     assert!(screen.contains("ASK ABOUT PROD"), "{screen}");
     assert!(screen.contains("? revenue per country last month"), "{screen}");
     assert!(screen.contains("it lands in the editor and doesn't run"), "{screen}");
-    app.ask_prompt = None;
-    app.confirm = Some(Confirm {
+    app.popups.ask_prompt = None;
+    app.popups.confirm = Some(Confirm {
         message: "Send shop's table and column names to the model?".into(),
         details: vec!["project 'shop' shares its schemas only with models on this machine".into()],
         danger: false,
@@ -88,7 +88,7 @@ fn asking_in_plain_language_and_sharing_a_schema() {
     assert!(screen.contains(" y  this once") && screen.contains(" a  always, for this project"), "{screen}");
     // A detail too long for the box wraps under its text, and the box
     // grows with it: its last row (the keys) still shows.
-    if let Some(confirm) = &mut app.confirm {
+    if let Some(confirm) = &mut app.popups.confirm {
         confirm.details = vec![
             "project 'shop' shares its schemas only with models on this machine, and far (x) isn't one: its \
              table and column names would go to https://nowhere.invalid/v1"
@@ -106,7 +106,7 @@ fn asking_in_plain_language_and_sharing_a_schema() {
 fn the_memory_window_marks_what_waits_for_the_user() {
     let (mut app, _dir) = query_app();
     let fact = |id: i64, subject: &str, value: &str, confirmed: bool, source: &str| serde_json::json!({ "id": id, "subject": subject, "relation": "means", "value": value, "confirmed": confirmed, "source": source });
-    app.memory_view = Some(crate::app::memory_view::MemoryView {
+    app.popups.memory_view = Some(crate::app::memory_view::MemoryView {
         facts: vec![
             fact(1, "orders.status", "3 = cancelled", true, "user"),
             fact(2, "orders.total", "VAT included", false, "model:claude"),
@@ -130,7 +130,7 @@ fn the_memory_window_marks_what_waits_for_the_user() {
     assert!(screen.contains("x/db/migrations"), "{screen}");
     // `e`: the selected fact whole, to change.
     app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
-    let view = app.memory_view.as_ref().unwrap();
+    let view = app.popups.memory_view.as_ref().unwrap();
     assert_eq!(view.editing, Some(1));
     assert_eq!(view.adding.as_ref().map(crate::app::LineInput::text), Some("orders.status means 3 = cancelled"));
     let screen = render(&mut app, 110, 24);
@@ -140,6 +140,6 @@ fn the_memory_window_marks_what_waits_for_the_user() {
     );
     // Esc keeps it as it was.
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    let view = app.memory_view.as_ref().unwrap();
+    let view = app.popups.memory_view.as_ref().unwrap();
     assert!(view.adding.is_none() && view.editing.is_none());
 }

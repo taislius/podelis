@@ -107,7 +107,7 @@ pub struct Settings {
     /// stops (it's started again when needed); 0 keeps it running.
     pub gateway_idle: u64,
     /// The models the gateway may use, the default first (`[[models]]`).
-    pub models: Vec<crate::gateway::models::ModelConfig>,
+    pub models: Vec<crate::config::models::ModelConfig>,
     /// Key bindings by action name (see `keys.rs`).
     pub keys: HashMap<String, KeySpec>,
 }

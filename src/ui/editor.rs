@@ -699,7 +699,7 @@ fn tx_status(app: &App, width: u16) -> Vec<Span<'static>> {
 /// no room).
 pub(super) fn draw_completion(f: &mut Frame, app: &App, (cx, cy): (u16, u16), area: Rect) {
     let t = theme();
-    let Some(popup_state) = &app.completion else { return };
+    let Some(popup_state) = &app.popups.completion else { return };
     const MAX_ROWS: usize = 8;
     let rows = popup_state.items.len().min(MAX_ROWS);
     let first = popup_state.selected.saturating_sub(MAX_ROWS - 1).min(popup_state.items.len() - rows);

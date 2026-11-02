@@ -16,8 +16,8 @@ fn renders_at_any_size() {
             };
             app.panes.schema_visible = true;
             app.help_visible = screen == 1;
-            app.cell_view = Some(CellView { scroll: 3, ..CellView::new("x".into(), "y\n".repeat(50)) });
-            app.confirm = Some(Confirm {
+            app.popups.cell_view = Some(CellView { scroll: 3, ..CellView::new("x".into(), "y\n".repeat(50)) });
+            app.popups.confirm = Some(Confirm {
                 message: "Sure?".into(),
                 details: vec!["a long detail line ".repeat(10)],
                 danger: false,
@@ -149,12 +149,12 @@ fn right_click_opens_a_menu_at_the_pointer() {
     let click = |kind, x, y| MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::NONE };
     app.handle_mouse(click(MouseEventKind::Down(MouseButton::Right), rows.x + 10, rows.y + 1));
     assert_eq!((app.focus, app.tab.grid.table_state.selected()), (Focus::Results, Some(1)));
-    assert_eq!(app.menu.as_ref().unwrap().title, "RESULTS");
+    assert_eq!(app.popups.menu.as_ref().unwrap().title, "RESULTS");
     assert_snapshot!(render(&mut app, 100, 30));
     // Clicking an item does it: "Copy the row" (the 9th).
     let menu = app.hits.menu;
     app.handle_mouse(click(MouseEventKind::Down(MouseButton::Left), menu.x + 3, menu.y + 9));
-    assert!(app.menu.is_none());
+    assert!(app.popups.menu.is_none());
     assert_eq!(app.take_clipboard().as_deref(), Some("2\tben@example.com\tline one line two"));
 }
 
@@ -209,8 +209,8 @@ fn clicking_the_project_in_the_top_bar_switches_project() {
     // The editor's menu is about the editor: no project switching there.
     app.focus = Focus::Editor;
     app.handle_key(KeyEvent::new(KeyCode::F(10), KeyModifiers::NONE));
-    assert!(app.menu.as_ref().is_some_and(|m| m.items.iter().all(|i| !i.label.contains("project"))));
-    app.menu = None;
+    assert!(app.popups.menu.as_ref().is_some_and(|m| m.items.iter().all(|i| !i.label.contains("project"))));
+    app.popups.menu = None;
     let r = app.hits.project;
     app.handle_mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),

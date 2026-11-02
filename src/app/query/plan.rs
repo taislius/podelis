@@ -158,7 +158,7 @@ impl App {
         ed.set_cursor(start);
         ed.set_anchor(Some(end));
         ed.scroll_row = start.0.saturating_sub(1);
-        self.completion = None;
+        self.popups.completion = None;
         // Zoomed, the editor is what's shown now.
         self.focus = Focus::Editor;
         let last = line + source.sql.matches('\n').count();

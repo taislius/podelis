@@ -230,8 +230,8 @@ impl App {
         }
         self.conns.auto_connect = false;
         self.restore_active_form();
-        self.completion = None;
-        self.menu = None;
+        self.popups.completion = None;
+        self.popups.menu = None;
         self.manager.project_prompt = None;
         self.manager.confirm_delete_project = false;
         self.manager.confirm_delete = false;

@@ -170,7 +170,7 @@ impl App {
         let Some(cell) = row.get(self.tab.grid.selected_col) else { return };
         let title = results.columns[self.tab.grid.selected_col].clone();
         let text = cell.as_deref().map_or_else(|| NULL_TEXT.to_string(), pretty_value);
-        self.cell_view = Some(CellView::new(title, text));
+        self.popups.cell_view = Some(CellView::new(title, text));
     }
 
     /// `x`: the selected row as one `column  value` line per column.
@@ -187,7 +187,7 @@ impl App {
         }
         let at = self.tab.grid.table_state.selected().unwrap_or(0);
         let title = t!("record.title", n = at + 1, of = self.tab.grid.view.len());
-        self.cell_view = Some(CellView { record: true, ..CellView::new(title, text) });
+        self.popups.cell_view = Some(CellView { record: true, ..CellView::new(title, text) });
     }
 
     /// The previous or next row in the row view (`x`), from its top.
@@ -203,7 +203,7 @@ impl App {
     }
 
     pub(in crate::app) fn handle_cell_view_key(&mut self, key: KeyEvent) {
-        let Some(view) = &mut self.cell_view else { return };
+        let Some(view) = &mut self.popups.cell_view else { return };
         let page = self.panes.editor_height.max(5) as u16;
         // A row (`x`): past its end ↓ goes on to the next row, and ↑ above
         // its start to the previous one.
@@ -213,7 +213,7 @@ impl App {
             return self.step_record(up);
         }
         match key.code {
-            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q' | 'v') => self.cell_view = None,
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q' | 'v') => self.popups.cell_view = None,
             KeyCode::Down | KeyCode::Char('j') => view.scroll = view.scroll.saturating_add(1),
             KeyCode::Up | KeyCode::Char('k') => view.scroll = view.scroll.saturating_sub(1),
             KeyCode::PageDown => view.scroll = view.scroll.saturating_add(page),
@@ -233,7 +233,7 @@ impl App {
             }
             KeyCode::Char('e') if view.sql.is_some() => {
                 let Some((sql, conn)) = view.sql.take() else { return };
-                self.cell_view = None;
+                self.popups.cell_view = None;
                 self.open_tab_on(conn, &sql);
             }
             KeyCode::Char('y') if view.browse => {
@@ -255,7 +255,7 @@ impl App {
             KeyCode::Left | KeyCode::Right | KeyCode::Char('h' | 'l') if view.record => {
                 self.step_record(matches!(key.code, KeyCode::Left | KeyCode::Char('h')));
             }
-            KeyCode::Char('x') if view.record => self.cell_view = None,
+            KeyCode::Char('x') if view.record => self.popups.cell_view = None,
             _ => {}
         }
     }

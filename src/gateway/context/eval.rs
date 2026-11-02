@@ -193,7 +193,8 @@ async fn dump_schemas() {
     let spec = std::env::var("PODELIS_EVAL_DUMP").expect("PODELIS_EVAL_DUMP");
     for pair in spec.split_whitespace() {
         let (name, address) = pair.split_once('=').expect("name=address");
-        let form = crate::cli::form_for_address(&crate::cli::classify(address)).unwrap();
+        let form =
+            crate::config::draft::ConnectionDraft::from_address(&crate::config::draft::classify(address)).unwrap();
         let mut params = form.params().unwrap();
         params.read_only = true;
         let engine = params.engine;

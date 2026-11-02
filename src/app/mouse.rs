@@ -40,7 +40,7 @@ impl App {
             }
             return;
         }
-        if self.menu.is_some() {
+        if self.popups.menu.is_some() {
             if matches!(ev.kind, MouseEventKind::Down(_)) {
                 self.click_menu(x, y);
             }
@@ -48,12 +48,12 @@ impl App {
         }
         // The library: a click picks a row, a double click opens it, the
         // wheel moves through them.
-        if self.library_view.is_some() && self.top_overlay() == Some(super::overlay::Overlay::Library) {
+        if self.popups.library_view.is_some() && self.top_overlay() == Some(super::overlay::Overlay::Library) {
             return self.library_mouse(ev);
         }
         // Over a popup only the wheel does something (scrolling it).
         if self.popup_open() {
-            if let Some(view) = &mut self.cell_view {
+            if let Some(view) = &mut self.popups.cell_view {
                 match ev.kind {
                     MouseEventKind::ScrollDown => view.scroll = view.scroll.saturating_add(WHEEL_LINES as u16),
                     MouseEventKind::ScrollUp => view.scroll = view.scroll.saturating_sub(WHEEL_LINES as u16),
@@ -68,7 +68,7 @@ impl App {
                 if inside(self.hits.plan, x, y) && self.tab.result_tab == ResultTab::Plan && !self.grid_shown() =>
             {
                 self.focus = Focus::Results;
-                self.completion = None;
+                self.popups.completion = None;
                 self.click_plan(y, ev.modifiers.contains(KeyModifiers::SHIFT));
             }
             MouseEventKind::Down(MouseButton::Left) => {
@@ -88,7 +88,7 @@ impl App {
                     }
                     // Not closed, and not asking about it (a query running):
                     // back to the tab that was shown, as browsers do.
-                    if self.tabs.len() == count && self.confirm.is_none() && was != tab {
+                    if self.tabs.len() == count && self.popups.confirm.is_none() && was != tab {
                         self.switch_tab(was);
                     } else if self.tabs.len() < count && was != tab {
                         self.switch_tab(if was > tab { was - 1 } else { was });
@@ -109,7 +109,7 @@ impl App {
                     && self.tab.editor.selection().is_some_and(|(a, b)| (a..=b).contains(&pos));
                 if on_selection {
                     self.focus = Focus::Editor;
-                    self.completion = None;
+                    self.popups.completion = None;
                 } else {
                     self.click(x, y, false);
                 }
@@ -137,7 +137,7 @@ impl App {
         // (Counted only for what moves or picks: not on every mouse move.)
         let moves = matches!(ev.kind, MouseEventKind::ScrollDown | MouseEventKind::ScrollUp | MouseEventKind::Down(_));
         let count = if moves { self.library_items().len() } else { 0 };
-        let Some(view) = &mut self.library_view else { return };
+        let Some(view) = &mut self.popups.library_view else { return };
         // A delete asked about is for the row it was asked on.
         if matches!(ev.kind, MouseEventKind::ScrollDown | MouseEventKind::ScrollUp) {
             view.confirm_delete = false;
@@ -280,7 +280,7 @@ impl App {
         }
         if inside(hits.editor_text, x, y) {
             self.focus = Focus::Editor;
-            self.completion = None;
+            self.popups.completion = None;
             let pos = self.editor_pos_at(x, y);
             self.tab.editor.clear_selection();
             self.tab.editor.set_cursor(pos);
