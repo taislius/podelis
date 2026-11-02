@@ -25,7 +25,7 @@ if [ "${PODELIS_CHECK_ENGINES:-}" = 1 ]; then
     done
 fi
 echo "==> cargo-deny"
-cargo deny check
+cargo deny --config tools/deny.toml check
 # Dependencies no code uses: where cargo-machete is installed (CI runs it).
 if command -v cargo-machete > /dev/null; then
     echo "==> cargo-machete"

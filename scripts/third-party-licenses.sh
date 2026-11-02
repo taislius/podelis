@@ -4,5 +4,5 @@
 # --features cli). The release workflow runs it and ships the file.
 set -eu
 cd "$(dirname "$0")/.."
-cargo about generate --fail about.hbs > THIRD-PARTY-LICENSES.txt
+cargo about generate --fail -c tools/about.toml tools/about.hbs > THIRD-PARTY-LICENSES.txt
 echo "Wrote THIRD-PARTY-LICENSES.txt"

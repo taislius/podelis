@@ -1,5 +1,5 @@
 # cargo-about: generates THIRD-PARTY-LICENSES.txt for release archives
-# (scripts/third-party-licenses.sh). Keep in line with deny.toml.
+# (scripts/third-party-licenses.sh). Keep in line with deny.toml beside it.
 accepted = [
     "MIT",
     "Apache-2.0",
