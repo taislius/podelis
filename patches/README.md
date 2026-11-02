@@ -29,6 +29,10 @@ our report #4482, 2026-10-31) but not yet released; aws-lc-rs instead of
 `rsa` is still an open request (#4082). When a release has the first, the
 copy here needs only the second.
 
+Its `Cargo.toml` tells cargo-machete to skip `rand` and `generic-array`,
+upstream's dependencies that this copy no longer uses (its RSA is
+aws-lc-rs's); they're left in to keep the copy to its two changes.
+
 `Cargo.toml` points `[patch.crates-io]` here. Remove the folder and the
 patch once a sqlx-mysql release has both fixes (`cargo update -p
 sqlx-mysql` shows a newer version), then check that Rfam still connects,
