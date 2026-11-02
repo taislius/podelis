@@ -14,15 +14,43 @@
 //!   ones: in the navigator's system section, never shown to models.
 //!   `auth` isn't: people query `auth.users`.
 
+use super::Service;
+use crate::db::Engine;
+
+/// Supabase, as a [`Service`].
+pub struct Supabase;
+
+impl Service for Supabase {
+    fn name(&self) -> &'static str {
+        "Supabase"
+    }
+
+    fn serves(&self, engine: Engine, host: &str) -> bool {
+        engine == Engine::Postgres && is_supabase(host)
+    }
+
+    fn refused(&self, host: &str, port: u16) -> Option<String> {
+        refused(host, port)
+    }
+
+    fn requires_tls(&self) -> bool {
+        true
+    }
+
+    fn is_internal_schema(&self, schema: &str) -> bool {
+        is_internal_schema(schema)
+    }
+}
+
 /// A host of Supabase's: a project's database or the pooler.
-pub fn is_supabase(host: &str) -> bool {
+fn is_supabase(host: &str) -> bool {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     host.ends_with(".supabase.co") || host.ends_with(".supabase.com")
 }
 
 /// Why Podėlis won't connect to `host:port`, if it's one of Supabase's
 /// transaction poolers.
-pub fn refused(host: &str, port: u16) -> Option<String> {
+fn refused(host: &str, port: u16) -> Option<String> {
     if port != 6543 || !is_supabase(host) {
         return None;
     }
@@ -55,7 +83,7 @@ const INTERNAL: &[&str] = &[
 ];
 
 /// One of Supabase's own schemas.
-pub fn is_internal_schema(schema: &str) -> bool {
+fn is_internal_schema(schema: &str) -> bool {
     INTERNAL.contains(&schema)
 }
 
