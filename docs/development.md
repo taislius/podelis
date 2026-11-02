@@ -84,6 +84,16 @@ time; one that lives (`mutants.out/missed.txt`) is code the tests run
 without checking: add the test that would catch it. About 20 minutes;
 `--iterate` tries again only what wasn't caught.
 
+**Fuzzing.** `crates/podelis-core/fuzz/` feeds any text, guided by which
+code it reaches, to the core's SQL handling in every engine's dialect (the
+lexer, statements, highlighting, analysis and lints, formatting,
+parameters), with the property tests' invariants. It needs nightly and
+cargo-fuzz (`rustup toolchain install nightly`, `cargo install
+cargo-fuzz`); from `crates/podelis-core`, `cargo +nightly fuzz run
+sql_text -- -max_total_time=600` runs it for ten minutes. A crash is saved
+under `fuzz/artifacts/`: add it as a test, and fix it. Its own workspace,
+so nightly stays out of the project's builds.
+
 **Code scanning.** `codeql.yml` runs GitHub's CodeQL over the Rust code
 and the workflows on pushes to master and weekly; what it finds is in the
 repository's Security tab, not a failed run.
