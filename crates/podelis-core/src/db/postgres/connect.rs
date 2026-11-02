@@ -3,6 +3,7 @@
 #![expect(clippy::unused_async, reason = "every engine has these functions with one signature, the generated dispatch calling them alike (build.rs): some needn't wait for anything")]
 
 use super::super::*;
+use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode, Postgres};
 use super::DriverConnection;
 

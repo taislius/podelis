@@ -1,24 +1,18 @@
 use super::*;
 
 /// Reads up to `n` more rows; `true` once the rows have run out.
-pub(super) async fn read_rows<R, S>(
-    stream: &mut S,
+async fn read_rows(
+    stream: &mut Rows<'_>,
     n: usize,
-    cell: fn(&R, usize) -> Option<String>,
     columns: &mut Option<Vec<(String, String)>>,
     out: &mut Vec<Vec<Option<String>>>,
-) -> Result<bool, sqlx::Error>
-where
-    R: Row,
-    S: futures_util::Stream<Item = Result<R, sqlx::Error>> + Unpin,
-{
+) -> Result<bool> {
     while out.len() < n {
         let Some(row) = stream.try_next().await? else { return Ok(true) };
         if columns.is_none() {
-            *columns =
-                Some(row.columns().iter().map(|c| (c.name().to_string(), c.type_info().name().to_string())).collect());
+            *columns = row.columns;
         }
-        out.push((0..row.columns().len()).map(|i| cell(&row, i)).collect());
+        out.push(row.cells);
     }
     Ok(false)
 }
@@ -26,23 +20,19 @@ where
 /// The streaming task for one connection: sends the first page, then serves
 /// page requests until the rows run out or every [`RowStream`] is dropped,
 /// in which case the query is cancelled on the server.
-pub(super) async fn serve_stream<R, S>(
-    mut stream: S,
-    cell: fn(&R, usize) -> Option<String>,
+async fn serve_stream(
+    mut stream: Rows<'_>,
     page: usize,
     first_tx: oneshot::Sender<Result<FirstPage>>,
     mut req_rx: mpsc::Receiver<PageRequest>,
     db: Database,
-) where
-    R: Row,
-    S: futures_util::Stream<Item = Result<R, sqlx::Error>> + Unpin,
-{
+) {
     let mut columns = None;
     let mut rows = Vec::new();
-    let done = match read_rows(&mut stream, page, cell, &mut columns, &mut rows).await {
+    let done = match read_rows(&mut stream, page, &mut columns, &mut rows).await {
         Ok(done) => done,
         Err(e) => {
-            let _ = first_tx.send(Err(e.into()));
+            let _ = first_tx.send(Err(e));
             return;
         }
     };
@@ -52,7 +42,7 @@ pub(super) async fn serve_stream<R, S>(
     }
     while let Some((n, reply)) = req_rx.recv().await {
         let mut rows = Vec::new();
-        match read_rows(&mut stream, n, cell, &mut columns, &mut rows).await {
+        match read_rows(&mut stream, n, &mut columns, &mut rows).await {
             Ok(done) => {
                 let _ = reply.send(Ok(Page { rows, done }));
                 if done {
@@ -60,7 +50,7 @@ pub(super) async fn serve_stream<R, S>(
                 }
             }
             Err(e) => {
-                let _ = reply.send(Err(e.to_string()));
+                let _ = reply.send(Err(format!("{e:#}")));
                 return;
             }
         }
@@ -68,40 +58,6 @@ pub(super) async fn serve_stream<R, S>(
     // Every handle dropped with rows left: stop the query rather than
     // draining the rest over the network.
     let _ = db.cancel().await;
-}
-
-/// Reads a `fetch_many` stream into per-statement results. A macro rather
-/// than a generic fn because the executor bounds for `&mut Connection` are
-/// unwieldy to spell out.
-macro_rules! collect_statements {
-    ($conn:expr, $sql:expr, $limit:expr, $cell:expr) => {{
-        let mut results: Vec<StatementResult> = Vec::new();
-        let mut current = StatementResult::default();
-        let mut stream = sqlx::raw_sql(AssertSqlSafe($sql)).fetch_many($conn);
-        while let Some(item) = stream.try_next().await? {
-            match item {
-                Either::Right(row) => {
-                    if current.columns.is_none() {
-                        current.columns = Some(
-                            row.columns()
-                                .iter()
-                                .map(|c| (c.name().to_string(), c.type_info().name().to_string()))
-                                .collect(),
-                        );
-                    }
-                    current.total_rows += 1;
-                    if current.rows.len() < $limit {
-                        current.rows.push((0..row.columns().len()).map(|i| $cell(&row, i)).collect());
-                    }
-                }
-                Either::Left(done) => {
-                    current.rows_affected = done.rows_affected();
-                    results.push(std::mem::take(&mut current));
-                }
-            }
-        }
-        results
-    }};
 }
 
 impl Database {
@@ -175,8 +131,7 @@ impl Database {
             on_session!(
                 &mut *guard,
                 |c| {
-                    let stream = sqlx::raw_sql(AssertSqlSafe(sql_owned)).fetch(&mut **c);
-                    serve_stream(stream, engine::cell, page, first_tx, req_rx, db).await;
+                    serve_stream(engine::driver::fetch(c, sql_owned), page, first_tx, req_rx, db).await;
                 },
                 closed => {
                     let _ = first_tx.send(Err(anyhow::anyhow!("disconnected")));
@@ -256,7 +211,7 @@ impl Database {
         };
 
         let statements = results.len();
-        // sqlx exposes no column names when a query returns zero rows, so
+        // A driver may give no column names when a query returns no rows, so
         // prepare the statement to recover them (e.g. an empty SELECT): the
         // last one, and earlier reads, which get their own result sets.
         let parts = sql::split_statements(sql, self.0.engine);
@@ -308,7 +263,7 @@ impl Database {
             return Ok(None);
         }
         let start = Instant::now();
-        let mut aside = on_pool!(&self.0.pool, |p| Session::from(p.acquire().await?));
+        let mut aside = on_pool!(&self.0.pool, |p| Session::from(engine::driver::acquire(p).await?));
         let mut results = aside.run(sql, row_limit).await?;
         let statements = results.len();
         let Some(last) = results.pop() else { return Ok(Some(QueryOutcome::default())) };
@@ -319,7 +274,7 @@ impl Database {
         self.check_reach().await?;
         // A new session has the connection's own settings again.
         self.0.session_changed.store(false, Ordering::SeqCst);
-        *session = on_pool!(&self.0.pool, |p| Session::from(p.acquire().await?));
+        *session = on_pool!(&self.0.pool, |p| Session::from(engine::driver::acquire(p).await?));
         session.watch_interrupt(&self.0.interrupt).await?;
         self.0.backend_id.store(session.backend_id().await?, Ordering::SeqCst);
         Ok(())
@@ -333,22 +288,17 @@ impl Database {
             .await
             .map_err(|_| anyhow::anyhow!("session busy"))?;
         self.clear_interrupt();
-        let sql = AssertSqlSafe(sql.to_string()).into_sql_str();
-        let prepared = on_session!(&mut *session, |c| (&mut **c).prepare(sql).await.map(drop), closed => anyhow::bail!("disconnected"));
+        let prepared = on_session!(&mut *session, |c| engine::driver::prepare(c, sql).await, closed => anyhow::bail!("disconnected"));
         let err = match prepared {
             Ok(()) => return Ok(CheckOutcome::Ok),
             Err(e) => e,
         };
-        let Some(db) = err.as_database_error() else {
-            // I/O or protocol trouble: not something to show as a hint.
-            return Ok(CheckOutcome::Unsupported);
-        };
-        let problem = on_driver!(self.0.engine, engine::queries::prepare_problem(db));
-        let Some(syntax) = problem else { return Ok(CheckOutcome::Unsupported) };
-        let err = anyhow::Error::from(err);
-        let missing_feature = missing_feature(&err);
+        // Not the server's (I/O or protocol trouble), or not worth a hint.
+        let Some(server) = errors::server_error(&err) else { return Ok(CheckOutcome::Unsupported) };
+        let Some(syntax) = server.check else { return Ok(CheckOutcome::Unsupported) };
+        let missing_feature = server.missing_feature;
         let message = error_message(&err);
-        let position = error_position(&err).or_else(|| self.0.engine.dialect().position_in_message(&message));
+        let position = server.position.or_else(|| self.0.engine.dialect().position_in_message(&message));
         Ok(CheckOutcome::Problem { message, position, syntax, missing_feature })
     }
 
@@ -397,8 +347,7 @@ impl Database {
             return Ok(());
         }
         let ping = async {
-            use sqlx::Connection as _;
-            on_session!(&mut *session, |c| drop(c.ping().await), closed => {});
+            on_session!(&mut *session, |c| engine::driver::ping(c).await, closed => {});
         };
         if tokio::time::timeout(limit, ping).await.is_ok() {
             return Ok(());
@@ -424,7 +373,7 @@ impl Database {
         if !self.0.stale.swap(false, Ordering::SeqCst) {
             return Ok(false);
         }
-        on_session!(std::mem::replace(session, Session::Closed), |c| drop(c.detach()), closed => {});
+        on_session!(std::mem::replace(session, Session::Closed), |c| engine::driver::detach(c), closed => {});
         if let Err(e) = self.reopen_session(session).await {
             self.0.stale.store(true, Ordering::SeqCst);
             return Err(e.context(errors::NoAnswer));
@@ -452,7 +401,7 @@ impl Database {
         // Hand the session connection back first: the pool's close() waits
         // for every checked-out connection.
         *self.0.session.lock().await = Session::Closed;
-        on_pool!(&self.0.pool, |p| p.close().await);
+        on_pool!(&self.0.pool, |p| engine::driver::close(p).await);
     }
 }
 
@@ -491,9 +440,9 @@ impl Session {
     }
 
     pub(super) async fn server_version(&mut self) -> String {
-        let version: Result<String, _> = on_session!(
+        let version = on_session!(
             self,
-            |c| sqlx::query_scalar(engine::DIALECT.version_query()).fetch_one(&mut **c).await,
+            |c| engine::driver::text(c, engine::DIALECT.version_query()).await,
             closed => return String::new()
         );
         // "16.2 (Debian 16.2-1)" → "16.2"
@@ -506,7 +455,7 @@ impl Session {
             self,
             |c| {
                 let sql = engine::DIALECT.sql_mode_query()?;
-                sqlx::query_scalar(sql).fetch_one(&mut **c).await.ok()
+                engine::driver::text(c, sql).await.ok()
             },
             closed => None
         )
@@ -517,26 +466,12 @@ impl Session {
     }
 
     pub(super) async fn run(&mut self, sql: &str, limit: usize) -> Result<Vec<StatementResult>> {
-        let sql = sql.to_string();
-        Ok(on_session!(
-            self,
-            |c| collect_statements!(&mut **c, sql, limit, engine::cell),
-            closed => anyhow::bail!("disconnected")
-        ))
+        on_session!(self, |c| engine::driver::run(c, sql, limit).await, closed => anyhow::bail!("disconnected"))
     }
 
     /// Column names and types of a single statement, via a server-side
     /// prepare. `None` if it can't be prepared (e.g. some utility commands).
     pub(super) async fn describe_columns(&mut self, sql: &str) -> Option<Vec<(String, String)>> {
-        let sql = AssertSqlSafe(sql.to_string()).into_sql_str();
-        let stmt_columns: Vec<(String, String)> = on_session!(
-            self,
-            |c| {
-                let stmt = (&mut **c).prepare(sql).await.ok()?;
-                stmt.columns().iter().map(|c| (c.name().to_string(), c.type_info().name().to_string())).collect()
-            },
-            closed => return None
-        );
-        Some(stmt_columns)
+        on_session!(self, |c| engine::driver::columns(c, sql).await, closed => None)
     }
 }

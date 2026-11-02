@@ -7,6 +7,8 @@ mod agent_constraints;
 pub(super) mod cells;
 #[cfg(feature = "sqlite")]
 pub(super) mod connect;
+#[cfg(feature = "sqlite")]
+pub(super) mod driver;
 #[cfg(all(any(test, feature = "test-support"), feature = "sqlite"))]
 pub(in crate::db) mod db_tests;
 #[cfg(feature = "sqlite")]

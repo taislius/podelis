@@ -7,7 +7,7 @@
 //! - The transaction poolers (port 6543, the shared one and the dedicated
 //!   `PgBouncer`) hand each transaction a different server connection. A
 //!   SQL client needs one session: `SET`, `BEGIN` across runs, temporary
-//!   tables, cancelling by the server's process id, and sqlx's named
+//!   tables, cancelling by the server's process id, and the driver's named
 //!   statements (which another client's could collide with there). So
 //!   Podėlis refuses them and says to use session mode.
 //! - Supabase's own schemas (`storage`, `realtime`, `vault`…) are system

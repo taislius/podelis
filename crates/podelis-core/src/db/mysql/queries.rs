@@ -6,7 +6,9 @@ use super::super::activity::Activity;
 use super::super::catalog::{ColumnRow, TableRow};
 use super::super::details::{ForeignKey, IndexInfo};
 use super::super::*;
-use sqlx::mysql::{MySql, MySqlDatabaseError};
+use sqlx::pool::PoolConnection;
+use sqlx::{AssertSqlSafe, Row};
+use sqlx::mysql::MySql;
 use super::DriverConnection;
 use super::super::dialect::Scan;
 
@@ -280,18 +282,6 @@ pub(in crate::db) async fn tls_info(db: &Database) -> Option<String> {
         o.rows.iter().find(|r| r[0].as_deref() == Some(name)).and_then(|r| r[1].clone()).filter(|v| !v.is_empty())
     };
     Some(format!("{}, {}", get("Ssl_version")?, get("Ssl_cipher").unwrap_or_default()))
-}
-
-/// What a failed prepare means: a syntax error (`Some(true)`), an unknown
-/// object (`Some(false)`), or nothing worth a hint (`None`).
-pub(in crate::db) fn prepare_problem(err: &dyn sqlx::error::DatabaseError) -> Option<bool> {
-    match err.try_downcast_ref::<MySqlDatabaseError>()?.number() {
-        1064 | 1149 => Some(true),
-        // unknown table/column/function, no database selected
-        1146 | 1054 | 1305 | 1046 | 1109 => Some(false),
-        // 1295: statement can't be prepared; anything else: not a hint
-        _ => None,
-    }
 }
 
 /// Cancels connection `id`'s running query.

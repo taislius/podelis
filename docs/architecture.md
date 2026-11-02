@@ -183,6 +183,9 @@ db/
   catalog.rs  details.rs  info.rs  activity.rs
                   Database methods: each calls its engine's same-named
                   function through the dispatch macros
+  via_sqlx.rs     what the engines that talk through sqlx share: their
+                  `driver.rs` is `via_sqlx::driver!()` and their errors'
+                  reading; nothing outside them names sqlx
   errors.rs  diagnose.rs  tunnel.rs  options.rs  types.rs  passwords.rs
                   shared: error messages and a failed connection's hints
                   (the network's and TLS's here, each engine's from its
@@ -206,6 +209,10 @@ db/
                   plan formatting, type names: its own read, each kind
                   written; error wording…); its DriverPool,
                   DriverConnection, DIALECT and `cell`
+    driver.rs     what `db` asks of a connection: acquire, close, ping,
+                  detach, run, fetch (rows as they come), prepare, columns,
+                  one text value; and `error_facts`, its driver's errors
+                  in no driver's terms (`errors::ErrorFacts`)
     connect.rs    connection options, pool and session; the check before
                   connecting and before reopening or cancelling
     queries.rs    catalog, table details, routines, session info, TLS,
@@ -231,13 +238,13 @@ Three concerns are kept apart:
   errors' hints, its clients' password files, its containers. Code that
   doesn't need SQL asks this, so an engine without SQL would implement
   only `Backend` (`engine.dialect()` would then become an `Option`; the
-  query path, sqlx's pools and the catalog are SQL's today).
+  query path and the catalog are SQL's today).
 - **SQL dialect** (`engine.dialect()`, `SqlDialect: Backend`): what differs
   in SQL text and facts,
   with no I/O — identifier quoting and string literals, lexer rules
   (comment styles, quoting, dollar quotes), placeholders (`$1`, `?`), the
   sqlparser and formatter dialects, EXPLAIN statements and plan formatting,
-  type names, how its errors read, hidden columns, and
+  type names, hidden columns, and
   what the server's version lacks (`too_new`: the engine folder's
   `versions.rs`, a table of features and the version that brought each,
   looked for in the code words of the statement that failed; the app adds
@@ -247,9 +254,14 @@ Three concerns are kept apart:
   server-side transaction state, DDL that commits, CREATE statements in the
   catalog, table sizes, plans as grids, `COPY`. The app and UI ask these
   instead of checking which engine it is.
-- **Driver** (the engine folder's `connect.rs` / `queries.rs` / `cells.rs`):
-  the I/O, through sqlx. Every engine has the same functions with the same
-  signatures, taking `&Database`.
+- **Driver** (the engine folder's `driver.rs` / `connect.rs` / `queries.rs`
+  / `cells.rs`): the I/O. Every engine has the same functions with the
+  same signatures; shared code (`run.rs`, `errors.rs`) calls only those,
+  and reads errors as `ErrorFacts` (broken, no connection, TLS, the
+  server's message, position, and what a check makes of it), so it never
+  sees a driver's types. The three engines today use sqlx, through
+  `via_sqlx.rs`; one with another driver (DuckDB's) writes its own
+  `driver.rs`.
 
 Dispatch is static, not trait objects. The generated `on_engine!(engine,
 engine::queries::activity(self).await)` (and `on_pool!`, `on_session!`)
@@ -267,20 +279,20 @@ through `links` metadata, so the lints allowed only with fewer engines
 
 1. A folder `db/<engine>/` with an `engine.toml` (`name`, `order`,
    `feature`) and that feature in both manifests: the core's
-   `crates/podelis-core/Cargo.toml` (turning on its sqlx driver) and the
+   `crates/podelis-core/Cargo.toml` (turning on its driver) and the
    root `Cargo.toml` (passing it on: `<engine> = ["podelis-core/<engine>"]`),
    in each one's `default` list (and in `crates/podelis-ai/Cargo.toml`,
    which passes them on only when it's built alone, and in CI's
    `engines` matrix, `.github/workflows/ci.yml`, to be built alone there),
    `mod.rs` (`Backend` and `SqlDialect` impls, `DriverPool`, `DriverConnection`,
-   `DIALECT`, `cell`), `connect.rs`, `queries.rs`, `cells.rs`,
+   `DIALECT`, `cell`), `driver.rs`, `connect.rs`, `queries.rs`, `cells.rs`,
    `passwords.rs`, `agent_constraints.rs` and `db_tests.rs`, modelled on
    an existing one.
 2. Build: `build.rs` adds it to `Engine`, `Engine::ALL`, `Pool` and
    `Session`; the compiler points at each function the new folder still
-   lacks. Its driver code (`connect.rs`, `queries.rs`, `cells.rs`,
-   `passwords.rs`, `db_tests.rs`, the driver types and the dialect's
-   methods that read the driver's errors) is behind its feature: built
+   lacks. Its driver code (`driver.rs`, `connect.rs`, `queries.rs`,
+   `cells.rs`, `passwords.rs`, `db_tests.rs` and the driver types) is
+   behind its feature: built
    without it, the engine keeps its dialect (`Engine::ALL`: SQL rules,
    lexing, plans) but leaves `Engine::BUILT`, `Pool`, `Session` and
    `on_driver!`, and connecting to it says the build lacks it. Shared code

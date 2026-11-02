@@ -50,9 +50,6 @@ pub enum ErrorPos {
     Near { line: usize, text: String },
 }
 
-/// A readable message for an error from `run`/`connect`: the server's own
-/// message (plus Postgres's detail and hint) rather than sqlx's wrapping,
-/// which repeats it and appends a line number from Postgres's C source.
 /// Marks an error after which the session was reopened: settings and any
 /// open transaction of the old session are gone.
 #[derive(Debug)]
@@ -93,55 +90,87 @@ impl std::fmt::Display for Unreachable {
 
 impl std::error::Error for Unreachable {}
 
+/// What a driver makes of one of its own errors, in no driver's terms:
+/// each engine's `driver::error_facts` reads its driver's.
+#[derive(Debug, Default)]
+pub struct ErrorFacts {
+    /// The connection itself broke.
+    pub broken: bool,
+    /// No connection could be had in time (the pool timed out, or closed).
+    pub no_connection: bool,
+    /// Why TLS failed, if that's what it is.
+    pub tls: Option<String>,
+    /// What the server said, if it's the server's error.
+    pub server: Option<ServerError>,
+}
+
+/// A server's error, as its engine reads it.
+#[derive(Debug, Default)]
+pub struct ServerError {
+    /// Its message, as the engine words it (a detail and hint added,
+    /// boilerplate cut).
+    pub message: String,
+    pub position: Option<ErrorPos>,
+    /// A syntax error or unknown function: what a feature the server's
+    /// version lacks looks like.
+    pub missing_feature: bool,
+    /// Said just before the server closes the connection (a shutdown).
+    pub closes_connection: bool,
+    /// As a statement check's finding: a syntax error (`Some(true)`),
+    /// another problem worth showing (`Some(false)`: an unknown table), or
+    /// none to show.
+    pub check: Option<bool>,
+}
+
+/// The first error in `err`'s chain a driver reads, with how many causes
+/// (context added on top) come before it.
+fn facts(err: &anyhow::Error) -> Option<(usize, ErrorFacts)> {
+    err.chain().enumerate().find_map(|(i, cause)| {
+        Engine::BUILT.into_iter().find_map(|e| on_driver!(e, engine::driver::error_facts(cause))).map(|f| (i, f))
+    })
+}
+
+/// What the server said, if `err` is the server's error.
+pub fn server_error(err: &anyhow::Error) -> Option<ServerError> {
+    facts(err)?.1.server
+}
+
+/// Why TLS failed, if that's why connecting did.
+pub fn tls_failure(err: &anyhow::Error) -> Option<String> {
+    facts(err)?.1.tls
+}
+
 /// Whether the server couldn't be reached at all: the connection broke,
 /// its address didn't answer, or no connection to it could be had in time
 /// (the pool timed out).
 pub fn is_unreachable(err: &anyhow::Error) -> bool {
     is_broken(err)
         || err.chain().any(|e| e.downcast_ref::<Unreachable>().is_some())
-        || matches!(err.downcast_ref::<sqlx::Error>(), Some(sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed))
+        || facts(err).is_some_and(|(_, f)| f.no_connection)
 }
 
 /// Whether the error means the connection itself broke.
 pub fn is_broken(err: &anyhow::Error) -> bool {
-    match err.downcast_ref::<sqlx::Error>() {
-        Some(sqlx::Error::Io(_) | sqlx::Error::Protocol(_) | sqlx::Error::Tls(_)) => true,
-        // A connection exception (SQLSTATE class 08), or what an engine
-        // says first when it closes the connection (PostgreSQL's shutdowns).
-        Some(sqlx::Error::Database(db)) => {
-            db.code().is_some_and(|c| c.starts_with("08"))
-                || Engine::ALL.iter().any(|e| e.dialect().closes_connection(db.as_ref()))
-        }
-        _ => false,
-    }
+    facts(err).is_some_and(|(_, f)| f.broken)
 }
 
+/// A readable message for an error from `run`/`connect`: the server's own
+/// message, as its engine words it, rather than the driver's wrapping;
+/// context added on top kept ("connection lost; reconnected").
 pub fn error_message(err: &anyhow::Error) -> String {
-    let Some(sqlx::Error::Database(db)) = err.downcast_ref::<sqlx::Error>() else {
+    let Some((before, ErrorFacts { server: Some(server), .. })) = facts(err) else {
         return format!("{err:#}");
     };
-    // The engine whose error it is words it (its detail and hint, its
-    // boilerplate cut); else the server's message as it came.
-    let msg = Engine::ALL
-        .iter()
-        .find_map(|e| e.dialect().database_error_message(db.as_ref()))
-        .unwrap_or_else(|| db.message().to_string());
-    // Keep context added on top, e.g. "connection lost; reconnected".
-    let context: Vec<String> =
-        err.chain().take_while(|e| e.downcast_ref::<sqlx::Error>().is_none()).map(ToString::to_string).collect();
-    if context.is_empty() { msg } else { format!("{}: {msg}", context.join(": ")) }
+    let context: Vec<String> = err.chain().take(before).map(ToString::to_string).collect();
+    if context.is_empty() { server.message } else { format!("{}: {}", context.join(": "), server.message) }
 }
 
 /// Whether `err` is a server's syntax error or unknown function (by its
 /// code): what a feature the server's version lacks looks like.
 pub fn missing_feature(err: &anyhow::Error) -> bool {
-    let Some(sqlx::Error::Database(db)) = err.downcast_ref::<sqlx::Error>() else { return false };
-    Engine::ALL.iter().any(|e| e.dialect().missing_feature_error(db.as_ref()))
+    server_error(err).is_some_and(|s| s.missing_feature)
 }
 
 pub fn error_position(err: &anyhow::Error) -> Option<ErrorPos> {
-    let Some(sqlx::Error::Database(db)) = err.downcast_ref::<sqlx::Error>() else {
-        return None;
-    };
-    Engine::ALL.iter().find_map(|e| e.dialect().database_error_position(db.as_ref()))
+    server_error(err)?.position
 }

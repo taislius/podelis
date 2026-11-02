@@ -4,8 +4,8 @@ use super::super::activity::Activity;
 use super::super::catalog::{ColumnRow, TableRow};
 use super::super::details::{ForeignKey, IndexInfo};
 use super::super::*;
+use sqlx::{AssertSqlSafe, Row};
 use sqlx::PgPool;
-use sqlx::postgres::PgDatabaseError;
 
 /// Stops a session's running query: for the activity monitor's stop and for
 /// cancelling our own (one statement, so the two can't drift apart).
@@ -347,17 +347,6 @@ pub(in crate::db) async fn tls_info(db: &Database) -> Option<String> {
     let o = db.run("SELECT version, cipher FROM pg_stat_ssl WHERE pid = pg_backend_pid() AND ssl", 1).await.ok()?;
     let row = o.rows.first()?;
     Some(format!("{}, {}", row[0].clone()?, row[1].clone().unwrap_or_default()))
-}
-
-/// What a failed prepare means: a syntax error (`Some(true)`), an unknown
-/// object (`Some(false)`), or nothing worth a hint (`None`).
-pub(in crate::db) fn prepare_problem(err: &dyn sqlx::error::DatabaseError) -> Option<bool> {
-    match err.try_downcast_ref::<PgDatabaseError>()?.code() {
-        "42601" => Some(true),
-        // undefined table/column/function/object, wrong argument types
-        "42P01" | "42703" | "42883" | "42704" | "42P02" | "42804" => Some(false),
-        _ => None,
-    }
 }
 
 /// Cancels backend `id`'s running query.

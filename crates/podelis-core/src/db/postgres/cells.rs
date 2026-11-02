@@ -1,6 +1,7 @@
 //! Decoding Postgres values as text.
 
 use super::super::*;
+use sqlx::{Row, TypeInfo, ValueRef};
 use rust_decimal::Decimal;
 use sqlx::postgres::{PgRow, PgValueFormat};
 use uuid::Uuid;

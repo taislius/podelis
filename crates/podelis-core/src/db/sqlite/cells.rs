@@ -1,6 +1,7 @@
 //! Decoding SQLite values as text.
 
 use super::super::*;
+use sqlx::{Row, TypeInfo, ValueRef};
 use sqlx::sqlite::SqliteRow;
 
 /// Formats a SQLite value by its storage class.

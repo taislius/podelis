@@ -5,6 +5,7 @@
 use super::super::catalog::{ColumnRow, TableRow};
 use super::super::details::{ForeignKey, IndexInfo};
 use super::super::*;
+use sqlx::pool::PoolConnection;
 use sqlx::sqlite::Sqlite;
 use super::DriverConnection;
 use super::super::dialect::Scan;
@@ -170,19 +171,6 @@ pub(in crate::db) const SESSION_INFO: (&str, &[&str]) = (
                         CAST((SELECT query_only FROM pragma_query_only) AS TEXT)",
                 &["Journal mode", "Foreign keys", "Size (bytes)", "Read-only"],
             );
-
-/// What a failed prepare means: a syntax error (`Some(true)`), an unknown
-/// object (`Some(false)`), or nothing worth a hint (`None`).
-pub(in crate::db) fn prepare_problem(err: &dyn sqlx::error::DatabaseError) -> Option<bool> {
-    let msg = err.message();
-    if msg.contains("syntax error") || msg.contains("incomplete input") || msg.contains("unrecognized token") {
-        Some(true)
-    } else if msg.starts_with("no such") {
-        Some(false)
-    } else {
-        None
-    }
-}
 
 /// SQLite is a file: no server sessions to list, or stop.
 pub(in crate::db) async fn activity(_db: &Database) -> Result<Vec<Activity>> {

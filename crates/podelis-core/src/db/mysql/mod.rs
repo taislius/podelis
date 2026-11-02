@@ -5,6 +5,8 @@ mod agent_constraints;
 pub(super) mod cells;
 #[cfg(feature = "mysql")]
 pub(super) mod connect;
+#[cfg(feature = "mysql")]
+pub(super) mod driver;
 #[cfg(all(any(test, feature = "test-support"), feature = "mysql"))]
 pub(in crate::db) mod db_tests;
 #[cfg(feature = "mysql")]
@@ -185,38 +187,7 @@ impl SqlDialect for MySql {
         })
     }
 
-    /// Its syntax errors start with a long boilerplate sentence.
-    #[cfg(feature = "mysql")]
-    fn database_error_message(&self, err: &dyn sqlx::error::DatabaseError) -> Option<String> {
-        let msg = err.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>()?.message();
-        Some(match msg.find("for the right syntax to use ") {
-            Some(i) => format!("syntax error {}", &msg[i + "for the right syntax to use ".len()..]),
-            None => msg.to_string(),
-        })
-    }
 
-    /// "… at line N", and "near 'rest of the statement' at line N": the
-    /// quoted text is what follows the error, which pins down the column.
-    #[cfg(feature = "mysql")]
-    fn missing_feature_error(&self, err: &dyn sqlx::error::DatabaseError) -> bool {
-        // a syntax error, FUNCTION … does not exist
-        err.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>().is_some_and(|e| matches!(e.number(), 1064 | 1305))
-    }
-    #[cfg(feature = "mysql")]
-    fn database_error_position(&self, err: &dyn sqlx::error::DatabaseError) -> Option<super::ErrorPos> {
-        use super::ErrorPos;
-        let msg = err.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>()?.message();
-        let at = msg.rfind(" at line ")?;
-        let digits: String = msg[at + " at line ".len()..].chars().take_while(char::is_ascii_digit).collect();
-        let line = digits.parse().ok()?;
-        match msg[..at].find("near '") {
-            Some(i) if msg[..at].ends_with('\'') => {
-                let near = &msg[i + "near '".len()..at - 1];
-                Some(if near.is_empty() { ErrorPos::Line(line) } else { ErrorPos::Near { line, text: near.to_string() } })
-            }
-            _ => Some(ErrorPos::Line(line)),
-        }
-    }
 
     fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
         &agent_constraints::AGENT_CONSTRAINTS
