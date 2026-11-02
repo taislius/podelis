@@ -2,13 +2,18 @@
 # for `Default::default()`) and checks that a test fails; a mutant that
 # lives is code the tests run without checking. Scoped to where a bug
 # hurts users most: what AI agents may run, what each engine refuses
-# them, and the OS keychain (podelis-planai's code-review.md). Run with
+# them, the OS keychain, the MCP server and the gateway's socket
+# (podelis-planai's code-review.md). Run with
 # `cargo mutants --workspace`: part of it is the core's.
 examine_globs = [
     "src/agents/mod.rs",
     "crates/podelis-core/src/db/agent_constraints.rs",
     "crates/podelis-core/src/db/*/agent_constraints.rs",
     "crates/podelis-core/src/db/keychain.rs",
+    # How agents reach the databases, and the gateway's socket (who may
+    # connect, one gateway per config folder).
+    "src/agents/mcp.rs",
+    "src/gateway/server.rs",
 ]
 # The core's rules are tested in the app's crate (src/agents/engines.rs).
 test_workspace = true
