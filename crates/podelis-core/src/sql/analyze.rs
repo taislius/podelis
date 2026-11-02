@@ -260,7 +260,7 @@ pub fn syntax_hint(script: &ParsedScript) -> Option<SyntaxHint> {
 /// for a line number, or the first whole-word match of a token.
 pub fn error_range(sent: &str, position: &ErrorPos) -> Option<(usize, usize)> {
     let word_len = |rest: &str| {
-        let word = rest.find(|c: char| !is_word_char(c)).unwrap_or(rest.len());
+        let word = rest.find(|c: char| !super::is_word_char(c)).unwrap_or(rest.len());
         if word > 0 { word } else { rest.chars().next().map_or(0, char::len_utf8) }
     };
     match position {
@@ -276,8 +276,8 @@ pub fn error_range(sent: &str, position: &ErrorPos) -> Option<(usize, usize)> {
             let lower = sent.to_lowercase();
             let needle = token.to_lowercase();
             let boundary = |i: usize| {
-                !lower[..i].chars().next_back().is_some_and(is_word_char)
-                    && !lower[i + needle.len()..].chars().next().is_some_and(is_word_char)
+                !lower[..i].chars().next_back().is_some_and(super::is_word_char)
+                    && !lower[i + needle.len()..].chars().next().is_some_and(super::is_word_char)
             };
             // Lowercasing can change byte lengths for non-ASCII text; then
             // only offsets that exist in both are safe.
@@ -303,11 +303,6 @@ pub fn error_range(sent: &str, position: &ErrorPos) -> Option<(usize, usize)> {
             }
         }
     }
-}
-
-/// A letter, digit or `_`: part of an SQL word.
-fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
 }
 
 #[cfg(test)]

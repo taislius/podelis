@@ -3,29 +3,33 @@
 //! every engine shares are `tests` in `mod.rs`; what each engine refuses is
 //! its `db/<engine>/agent_constraints.rs`.
 
+use crate::agents::{Verdict, Wrap, verdict};
+use crate::db::{AgentAccess, ConnectionMode, Engine};
+
+fn verdict_on(engine: Engine, sql: &str) -> Verdict {
+    verdict(AgentAccess::Write, ConnectionMode::Normal, sql, engine)
+}
+
+/// Why it's refused.
+fn refused(engine: Engine, sql: &str) -> String {
+    match verdict_on(engine, sql) {
+        Verdict::Refuse(said) => said,
+        Verdict::Run(wrap) => panic!("{engine:?} ran {sql}: {wrap:?}"),
+    }
+}
+
+/// How it runs.
+fn run(engine: Engine, sql: &str) -> Wrap {
+    match verdict_on(engine, sql) {
+        Verdict::Run(wrap) => wrap,
+        Verdict::Refuse(said) => panic!("{engine:?} refused {sql}: {said}"),
+    }
+}
+
 mod postgres {
-    use crate::agents::{Verdict, Wrap, verdict};
-    use crate::db::{AgentAccess, ConnectionMode, Engine};
+    use super::*;
 
-    fn verdict_on(sql: &str) -> Verdict {
-        verdict(AgentAccess::Write, ConnectionMode::Normal, sql, Engine::Postgres)
-    }
-
-    /// Why it's refused.
-    fn refused(sql: &str) -> String {
-        match verdict_on(sql) {
-            Verdict::Refuse(said) => said,
-            Verdict::Run(wrap) => panic!("ran {sql}: {wrap:?}"),
-        }
-    }
-
-    /// How it runs.
-    fn run(sql: &str) -> Wrap {
-        match verdict_on(sql) {
-            Verdict::Run(wrap) => wrap,
-            Verdict::Refuse(said) => panic!("refused {sql}: {said}"),
-        }
-    }
+    const ENGINE: Engine = Engine::Postgres;
 
     #[test]
     fn its_own_statements() {
@@ -41,36 +45,17 @@ mod postgres {
             // MySQL's and SQLite's, not PostgreSQL's.
             ("replace into t values (1)", "schema changes on PostgreSQL"),
         ] {
-            assert!(refused(sql).contains(why), "{sql}: {}", refused(sql));
+            assert!(refused(ENGINE, sql).contains(why), "{sql}: {}", refused(ENGINE, sql));
         }
-        assert_eq!(run("merge into t using u on t.id = u.id when matched then update set x = 1"), Wrap::Commit);
-        assert_eq!(run("table t"), Wrap::Commit);
+        assert_eq!(run(ENGINE, "merge into t using u on t.id = u.id when matched then update set x = 1"), Wrap::Commit);
+        assert_eq!(run(ENGINE, "table t"), Wrap::Commit);
     }
 }
 
 mod mysql {
-    use crate::agents::{Verdict, Wrap, verdict};
-    use crate::db::{AgentAccess, ConnectionMode, Engine};
+    use super::*;
 
-    fn verdict_on(sql: &str) -> Verdict {
-        verdict(AgentAccess::Write, ConnectionMode::Normal, sql, Engine::MySql)
-    }
-
-    /// Why it's refused.
-    fn refused(sql: &str) -> String {
-        match verdict_on(sql) {
-            Verdict::Refuse(said) => said,
-            Verdict::Run(wrap) => panic!("ran {sql}: {wrap:?}"),
-        }
-    }
-
-    /// How it runs.
-    fn run(sql: &str) -> Wrap {
-        match verdict_on(sql) {
-            Verdict::Run(wrap) => wrap,
-            Verdict::Refuse(said) => panic!("refused {sql}: {said}"),
-        }
-    }
+    const ENGINE: Engine = Engine::MySql;
 
     #[test]
     fn its_own_statements() {
@@ -90,38 +75,19 @@ mod mysql {
             ("select 'a\\' , load_file('/etc/passwd') -- '", "backslash before a quote"),
             ("select \"a\\\" , load_file('/etc/passwd') -- \"", "backslash before a quote"),
         ] {
-            assert!(refused(sql).contains(why), "{sql}: {}", refused(sql));
+            assert!(refused(ENGINE, sql).contains(why), "{sql}: {}", refused(ENGINE, sql));
         }
-        assert_eq!(run("replace into t values (1)"), Wrap::Commit);
-        assert_eq!(run("describe t"), Wrap::Commit);
+        assert_eq!(run(ENGINE, "replace into t values (1)"), Wrap::Commit);
+        assert_eq!(run(ENGINE, "describe t"), Wrap::Commit);
         // Plain comments and optimizer hints are fine.
-        assert_eq!(run("select /*+ MAX_EXECUTION_TIME(1000) */ 1 /* why */ -- note"), Wrap::Commit);
+        assert_eq!(run(ENGINE, "select /*+ MAX_EXECUTION_TIME(1000) */ 1 /* why */ -- note"), Wrap::Commit);
     }
 }
 
 mod sqlite {
-    use crate::agents::{Verdict, Wrap, verdict};
-    use crate::db::{AgentAccess, ConnectionMode, Engine};
+    use super::*;
 
-    fn verdict_on(sql: &str) -> Verdict {
-        verdict(AgentAccess::Write, ConnectionMode::Normal, sql, Engine::Sqlite)
-    }
-
-    /// Why it's refused.
-    fn refused(sql: &str) -> String {
-        match verdict_on(sql) {
-            Verdict::Refuse(said) => said,
-            Verdict::Run(wrap) => panic!("ran {sql}: {wrap:?}"),
-        }
-    }
-
-    /// How it runs.
-    fn run(sql: &str) -> Wrap {
-        match verdict_on(sql) {
-            Verdict::Run(wrap) => wrap,
-            Verdict::Refuse(said) => panic!("refused {sql}: {said}"),
-        }
-    }
+    const ENGINE: Engine = Engine::Sqlite;
 
     #[test]
     fn its_own_statements() {
@@ -130,9 +96,9 @@ mod sqlite {
             ("attach 'other.db' as o", "not ATTACH: a connection is one database file"),
             ("pragma writable_schema = 1", "not PRAGMA: describe_table tells"),
         ] {
-            assert!(refused(sql).contains(why), "{sql}: {}", refused(sql));
+            assert!(refused(ENGINE, sql).contains(why), "{sql}: {}", refused(ENGINE, sql));
         }
-        assert_eq!(run("replace into t values (1)"), Wrap::Commit);
-        assert_eq!(run("values (1), (2)"), Wrap::Commit);
+        assert_eq!(run(ENGINE, "replace into t values (1)"), Wrap::Commit);
+        assert_eq!(run(ENGINE, "values (1), (2)"), Wrap::Commit);
     }
 }

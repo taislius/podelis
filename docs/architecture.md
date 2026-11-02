@@ -56,7 +56,9 @@ that ships (items marked `#[cfg(test)]` may reach across): a
 `crate::app` in `gateway/`, or a `use crate::{app::…}`, fails `cargo
 test`. Inside the core, `sql` and `db` use each other (`Engine` and the
 lexer rules one way, statement analysis the other); being one crate,
-that's allowed. `agents` and `gateway` share a level: the
+that's allowed. The core's items the app uses are `pub`, so rustc can't
+tell when the app stops using one: dead code there goes unnoticed (the
+price of a library crate). `agents` and `gateway` share a level: the
 gateway serves agents' MCP sessions, and `podelis mcp` starts the gateway.
 
 Whoever connects (the app, `-e`, the gateway, agents) turns a saved
@@ -225,8 +227,10 @@ Outside `db/`, code doesn't name an engine except in tests.
 ### Adding an engine
 
 1. A folder `db/<engine>/` with an `engine.toml` (`name`, `order`,
-   `feature`) and that feature in `Cargo.toml` (on by default, turning on
-   its sqlx driver),
+   `feature`) and that feature in both manifests: the core's
+   `crates/podelis-core/Cargo.toml` (turning on its sqlx driver) and the
+   root `Cargo.toml` (passing it on: `<engine> = ["podelis-core/<engine>"]`),
+   in each one's `default` list,
    `mod.rs` (a `Dialect` impl, `DriverPool`, `DriverConnection`,
    `DIALECT`, `cell`), `connect.rs`, `queries.rs`, `cells.rs`,
    `passwords.rs`, `agent_constraints.rs` and `db_tests.rs`, modelled on

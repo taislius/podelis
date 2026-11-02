@@ -73,6 +73,13 @@ fn english() -> Catalog {
     catalog(LANGUAGES[0].2)
 }
 
+/// English's keys: every word there is (the app's tests check them
+/// against the `t!`s in both crates' code).
+#[cfg(any(test, feature = "test-support"))]
+pub fn english_keys() -> Vec<&'static str> {
+    english().into_keys().collect()
+}
+
 /// The language `setting` names (`auto`, or a code like `lt`), `auto`
 /// following `LANG` (`lt_LT.UTF-8` is Lithuanian); English for any other.
 fn pick(setting: &str, lang_env: Option<&str>) -> &'static (&'static str, &'static str, &'static str) {
@@ -217,68 +224,6 @@ mod tests {
             .collect();
         names.sort_unstable();
         names
-    }
-
-    /// Every key the code uses, from its `t!("…")`s.
-    fn used_keys() -> Vec<String> {
-        let mut keys = Vec::new();
-        // This crate's code and the app's (the workspace's root crate).
-        let mut stack = vec![
-            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
-            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../src")),
-        ];
-        while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(dir).unwrap().flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    // Not the words' own module: its comments show examples.
-                    if !path.ends_with("lang") {
-                        stack.push(path);
-                    }
-                } else if path.extension().is_some_and(|e| e == "rs") {
-                    let code = std::fs::read_to_string(&path).unwrap();
-                    // `t!("…` and `tn!("…`, not the end of `format!("…`.
-                    for macro_call in ["t!(", "tn!("] {
-                        for (at, _) in code.match_indices(macro_call) {
-                            let before = code[..at].chars().next_back();
-                            if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
-                                continue;
-                            }
-                            // The key, maybe on the next line (as rustfmt puts it).
-                            let Some(rest) = code[at + macro_call.len()..].trim_start().strip_prefix('"') else {
-                                continue;
-                            };
-                            if let Some((key, _)) = rest.split_once('"') {
-                                // A counted word's forms: `key.one`, `key.other`…
-                                let forms = if macro_call.starts_with("tn") { ".other" } else { "" };
-                                keys.push(format!("{key}{forms}"));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // Keys are `section.key`; the examples in comments aren't.
-        keys.retain(|k| k.contains('.') && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_'));
-        keys
-    }
-
-    #[test]
-    fn every_key_the_code_uses_is_in_english() {
-        let en = english();
-        let missing: Vec<String> = used_keys().into_iter().filter(|k| !en.contains_key(k.as_str())).collect();
-        assert!(missing.is_empty(), "not in lang/en.toml: {missing:?}");
-    }
-
-    #[test]
-    fn english_has_no_words_the_code_doesnt_use() {
-        let used = used_keys();
-        let counted =
-            |k: &str| k.rsplit_once('.').is_some_and(|(stem, _)| used.iter().any(|u| *u == format!("{stem}.other")));
-        let mut unused: Vec<&str> =
-            english().into_keys().filter(|k| !used.iter().any(|u| u == k) && !counted(k)).collect();
-        unused.sort_unstable();
-        assert!(unused.is_empty(), "in lang/en.toml but not used: {unused:?}");
     }
 
     #[test]
