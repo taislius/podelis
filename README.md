@@ -215,6 +215,24 @@ Without the UI, for scripts and pipes, see
 From a checkout, `cargo run` (or `cargo run -- -p shop-backend`). No config
 file is needed — the first run starts with a welcome screen.
 
+## Extending and scripting
+
+Podėlis has no plugin API. It works with other programs instead, Unix
+style: it runs your commands and prints what scripts can read. Most of
+these work headless too, with no UI: in scripts, cron jobs and CI.
+
+| What | In the app | Headless |
+|---|---|---|
+| Rows to another program | `\|` pipes the rows shown through a command (`\| grep LT \| sort`); `o` opens them in an app per format, or in `[viewers]` you choose ([Results](docs/query-screen.md#results)) | `podelis prod -e "…" -f csv` (or `tsv`, `json`, `table`) prints them to stdout: pipe them anywhere ([`-e`](docs/command-line.md#run-sql--e)) |
+| Data in | | `podelis app.db --import data.csv` ([`--import`](docs/command-line.md#load-a-file---import)) |
+| Passwords from your tools | A connection's password command (`op read …`, `pass show …`, `vault kv get …`) instead of a saved password ([Settings](docs/connections.md#settings)) | The same, for every saved connection `-e`, `--import` and `ask` open; or `$DATABASE_URL` |
+| Models' keys from your tools | | A model's `key_command` in `config.toml` ([AI models](docs/configuration.md#ai-models)) |
+| AI agents | Their calls, approvals and sandboxes in the agent activity (`Ctrl+K`, then type "agent") | `podelis mcp`: any MCP agent uses the connections you share, under the rules you set ([For AI agents](docs/agents.md)) |
+| Asking and memory | `Ctrl+K q`, `Ctrl+K k` | `podelis ask`, `podelis memory` ([`ask`](docs/command-line.md#ask-in-plain-language-ask), [`memory`](docs/command-line.md#what-your-team-knows-memory)) |
+| Telling what happened | | Exit codes for each kind of failure, so a script can tell a refused write from a lost server ([Exit codes](docs/command-line.md#exit-codes)); `podelis doctor` and `--test` check a setup ([On servers and in CI](docs/command-line.md#on-servers-and-in-ci)) |
+
+More databases through separate adapter programs are planned, not built.
+
 ## Documentation
 
 - [Projects and connections](docs/connections.md): projects, connection

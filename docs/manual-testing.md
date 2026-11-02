@@ -371,7 +371,7 @@ With a real key (a few cents) and, if you have it, Ollama:
 - [ ] A PostgreSQL connection shared as *write in a sandbox*: have an
   agent insert rows, update them, and read them back; from `psql` meanwhile
   nothing shows. One failing call (a duplicate key) leaves the rest. In
-  `Ctrl+K a` its calls say "in the sandbox", and `s` in its session gives
+  the agent activity (`Ctrl+K`, then "agent") its calls say "in the sandbox", and `s` in its session gives
   the script. Close the agent: the transaction is gone (`pg_stat_activity`
   shows no idle-in-transaction session).
 - [ ] Refusals say why, engine by engine: `PRAGMA table_info(t)` on SQLite
