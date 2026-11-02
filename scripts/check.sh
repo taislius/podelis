@@ -26,6 +26,11 @@ if [ "${PODELIS_CHECK_ENGINES:-}" = 1 ]; then
 fi
 echo "==> cargo-deny"
 cargo deny check
+# Dependencies no code uses: where cargo-machete is installed (CI runs it).
+if command -v cargo-machete > /dev/null; then
+    echo "==> cargo-machete"
+    cargo machete
+fi
 # The scripts are POSIX sh (Debian's /bin/sh is dash, not bash): checked
 # where shellcheck or dash is installed.
 if command -v shellcheck > /dev/null; then
