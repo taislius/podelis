@@ -87,6 +87,23 @@ async fn one_gateway_per_folder_and_a_crashed_ones_socket_is_replaced() {
     client.call("status", json!({})).await.unwrap();
 }
 
+/// Idle counts from when the last client went, not from the start: one that
+/// came and went late keeps the gateway up for a whole idle time after.
+#[tokio::test]
+async fn idle_counts_from_the_last_client() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = start(dir.path(), Some(Duration::from_secs(1)));
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let client = connect(dir.path()).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(client);
+    // 1.5 s after the start, but only 0.7 s since the client went.
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert!(!server.is_finished(), "stopped counting from the start");
+    let ended = tokio::time::timeout(Duration::from_secs(3), server).await.unwrap().unwrap().unwrap();
+    assert_eq!(ended, Ended::Stopped("idle"));
+}
+
 #[tokio::test]
 async fn it_stops_when_idle_and_tells_clients_when_it_stops() {
     let dir = tempfile::tempdir().unwrap();

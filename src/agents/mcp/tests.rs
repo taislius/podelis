@@ -9,7 +9,10 @@ pub(crate) struct TestAgent;
 
 impl ClientHandler for TestAgent {
     fn get_info(&self) -> ClientConfig {
-        ClientConfig::new(ClientCapabilities::default(), Implementation::new("test-agent", "1"))
+        ClientConfig::new(
+            ClientCapabilities::default(),
+            Implementation::new("test-agent", "1").with_title("Test Agent"),
+        )
     }
 }
 
@@ -122,6 +125,8 @@ async fn an_agents_sandbox_keeps_nothing() {
     assert!(count(call(&reader, "query", look_q).await));
     let text = std::fs::read_to_string(&log).unwrap();
     let entries: Vec<serde_json::Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let first = entries.iter().find(|e| e["sandbox"].is_number()).unwrap();
+    assert_eq!(first["sandbox"], serde_json::json!(1), "the first sandbox is 1: {text}");
     assert!(entries.iter().filter(|e| e["sandbox"] == serde_json::json!(1)).count() >= 4, "{text}");
     // The one after the idle rollback is a new sandbox.
     assert_eq!(entries.last().unwrap()["sandbox"], serde_json::json!(2), "{text}");
@@ -330,6 +335,7 @@ async fn approved_writes_wait_for_the_user() {
                     if request.sql.contains("x = 7") {
                         continue;
                     }
+                    assert!(request.production, "a production connection: {request:?}");
                     seen.lock().unwrap().push(request.dry_run.clone());
                     crate::agents::answer(&pending, &request.id, request.sql.contains("x = 5"));
                 }
@@ -442,6 +448,13 @@ async fn live_agents_on_servers() {
         // where the engine can tell how big (not SQLite); elsewhere it runs.
         let heavy = call(&client, "query", q("prod", "SELECT * FROM agent_t WHERE x = 2")).await;
         let tables = setup.tables(false).await.unwrap();
+        let rows = tables.iter().find(|t| t.name == "agent_t").and_then(|t| t.rows).filter(|r| *r >= 0);
+        // An engine's row estimate, where it has one, goes with the table.
+        let schema = call(&client, "schema", serde_json::json!({ "connection": "reads", "filter": "agent_t" })).await;
+        assert_eq!(schema.contains(", ~"), rows.is_some(), "{engine:?}: {schema}");
+        if let Some(rows) = rows {
+            assert!(schema.contains(&format!(", ~{rows} rows")), "{engine:?}: {schema}");
+        }
         if tables.iter().find(|t| t.name == "agent_t").is_some_and(|t| t.rows.is_some()) {
             assert!(
                 heavy.starts_with("ERROR") && heavy.contains("read all of") && heavy.contains("agent_t"),
@@ -487,4 +500,282 @@ fn make_file_db(path: &std::path::Path, sql: &str) {
     })
     .join()
     .unwrap();
+}
+
+/// What agents learn of a table: its columns and keys, its indexes (not
+/// the primary key's), its foreign keys, a view's definition, found in any
+/// case; and its neighbours through foreign keys.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn agents_learn_a_tables_shape_and_its_neighbours() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.db");
+    make_file_db(
+        &path,
+        "CREATE TABLE parent (id INTEGER PRIMARY KEY, code TEXT NOT NULL); \
+         CREATE UNIQUE INDEX parent_code ON parent (code); \
+         CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INT REFERENCES parent (id), note TEXT); \
+         CREATE VIEW kids AS SELECT id, note FROM child",
+    );
+    let shared = vec![file_connection("s", &path, AgentAccess::Read, ConnectionMode::Normal)];
+    let client = connect(Server::new("p1".into(), "shop".into(), shared, dir.path().join("log.jsonl"))).await;
+    let describe =
+        |table: &str| call(&client, "describe_table", serde_json::json!({ "connection": "s", "table": table }));
+    let parent = describe("PARENT").await;
+    assert!(parent.starts_with("parent\n"), "{parent}");
+    assert!(
+        parent.contains("  id INTEGER NOT NULL PRIMARY KEY") || parent.contains("  id INTEGER PRIMARY KEY"),
+        "{parent}"
+    );
+    assert!(parent.contains("  code TEXT NOT NULL"), "{parent}");
+    assert!(parent.contains("unique index parent_code (code)"), "{parent}");
+    assert!(!parent.contains("autoindex") && parent.matches("index").count() == 1, "only its own index: {parent}");
+    let child = describe("child").await;
+    assert!(child.contains("  note TEXT\n"), "nullable, no NOT NULL: {child}");
+    assert!(child.contains("foreign key parent_id → parent"), "{child}");
+    let view = describe("kids").await;
+    assert!(view.starts_with("kids (view)\n") && view.contains("definition: CREATE VIEW kids"), "{view}");
+    assert!(describe("nope").await.starts_with("ERROR No table 'nope'"));
+    let related = call(&client, "related_tables", serde_json::json!({ "connection": "s", "table": "parent" })).await;
+    assert!(related.contains("child") && related.contains("parent_id"), "{related}");
+}
+
+/// The schema of a big database is cut, with a note to filter, and a filter
+/// that matches nothing says so.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_big_schema_is_cut_with_a_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("big.db");
+    let columns: Vec<String> = (0..12).map(|c| format!("a_rather_long_column_name_{c} TEXT")).collect();
+    let tables: Vec<String> =
+        (0..700).map(|t| format!("CREATE TABLE table_number_{t} ({});", columns.join(", "))).collect();
+    make_file_db(&path, &tables.join("\n"));
+    let shared = vec![file_connection("big", &path, AgentAccess::Read, ConnectionMode::Normal)];
+    let client = connect(Server::new("p1".into(), "shop".into(), shared, dir.path().join("log.jsonl"))).await;
+    let all = call(&client, "schema", serde_json::json!({ "connection": "big" })).await;
+    assert!(all.ends_with("… more tables left out: pass a filter\n"), "{}", &all[all.len().saturating_sub(200)..]);
+    assert!(all.len() < 200_000 + 1_000, "{}", all.len());
+    let one = call(&client, "schema", serde_json::json!({ "connection": "big", "filter": "NUMBER_699" })).await;
+    assert_eq!(one.lines().count(), 1, "{one}");
+    let none = call(&client, "schema", serde_json::json!({ "connection": "big", "filter": "nothing_like_it" })).await;
+    assert_eq!(none, "No tables match.");
+}
+
+/// The log says who ran what, where: the agent as it calls itself (title
+/// too), the engine, the tool, the SQL as sent but trimmed; a shared
+/// connection that can't be opened is an error, an unshared one a refusal.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn the_log_says_who_ran_what_where() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.db");
+    make_file_db(&path, "CREATE TABLE t (x INT)");
+    let log = dir.path().join("log.jsonl");
+    let shared = vec![
+        file_connection("s", &path, AgentAccess::Read, ConnectionMode::Normal),
+        file_connection("w", &path, AgentAccess::Write, ConnectionMode::Normal),
+        file_connection("gone", &dir.path().join("missing.db"), AgentAccess::Read, ConnectionMode::Normal),
+    ];
+    let client = connect(Server::new("p1".into(), "shop".into(), shared, log.clone())).await;
+    let q = |connection: &str, sql: &str| serde_json::json!({ "connection": connection, "sql": sql });
+    assert!(!call(&client, "query", q("s", "  select x from t  ")).await.starts_with("ERROR"));
+    assert!(!call(&client, "explain", q("s", "select x from t")).await.starts_with("ERROR"));
+    assert_eq!(call(&client, "query", q("w", "insert into t values (1)")).await, r#"{"rows_affected":1}"#);
+    assert!(call(&client, "query", q("gone", "select 1")).await.starts_with("ERROR"));
+    assert!(call(&client, "query", q("nope", "select 1")).await.starts_with("ERROR"));
+    let text = std::fs::read_to_string(&log).unwrap();
+    let entries: Vec<serde_json::Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let find = |connection: &str, tool: &str| {
+        entries
+            .iter()
+            .find(|e| e["connection"] == connection && e["tool"] == tool)
+            .unwrap_or_else(|| panic!("no {tool} on {connection}: {text}"))
+    };
+    let ran = find("s", "query");
+    assert_eq!(ran["sql"], "select x from t", "{text}");
+    assert_eq!(ran["engine"], serde_json::to_value(Engine::Sqlite).unwrap(), "{text}");
+    assert_eq!(
+        (ran["agent"].as_str(), ran["agent_title"].as_str()),
+        (Some("test-agent"), Some("Test Agent")),
+        "{text}"
+    );
+    assert!(ran["at"].as_str().is_some_and(|at| at.starts_with("20")), "{text}");
+    assert!(ran["rows"] == 0 && ran["changed"].is_null(), "a read's rows: {text}");
+    let wrote = find("w", "query");
+    assert!(wrote["changed"] == 1 && wrote["rows"].is_null(), "a write's rows changed: {text}");
+    assert_eq!(find("s", "explain")["sql"], "select x from t", "{text}");
+    let gone = find("gone", "query");
+    assert!(gone["error"].is_string() && gone["refused"].is_null(), "an error, not a refusal: {text}");
+    let nope = find("nope", "query");
+    assert!(nope["refused"].is_string() && nope["error"].is_null(), "a refusal: {text}");
+}
+
+/// A connection is opened for agents read-only on the server too, unless
+/// they may write there and it isn't a read-only connection, so a write
+/// that got past the SQL's checks still fails; changed sharing opens it
+/// again with the new rights.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn agents_connections_are_read_only_unless_they_may_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.db");
+    make_file_db(&path, "CREATE TABLE t (x INT)");
+    let shared = vec![
+        file_connection("reads", &path, AgentAccess::Read, ConnectionMode::Normal),
+        file_connection("writes", &path, AgentAccess::Write, ConnectionMode::Normal),
+        file_connection("locked", &path, AgentAccess::Write, ConnectionMode::ReadOnly),
+    ];
+    let server = Server::new("p1".into(), "shop".into(), shared, dir.path().join("log.jsonl"));
+    // Straight to the connection, past the SQL's checks.
+    let writes = async |server: &Server, name: &str| {
+        let (db, _, _) = server.database(name).await.unwrap();
+        db.run("INSERT INTO t VALUES (1)", 1).await.is_ok()
+    };
+    assert!(!writes(&server, "reads").await, "read access: read-only on the server");
+    assert!(writes(&server, "writes").await);
+    assert!(!writes(&server, "locked").await, "a read-only connection stays read-only");
+    // Sharing changed from write to read: opened again, read-only.
+    let store = dir.path().join("connections.toml");
+    let save = |agents: &str| {
+        let toml = format!(
+            "[[projects]]\nid = \"p1\"\nname = \"shop\"\n[[projects.connections]]\nname = \"s\"\nengine = \"Sqlite\"\n\
+             host = \"{}\"\nport = \"\"\nuser = \"\"\ndatabase = \"\"\nagents = \"{agents}\"\n",
+            path.display()
+        );
+        std::fs::write(&store, toml).unwrap();
+    };
+    let server =
+        Server::new("p1".into(), "shop".into(), Vec::new(), dir.path().join("log.jsonl")).reading(store.clone());
+    save("write");
+    assert!(writes(&server, "s").await);
+    save("read");
+    assert!(!writes(&server, "s").await, "the new rights, not the old connection");
+}
+
+/// An answer exactly at the size limit isn't cut, and when every row came
+/// it says none were left out.
+#[test]
+fn an_answer_at_the_limit_is_whole() {
+    // Each cell counts its length and 3: 1,000 a row, 200 rows, the limit.
+    let cell = "x".repeat(997);
+    let outcome = QueryOutcome {
+        columns: vec!["a".into()],
+        rows: vec![vec![Some(cell)]; 200],
+        total_rows: 200,
+        ..QueryOutcome::default()
+    };
+    let json: serde_json::Value = serde_json::from_str(&answer(&outcome, false)).unwrap();
+    assert_eq!(json["rows"].as_array().unwrap().len(), 200);
+    assert_eq!(json["more_rows"], false);
+    assert!(json["notes"].is_null(), "{}", json["notes"]);
+}
+
+/// A sandbox in use isn't rolled back as idle: idle counts from its last
+/// call, not from its first.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_sandbox_in_use_isnt_idle() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.db");
+    make_file_db(&path, "CREATE TABLE t (x INT)");
+    let log = dir.path().join("log.jsonl");
+    let sandbox = vec![file_connection("box", &path, AgentAccess::Sandbox, ConnectionMode::Normal)];
+    let server = Server::new("p1".into(), "shop".into(), sandbox, log.clone()).idling(Duration::from_secs(2));
+    let client = connect(server).await;
+    let q = serde_json::json!({ "connection": "box", "sql": "insert into t values (1)" });
+    // A call every half second for 3.5 s: never 2 s apart.
+    for _ in 0..8 {
+        assert!(!call(&client, "query", q.clone()).await.starts_with("ERROR"));
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let entries = agents::read(&log);
+    assert!(entries.iter().all(|e| e.sandbox == Some(1)), "one sandbox throughout: {entries:?}");
+}
+
+/// A sandbox whose connection was opened again (its sharing changed) is
+/// lost, said so, and never written into; the next call starts a new one.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_sandbox_on_a_reopened_connection_is_lost() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.db");
+    make_file_db(&path, "CREATE TABLE t (x INT)");
+    let store = dir.path().join("connections.toml");
+    let save = |timeout: &str| {
+        let toml = format!(
+            "[[projects]]\nid = \"p1\"\nname = \"shop\"\n[[projects.connections]]\nname = \"box\"\nengine = \"Sqlite\"\n\
+             host = \"{}\"\nport = \"\"\nuser = \"\"\ndatabase = \"\"\nagents = \"sandbox\"\ntimeout = \"{timeout}\"\n",
+            path.display()
+        );
+        std::fs::write(&store, toml).unwrap();
+    };
+    save("5");
+    let log = dir.path().join("log.jsonl");
+    let server = Server::new("p1".into(), "shop".into(), Vec::new(), log.clone()).reading(store.clone());
+    let client = connect(server).await;
+    let q = |sql: &str| serde_json::json!({ "connection": "box", "sql": sql });
+    assert!(!call(&client, "query", q("insert into t values (1)")).await.starts_with("ERROR"));
+    save("6");
+    let lost = call(&client, "query", q("insert into t values (2)")).await;
+    assert!(lost.starts_with("ERROR") && lost.contains("the sandbox was lost"), "{lost}");
+    let next = call(&client, "query", q("select count(*) from t")).await;
+    assert!(next.contains(r#"[["0"]]"#), "a new sandbox, with neither insert: {next}");
+    let numbers: Vec<Option<u32>> = agents::read(&log).iter().map(|e| e.sandbox).collect();
+    assert_eq!(numbers.first(), Some(&Some(1)));
+    assert_eq!(numbers.last(), Some(&Some(2)), "{numbers:?}");
+}
+
+/// On the servers: a write's dry run for the user approving it (none for a
+/// schema change where it commits at once), and a sandbox's end turning
+/// MySQL's autocommit back on.
+#[tokio::test]
+async fn live_dry_run_notes_and_sandbox_ends() {
+    for engine in [Engine::Postgres, Engine::MySql] {
+        let Some((db, params)) = crate::db::tests::own_live_db(engine, "podelis_agent_dry").await else { continue };
+        db.run("DROP TABLE IF EXISTS dry_t", 1).await.unwrap();
+        db.run("DROP TABLE IF EXISTS dry_u", 1).await.unwrap();
+        db.run("CREATE TABLE dry_t (id INT PRIMARY KEY, x INT)", 1).await.unwrap();
+        db.run("INSERT INTO dry_t VALUES (1, 1), (2, 2)", 1).await.unwrap();
+        let profile = ConnectionProfile {
+            port: params.port.to_string(),
+            user: params.user.clone(),
+            database: params.database.clone(),
+            ..server_connection("d", engine, &params.host, AgentAccess::Approve, ConnectionMode::Production)
+        };
+        let ddl = dry_run_note(&db, &profile, "CREATE TABLE dry_u (id INT)").await.unwrap();
+        let write = dry_run_note(&db, &profile, "UPDATE dry_t SET x = 0 WHERE x > 0").await.unwrap();
+        assert_eq!(write, "dry run: would change 2 row(s)", "{engine:?}");
+        if engine.capabilities().ddl_commits {
+            assert_eq!(ddl, format!("no dry run: {} commits schema changes at once", engine.label()));
+        } else {
+            assert_eq!(ddl, "dry run: would change 0 row(s)", "{engine:?}: a schema change rolls back here");
+        }
+        let changed = db.run("SELECT count(*) FROM dry_t WHERE x = 0", 1).await.unwrap();
+        assert_eq!(changed.rows[0][0].as_deref(), Some("0"), "{engine:?}: dry runs change nothing");
+        if engine == Engine::MySql {
+            db.run_once("SET autocommit = 0", 1).await.unwrap();
+            end_sandbox(&db).await;
+            let on = db.run_once("SELECT @@autocommit", 1).await.unwrap();
+            assert_eq!(on.rows[0][0].as_deref(), Some("1"), "autocommit back on");
+        }
+        db.run("DROP TABLE dry_t", 1).await.unwrap();
+        db.run("DROP TABLE IF EXISTS dry_u", 1).await.unwrap();
+    }
+}
+
+/// A plan's notes come first, under their heading, only when it has some.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_plans_notes_lead_only_when_there_are_some() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.db");
+    make_file_db(&path, "CREATE TABLE t (id INTEGER PRIMARY KEY, x INT)");
+    let shared = vec![file_connection("s", &path, AgentAccess::Read, ConnectionMode::Normal)];
+    let client = connect(Server::new("p1".into(), "shop".into(), shared, dir.path().join("log.jsonl"))).await;
+    let explain = |sql: &str| call(&client, "explain", serde_json::json!({ "connection": "s", "sql": sql }));
+    let sorted = explain("SELECT * FROM t ORDER BY x").await;
+    assert!(sorted.starts_with("What stands out:\n- Sorts in a temporary B-tree"), "{sorted}");
+    let looked_up = explain("SELECT * FROM t WHERE id = 2").await;
+    assert!(!looked_up.contains("What stands out") && looked_up.contains("PRIMARY KEY"), "{looked_up}");
 }
