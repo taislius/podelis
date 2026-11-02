@@ -215,27 +215,6 @@ pub(crate) fn file_params(path: &std::path::Path, read_only: bool) -> ConnectPar
     }
 }
 
-/// A saved connection `name` to the file database at `path`.
-pub(crate) fn file_profile(name: &str, path: &std::path::Path) -> crate::config::store::ConnectionProfile {
-    crate::config::store::ConnectionProfile {
-        unknown: crate::config::store::Unknown::default(),
-        name: name.into(),
-        engine: file_engine(),
-        host: path.to_string_lossy().into_owned(),
-        port: String::new(),
-        user: String::new(),
-        database: String::new(),
-        ssl_mode: SslMode::Disable,
-        mode: ConnectionMode::Normal,
-        transaction: None,
-        ssh: String::new(),
-        timeout: String::new(),
-        password_command: Vec::new(),
-        agents: AgentAccess::None,
-        legacy_keychain: false,
-    }
-}
-
 /// Opt-in: `PODELIS_TEST_SSH_DEST` names an ssh destination that can
 /// reach the test database (by the same host/port as the direct test).
 #[tokio::test]
@@ -424,7 +403,6 @@ async fn links_on_each_engine() {
             ("parent_id", "link_parent", Some("id")),
             "{engine:?}"
         );
-        assert!(crate::related::describe(&links, "", "link_parent").contains("← link_child (parent_id → id)"));
         db.run("DROP TABLE link_child", 1).await.unwrap();
         db.run("DROP TABLE link_parent", 1).await.unwrap();
     }

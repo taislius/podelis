@@ -155,26 +155,6 @@ async fn an_address_nothing_answers_at_says_why_at_once() {
     crate::db::reach("127.0.0.1", open.local_addr().unwrap().port()).await.unwrap();
 }
 
-/// How PostgreSQL's types took the sample file (`import::tests`): each
-/// guessed one, the same moment from two time zones, and a bad value
-/// named by its line.
-#[tokio::test]
-async fn live_import_types() {
-    use crate::transfer::import::tests::{import_failing, import_sample};
-    let Some(db) = live_db(Engine::Postgres).await else { return };
-    let o = import_sample(&db, "pets_types").await;
-    let types: Vec<String> = o.column_types.iter().map(|t| t.to_lowercase()).collect();
-    assert_eq!(types[1..], ["text", "bool", "date", "timestamp", "float8", "timestamptz"]);
-    assert_eq!(o.rows[1][2].as_deref(), Some("false"));
-    assert_eq!(o.rows[0][4].as_deref(), Some("2026-10-13 10:00:00.123456"));
-    db.run("SET TIME ZONE 'UTC'", 1).await.unwrap();
-    let at = db.run("SELECT at FROM pets_types ORDER BY id", 10).await.unwrap();
-    assert_eq!(at.rows[0][0], at.rows[1][0], "the same moment: {:?}", at.rows);
-    let err = import_failing(&db, "id,born\n4,2020-01-01\n5,not a date\n", "pets_types").await;
-    assert!(format!("{err:#}").starts_with("line 3: "), "{err:#}");
-    db.run("DROP TABLE pets_types", 1).await.unwrap();
-}
-
 #[tokio::test]
 async fn live_postgres_partitions_name_their_parent() {
     let Some(db) = live_db(Engine::Postgres).await else { return };

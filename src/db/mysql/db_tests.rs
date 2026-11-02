@@ -178,20 +178,3 @@ async fn a_mysql_server_that_is_down_says_why_at_once() {
     assert!(crate::db::is_unreachable(&err));
 }
 
-/// How MySQL's types took the sample file (`import::tests`): booleans are
-/// TINYINT(1), timestamps keep their microseconds, a time with a zone is
-/// kept as written; a bad value puts nothing in.
-#[tokio::test]
-async fn live_import_types() {
-    use crate::transfer::import::tests::{import_failing, import_sample};
-    let Some((db, _)) = own_live_db("podelis_import_types").await else { return };
-    let o = import_sample(&db, "pets_types").await;
-    assert_eq!(o.rows[1][2].as_deref(), Some("0"), "BOOLEAN is TINYINT(1)");
-    assert_eq!(o.rows[0][4].as_deref(), Some("2026-10-13 10:00:00.123456"));
-    assert_eq!(o.rows[1][4].as_deref(), Some("2026-10-13 11:30:00.000000"));
-    assert_eq!(o.rows[0][6].as_deref(), Some("2026-10-13T10:00:00Z"), "kept as written");
-    import_failing(&db, "id,born\n4,2020-01-01\n5,not a date\n", "pets_types").await;
-    let count = db.run("SELECT count(*) FROM pets_types", 1).await.unwrap();
-    assert_eq!(count.rows[0][0].as_deref(), Some("3"));
-    db.run("DROP TABLE pets_types", 1).await.unwrap();
-}

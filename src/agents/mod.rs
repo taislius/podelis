@@ -3,6 +3,8 @@
 //! itself.
 
 mod approvals;
+#[cfg(test)]
+mod engines;
 mod log;
 pub(crate) mod mcp;
 

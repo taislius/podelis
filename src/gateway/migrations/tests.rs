@@ -96,7 +96,7 @@ fn names_quoted_the_engines_way() {
 fn the_engine_most_connections_use() {
     let profile = |engine| crate::config::store::ConnectionProfile {
         engine,
-        ..crate::db::tests::file_profile("x", std::path::Path::new("x"))
+        ..crate::config::store::file_profile("x", std::path::Path::new("x"))
     };
     assert_eq!(engine_of(&[]), Engine::ALL[0]);
     let [first, second, ..] = Engine::ALL;

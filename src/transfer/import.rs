@@ -642,4 +642,43 @@ pub(crate) mod tests {
         assert_eq!(col(1), [Some("1999".into()), None, Some("2002".into())]);
         assert_eq!(col(2)[0].as_deref(), Some("integer"), "a `\\N` doesn't make the column text");
     }
+
+    /// How PostgreSQL's types took the sample file (`import::tests`): each
+    /// guessed one, the same moment from two time zones, and a bad value
+    /// named by its line.
+    #[tokio::test]
+    async fn live_postgres_import_types() {
+        let Some(db) = crate::db::tests::live_db(crate::db::Engine::Postgres).await else { return };
+        let o = import_sample(&db, "pets_types").await;
+        let types: Vec<String> = o.column_types.iter().map(|t| t.to_lowercase()).collect();
+        assert_eq!(types[1..], ["text", "bool", "date", "timestamp", "float8", "timestamptz"]);
+        assert_eq!(o.rows[1][2].as_deref(), Some("false"));
+        assert_eq!(o.rows[0][4].as_deref(), Some("2026-10-13 10:00:00.123456"));
+        db.run("SET TIME ZONE 'UTC'", 1).await.unwrap();
+        let at = db.run("SELECT at FROM pets_types ORDER BY id", 10).await.unwrap();
+        assert_eq!(at.rows[0][0], at.rows[1][0], "the same moment: {:?}", at.rows);
+        let err = import_failing(&db, "id,born\n4,2020-01-01\n5,not a date\n", "pets_types").await;
+        assert!(format!("{err:#}").starts_with("line 3: "), "{err:#}");
+        db.run("DROP TABLE pets_types", 1).await.unwrap();
+    }
+
+    /// How MySQL's types took the sample file (`import::tests`): booleans are
+    /// TINYINT(1), timestamps keep their microseconds, a time with a zone is
+    /// kept as written; a bad value puts nothing in.
+    #[tokio::test]
+    async fn live_mysql_import_types() {
+        let Some((db, _)) = crate::db::tests::own_live_db(crate::db::Engine::MySql, "podelis_import_types").await
+        else {
+            return;
+        };
+        let o = import_sample(&db, "pets_types").await;
+        assert_eq!(o.rows[1][2].as_deref(), Some("0"), "BOOLEAN is TINYINT(1)");
+        assert_eq!(o.rows[0][4].as_deref(), Some("2026-10-13 10:00:00.123456"));
+        assert_eq!(o.rows[1][4].as_deref(), Some("2026-10-13 11:30:00.000000"));
+        assert_eq!(o.rows[0][6].as_deref(), Some("2026-10-13T10:00:00Z"), "kept as written");
+        import_failing(&db, "id,born\n4,2020-01-01\n5,not a date\n", "pets_types").await;
+        let count = db.run("SELECT count(*) FROM pets_types", 1).await.unwrap();
+        assert_eq!(count.rows[0][0].as_deref(), Some("3"));
+        db.run("DROP TABLE pets_types", 1).await.unwrap();
+    }
 }
