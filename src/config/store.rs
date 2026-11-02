@@ -532,24 +532,30 @@ mod tests {
         store.project(project).unwrap().connections.iter().map(|c| c.name.clone()).collect()
     }
 
-    /// Opt-in (`PODELIS_TEST_KEYCHAIN=1`): a connection's password under its
-    /// real account name (project and connection, with what names may hold)
-    /// in the OS keychain, moved to another project as `m` does.
+    /// Opt-in (`PODELIS_TEST_KEYCHAIN=1`): the OS keychain stores, finds
+    /// and forgets a connection's password under its real account name
+    /// (project and connection, with what names may hold), as connecting
+    /// reads it. (Moving one with `m` is the app's test
+    /// `moving_a_connection_moves_its_password`.) Its entry goes however
+    /// the test ends: it'd sit beside the user's own.
     #[test]
     fn live_keychain_accounts_of_connections() {
         if std::env::var("PODELIS_TEST_KEYCHAIN").as_deref() != Ok("1") {
             return;
         }
+        struct Forget(String);
+        impl Drop for Forget {
+            fn drop(&mut self) {
+                let _ = crate::db::keychain::delete_password(&self.0);
+            }
+        }
         let p = profile("shop db / ąčę: \"prod\"");
-        let from = format!("podelis-test-{}", uuid::Uuid::new_v4());
-        let to = format!("podelis-test-{} (2)", uuid::Uuid::new_v4());
-        let (a, b) = (keychain_account(&from, &p), keychain_account(&to, &p));
-        crate::db::keychain::store_password(&a, "s3cret").unwrap();
-        assert_eq!(saved_password(&from, &p).0, "s3cret");
-        crate::db::keychain::store_password(&b, &get_password(&a).unwrap()).unwrap();
-        crate::db::keychain::delete_password(&a).unwrap();
-        assert_eq!((saved_password(&from, &p).0, saved_password(&to, &p).0), (String::new(), "s3cret".to_string()));
-        crate::db::keychain::delete_password(&b).unwrap();
+        let project = format!("podelis-test-{} (2)", uuid::Uuid::new_v4());
+        let entry = Forget(keychain_account(&project, &p));
+        crate::db::keychain::store_password(&entry.0, "s3cret").unwrap();
+        assert_eq!(saved_password(&project, &p), ("s3cret".to_string(), None));
+        crate::db::keychain::store_password(&entry.0, "").unwrap();
+        assert_eq!(saved_password(&project, &p).0, "");
     }
 
     #[test]

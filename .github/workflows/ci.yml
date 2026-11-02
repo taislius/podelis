@@ -65,7 +65,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        features: ["postgres,sqlite", "postgres", "mysql", "sqlite"]
+        # `key` names its cache: a cache key can't hold commas.
+        include:
+          - { features: "postgres,sqlite", key: postgres-sqlite }
+          - { features: postgres, key: postgres }
+          - { features: mysql, key: mysql }
+          - { features: sqlite, key: sqlite }
     services:
       postgres:
         image: postgres:17
@@ -91,6 +96,6 @@ jobs:
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.features }}
+          key: ${{ matrix.key }}
       - run: cargo clippy --all-targets --locked --no-default-features --features ${{ matrix.features }} -- -D warnings
       - run: cargo test --locked --no-default-features --features ${{ matrix.features }}

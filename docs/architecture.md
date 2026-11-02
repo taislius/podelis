@@ -264,7 +264,7 @@ Outside `db/`, code doesn't name an engine except in tests.
    `Engine::ALL` for SQL rules (in `db/tests.rs`, `agents/`,
    `transfer/import.rs`, `transfer/diff.rs`, `agents/mcp.rs` and the app's), so they take it in on
    their own; tests that need a database always there use the file
-   engine (`file_engine()`, by the `file_based` capability). Its own
+   engine (`file_engine()`: SQLite, so a test using it says `#[cfg(feature = "sqlite")]`). Its own
    statements for agents are tested in its `agent_constraints.rs`.
 
 ## The gateway

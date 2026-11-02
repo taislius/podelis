@@ -58,8 +58,9 @@ fn check(src: &Path, shown: &str, rules: &[(&str, &[&str])], wrong: &mut Vec<Str
     for &(module, denied) in rules {
         for file in files(src, module) {
             let text = std::fs::read_to_string(&file).unwrap();
+            let depth = depth_of(file.strip_prefix(src).unwrap());
             for (n, line) in shipped_lines(&text) {
-                for used in modules_named(&line) {
+                for used in modules_named(&line, depth) {
                     if denied.contains(&used.as_str()) {
                         let path = file.strip_prefix(src).unwrap().display();
                         wrong.push(format!("{shown}/{path}:{n}: {module} uses crate::{used}: {}", line.trim()));
@@ -95,21 +96,30 @@ fn files(src: &Path, module: &str) -> Vec<PathBuf> {
     out
 }
 
+/// How many modules down a file is: `lang/mod.rs` and `lang.rs` 1 (its
+/// `super` is the crate's root), `app/tests/mod.rs` 2.
+fn depth_of(path: &Path) -> usize {
+    let parts = path.components().count();
+    if path.file_name().is_some_and(|n| n == "mod.rs") { parts - 1 } else { parts }
+}
+
 fn is_test_file(name: &str) -> bool {
     name == "tests.rs" || name.ends_with("_tests.rs")
 }
 
 /// The file's statements that ship, numbered by their first line: test
-/// items left out, comments dropped, and a `use crate::{…}` that spans
-/// lines joined into one.
+/// items left out, comments, strings and character literals blanked (so
+/// neither their braces nor their words count), and a `use crate::{…}`
+/// that spans lines joined into one.
 fn shipped_lines(text: &str) -> Vec<(usize, String)> {
+    let code = blank(text);
     let mut out: Vec<(usize, String)> = Vec::new();
     let mut test_next = false;
     // Inside a test item: the braces still open (None until its first).
     let mut skipping: Option<Option<i32>> = None;
     let mut joining: Option<(usize, String)> = None;
-    for (i, line) in text.lines().enumerate() {
-        let code = line.split("//").next().unwrap_or("").trim();
+    for (i, line) in code.lines().enumerate() {
+        let code = line.trim();
         if let Some(depth) = &mut skipping {
             let opened = braces(code);
             let now = depth.unwrap_or(0) + opened;
@@ -154,52 +164,121 @@ fn shipped_lines(text: &str) -> Vec<(usize, String)> {
     out
 }
 
-/// The braces `code` opens less those it closes, outside strings and
-/// character literals (a test's `'{'` or `"{name}"` isn't a block).
+/// The braces a line of blanked code opens, less those it closes.
 fn braces(code: &str) -> i32 {
-    let mut depth = 0;
-    let mut chars = code.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => {
-                while let Some(c) = chars.next() {
-                    match c {
-                        '\\' => {
-                            chars.next();
-                        }
-                        '"' => break,
-                        _ => {}
-                    }
-                }
-            }
-            // A character literal (`'{'`, `'\\''`), not a lifetime (`'a`).
-            '\'' => {
-                // After the quote: `{'`, or an escape (`\''`, `\n'`, `\u{7f}'`)
-                // up to the quote after it.
-                let rest: String = chars.clone().take(12).collect();
-                let len = if rest.starts_with('\\') {
-                    rest.get(2..).and_then(|r| r.find('\'')).map(|i| i + 3)
-                } else {
-                    rest.chars().nth(1).filter(|c| *c == '\'').map(|_| 2)
-                };
-                for _ in 0..len.unwrap_or(0) {
-                    chars.next();
-                }
-            }
-            '{' => depth += 1,
-            '}' => depth -= 1,
-            _ => {}
-        }
-    }
-    depth
+    code.matches('{').count() as i32 - code.matches('}').count() as i32
 }
 
-/// The modules `code` names after `crate::` (or the other crates' names), a
-/// `crate::{…}` group's too.
-fn modules_named(code: &str) -> Vec<String> {
+/// `text` with its comments (`//`, nested `/* */`), strings (`"…"`, raw
+/// `r#"…"#`, byte ones) and character literals (`'{'`, `'\''`) made
+/// spaces, line breaks kept: the code alone, at its lines. A lifetime
+/// (`'a`) stays.
+fn blank(text: &str) -> String {
+    let c: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let gone = |ch: char| if ch == '\n' { '\n' } else { ' ' };
+    let mut i = 0;
+    while i < c.len() {
+        let (ch, next) = (c[i], c.get(i + 1).copied());
+        let after_word = i > 0 && (c[i - 1].is_alphanumeric() || c[i - 1] == '_');
+        if ch == '/' && next == Some('/') {
+            while i < c.len() && c[i] != '\n' {
+                out.push(' ');
+                i += 1;
+            }
+            continue;
+        }
+        if ch == '/' && next == Some('*') {
+            let mut depth = 0;
+            while i < c.len() {
+                if c[i] == '/' && c.get(i + 1) == Some(&'*') {
+                    depth += 1;
+                } else if c[i] == '*' && c.get(i + 1) == Some(&'/') {
+                    depth -= 1;
+                } else {
+                    out.push(gone(c[i]));
+                    i += 1;
+                    continue;
+                }
+                out.push_str("  ");
+                i += 2;
+                if depth == 0 {
+                    break;
+                }
+            }
+            continue;
+        }
+        // A raw string: `r"…"`, `r#"…"#`, `br"…"`.
+        if !after_word && (ch == 'r' || (ch == 'b' && next == Some('r'))) {
+            let mut j = i + if ch == 'b' { 2 } else { 1 };
+            let mut hashes = 0;
+            while c.get(j) == Some(&'#') {
+                hashes += 1;
+                j += 1;
+            }
+            if c.get(j) == Some(&'"') {
+                let closes = |at: usize| c[at] == '"' && (1..=hashes).all(|k| c.get(at + k) == Some(&'#'));
+                out.extend(std::iter::repeat_n(' ', j + 1 - i));
+                i = j + 1;
+                while i < c.len() && !closes(i) {
+                    out.push(gone(c[i]));
+                    i += 1;
+                }
+                let end = (i + 1 + hashes).min(c.len());
+                out.extend(std::iter::repeat_n(' ', end - i));
+                i = end;
+                continue;
+            }
+        }
+        if ch == '"' {
+            out.push(' ');
+            i += 1;
+            while i < c.len() && c[i] != '"' {
+                if c[i] == '\\' {
+                    out.push(' ');
+                    i += 1;
+                }
+                if i < c.len() {
+                    out.push(gone(c[i]));
+                    i += 1;
+                }
+            }
+            if i < c.len() {
+                out.push(' ');
+                i += 1;
+            }
+            continue;
+        }
+        // A character literal; not a lifetime (`'a`), whose second quote
+        // never comes.
+        if ch == '\'' {
+            let end = if next == Some('\\') {
+                (i + 3..c.len().min(i + 12)).find(|&j| c[j] == '\'')
+            } else {
+                (c.get(i + 2) == Some(&'\'')).then_some(i + 2)
+            };
+            if let Some(end) = end {
+                out.extend(std::iter::repeat_n(' ', end + 1 - i));
+                i = end + 1;
+                continue;
+            }
+        }
+        out.push(ch);
+        i += 1;
+    }
+    out
+}
+
+/// The modules `code` names after `crate::` (or the other crates' names,
+/// or as many `super::`s as reach the crate's root from a file `depth`
+/// modules down), a `crate::{…}` group's too.
+fn modules_named(code: &str, depth: usize) -> Vec<String> {
     let mut out = Vec::new();
     // The core's modules by their own names; the AI crate as `ai`.
-    let code = code.replace("podelis_core::", "crate::").replace("podelis_ai::", "crate::ai::");
+    let mut code = code.replace("podelis_core::", "crate::").replace("podelis_ai::", "crate::ai::");
+    if depth > 0 {
+        code = code.replace(&"super::".repeat(depth), "crate::");
+    }
     for (i, _) in code.match_indices("crate::") {
         let rest = &code[i + "crate::".len()..];
         if let Some(group) = rest.strip_prefix('{') {
@@ -232,12 +311,26 @@ fn ident(text: &str) -> String {
 
 #[test]
 fn the_check_sees_what_it_should() {
-    assert_eq!(modules_named("use crate::app::ConnectForm;"), ["app"]);
-    assert_eq!(modules_named("    let x = crate::cli::classify(a);"), ["cli"]);
-    assert_eq!(modules_named("use crate::application::X;"), ["application"]);
-    assert_eq!(modules_named("use podelis_core::db::Engine;"), ["db"]);
-    assert_eq!(modules_named("let m = podelis_ai::models::on_this_machine(c);"), ["ai"]);
-    assert_eq!(modules_named("use crate::{app::ConnectForm, config::{store, draft}, db};"), ["app", "config", "db"]);
+    let named = |code: &str| modules_named(code, 0);
+    assert_eq!(named("use crate::app::ConnectForm;"), ["app"]);
+    assert_eq!(named("    let x = crate::cli::classify(a);"), ["cli"]);
+    assert_eq!(named("use crate::application::X;"), ["application"]);
+    assert_eq!(named("use podelis_core::db::Engine;"), ["db"]);
+    assert_eq!(named("let m = podelis_ai::models::on_this_machine(c);"), ["ai"]);
+    assert_eq!(named("use crate::{app::ConnectForm, config::{store, draft}, db};"), ["app", "config", "db"]);
+    // `super` from a top module's file is the crate's root; deeper, it isn't.
+    assert_eq!(modules_named("use super::db::Engine;", 1), ["db"]);
+    assert!(modules_named("use super::grid::Grid;", 2).is_empty());
+    assert_eq!(modules_named("use super::super::ui::X;", 2), ["ui"]);
+    assert_eq!(depth_of(Path::new("lang/mod.rs")), 1);
+    assert_eq!(depth_of(Path::new("app/tests/results.rs")), 3);
+    // Strings, raw strings, character literals and comments hold no code.
+    assert_eq!(blank("f('{', \"{x}\") // crate::app {").trim_end(), "f(   ,      )");
+    // (`r"C:\dir\"` is 10 characters: no escapes in a raw string.)
+    assert_eq!(blank("let p = r\"C:\\dir\\\"; {").trim_end(), format!("let p = {}; {{", " ".repeat(10)));
+    assert_eq!(blank("r#\"say \"{\" here\"#; }").trim_end(), format!("{}; }}", " ".repeat(17)));
+    assert_eq!(blank("fn f<'a>(x: &'a str) { '\\'' }"), "fn f<'a>(x: &'a str) {      }");
+    assert_eq!(blank("/* a /* b */ { */ x").trim_start(), "x");
     let text = "\
 use crate::db::Engine;
 // crate::app in a comment
@@ -250,16 +343,16 @@ use crate::{
 #[cfg(test)]
 pub(crate) mod helpers {
     use crate::app::X;
+    const BODY: &str = r#\"{
+        \"a\": 1
+    }\"#;
     fn f() { if true { } }
 }
 #[cfg(test)]
 use crate::ui::Y;
 fn g() {}
 ";
-    assert_eq!(braces("let x = '{'; f(\"{name}\") {"), 1);
-    assert_eq!(braces("fn f<'a>(x: &'a str) { '\\'' }"), 0);
-    assert_eq!(braces("['\\'', '{', '\\u{7b}'] {"), 1);
-    let named: Vec<(usize, Vec<String>)> = shipped_lines(text).iter().map(|(n, l)| (*n, modules_named(l))).collect();
-    let expected = [(1, vec!["db"]), (5, vec!["config", "gateway"]), (16, vec![])];
-    assert_eq!(named, expected.map(|(n, m)| (n, m.into_iter().map(String::from).collect())));
+    let got: Vec<(usize, Vec<String>)> = shipped_lines(text).iter().map(|(n, l)| (*n, named(l))).collect();
+    let expected = [(1, vec!["db"]), (5, vec!["config", "gateway"]), (19, vec![])];
+    assert_eq!(got, expected.map(|(n, m)| (n, m.into_iter().map(String::from).collect())));
 }

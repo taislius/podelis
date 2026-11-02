@@ -211,7 +211,7 @@ pub(in crate::db) async fn live_cancel(db: &Database, slow: &str, stopped: impl 
 /// it happens to run.
 #[cfg(feature = "sqlite")]
 pub fn file_engine() -> Engine {
-    Engine::BUILT.into_iter().find(|e| e.is_file_based()).expect("an engine with file databases")
+    Engine::Sqlite
 }
 
 /// A file database at `path`.
