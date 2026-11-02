@@ -131,14 +131,20 @@ pub async fn serve(
     };
     // Clients are told, then given a moment to read it.
     let _ = shared.stop.send(Some(reason));
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while shared.clients.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    let_clients_read(&shared).await;
     let _ = std::fs::remove_file(&socket);
     tracing::info!(reason, "gateway stopped");
     drop(lock);
     Ok(Ended::Stopped(reason))
+}
+
+/// Waits, at most a second, for connected clients to read that the gateway
+/// stops and go, before the process ends under them.
+async fn let_clients_read(shared: &Shared) {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while shared.clients.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 /// Listens on `socket`, replacing a file a crashed gateway left (the
