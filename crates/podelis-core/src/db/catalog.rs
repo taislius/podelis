@@ -47,7 +47,7 @@ impl Database {
                     .map(|(s, t)| (s.to_string(), t.to_string()));
                 TableInfo {
                     system: dialect.is_system_table(&schema, &name)
-                        || (self.0.supabase && super::supabase::is_internal_schema(&schema)),
+                        || self.0.service.is_some_and(|s| s.is_internal_schema(&schema)),
                     schema,
                     name,
                     is_view: partition_of.is_none() && kind.to_ascii_uppercase().contains("VIEW"),

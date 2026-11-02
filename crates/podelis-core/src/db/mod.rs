@@ -31,7 +31,7 @@ mod options;
 pub mod password_command;
 pub mod passwords;
 mod run;
-pub mod supabase;
+pub mod services;
 #[cfg(any(test, feature = "test-support"))]
 pub mod tests;
 mod tunnel;
@@ -96,8 +96,9 @@ struct Inner {
     /// (`connect::check_reach`). None for a file, a socket path, or an SSH
     /// tunnel (its end is this machine).
     address: Option<(String, u16)>,
-    /// A Supabase database: its own schemas are system ones.
-    supabase: bool,
+    /// The hosted service it's on, if one (`services`): its own schemas are
+    /// system ones.
+    service: Option<&'static dyn services::Service>,
 }
 
 /// Transaction state of the session connection.
@@ -281,12 +282,13 @@ impl Database {
             params.host.trim().trim_start_matches('[').trim_end_matches(']').to_string()
         };
         let mut port = params.port;
-        let supabase = params.engine == Engine::Postgres && supabase::is_supabase(&host);
-        if supabase {
-            if let Some(why) = supabase::refused(&host, port) {
+        // A hosted service's own rules (Supabase's TLS, its pooler).
+        let service = services::serving(params.engine, &host);
+        if let Some(service) = service {
+            if let Some(why) = service.refused(&host, port) {
                 anyhow::bail!(why);
             }
-            if params.ssl_mode == SslMode::Prefer {
+            if service.requires_tls() && params.ssl_mode == SslMode::Prefer {
                 params.ssl_mode = SslMode::Require;
             }
         }
@@ -346,7 +348,7 @@ impl Database {
             stale: AtomicBool::new(false),
             stream_task: std::sync::Mutex::new(None),
             address,
-            supabase,
+            service,
         })))
     }
 
