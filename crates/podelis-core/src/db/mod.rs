@@ -20,6 +20,7 @@ include!(concat!(env!("OUT_DIR"), "/engines.rs"));
 
 mod activity;
 pub mod agent_constraints;
+mod backend;
 mod catalog;
 mod details;
 mod diagnose;
@@ -38,11 +39,12 @@ mod tunnel;
 mod types;
 
 pub use activity::Activity;
+pub use backend::{Backend, Capabilities, ContainerLogin, ContainerSecret};
 pub use details::{Comment, ForeignKey, IndexInfo, Link, RoutineInfo, TableDetails};
 pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint};
 #[cfg(any(test, feature = "test-support"))]
 pub use dialect::PlanNote;
-pub use dialect::{ContainerLogin, ContainerSecret, Dialect, LexerRules, Plan, TxEnd, human_rows};
+pub use dialect::{LexerRules, Plan, SqlDialect, TxEnd, human_rows};
 pub use errors::{
     CheckOutcome, ErrorPos, error_message, error_position, is_broken, is_reconnected, is_unreachable, missing_feature,
     sql_literal, value_literal,

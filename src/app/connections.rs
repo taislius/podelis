@@ -570,7 +570,7 @@ impl App {
             && let Err(e) = crate::db::keychain::store_password(&account, keep)
             && !keep.is_empty()
         {
-            let pgpass = form.engine.dialect().password_files_note();
+            let pgpass = form.engine.backend().password_files_note();
             let instead = match crate::db::password_command::installed(crate::system::programs::on_path).first() {
                 Some(tool) => {
                     t!("connections.tool_installed", tool = tool.label, example = tool.example(&name), pgpass = pgpass)

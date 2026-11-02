@@ -122,7 +122,7 @@ impl Ps {
         // container listening on both is more likely PostgreSQL's.
         Engine::BUILT.into_iter().filter(|e| !e.is_file_based()).find(|e| {
             let port = e.default_port().parse().unwrap_or(0);
-            listens(port) || e.dialect().container_images().contains(&repo.as_str())
+            listens(port) || e.backend().container_images().contains(&repo.as_str())
         })
     }
 
@@ -136,7 +136,7 @@ impl Ps {
                     .filter(|v| !v.is_empty())
                     .map(str::to_string)
             };
-            let login = engine.dialect().container_login(&var);
+            let login = engine.backend().container_login(&var);
             let (user, database, password) = login.map_or_else(Default::default, |l| (l.user, l.database, l.password));
             let password_command = match password {
                 Some(ContainerSecret::Var(name)) => words([tool, "exec", &self.name, "printenv", name]),

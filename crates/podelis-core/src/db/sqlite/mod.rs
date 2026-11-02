@@ -14,7 +14,8 @@ pub(super) mod passwords;
 #[cfg(feature = "sqlite")]
 pub(super) mod queries;
 
-use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan, PlanNote, hex_digits};
+use super::backend::{Backend, Capabilities};
+use super::dialect::{SqlDialect, LexerRules, Placeholders, Plan, PlanNote, hex_digits};
 
 pub struct Sqlite;
 
@@ -31,7 +32,35 @@ pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::Sqlite>;
 /// This engine's dialect, for `Engine::dialect`.
 pub(super) static DIALECT: Sqlite = Sqlite;
 
-impl Dialect for Sqlite {
+impl Backend for Sqlite {    fn label(&self) -> &'static str {
+        "SQLite"
+    }
+    fn url_schemes(&self) -> &'static [&'static str] {
+        &["sqlite", "sqlite3"]
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            file_based: true,
+            cancel: true,
+            activity: false,
+            schemas: false,
+            routines: false,
+            server_txn_state: false,
+            ddl_commits: false,
+            stores_create_sql: true,
+            table_sizes: false,
+            plan_as_grid: false,
+            copy_in: false,
+        }
+    }
+    fn connect_hint(&self, message: &str) -> Option<&'static str> {
+        message
+            .contains("unable to open database file")
+            .then_some("can't open that file: check the path and that you may write to its folder")
+    }
+}
+
+impl SqlDialect for Sqlite {
     fn copy_into(&self, path: &str) -> Option<String> {
         Some(format!("VACUUM INTO {}", crate::db::sql_literal(path, crate::db::Engine::Sqlite)))
     }
@@ -60,11 +89,6 @@ impl Dialect for Sqlite {
         })
     }
 
-    fn connect_hint(&self, message: &str) -> Option<&'static str> {
-        message
-            .contains("unable to open database file")
-            .then_some("can't open that file: check the path and that you may write to its folder")
-    }
     /// SQLite keeps any name it's given; these are the ones its
     /// documentation lists (Datatypes In SQLite, 3.1.1) beside the
     /// standard's.
@@ -110,27 +134,6 @@ impl Dialect for Sqlite {
         let digits = shown.strip_prefix("X'")?.strip_suffix('\'')?;
         (digits.len() % 2 == 0 && digits.chars().all(|c| c.is_ascii_hexdigit())).then(|| shown.to_string())
     }
-    fn label(&self) -> &'static str {
-        "SQLite"
-    }
-    fn url_schemes(&self) -> &'static [&'static str] {
-        &["sqlite", "sqlite3"]
-    }
-    fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            file_based: true,
-            cancel: true,
-            activity: false,
-            schemas: false,
-            routines: false,
-            server_txn_state: false,
-            ddl_commits: false,
-            stores_create_sql: true,
-            table_sizes: false,
-            plan_as_grid: false,
-            copy_in: false,
-        }
-    }
     fn lexer(&self) -> LexerRules {
         LexerRules {
             hash_comments: false,
@@ -142,6 +145,7 @@ impl Dialect for Sqlite {
             dollar_quotes: false,
         }
     }
+
     fn keywords(&self) -> &'static [&'static str] {
         &["FULL", "PRAGMA", "RETURNING"]
     }
@@ -184,8 +188,7 @@ impl Dialect for Sqlite {
     }
     fn add_foreign_key(&self, _table: &str, _column: &str, _target: &str, _target_column: &str) -> Option<String> {
         None
-    }
-}
+    }}
 
 /// EXPLAIN QUERY PLAN rows (id, parent, _, detail), nested by parent.
 fn plan_tree(rows: &[Vec<Option<String>>]) -> String {

@@ -172,7 +172,11 @@ build.rs          finds every src/db/<engine>/ with an engine.toml and
                   Session, the engines' modules, and the dispatch macros
 db/
   mod.rs          Database (includes engines.rs)
-  dialect.rs      trait Dialect + Capabilities + LexerRules + Placeholders
+  backend.rs      trait Backend + Capabilities: what every engine has, SQL
+                  or not (name, URL schemes, port, socket, what's offered,
+                  its connection errors' hints, password files, containers)
+  dialect.rs      trait SqlDialect (a Backend's SQL) + LexerRules +
+                  Placeholders
   run.rs          running, streaming, cancelling, checking statements; the
                   answer check before a run after a quiet while, and a
                   session given up on (stale) replaced before the next
@@ -180,9 +184,15 @@ db/
                   Database methods: each calls its engine's same-named
                   function through the dispatch macros
   errors.rs  diagnose.rs  tunnel.rs  options.rs  types.rs  passwords.rs
-                  shared: error messages (each engine words its own),
-                  the connection test, SSH tunnels, connection parameters,
-                  the type vocabulary, where passwords are looked for
+                  shared: error messages and a failed connection's hints
+                  (the network's and TLS's here, each engine's from its
+                  dialect), the connection test, SSH tunnels, connection
+                  parameters, the type vocabulary and the SQL standard's
+                  type names (each engine's own from its dialect), where
+                  passwords are looked for
+  services/       hosted services on an engine (Supabase on PostgreSQL):
+                  trait Service, found by engine and host; what each
+                  refuses, whether it needs TLS, which schemas are its own
   agent_constraints.rs
                   the shape of what AI agents may send (each engine fills
                   it in); `agents/` applies it without naming engines
@@ -190,9 +200,11 @@ db/
   postgres/  mysql/  sqlite/
     engine.toml   its name (the Engine variant, as connections.toml writes
                   it) and its order in lists
-    mod.rs        the Dialect: names, quoting, lexer rules, placeholders,
-                  EXPLAIN, plan formatting, capabilities, type names, error
-                  wording, container images and logins…; its DriverPool,
+    mod.rs        its Backend (names, ports, capabilities, connection
+                  hints, container images and logins…) and its
+                  SqlDialect (quoting, lexer rules, placeholders, EXPLAIN,
+                  plan formatting, type names: its own read, each kind
+                  written; error wording…); its DriverPool,
                   DriverConnection, DIALECT and `cell`
     connect.rs    connection options, pool and session; the check before
                   connecting and before reopening or cancelling
@@ -214,11 +226,18 @@ db/
 
 Three concerns are kept apart:
 
-- **Dialect** (`engine.dialect()`): what differs in SQL text and facts,
+- **Backend** (`engine.backend()`): what every engine has, SQL or not —
+  its name, URL schemes, port and socket, capabilities, its connection
+  errors' hints, its clients' password files, its containers. Code that
+  doesn't need SQL asks this, so an engine without SQL would implement
+  only `Backend` (`engine.dialect()` would then become an `Option`; the
+  query path, sqlx's pools and the catalog are SQL's today).
+- **SQL dialect** (`engine.dialect()`, `SqlDialect: Backend`): what differs
+  in SQL text and facts,
   with no I/O — identifier quoting and string literals, lexer rules
   (comment styles, quoting, dollar quotes), placeholders (`$1`, `?`), the
   sqlparser and formatter dialects, EXPLAIN statements and plan formatting,
-  type names, how its errors read, hidden columns, container images, and
+  type names, how its errors read, hidden columns, and
   what the server's version lacks (`too_new`: the engine folder's
   `versions.rs`, a table of features and the version that brought each,
   looked for in the code words of the statement that failed; the app adds
@@ -253,7 +272,7 @@ through `links` metadata, so the lints allowed only with fewer engines
    in each one's `default` list (and in `crates/podelis-ai/Cargo.toml`,
    which passes them on only when it's built alone, and in CI's
    `engines` matrix, `.github/workflows/ci.yml`, to be built alone there),
-   `mod.rs` (a `Dialect` impl, `DriverPool`, `DriverConnection`,
+   `mod.rs` (`Backend` and `SqlDialect` impls, `DriverPool`, `DriverConnection`,
    `DIALECT`, `cell`), `connect.rs`, `queries.rs`, `cells.rs`,
    `passwords.rs`, `agent_constraints.rs` and `db_tests.rs`, modelled on
    an existing one.
@@ -552,7 +571,7 @@ Backticks (MySQL), `$$` bodies (PostgreSQL), `LIMIT 5, 10` (MySQL),
 In `sqlparser` a dialect isn't a separate parser: there is one parser, and
 the dialect is a trait of switches (about 140 `supports_*` methods) and hooks
 for quoting and precedence. Podėlis picks it per connection:
-`Dialect::parser()` in each engine's `mod.rs` returns `PostgreSqlDialect`,
+`SqlDialect::parser()` in each engine's `mod.rs` returns `PostgreSqlDialect`,
 `MySqlDialect` or `SQLiteDialect`. Our own lexer in `sql/mod.rs` makes the same
 per-engine choices through `LexerRules`, so statement splitting gets dollar
 quotes and backticks right even when `sqlparser` gives up.
@@ -595,7 +614,7 @@ otherwise.
 Settings that change *meaning* can be read, though. Podėlis reads MySQL's
 `@@SESSION.sql_mode` when it connects and again whenever the catalog
 reloads (which happens after a `SET`), keeps it on the `Database`, and
-passes it to the rules: `Dialect::pipes_are_or(sql_mode)`. Facts that
+passes it to the rules: `SqlDialect::pipes_are_or(sql_mode)`. Facts that
 depend on settings take them as arguments; facts that don't stay plain
 methods.
 
@@ -615,7 +634,7 @@ staying quiet when it fails is the correct response.
 
 ```rust
 // db/dialect.rs: the question, with a default
-pub trait Dialect: Sync {
+pub trait SqlDialect: Backend {
     …
     /// `||` is logical OR, not string concatenation, under `sql_mode`.
     fn pipes_are_or(&self, _sql_mode: &str) -> bool { false }
