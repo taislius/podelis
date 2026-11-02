@@ -675,7 +675,10 @@ and why:
 - Live-database tests in `db/tests.rs` and each engine's `db_tests.rs` run against real PostgreSQL and MySQL
   when `PODELIS_TEST_PG_PORT` / `PODELIS_TEST_MYSQL_PORT` are set; SQLite
   always runs.
-- Property tests (`src/fuzz_tests.rs`) throw random SQL-ish text at the lexer,
-  splitter, analyzer, completion, parameters and editor.
+- Property tests throw random input at what handles what the user types:
+  the core's (`crates/podelis-core/tests/properties.rs`: SQL-ish text at the
+  lexer, splitter, formatter, analyzer, completion, parameters) through its
+  public API, and the app's beside their code (the editor's random edits,
+  the library's search).
 - `scripts/check.sh` runs formatting, clippy (pedantic, warnings as errors),
   all tests and cargo-deny; the git pre-push hook runs it.
