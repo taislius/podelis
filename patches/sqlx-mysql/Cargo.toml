@@ -202,3 +202,10 @@ cast_possible_truncation = "deny"
 cast_possible_wrap = "deny"
 cast_sign_loss = "deny"
 disallowed_methods = "deny"
+
+# cargo-machete (deny.yml): upstream's dependencies, unused in this copy
+# (its RSA is aws-lc-rs's, so `rand` stays off and `generic-array` goes
+# unused). Not removed: the copy keeps to its two changes (README.md), and
+# goes when a release has them.
+[package.metadata.cargo-machete]
+ignored = ["generic-array", "rand"]
