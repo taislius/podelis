@@ -3,11 +3,11 @@ use super::*;
 // `Engine` and `Engine::ALL` are build.rs's (`db/mod.rs`).
 impl Engine {
     pub fn label(self) -> &'static str {
-        self.dialect().label()
+        self.backend().label()
     }
 
     pub fn default_port(self) -> &'static str {
-        self.dialect().default_port()
+        self.backend().default_port()
     }
 
     pub fn cycle(self, forward: bool) -> Engine {

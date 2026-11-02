@@ -1,10 +1,12 @@
-//! What differs between engines without talking to a server: names,
-//! quoting, lexing, placeholders, EXPLAIN, and what each one supports.
-//! Each engine implements [`Dialect`] in its own module; everything outside
-//! `db` asks `engine.dialect()` or its [`Capabilities`] instead of matching
-//! on the engine.
+//! How engines' SQL differs, without talking to a server: quoting, lexing,
+//! placeholders, EXPLAIN, statements, types. Each SQL engine implements
+//! [`SqlDialect`] in its own module, and everything outside `db` asks
+//! `engine.dialect()` instead of matching on the engine. What isn't about
+//! SQL (names, ports, containers, what's offered) is `backend.rs`'s, so a
+//! database without SQL needs only that.
 
 use super::Engine;
+use super::backend::Backend;
 
 /// An EXPLAIN's output made readable: the plan as an indented tree, and
 /// what stands out in it.
@@ -53,52 +55,6 @@ pub fn misestimated(estimated: f64, actual: f64) -> bool {
     hi >= 1000.0 && hi >= lo.max(1.0) * MISESTIMATE_FACTOR
 }
 
-/// What an engine can do, for the app to decide what to offer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[expect(clippy::struct_excessive_bools, reason = "independent yes-or-no capabilities")]
-pub struct Capabilities {
-    /// A local file: no host, port, user, TLS or SSH.
-    pub file_based: bool,
-    /// A running query can be cancelled (and so time out).
-    pub cancel: bool,
-    /// Sessions on the server can be listed and stopped.
-    pub activity: bool,
-    /// Several schemas, shown as `schema.table`.
-    pub schemas: bool,
-    /// Stored functions and procedures.
-    pub routines: bool,
-    /// The server says whether a transaction is open.
-    pub server_txn_state: bool,
-    /// DDL commits an open transaction (MySQL).
-    pub ddl_commits: bool,
-    /// The catalog keeps each table's CREATE statement (SQLite).
-    pub stores_create_sql: bool,
-    /// The catalog knows each table's size on disk (not SQLite).
-    pub table_sizes: bool,
-    /// A plan with several columns is a table worth a grid (MySQL's classic
-    /// EXPLAIN; not SQLite's EXPLAIN QUERY PLAN, a tree).
-    pub plan_as_grid: bool,
-    /// Rows load fastest with `COPY … FROM STDIN` (PostgreSQL).
-    pub copy_in: bool,
-}
-
-/// The login an engine's container was given (see
-/// `Dialect::container_login`).
-#[derive(Debug, PartialEq, Eq)]
-pub struct ContainerLogin {
-    pub user: String,
-    pub database: String,
-    pub password: Option<ContainerSecret>,
-}
-
-/// Where a container's password is: an environment variable, or a file
-/// inside it (`*_PASSWORD_FILE`, as with Docker secrets).
-#[derive(Debug, PartialEq, Eq)]
-pub enum ContainerSecret {
-    Var(&'static str),
-    File(String),
-}
-
 /// How the lexer splits this engine's SQL.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(clippy::struct_excessive_bools, reason = "independent lexer switches")]
@@ -142,15 +98,11 @@ pub enum TxEnd {
     Rollback,
 }
 
-/// An engine's SQL, apart from talking to the server.
-pub trait Dialect: Sync {
-    fn label(&self) -> &'static str;
-    /// URL schemes that select this engine.
-    fn url_schemes(&self) -> &'static [&'static str];
-    fn default_port(&self) -> &'static str {
-        ""
-    }
-    fn capabilities(&self) -> Capabilities;
+/// An engine's SQL, apart from talking to the server: how it's lexed,
+/// parsed, quoted and planned, its statements for transactions, rows and
+/// columns, its types and its errors. What any database has, SQL or not,
+/// is its [`Backend`]'s.
+pub trait SqlDialect: Backend {
     fn lexer(&self) -> LexerRules;
     fn placeholders(&self) -> Placeholders;
     /// For statement analysis.
@@ -210,12 +162,6 @@ pub trait Dialect: Sync {
         None
     }
 
-    /// The socket file to connect to for a Unix socket `path` given in the
-    /// form (Postgres takes the folder that holds it).
-    fn socket_file(&self, path: &str, _port: u16) -> String {
-        path.to_string()
-    }
-
     /// A query returning the server's version string.
     fn version_query(&self) -> &'static str;
     /// The statement that starts a transaction, read-only if `read_only`
@@ -243,12 +189,6 @@ pub trait Dialect: Sync {
     /// engine's. Upper case, sorted.
     fn keywords(&self) -> &'static [&'static str] {
         &[]
-    }
-    /// A plain-language hint for one of this engine's own connection errors
-    /// (`message` in lower case), as it words them; the network's, SSH's and
-    /// TLS's are `diagnose::hint`'s.
-    fn connect_hint(&self, _message: &str) -> Option<&'static str> {
-        None
     }
     /// The cheapest query that shows the connection answers.
     fn ping(&self) -> &'static str {
@@ -281,19 +221,6 @@ pub trait Dialect: Sync {
     fn hidden_columns(&self) -> &'static [&'static str] {
         &[]
     }
-    /// Where its own clients find a password, as a note: " (or ~/.pgpass)".
-    fn password_files_note(&self) -> &'static str {
-        ""
-    }
-    /// The official container images that run it (`postgres`, `mariadb`).
-    fn container_images(&self) -> &'static [&'static str] {
-        &[]
-    }
-    /// The login a container of it was given, from its environment
-    /// (`var`: a variable's value); `None` for an engine without containers.
-    fn container_login(&self, _var: &dyn Fn(&str) -> Option<String>) -> Option<ContainerLogin> {
-        None
-    }
     /// What type `ty` (as the catalog reports it, lowercase) means here:
     /// this engine's own names, and the standard's it reads otherwise;
     /// `None` leaves it to the standard's meaning (`db::types`).
@@ -303,7 +230,7 @@ pub trait Dialect: Sync {
     /// How this engine writes a type of `kind`; `None` if it has nothing
     /// like it.
     fn type_name(&self, kind: &super::TypeKind) -> Option<String>;
-    /// Whether it keeps only a type's affinity (SQLite): beside it any
+    /// Whether it keeps only a type's affinity: beside it any
     /// integer is any other, and lengths don't count.
     fn keeps_only_affinity(&self) -> bool {
         false
@@ -315,7 +242,7 @@ pub trait Dialect: Sync {
     }
     /// Whether `err` (this engine's) is a syntax error or an unknown
     /// function: what a feature newer than the server looks like (see
-    /// [`Dialect::too_new`]). By its code, whatever language the server
+    /// [`SqlDialect::too_new`]). By its code, whatever language the server
     /// speaks.
     fn missing_feature_error(&self, _err: &dyn sqlx::error::DatabaseError) -> bool {
         false
@@ -416,18 +343,9 @@ pub trait Dialect: Sync {
 }
 
 impl Engine {
-    /// Its engine module's dialect (`DIALECT`).
-    pub fn dialect(self) -> &'static dyn Dialect {
+    /// Its engine module's SQL dialect (`DIALECT`).
+    pub fn dialect(self) -> &'static dyn SqlDialect {
         on_engine!(self, &engine::DIALECT)
-    }
-
-    pub fn capabilities(self) -> Capabilities {
-        self.dialect().capabilities()
-    }
-
-    /// The engine a URL scheme selects.
-    pub fn from_scheme(scheme: &str) -> Option<Engine> {
-        Engine::ALL.into_iter().find(|e| e.dialect().url_schemes().iter().any(|s| s.eq_ignore_ascii_case(scheme)))
     }
 }
 
@@ -463,7 +381,7 @@ pub struct TooNew {
 }
 
 /// `sql`'s code as lowercase words and punctuation, without spaces,
-/// comments or what's in strings: what [`Dialect::too_new`] looks through.
+/// comments or what's in strings: what [`SqlDialect::too_new`] looks through.
 pub fn code_words(sql: &str, engine: crate::db::Engine) -> Vec<String> {
     use crate::sql::TokenKind;
     crate::sql::tokenize(sql, engine)

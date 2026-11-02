@@ -14,7 +14,8 @@ mod plan;
 pub(super) mod queries;
 mod versions;
 
-use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan, hex_digits};
+use super::backend::{Backend, Capabilities};
+use super::dialect::{SqlDialect, LexerRules, Placeholders, Plan, hex_digits};
 use crate::sql::TokenKind;
 
 pub struct MySql;
@@ -32,27 +33,7 @@ pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::MySql>;
 /// This engine's dialect, for `Engine::dialect`.
 pub(super) static DIALECT: MySql = MySql;
 
-impl Dialect for MySql {
-    fn begin(&self, read_only: bool) -> &'static str {
-        if read_only { "START TRANSACTION READ ONLY" } else { "START TRANSACTION" }
-    }
-
-    fn sandbox_session(&self) -> Option<(&'static str, &'static str)> {
-        Some(("SET autocommit = 0", "SET autocommit = 1"))
-    }
-
-    fn tables_without_rollback(&self) -> Option<&'static str> {
-        Some(
-            "SELECT CAST(GROUP_CONCAT(table_name SEPARATOR ', ') AS CHAR) FROM information_schema.tables \
-             WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE' AND engine <> 'InnoDB'",
-        )
-    }
-
-    fn locks_held_query(&self) -> Option<&'static str> {
-        // MySQL 8's InnoDB locks (it needs performance_schema access).
-        Some("SELECT COUNT(*) FROM performance_schema.data_locks WHERE thread_id = PS_CURRENT_THREAD_ID()")
-    }
-
+impl Backend for MySql {
     fn password_files_note(&self) -> &'static str {
         " (or ~/.my.cnf)"
     }
@@ -85,6 +66,30 @@ impl Dialect for MySql {
         Some(crate::db::ContainerLogin { user: "root".to_string(), database, password })
     }
 
+    fn label(&self) -> &'static str {
+        "MySQL"
+    }
+    fn url_schemes(&self) -> &'static [&'static str] {
+        &["mysql", "mariadb"]
+    }
+    fn default_port(&self) -> &'static str {
+        "3306"
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            file_based: false,
+            cancel: true,
+            activity: true,
+            schemas: false,
+            routines: true,
+            server_txn_state: false,
+            ddl_commits: true,
+            stores_create_sql: false,
+            table_sizes: true,
+            plan_as_grid: true,
+            copy_in: false,
+        }
+    }
     fn connect_hint(&self, message: &str) -> Option<&'static str> {
         let has = |s: &str| message.contains(s);
         Some(if has("access denied for user") && has("using password: no") {
@@ -99,6 +104,29 @@ impl Dialect for MySql {
             return None;
         })
     }
+}
+
+impl SqlDialect for MySql {
+    fn begin(&self, read_only: bool) -> &'static str {
+        if read_only { "START TRANSACTION READ ONLY" } else { "START TRANSACTION" }
+    }
+
+    fn sandbox_session(&self) -> Option<(&'static str, &'static str)> {
+        Some(("SET autocommit = 0", "SET autocommit = 1"))
+    }
+
+    fn tables_without_rollback(&self) -> Option<&'static str> {
+        Some(
+            "SELECT CAST(GROUP_CONCAT(table_name SEPARATOR ', ') AS CHAR) FROM information_schema.tables \
+             WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE' AND engine <> 'InnoDB'",
+        )
+    }
+
+    fn locks_held_query(&self) -> Option<&'static str> {
+        // MySQL 8's InnoDB locks (it needs performance_schema access).
+        Some("SELECT COUNT(*) FROM performance_schema.data_locks WHERE thread_id = PS_CURRENT_THREAD_ID()")
+    }
+
     /// `float` is a 4-byte float here; `timestamp` a moment in time (stored
     /// in UTC, shown in the session's zone).
     fn type_kind(&self, ty: &str) -> Option<crate::db::TypeKind> {
@@ -193,31 +221,6 @@ impl Dialect for MySql {
     fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
         &agent_constraints::AGENT_CONSTRAINTS
     }
-
-    fn label(&self) -> &'static str {
-        "MySQL"
-    }
-    fn url_schemes(&self) -> &'static [&'static str] {
-        &["mysql", "mariadb"]
-    }
-    fn default_port(&self) -> &'static str {
-        "3306"
-    }
-    fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            file_based: false,
-            cancel: true,
-            activity: true,
-            schemas: false,
-            routines: true,
-            server_txn_state: false,
-            ddl_commits: true,
-            stores_create_sql: false,
-            table_sizes: true,
-            plan_as_grid: true,
-            copy_in: false,
-        }
-    }
     fn lexer(&self) -> LexerRules {
         LexerRules {
             hash_comments: true,
@@ -229,6 +232,7 @@ impl Dialect for MySql {
             dollar_quotes: false,
         }
     }
+
     fn keywords(&self) -> &'static [&'static str] {
         &["DESCRIBE", "FETCH", "FUNCTION", "GRANT", "LATERAL", "REVOKE", "SCHEMA", "SHOW", "TRUNCATE", "USE"]
     }
@@ -323,8 +327,7 @@ impl Dialect for MySql {
     fn modify_column(&self, table: &str, column: &str, data_type: &str, nullable: bool) -> Option<String> {
         let null = if nullable { "NULL" } else { "NOT NULL" };
         Some(format!("ALTER TABLE {table} MODIFY COLUMN {column} {data_type} {null}"))
-    }
-}
+    }}
 
 /// The kind of server, from its version string (`8.0.36`, `5.7.44-log`,
 /// `10.11.6-MariaDB-0+deb12u1`).

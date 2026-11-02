@@ -22,7 +22,7 @@ pub fn is_auth_failure(message: &str) -> bool {
 pub fn hint(message: &str) -> Option<&'static str> {
     let m = message.to_lowercase();
     network_hint(&m)
-        .or_else(|| Engine::ALL.into_iter().find_map(|e| e.dialect().connect_hint(&m)))
+        .or_else(|| Engine::ALL.into_iter().find_map(|e| e.backend().connect_hint(&m)))
         .or_else(|| tls_hint(&m))
 }
 
@@ -234,7 +234,7 @@ fn file_step(path: &str, read_only: bool) -> Step {
 }
 
 async fn socket_step(path: &str, engine: Engine, port: u16) -> Step {
-    let target = engine.dialect().socket_file(path, port);
+    let target = engine.backend().socket_file(path, port);
     let started = Instant::now();
     match tokio::net::UnixStream::connect(&target).await {
         Ok(_) => Step::new("Socket", StepState::Ok, target, Some(started.elapsed())),

@@ -9,7 +9,7 @@ PODELIS_CHECK_ENGINES=1 ./scripts/check.sh   # also the four fewer-engine builds
 ```
 
 How the code is organised — the app/UI/database layers, and the database
-adapters (one folder per engine, a `Dialect` and capabilities per engine) —
+adapters (one folder per engine, a `Backend`, its capabilities and an `SqlDialect` per engine) —
 is in [architecture.md](architecture.md), including how `build.rs` finds
 the engines and how to add one.
 

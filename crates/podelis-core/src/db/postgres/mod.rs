@@ -19,7 +19,8 @@ pub(super) mod pgpass;
 pub(super) mod queries;
 mod versions;
 
-use super::dialect::{Capabilities, Dialect, LexerRules, Placeholders, Plan};
+use super::backend::{Backend, Capabilities};
+use super::dialect::{SqlDialect, LexerRules, Placeholders, Plan};
 
 pub struct Postgres;
 
@@ -36,15 +37,7 @@ pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::Postgres>;
 /// This engine's dialect, for `Engine::dialect`.
 pub(super) static DIALECT: Postgres = Postgres;
 
-impl Dialect for Postgres {
-    fn begin(&self, read_only: bool) -> &'static str {
-        if read_only { "BEGIN READ ONLY" } else { "BEGIN" }
-    }
-
-    fn hidden_columns(&self) -> &'static [&'static str] {
-        &["ctid", "xmin", "xmax", "cmin", "cmax", "tableoid"]
-    }
-
+impl Backend for Postgres {
     fn password_files_note(&self) -> &'static str {
         " (or ~/.pgpass)"
     }
@@ -68,6 +61,30 @@ impl Dialect for Postgres {
         Some(crate::db::ContainerLogin { user, database, password })
     }
 
+    fn label(&self) -> &'static str {
+        "PostgreSQL"
+    }
+    fn url_schemes(&self) -> &'static [&'static str] {
+        &["postgres", "postgresql"]
+    }
+    fn default_port(&self) -> &'static str {
+        "5432"
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            file_based: false,
+            cancel: true,
+            activity: true,
+            schemas: true,
+            routines: true,
+            server_txn_state: true,
+            ddl_commits: false,
+            stores_create_sql: false,
+            table_sizes: true,
+            plan_as_grid: false,
+            copy_in: true,
+        }
+    }
     fn connect_hint(&self, message: &str) -> Option<&'static str> {
         let has = |s: &str| message.contains(s);
         Some(if has("password authentication failed") {
@@ -86,6 +103,25 @@ impl Dialect for Postgres {
             return None;
         })
     }
+    /// Postgres sockets are a folder holding `.s.PGSQL.<port>`.
+    fn socket_file(&self, path: &str, port: u16) -> String {
+        if std::path::Path::new(path).is_dir() {
+            format!("{}/.s.PGSQL.{port}", path.trim_end_matches('/'))
+        } else {
+            path.to_string()
+        }
+    }
+}
+
+impl SqlDialect for Postgres {
+    fn begin(&self, read_only: bool) -> &'static str {
+        if read_only { "BEGIN READ ONLY" } else { "BEGIN" }
+    }
+
+    fn hidden_columns(&self) -> &'static [&'static str] {
+        &["ctid", "xmin", "xmax", "cmin", "cmax", "tableoid"]
+    }
+
     /// `real` is a 4-byte float here (MySQL's is a double).
     fn type_kind(&self, ty: &str) -> Option<crate::db::TypeKind> {
         use crate::db::TypeKind as Kind;
@@ -173,31 +209,6 @@ impl Dialect for Postgres {
     fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
         &agent_constraints::AGENT_CONSTRAINTS
     }
-
-    fn label(&self) -> &'static str {
-        "PostgreSQL"
-    }
-    fn url_schemes(&self) -> &'static [&'static str] {
-        &["postgres", "postgresql"]
-    }
-    fn default_port(&self) -> &'static str {
-        "5432"
-    }
-    fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            file_based: false,
-            cancel: true,
-            activity: true,
-            schemas: true,
-            routines: true,
-            server_txn_state: true,
-            ddl_commits: false,
-            stores_create_sql: false,
-            table_sizes: true,
-            plan_as_grid: false,
-            copy_in: true,
-        }
-    }
     fn lexer(&self) -> LexerRules {
         LexerRules {
             hash_comments: false,
@@ -209,6 +220,7 @@ impl Dialect for Postgres {
             dollar_quotes: true,
         }
     }
+
     fn keywords(&self) -> &'static [&'static str] {
         &["FETCH", "FULL", "FUNCTION", "GRANT", "ILIKE", "LATERAL", "RETURNING", "REVOKE", "SCHEMA", "SHOW", "TRUNCATE"]
     }
@@ -223,14 +235,6 @@ impl Dialect for Postgres {
     }
     fn formatter(&self) -> sqlformat::Dialect {
         sqlformat::Dialect::PostgreSql
-    }
-    /// Postgres sockets are a folder holding `.s.PGSQL.<port>`.
-    fn socket_file(&self, path: &str, port: u16) -> String {
-        if std::path::Path::new(path).is_dir() {
-            format!("{}/.s.PGSQL.{port}", path.trim_end_matches('/'))
-        } else {
-            path.to_string()
-        }
     }
     fn locks_held_query(&self) -> Option<&'static str> {
         Some(
@@ -265,8 +269,7 @@ impl Dialect for Postgres {
     fn modify_column(&self, table: &str, column: &str, data_type: &str, nullable: bool) -> Option<String> {
         let null = if nullable { "DROP NOT NULL" } else { "SET NOT NULL" };
         Some(format!("ALTER TABLE {table} ALTER COLUMN {column} TYPE {data_type}, ALTER COLUMN {column} {null}"))
-    }
-}
+    }}
 
 #[cfg(test)]
 mod tests {

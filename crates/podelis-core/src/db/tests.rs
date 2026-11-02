@@ -578,7 +578,7 @@ fn the_statements_podelis_writes() {
 fn each_engine_hints_at_its_own_connection_errors() {
     let whose = |message: &str| {
         let m = message.to_lowercase();
-        Engine::ALL.into_iter().filter(|e| e.dialect().connect_hint(&m).is_some()).collect::<Vec<_>>()
+        Engine::ALL.into_iter().filter(|e| e.backend().connect_hint(&m).is_some()).collect::<Vec<_>>()
     };
     let postgres = "password authentication failed for user \"app\"";
     let mysql = "Access denied for user 'root'@'localhost' (using password: NO)";
