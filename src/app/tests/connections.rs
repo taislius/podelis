@@ -38,6 +38,8 @@ fn sqlite_form_shows_only_file_fields() {
     assert_eq!(form.host, "localhost");
 }
 
+/// A server's form (the first engine is one when the build has one).
+#[cfg(any(feature = "postgres", feature = "mysql"))]
 #[test]
 fn password_command_replaces_the_password() {
     let mut form = ConnectForm::new();
@@ -56,10 +58,13 @@ fn password_command_replaces_the_password() {
     form.password_command = "'' show".into();
     assert!(form.params().unwrap_err().contains("program is empty"));
     // A file has no password: the command isn't kept for it.
-    form.password_command = "pass show db".into();
-    form.cycle_engine(false);
-    form.host = "/tmp/x.db".into();
-    assert!(form.params().unwrap().password_command.is_empty());
+    #[cfg(feature = "sqlite")]
+    {
+        form.password_command = "pass show db".into();
+        form.cycle_engine(false);
+        form.host = "/tmp/x.db".into();
+        assert!(form.params().unwrap().password_command.is_empty());
+    }
 }
 
 #[test]
@@ -172,6 +177,7 @@ async fn picking_a_database_container_fills_in_a_new_connection() {
     );
 }
 
+#[cfg(any(feature = "postgres", feature = "mysql"))]
 #[test]
 fn ssh_destination_is_trimmed_into_params() {
     let mut form = ConnectForm::new();
@@ -338,6 +344,7 @@ async fn an_address_on_the_first_run_opens_a_default_project_that_keeps_the_tabs
     assert_eq!(app.tab.editor.text(), "select 'kept'");
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_cancel_the_server_cant_be_told_lets_esc_stop_waiting() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -376,6 +383,7 @@ async fn a_cancel_the_server_cant_be_told_lets_esc_stop_waiting() {
     assert!(!app.tab.run.cancel_failed, "the next Esc asks the server again");
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_lost_connection_is_checked_again_and_said_when_back() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -394,6 +402,7 @@ async fn a_lost_connection_is_checked_again_and_said_when_back() {
 }
 
 /// A SQLite connection's timeout stops a query that runs too long.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn sqlite_queries_time_out() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -407,6 +416,7 @@ async fn sqlite_queries_time_out() {
     assert!(app.notes.status.starts_with("Timed out after 1 s"), "{}", app.notes.status);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn server_syntax_check_after_typing_pause() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -474,6 +484,7 @@ fn sql_literals_escape_per_engine() {
     assert_eq!(sql_literal(r"a\b'", Engine::MySql), r"'a\\b'''");
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_missing_sqlite_file_is_created_only_when_asked_again() {
     let (mut app, dir) = test_app();
@@ -501,6 +512,7 @@ async fn a_missing_sqlite_file_is_created_only_when_asked_again() {
     assert!(other.exists() && app.connection.database.is_some());
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn each_tab_keeps_its_own_connection() {
     let (mut app, dir) = test_app();
@@ -546,6 +558,7 @@ async fn each_tab_keeps_its_own_connection() {
     assert_eq!(app.connection.form.name, "alpha");
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_read_finishes_in_its_tab_while_one_on_another_connection_is_shown() {
     let (mut app, dir) = test_app();
@@ -578,6 +591,7 @@ async fn a_read_finishes_in_its_tab_while_one_on_another_connection_is_shown() {
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("1".to_string())]]);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn compare_schemas_and_rows_with_another_tabs_connection() {
     let (mut app, dir) = test_app();
@@ -633,6 +647,7 @@ async fn compare_schemas_and_rows_with_another_tabs_connection() {
     assert!(app.notes.status.contains("Only reads"), "{}", app.notes.status);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn session_is_restored_on_startup() {
     let (mut app, dir) = test_app();
@@ -743,6 +758,7 @@ async fn queries_are_cancelled_at_the_connection_timeout() {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn connection_info_keepalive_and_diagnostics() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -773,6 +789,7 @@ async fn connection_info_keepalive_and_diagnostics() {
     assert!(!report.contains(":memory:"), "no file names or hosts: {report}");
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn heartbeat_can_be_switched_on_and_reports_a_lost_connection() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -808,6 +825,7 @@ async fn heartbeat_can_be_switched_on_and_reports_a_lost_connection() {
     assert_eq!(app.settings.keepalive, 0);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn the_projects_pane_switches_adds_renames_and_deletes_over_the_work() {
     let (mut app, dir) = test_app();
@@ -876,6 +894,7 @@ async fn the_projects_pane_switches_adds_renames_and_deletes_over_the_work() {
     assert_eq!(app.project().map(|p| p.name.as_str()), Some("fresh"));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn the_connections_pane_connects_edits_and_goes_back() {
     let (mut app, dir) = test_app();
@@ -960,6 +979,7 @@ async fn the_connections_pane_connects_edits_and_goes_back() {
     assert_eq!((app.tabs.len(), app.connection.form.name.as_str()), (3, "beta"));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn leaving_the_panes_drops_a_password_still_being_read() {
     let (mut app, dir) = test_app();
@@ -994,6 +1014,7 @@ fn looking_at_the_projects_keeps_an_empty_tab() {
     assert_eq!(app.tabs.len(), 2);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_new_connection_is_kept_once_it_works() {
     let (mut app, dir) = test_app();
@@ -1029,6 +1050,7 @@ async fn a_new_connection_is_kept_once_it_works() {
     assert_eq!(saved(&app).len(), 2);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn open_connections_are_listed_gone_to_and_closed() {
     let (mut app, dir) = test_app();
@@ -1096,6 +1118,7 @@ async fn open_connections_are_listed_gone_to_and_closed() {
     assert!(app.popups.palette.is_none());
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn closing_a_connection_says_its_transaction_goes() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;

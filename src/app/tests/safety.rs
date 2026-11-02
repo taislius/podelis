@@ -12,6 +12,7 @@ fn delete_requires_confirmation() {
     assert!(!app.manager.confirm_delete);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn read_only_mode_refuses_writes() {
     let (mut app, _dir) = connected_app(ConnectionMode::ReadOnly).await;
@@ -22,6 +23,7 @@ async fn read_only_mode_refuses_writes() {
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("42".to_string())]]);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn destructive_statements_need_confirmation() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -40,6 +42,7 @@ async fn destructive_statements_need_confirmation() {
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows_affected, Some(2));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn production_mode_confirms_every_write() {
     let (mut app, _dir) = connected_app(ConnectionMode::Production).await;
@@ -49,6 +52,7 @@ async fn production_mode_confirms_every_write() {
     assert!(app.popups.confirm.as_ref().unwrap().message.contains("PRODUCTION"));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn tx_modes_auto_manual_and_rollback_only() {
     // Ctrl+K x, then the mode's letter.
@@ -103,12 +107,14 @@ async fn tx_modes_auto_manual_and_rollback_only() {
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("2".to_string())]]);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn production_connections_start_in_review() {
     let (app, _dir) = connected_app(ConnectionMode::Production).await;
     assert_eq!(app.connection.tx_mode, TxMode::Manual);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn transaction_tracking_and_disconnect_confirmation() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -139,6 +145,7 @@ async fn transaction_tracking_and_disconnect_confirmation() {
     assert!(matches!(app.screen, Screen::Connections));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn null_refused_on_not_null_column_and_production_confirms() {
     let (mut app, _dir) = Box::pin(edit_cell(ConnectionMode::Normal, "select * from people", 1)).await;
@@ -159,6 +166,7 @@ async fn null_refused_on_not_null_column_and_production_confirms() {
 
 /// On production, a read that would read a whole big table asks first;
 /// below the limit, or once confirmed, it just runs.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn heavy_reads_on_production_ask_first() {
     let (mut app, _dir) = connected_app(ConnectionMode::Production).await;
@@ -177,6 +185,7 @@ async fn heavy_reads_on_production_ask_first() {
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][0].as_deref(), Some("8"));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn writes_can_be_reviewed_in_a_transaction() {
     let (mut app, _dir) = connected_app(ConnectionMode::Production).await;
@@ -247,6 +256,7 @@ async fn explain_analyze_of_a_write_is_rolled_back() {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn quitting_from_the_panes_asks_about_an_open_transaction() {
     let (mut app, dir) = test_app();
@@ -285,6 +295,7 @@ fn connect_form_sets_the_transaction_mode() {
     assert_eq!(ConnectForm::from_profile(&profile, String::new()).tx_mode(), TxMode::RollbackOnly);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_connection_starts_in_its_transaction_mode() {
     let (mut app, _dir) = test_app();
@@ -300,6 +311,7 @@ async fn a_connection_starts_in_its_transaction_mode() {
 /// The sandbox: writes build on each other in one transaction, a failed
 /// step rolls back alone, the last step can be undone, and it ends as a
 /// script (nothing kept) or run for real (after a commit asked for).
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_sandbox_keeps_steps_until_it_is_ended() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -405,6 +417,7 @@ async fn a_sandbox_on_the_servers() {
 /// A SQLite file's sandbox works on a copy: the original isn't touched
 /// (nor locked) meanwhile, the copy goes when it ends, and run for real
 /// writes the original.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_sqlite_files_sandbox_works_on_a_copy() {
     let (mut app, dir) = test_app();

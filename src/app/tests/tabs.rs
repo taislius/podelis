@@ -31,6 +31,7 @@ fn drafts_survive_project_switches_and_restarts() {
     assert!(app.tab.editor.is_empty());
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn tabs_on_different_connections_run_at_once_and_esc_stops_only_its_own() {
     let (mut app, dir) = test_app();
@@ -84,6 +85,7 @@ async fn tabs_on_different_connections_run_at_once_and_esc_stops_only_its_own() 
     assert!(!app.notes.status.contains("Couldn't cancel"), "{}", app.notes.status);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn runs_show_their_tab_at_once_and_f7_waits_for_a_running_query() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -133,6 +135,7 @@ async fn runs_show_their_tab_at_once_and_f7_waits_for_a_running_query() {
     finish(&mut app).await;
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn other_tabs_can_be_used_while_a_read_runs() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -176,6 +179,7 @@ async fn other_tabs_can_be_used_while_a_read_runs() {
     finish(&mut app).await;
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn result_tabs_messages_and_help() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -212,6 +216,7 @@ async fn result_tabs_messages_and_help() {
     assert!(!app.help_visible && app.popups.palette.is_none() && app.tab.editor.text() == "?");
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn tabs_keep_their_own_sql_and_results() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -236,6 +241,7 @@ async fn tabs_keep_their_own_sql_and_results() {
     assert_eq!(app.tab.editor.text(), "select 1 as one");
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn save_rename_group_and_search_queries() {
     let (mut app, dir) = connected_app(ConnectionMode::Normal).await;
@@ -298,6 +304,7 @@ async fn save_rename_group_and_search_queries() {
     assert!(!again.tab_dirty(0));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn deleting_a_saved_query_unlinks_its_tab() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -487,6 +494,7 @@ fn the_library_finds_by_date() {
 
 /// A query that ends in a hidden tab is announced (a bell and a desktop
 /// notification), with the tab's name, even with the terminal in front.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_hidden_tabs_finished_query_is_announced() {
     let (mut app, dir) = test_app();

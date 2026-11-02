@@ -58,6 +58,7 @@ pub(crate) async fn call(
 
 /// An agent through the real protocol: what it sees, what runs, what's
 /// refused, the dry run on production, and the log of it all.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_relative_sqlite_file_is_the_agents() {
     let dir = tempfile::tempdir().unwrap();
@@ -74,6 +75,7 @@ async fn a_relative_sqlite_file_is_the_agents() {
 /// A sandbox: the agent's writes build on each other and its reads see
 /// them, a failed call doesn't spoil it, nobody else sees anything, and
 /// idle it's rolled back.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn an_agents_sandbox_keeps_nothing() {
     let dir = tempfile::tempdir().unwrap();
@@ -165,6 +167,7 @@ async fn a_killed_sandbox_session_commits_nothing() {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn agents_get_shared_connections_safely() {
     let dir = tempfile::tempdir().unwrap();
@@ -259,6 +262,7 @@ async fn agents_get_shared_connections_safely() {
 }
 
 /// Sharing changed in Podėlis applies at once to a server that's running.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn sharing_changes_apply_at_once() {
     let dir = tempfile::tempdir().unwrap();
@@ -287,6 +291,7 @@ async fn sharing_changes_apply_at_once() {
 
 /// Where the user approves writes: each one waits for their answer in
 /// Podėlis, which sees its dry run; yes runs it, no or no answer don't.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn approved_writes_wait_for_the_user() {
     let dir = tempfile::tempdir().unwrap();

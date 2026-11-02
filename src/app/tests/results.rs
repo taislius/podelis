@@ -37,6 +37,7 @@ fn results_navigation_and_copy() {
     assert_eq!(app.take_clipboard().as_deref(), Some("1\t"));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn each_query_keeps_its_result_to_go_back_to() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -79,6 +80,7 @@ async fn each_query_keeps_its_result_to_go_back_to() {
     assert_eq!(shown(&app).as_deref(), Some("one"));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn an_earlier_result_runs_again_with_its_own_parameters() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -130,6 +132,7 @@ fn kept_results_are_dropped_past_a_row_budget() {
     assert_eq!(app.tab.run_at, 2);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn rows_open_in_the_app_for_their_format() {
     use crate::app::pipes::OpenFormat;
@@ -156,6 +159,7 @@ async fn rows_open_in_the_app_for_their_format() {
     assert_eq!((mode(&external.file), mode(external.file.parent().unwrap())), (0o600, 0o700));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn run_outcomes_are_for_the_results_pane() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -224,6 +228,7 @@ fn pretty_value_formats_json_only() {
     assert_eq!(pretty_value("plain"), "plain");
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn results_filter_sort_view_and_load_more() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -266,6 +271,7 @@ async fn results_filter_sort_view_and_load_more() {
 
 /// "Export all rows" writes every row of a streamed result, not just those
 /// loaded, without loading them into the grid; Esc stops it.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn export_all_rows_of_a_streamed_result() {
     let (mut app, dir) = connected_app(ConnectionMode::Normal).await;
@@ -334,6 +340,7 @@ async fn export_all_rows_of_a_streamed_result() {
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][0].as_deref(), Some("42"));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_script_shows_every_result_set() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -386,6 +393,7 @@ async fn the_syntax_check_runs_off_the_ui_thread_and_drops_stale_results() {
     assert_eq!(app.tab.syntax_hint, None);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn copying_names_rows_as_csv_and_where_messages_show() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -422,6 +430,7 @@ async fn copying_names_rows_as_csv_and_where_messages_show() {
     app.tab.run.executing = false;
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn edit_a_cell_by_primary_key() {
     let (mut app, _dir) = Box::pin(edit_cell(ConnectionMode::Normal, "select * from people order by id", 2)).await;
@@ -449,6 +458,7 @@ async fn edit_a_cell_by_primary_key() {
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][1], None);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn editing_is_refused_when_rows_cant_be_identified() {
     for (select, col, why) in [
@@ -464,6 +474,7 @@ async fn editing_is_refused_when_rows_cant_be_identified() {
     assert!(app.cell_edit.is_none() && said(&app).contains("read-only"), "{}", said(&app));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn m_while_a_page_comes_follows_it_and_finds_new_rows_when_sorted() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -495,6 +506,7 @@ async fn m_while_a_page_comes_follows_it_and_finds_new_rows_when_sorted() {
     assert_eq!(app.tab.grid.table_state.selected(), Some(0), "the first new row in the sorted view");
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn m_waiting_on_the_last_page_shows_its_rows() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -516,6 +528,7 @@ async fn m_waiting_on_the_last_page_shows_its_rows() {
     assert_eq!(app.tab.grid.table_state.selected(), Some(10));
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn large_results_stream_in_as_you_scroll() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -557,6 +570,7 @@ async fn large_results_stream_in_as_you_scroll() {
     assert!(app.tab.run.stream.is_none() && app.tab.grid.results.as_ref().unwrap().truncated());
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn insert_export_round_trips_through_the_database() {
     let (mut app, dir) = connected_app(ConnectionMode::Normal).await;
@@ -588,6 +602,7 @@ async fn insert_export_round_trips_through_the_database() {
 }
 
 /// `b` charts the selected column of the rows shown.
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn chart_a_result_column() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -602,6 +617,7 @@ async fn chart_a_result_column() {
     assert!(view.text.contains(&format!("b │{} 6", "█".repeat(40))), "{}", view.text);
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn record_view_shows_a_row_vertically() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
@@ -619,6 +635,7 @@ async fn record_view_shows_a_row_vertically() {
     assert!(app.popups.cell_view.is_none());
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn add_mark_delete_and_copy_rows() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;

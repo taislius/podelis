@@ -16,6 +16,7 @@ fn connections_screen_with_delete_confirmation() {
     assert_snapshot!(render(&mut app, 80, 14));
 }
 
+#[cfg(feature = "sqlite")]
 #[test]
 fn connect_form_server_and_sqlite() {
     let (mut app, _dir) = app();
@@ -48,6 +49,7 @@ fn production_confirmation_dialog_and_badges() {
     assert_snapshot!(render(&mut app, 90, 20));
 }
 
+#[cfg(feature = "sqlite")]
 #[test]
 fn a_long_file_path_gives_way_to_the_message_and_keeps_its_name() {
     let (mut app, _dir) = query_app();

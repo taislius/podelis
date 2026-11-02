@@ -503,6 +503,7 @@ async fn live_plans_aside_while_the_session_is_busy() {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_session_given_up_on_is_opened_again() {
     let dir = tempfile::tempdir().unwrap();

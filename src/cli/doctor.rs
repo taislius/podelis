@@ -223,6 +223,7 @@ mod tests {
         assert_eq!(viewers(&settings).detail, "no-such-viewer-xyz isn't installed");
     }
 
+    #[cfg(feature = "sqlite")]
     #[tokio::test]
     async fn a_saved_connection_whose_file_is_gone_fails() {
         let dir = tempfile::tempdir().unwrap();

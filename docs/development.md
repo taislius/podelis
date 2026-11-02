@@ -92,10 +92,11 @@ PODELIS_EVAL_DUMP="pagila=postgres://postgres:…@127.0.0.1:55433/pagila?sslmode
 GitHub Actions, kept small to save minutes:
 
 - `ci.yml` — on pushes to master (not docs-only ones): format,
-  clippy and tests on Linux against real PostgreSQL and MySQL, then clippy
-  and tests again built with fewer engines (`--no-default-features
-  --features postgres,sqlite`, as the README shows: no test may assume
-  MySQL is there); a newer push
+  clippy and tests on Linux against real PostgreSQL and MySQL; beside it,
+  clippy and tests built with fewer engines (`--no-default-features
+  --features …`: the README's `postgres,sqlite`, and each engine alone), so
+  nothing assumes an engine is there (a test that needs SQLite's files
+  carries `#[cfg(feature = "sqlite")]`); a newer push
   cancels the older run. A force-push may not start it; run it by hand
   with `gh workflow run ci.yml --repo taislius/podelis` (or Actions → CI →
   Run workflow).
