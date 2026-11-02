@@ -1003,7 +1003,7 @@ impl App {
         let Some(model) = self.settings.models.first() else {
             return AiState::Off;
         };
-        let shared = crate::config::models::on_this_machine(model)
+        let shared = podelis_ai::models::on_this_machine(model)
             || self.project().is_some_and(|p| p.share_schema == crate::config::store::ShareSchema::All);
         AiState::On { model: model.name.clone(), asks_to_share: !shared }
     }

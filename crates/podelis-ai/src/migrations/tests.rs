@@ -94,12 +94,8 @@ fn names_quoted_the_engines_way() {
 
 #[test]
 fn the_engine_most_connections_use() {
-    let profile = |engine| crate::config::store::ConnectionProfile {
-        engine,
-        ..crate::config::store::file_profile("x", std::path::Path::new("x"))
-    };
     assert_eq!(engine_of(&[]), Engine::ALL[0]);
     let [first, second, ..] = Engine::ALL;
-    assert_eq!(engine_of(&[profile(second), profile(first), profile(second)]), second);
-    assert_eq!(engine_of(&[profile(second), profile(first)]), first, "a tie: the first listed");
+    assert_eq!(engine_of(&[second, first, second]), second);
+    assert_eq!(engine_of(&[second, first]), first, "a tie: the first listed");
 }

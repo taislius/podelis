@@ -26,6 +26,7 @@ mod diagnose;
 mod dialect;
 mod errors;
 mod info;
+pub mod keychain;
 mod options;
 pub mod password_command;
 pub mod passwords;

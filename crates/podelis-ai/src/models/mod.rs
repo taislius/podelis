@@ -30,8 +30,10 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::config::models::is_local;
-pub use crate::config::models::{Api, ModelConfig, on_this_machine};
+mod config;
+
+use config::is_local;
+pub use config::{Api, ModelConfig, on_this_machine};
 
 /// How many times a request is tried again after a busy or failing
 /// server (before any of its answer came).
@@ -232,7 +234,7 @@ pub fn key_with(
 ) -> Result<(Option<String>, KeySource), ModelError> {
     // A keychain that can't be read (none on a server, or locked) isn't
     // fatal: the key may come from elsewhere, or not be needed at all.
-    match crate::config::store::get_password(&ModelConfig::keychain_account(&config.name)) {
+    match crate::db::keychain::get_password(&ModelConfig::keychain_account(&config.name)) {
         Ok(stored) if !stored.is_empty() => return Ok((Some(stored), KeySource::Keychain)),
         Ok(_) => {}
         Err(e) => tracing::info!(model = %config.name, error = %format!("{e:#}"), "model: keychain not readable"),
@@ -272,7 +274,7 @@ fn http(local: bool) -> Result<&'static reqwest::Client, ModelError> {
 /// Where the model's key would come from, without running its
 /// `key_command` (a password manager would ask, just to list models).
 pub fn key_source(config: &ModelConfig) -> KeySource {
-    if crate::config::store::get_password(&ModelConfig::keychain_account(&config.name)).is_ok_and(|k| !k.is_empty()) {
+    if crate::db::keychain::get_password(&ModelConfig::keychain_account(&config.name)).is_ok_and(|k| !k.is_empty()) {
         return KeySource::Keychain;
     }
     if config.key_command.as_deref().is_some_and(|c| !c.trim().is_empty()) {

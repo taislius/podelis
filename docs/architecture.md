@@ -1,11 +1,15 @@
 # Architecture
 
-Podėlis is one binary, built from a Cargo workspace of two crates:
+Podėlis is one binary, built from a Cargo workspace of three crates:
 `podelis-core` (`crates/podelis-core/`: the databases, SQL text and the
-words it says, which know nothing of the app) and `podelis` (the root:
-the app, its UI, the command line, the gateway and agents). The root
-crate re-exports the core's modules (`use podelis_core::{db, lang, sql}`
-in `main.rs`), so its code says `crate::db::…` as before.
+words it says, which know nothing of the app), `podelis-ai`
+(`crates/podelis-ai/`: models, context, memory, migrations read into
+facts, a model's SQL checked; on the core, never the app) and `podelis`
+(the root: the app, its UI, the command line, the gateway process and
+agents). The root crate re-exports the others' modules (`use
+podelis_core::{db, lang, sql}` in `main.rs`, `pub use podelis_ai::{…}` in
+`gateway/mod.rs`), so its code says `crate::db::…` and
+`gateway::memory::…` as before.
 
 ```
 crates/podelis-core/
@@ -33,8 +37,9 @@ src/
                          JSON, INSERTs, a text table, an ASCII table: for exports, pipes and -e
                          alike), comparing connections, result snapshots
   config/                on disk: projects and connections (store),
-                         settings, keys, themes, history, the query library,
-                         `[[models]]` entries (models); a connection as typed
+                         settings (with `[[models]]`, as `podelis-ai` reads
+                         them), keys, themes, history, the query library; a
+                         connection as typed
                          (draft: `ConnectionDraft`, URL and file arguments)
   system/                the clipboard, database containers, crash reports,
                          the debug log, installed programs, the install's
@@ -47,7 +52,7 @@ src/
 Each module uses only those to its left (lower):
 
 ```
-podelis-core (lang, sql, db)  →  editor, related, chart  →  config  →  system  →  transfer  →  agents, gateway  →  app  →  ui  →  cli, main.rs
+podelis-core (lang, sql, db)  →  podelis-ai  →  editor, related, chart  →  config  →  system  →  transfer  →  agents, gateway  →  app  →  ui  →  cli, main.rs
 ```
 
 Cargo keeps the core below the rest: it can't name the app's modules.
@@ -230,7 +235,8 @@ Outside `db/`, code doesn't name an engine except in tests.
    `feature`) and that feature in both manifests: the core's
    `crates/podelis-core/Cargo.toml` (turning on its sqlx driver) and the
    root `Cargo.toml` (passing it on: `<engine> = ["podelis-core/<engine>"]`),
-   in each one's `default` list,
+   in each one's `default` list (and in `crates/podelis-ai/Cargo.toml`,
+   which passes them on only when it's built alone),
    `mod.rs` (a `Dialect` impl, `DriverPool`, `DriverConnection`,
    `DIALECT`, `cell`), `connect.rs`, `queries.rs`, `cells.rs`,
    `passwords.rs`, `agent_constraints.rs` and `db_tests.rs`, modelled on
@@ -260,10 +266,13 @@ Outside `db/`, code doesn't name an engine except in tests.
 `gateway/` is a separate process, `podelis gateway`: the one place for
 AI models, the context they're shown, their tools and memory (the plan is
 in the private planning notes). Clients talk to it; they don't call
-models themselves.
+models themselves. The process (protocol, server, client, its methods)
+is the root crate's `src/gateway/`; what it serves is `podelis-ai`, a
+library under it (`crates/podelis-ai/src/`), re-exported there as
+`gateway::{context, memory, migrations, models, names}`.
 
 ```
-gateway/
+src/gateway/
   protocol.rs   JSON-RPC 2.0, one message per line; requests, responses,
                 and notifications the gateway pushes (`stopping`)
   server.rs     one gateway per config folder (a lock file held for the
@@ -276,6 +285,8 @@ gateway/
   command.rs    `podelis gateway [status | start | stop | models | key | test]`
   ai.rs         the `models`, `complete`, `context`, `ask` and `memory.*`
                 methods
+  eval.rs       the context's eval (see "How good it is, measured")
+crates/podelis-ai/src/
   memory.rs     a project's facts ("thing, relation, value", who said it,
                 confirmed or not) in `memory/<project-id>.db`, with an FTS5
                 index; `relevant` picks those about the question's tables
@@ -290,9 +301,9 @@ gateway/
                 their foreign-key neighbours, partitions as their parent,
                 rendered within a budget (see "The context, in the
                 field's terms")
-  models/       the models (their `[[models]]` entries are
-                `config::models`): keys (keychain, key_command,
-                environment), retries
+  models/       the models: their `[[models]]` entries (config.rs, read
+                by the app's settings), keys (the core's `db::keychain`,
+                key_command, environment), retries
     anthropic.rs  Anthropic's Messages API, streamed
     openai.rs     OpenAI's Chat Completions format (GPT, Ollama, llama.cpp…)
     sse.rs        server-sent events, as both stream answers
@@ -400,7 +411,7 @@ around it has a name:
   asked.
 - **No column values.**
 
-**How good it is, measured:** `src/gateway/context/eval.rs` runs 26
+**How good it is, measured:** `src/gateway/eval.rs` runs 26
 questions over schema snapshots of Pagila, Sakila and Chinook, each with
 the tables its SQL needs, and fails when recall (those tables chosen) or
 precision (chosen tables used) drops under its floor. On 2026-11-01:

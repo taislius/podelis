@@ -163,7 +163,7 @@ async fn a_fact_is_changed_and_found_by_its_new_words() {
 async fn an_edit_keeps_the_facts_own_relation_and_outlives_learning_again() {
     let dir = tempfile::tempdir().unwrap();
     let mut conn = open(dir.path(), "p1").await.unwrap();
-    let learned = [crate::gateway::migrations::Learned {
+    let learned = [crate::migrations::Learned {
         subject: "orders".into(),
         relation: "history".into(),
         value: "created in 001".into(),

@@ -254,7 +254,7 @@ async fn complete_asks_the_model_streams_its_answer_and_tries_again_when_busy() 
     let config =
         format!("[[models]]\nname = \"fake\"\napi = \"anthropic\"\nurl = \"{url}\"\nmodel = \"claude-opus-5-5\"\n");
     std::fs::write(dir.path().join("config.toml"), config).unwrap();
-    crate::config::store::set_password("model:fake", "sk-test-key").unwrap();
+    crate::db::keychain::set_password("model:fake", "sk-test-key").unwrap();
     let _gateway = start(dir.path(), None);
     let mut client = connect(dir.path()).await;
 
@@ -489,7 +489,7 @@ async fn ask_shows_a_schema_to_a_far_model_only_if_the_project_shares_it() {
     saved_shop(dir.path()).await;
     let config = "[[models]]\nname = \"far\"\napi = \"anthropic\"\nurl = \"https://models.example\"\nmodel = \"claude-opus-5-5\"\n";
     std::fs::write(dir.path().join("config.toml"), config).unwrap();
-    crate::config::store::set_password("model:far", "sk-far").unwrap();
+    crate::db::keychain::set_password("model:far", "sk-far").unwrap();
     let _gateway = start(dir.path(), None);
     let mut client = connect(dir.path()).await;
     let ask = json!({ "project": "p", "connection": "shop", "question": "orders per customer" });

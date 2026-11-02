@@ -2325,6 +2325,7 @@ dependencies = [
  "futures-util",
  "insta",
  "keyring",
+ "podelis-ai",
  "podelis-core",
  "proptest",
  "ratatui",
@@ -2348,6 +2349,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "podelis-ai"
+version = "0.7.3"
+dependencies = [
+ "chrono",
+ "futures-util",
+ "podelis-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlparser",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "podelis-core"
 version = "0.7.3"
 dependencies = [
@@ -2356,6 +2375,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "insta",
+ "keyring",
  "rust_decimal",
  "serde",
  "serde_json",

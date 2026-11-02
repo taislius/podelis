@@ -21,7 +21,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::Schema;
+use super::context::Schema;
 use crate::db::{ColumnInfo, Comment, Link, TableInfo};
 
 #[derive(Serialize, Deserialize)]
@@ -34,7 +34,7 @@ struct Snapshot {
 }
 
 fn folder() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/gateway/context/eval")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/gateway/eval")
 }
 
 fn schema(name: &str) -> Schema {

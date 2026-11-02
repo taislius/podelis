@@ -26,6 +26,9 @@ ignore-dev-dependencies = true
 [podelis]
 accepted = ["AGPL-3.0-only"]
 
-# Its core crate (the workspace's other member), the same.
+# Its other crates (the workspace's members), the same.
 [podelis-core]
+accepted = ["AGPL-3.0-only"]
+
+[podelis-ai]
 accepted = ["AGPL-3.0-only"]
