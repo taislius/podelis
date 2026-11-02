@@ -1,0 +1,5 @@
+---
+source: crates/podelis-ai/src/prompts.rs
+expression: describe_table_tool()
+---
+Show one table's columns, keys, where its foreign keys point and its comments, as the tables you were shown are listed.
