@@ -75,6 +75,18 @@ elsewhere. The scripts are POSIX `sh` (Debian's `/bin/sh` is dash):
 `check.sh` runs shellcheck on them, or `dash -n` where only dash is
 installed. Windows isn't supported.
 
+**Mutation testing.** `cargo mutants --workspace` (install
+`cargo-mutants`) changes the code where a bug hurts users most (what
+agents may run, what each engine refuses them, the OS keychain:
+`.cargo/mutants.toml`) one change at a time, and checks a test fails each
+time; one that lives (`mutants.out/missed.txt`) is code the tests run
+without checking: add the test that would catch it. About 20 minutes;
+`--iterate` tries again only what wasn't caught.
+
+**Code scanning.** `codeql.yml` runs GitHub's CodeQL over the Rust code
+and the workflows on pushes to master and weekly; what it finds is in the
+repository's Security tab, not a failed run.
+
 **The context's eval.** `cargo test retrieval -- --nocapture` prints
 recall, precision and the context's size per database for the gold set
 in `crates/podelis-ai/src/context/eval/questions.txt` (`PODELIS_EVAL_ALL=1` also
