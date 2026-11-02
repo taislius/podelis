@@ -205,12 +205,17 @@ pub(in crate::db) async fn live_cancel(db: &Database, slow: &str, stopped: impl 
 }
 
 /// The engine whose database is a file, needing no server: for tests that
-/// need a database that's always there.
+/// need a database that's always there. Only built with SQLite, so a test
+/// that needs it without saying so (`#[cfg(feature = "sqlite")]`) doesn't
+/// compile in a build without (CI's engines job), rather than failing when
+/// it happens to run.
+#[cfg(feature = "sqlite")]
 pub fn file_engine() -> Engine {
     Engine::BUILT.into_iter().find(|e| e.is_file_based()).expect("an engine with file databases")
 }
 
 /// A file database at `path`.
+#[cfg(feature = "sqlite")]
 pub fn file_params(path: &std::path::Path, read_only: bool) -> ConnectParams {
     ConnectParams {
         engine: file_engine(),

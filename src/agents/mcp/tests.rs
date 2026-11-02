@@ -13,12 +13,25 @@ impl ClientHandler for TestAgent {
     }
 }
 
+#[cfg(feature = "sqlite")]
 fn file_connection(name: &str, path: &std::path::Path, agents: AgentAccess, mode: ConnectionMode) -> ConnectionProfile {
+    connection(name, crate::db::tests::file_engine(), &path.to_string_lossy(), agents, mode)
+}
+
+/// A shared connection `name` on `engine` at `host` (a server's port, user
+/// and database left empty).
+fn connection(
+    name: &str,
+    engine: crate::db::Engine,
+    host: &str,
+    agents: AgentAccess,
+    mode: ConnectionMode,
+) -> ConnectionProfile {
     ConnectionProfile {
         unknown: crate::config::store::Unknown::default(),
         name: name.into(),
-        engine: crate::db::tests::file_engine(),
-        host: path.to_string_lossy().into_owned(),
+        engine,
+        host: host.into(),
         port: String::new(),
         user: String::new(),
         database: String::new(),
@@ -374,14 +387,11 @@ async fn live_agents_on_servers() {
             setup.run(create, 1).await.unwrap();
         }
         let profile = |name: &str, agents, mode| ConnectionProfile {
-            name: name.into(),
-            engine,
-            host: params.host.clone(),
             port: if params.port == 0 { String::new() } else { params.port.to_string() },
             user: params.user.clone(),
             database: params.database.clone(),
             password_command: vec!["printf".into(), "%s".into(), params.password.clone()],
-            ..file_connection(name, std::path::Path::new(""), agents, mode)
+            ..connection(name, engine, &params.host, agents, mode)
         };
         let dir = tempfile::tempdir().unwrap();
         let server = Server::new(
@@ -461,6 +471,7 @@ async fn live_agents_on_servers() {
 
 /// Makes a file database with `sql` in it, through Podėlis's own driver
 /// (on its own runtime: the test's is busy with the protocol).
+#[cfg(feature = "sqlite")]
 fn make_file_db(path: &std::path::Path, sql: &str) {
     let target = path.to_path_buf();
     let sql = sql.to_string();

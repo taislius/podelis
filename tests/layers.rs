@@ -38,24 +38,36 @@ const RULES: &[(&str, &[&str])] = &[
 const ALL: &[&str] =
     &["ai", "related", "chart", "config", "system", "transfer", "agents", "gateway", "app", "ui", "cli"];
 
+/// Inside `podelis-core` (Cargo sees only its edge to the app): the words
+/// are below SQL and the databases, which may use each other.
+const CORE_RULES: &[(&str, &[&str])] = &[("lang", &["sql", "db"])];
+
 #[test]
 fn modules_use_only_the_layers_below_them() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut wrong = Vec::new();
-    for &(module, denied) in RULES {
-        for file in files(&src, module) {
+    for (src, rules) in [("src", RULES), ("crates/podelis-core/src", CORE_RULES)] {
+        check(&root.join(src), src, rules, &mut wrong);
+    }
+    assert!(wrong.is_empty(), "imports against the layers (docs/architecture.md):\n{}", wrong.join("\n"));
+}
+
+/// The lines of `src`'s modules that use what their rule denies, said into
+/// `wrong` (paths shown from `shown`).
+fn check(src: &Path, shown: &str, rules: &[(&str, &[&str])], wrong: &mut Vec<String>) {
+    for &(module, denied) in rules {
+        for file in files(src, module) {
             let text = std::fs::read_to_string(&file).unwrap();
             for (n, line) in shipped_lines(&text) {
                 for used in modules_named(&line) {
                     if denied.contains(&used.as_str()) {
-                        let path = file.strip_prefix(&src).unwrap().display();
-                        wrong.push(format!("src/{path}:{n}: {module} uses crate::{used}: {}", line.trim()));
+                        let path = file.strip_prefix(src).unwrap().display();
+                        wrong.push(format!("{shown}/{path}:{n}: {module} uses crate::{used}: {}", line.trim()));
                     }
                 }
             }
         }
     }
-    assert!(wrong.is_empty(), "imports against the layers (docs/architecture.md):\n{}", wrong.join("\n"));
 }
 
 /// The module's files: `src/<module>.rs` or everything under `src/<module>/`.
@@ -99,7 +111,7 @@ fn shipped_lines(text: &str) -> Vec<(usize, String)> {
     for (i, line) in text.lines().enumerate() {
         let code = line.split("//").next().unwrap_or("").trim();
         if let Some(depth) = &mut skipping {
-            let opened = code.matches('{').count() as i32 - code.matches('}').count() as i32;
+            let opened = braces(code);
             let now = depth.unwrap_or(0) + opened;
             if (depth.is_none() && opened == 0 && code.ends_with(';')) || (depth.is_some() || opened > 0) && now <= 0 {
                 skipping = None;
@@ -117,7 +129,7 @@ fn shipped_lines(text: &str) -> Vec<(usize, String)> {
         }
         if test_next && !code.starts_with("#[") {
             test_next = false;
-            let opened = code.matches('{').count() as i32 - code.matches('}').count() as i32;
+            let opened = braces(code);
             if opened > 0 {
                 skipping = Some(Some(opened));
             } else if !code.ends_with(';') && !code.ends_with('}') {
@@ -140,6 +152,46 @@ fn shipped_lines(text: &str) -> Vec<(usize, String)> {
         out.push((i + 1, code.to_string()));
     }
     out
+}
+
+/// The braces `code` opens less those it closes, outside strings and
+/// character literals (a test's `'{'` or `"{name}"` isn't a block).
+fn braces(code: &str) -> i32 {
+    let mut depth = 0;
+    let mut chars = code.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                while let Some(c) = chars.next() {
+                    match c {
+                        '\\' => {
+                            chars.next();
+                        }
+                        '"' => break,
+                        _ => {}
+                    }
+                }
+            }
+            // A character literal (`'{'`, `'\\''`), not a lifetime (`'a`).
+            '\'' => {
+                // After the quote: `{'`, or an escape (`\''`, `\n'`, `\u{7f}'`)
+                // up to the quote after it.
+                let rest: String = chars.clone().take(12).collect();
+                let len = if rest.starts_with('\\') {
+                    rest.get(2..).and_then(|r| r.find('\'')).map(|i| i + 3)
+                } else {
+                    rest.chars().nth(1).filter(|c| *c == '\'').map(|_| 2)
+                };
+                for _ in 0..len.unwrap_or(0) {
+                    chars.next();
+                }
+            }
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            _ => {}
+        }
+    }
+    depth
 }
 
 /// The modules `code` names after `crate::` (or the other crates' names), a
@@ -204,6 +256,9 @@ pub(crate) mod helpers {
 use crate::ui::Y;
 fn g() {}
 ";
+    assert_eq!(braces("let x = '{'; f(\"{name}\") {"), 1);
+    assert_eq!(braces("fn f<'a>(x: &'a str) { '\\'' }"), 0);
+    assert_eq!(braces("['\\'', '{', '\\u{7b}'] {"), 1);
     let named: Vec<(usize, Vec<String>)> = shipped_lines(text).iter().map(|(n, l)| (*n, modules_named(l))).collect();
     let expected = [(1, vec!["db"]), (5, vec!["config", "gateway"]), (16, vec![])];
     assert_eq!(named, expected.map(|(n, m)| (n, m.into_iter().map(String::from).collect())));

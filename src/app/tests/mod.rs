@@ -2,7 +2,9 @@ use super::*;
 use std::time::Instant;
 
 use crate::config::keys::Action;
+#[cfg(feature = "sqlite")]
 use crate::config::store::file_profile;
+#[cfg(feature = "sqlite")]
 use crate::db::tests::file_engine;
 use crate::db::{ConnectionMode, SslMode, TxnState};
 
@@ -56,6 +58,7 @@ pub(super) fn type_text(app: &mut App, text: &str) {
 }
 
 /// An app connected to an in-memory file database (SQLite), on the query screen.
+#[cfg(feature = "sqlite")]
 pub(super) async fn connected_app(mode: ConnectionMode) -> (App, tempfile::TempDir) {
     let (mut app, dir) = test_app();
     app.connection.form.engine = file_engine();
@@ -100,6 +103,7 @@ pub(super) async fn check_syntax_now(app: &mut App) {
 }
 
 /// Edits a cell of `select … from people` and returns the app.
+#[cfg(feature = "sqlite")]
 pub(super) async fn edit_cell(mode: ConnectionMode, select: &str, col: usize) -> (App, tempfile::TempDir) {
     // Set up in normal mode, then switch to the mode under test.
     let (mut app, dir) = connected_app(ConnectionMode::Normal).await;
@@ -207,6 +211,7 @@ pub(super) async fn read_password(app: &mut App) {
 
 /// An app on the saved SQLite connection `shop` of project `p`, its data
 /// (and gateway) in `dir`, with `config` as config.toml.
+#[cfg(feature = "sqlite")]
 pub(super) async fn asking_app(dir: &std::path::Path, config: &str) -> App {
     crate::gateway::tests::saved_shop(dir).await;
     std::fs::write(dir.join("config.toml"), config).unwrap();

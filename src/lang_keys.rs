@@ -1,14 +1,15 @@
 //! The words the code says against `lang/en.toml` (in `podelis-core`):
-//! every `t!`/`tn!` key in both crates is there, and nothing there is
-//! unused. Here, in the app's crate, because it reads both crates' code.
+//! every `t!`/`tn!` key in the three crates is there, and nothing there is
+//! unused. Here, in the app's crate, because it reads every crate's code.
 
 /// Every key the code uses, from its `t!("…")`s.
 fn used_keys() -> Vec<String> {
     let mut keys = Vec::new();
-    // The app's code and its core's.
+    // The workspace's three crates.
     let mut stack = vec![
         std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
         std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/crates/podelis-core/src")),
+        std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/crates/podelis-ai/src")),
     ];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(dir).unwrap().flatten() {
@@ -48,18 +49,17 @@ fn used_keys() -> Vec<String> {
 
 #[test]
 fn every_key_the_code_uses_is_in_english() {
-    let en = crate::lang::english_keys();
-    let missing: Vec<String> = used_keys().into_iter().filter(|k| !en.contains(&k.as_str())).collect();
+    let en: std::collections::HashSet<&str> = crate::lang::english_keys().into_iter().collect();
+    let missing: Vec<String> = used_keys().into_iter().filter(|k| !en.contains(k.as_str())).collect();
     assert!(missing.is_empty(), "not in lang/en.toml: {missing:?}");
 }
 
 #[test]
 fn english_has_no_words_the_code_doesnt_use() {
-    let used = used_keys();
-    let counted =
-        |k: &str| k.rsplit_once('.').is_some_and(|(stem, _)| used.iter().any(|u| *u == format!("{stem}.other")));
+    let used: std::collections::HashSet<String> = used_keys().into_iter().collect();
+    let counted = |k: &str| k.rsplit_once('.').is_some_and(|(stem, _)| used.contains(&format!("{stem}.other")));
     let mut unused: Vec<&str> =
-        crate::lang::english_keys().into_iter().filter(|k| !used.iter().any(|u| u == k) && !counted(k)).collect();
+        crate::lang::english_keys().into_iter().filter(|k| !used.contains(*k) && !counted(k)).collect();
     unused.sort_unstable();
     assert!(unused.is_empty(), "in lang/en.toml but not used: {unused:?}");
 }

@@ -5,7 +5,7 @@ name: Dependencies
 on:
   push:
     branches: [master]
-    paths: ["Cargo.toml", "Cargo.lock", "deny.toml", "osv-scanner.toml"]
+    paths: ["Cargo.toml", "crates/*/Cargo.toml", "Cargo.lock", "deny.toml", "osv-scanner.toml"]
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
