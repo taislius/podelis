@@ -266,7 +266,6 @@ impl Server {
         };
         let filter = args.filter.as_deref().map(str::to_lowercase);
         let mut out = String::new();
-        let mut shown = 0;
         let matching =
             catalog.iter().filter(|(t, _)| filter.as_ref().is_none_or(|f| t.name.to_lowercase().contains(f)));
         for (table, columns) in matching {
@@ -283,9 +282,8 @@ impl Server {
                 .map(|c| format!("{} {}{}", c.name, c.data_type, if c.primary_key { " PK" } else { "" }))
                 .collect();
             let _ = writeln!(out, "{name}{kind}{rows}: {}", cols.join(", "));
-            shown += 1;
         }
-        if shown == 0 {
+        if out.is_empty() {
             return text("No tables match.");
         }
         text(out)
@@ -524,13 +522,12 @@ impl Server {
         Ok((open.db.clone(), profile, Arc::clone(&open.turn)))
     }
 
-    /// A log entry for SQL an agent sent to `connection`, stamped now, with
-    /// who sent it: the client as it reported itself, this session, its
-    /// folder and the user's name for it.
+    /// A log entry for SQL an agent sent to `connection`, with who sent it:
+    /// the client as it reported itself, this session, its folder and the
+    /// user's name for it (`write_log` stamps the time).
     fn entry(&self, peer: &Peer<RoleServer>, connection: &str, engine: Option<Engine>, tool: &str, sql: &str) -> Entry {
         let client = peer.peer_info().map(|i| i.client_info.clone());
         Entry {
-            at: chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
             agent: client.as_ref().map_or_else(|| "agent".to_string(), |c| c.name.clone()),
             agent_version: client.as_ref().map(|c| c.version.clone()).filter(|v| !v.is_empty()),
             agent_title: client.and_then(|c| c.title),
