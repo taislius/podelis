@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 
 /// Each module, and the modules its code must not use. From the bottom up:
-/// the text editor (nothing below it), the databases' small helpers
+/// the text editor (only the core below it), the databases' small helpers
 /// `related` and `chart` (above `podelis-core`), what's on disk, the
 /// machine, data in and out, agents and the gateway, then the app, its
 /// drawing and the command line.
@@ -32,9 +32,8 @@ const RULES: &[(&str, &[&str])] = &[
     ("ui", &["cli"]),
 ];
 
-/// Every module, for `editor`, which uses none.
-const ALL: &[&str] =
-    &["sql", "db", "related", "chart", "config", "system", "transfer", "agents", "gateway", "app", "ui", "cli"];
+/// Every module of the app's crate, for `editor`, which uses only the core.
+const ALL: &[&str] = &["related", "chart", "config", "system", "transfer", "agents", "gateway", "app", "ui", "cli"];
 
 #[test]
 fn modules_use_only_the_layers_below_them() {

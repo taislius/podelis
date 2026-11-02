@@ -646,6 +646,7 @@ pub(crate) mod tests {
     /// How PostgreSQL's types took the sample file (`import::tests`): each
     /// guessed one, the same moment from two time zones, and a bad value
     /// named by its line.
+    #[cfg(feature = "postgres")]
     #[tokio::test]
     async fn live_postgres_import_types() {
         let Some(db) = crate::db::tests::live_db(crate::db::Engine::Postgres).await else { return };
@@ -665,6 +666,7 @@ pub(crate) mod tests {
     /// How MySQL's types took the sample file (`import::tests`): booleans are
     /// TINYINT(1), timestamps keep their microseconds, a time with a zone is
     /// kept as written; a bad value puts nothing in.
+    #[cfg(feature = "mysql")]
     #[tokio::test]
     async fn live_mysql_import_types() {
         let Some((db, _)) = crate::db::tests::own_live_db(crate::db::Engine::MySql, "podelis_import_types").await

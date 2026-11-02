@@ -542,6 +542,12 @@ pub enum Highlight {
 /// Each line's highlighted fragments.
 pub type HighlightedLines<'a> = Vec<Vec<(&'a str, Highlight)>>;
 
+/// A letter, digit or `_`: part of a word, for SQL's analysis and the
+/// editor's word motions alike.
+pub fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
 /// Splits `text` into lines of highlighted fragments.
 #[cfg(any(test, feature = "test-support"))]
 pub fn highlight_lines(text: &str, engine: Engine) -> HighlightedLines<'_> {

@@ -24,6 +24,8 @@ mod editor;
 #[cfg(test)]
 mod fuzz_tests;
 mod gateway;
+#[cfg(test)]
+mod lang_keys;
 mod related;
 mod system;
 mod transfer;
