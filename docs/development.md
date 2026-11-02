@@ -106,7 +106,10 @@ GitHub Actions, kept small to save minutes:
   Actions → Platforms → Run workflow).
 - `deny.yml` — `cargo deny` when dependencies change, and weekly; beside
   it osv-scanner (OSV: GitHub's advisories as well as RustSec's), with the
-  same exceptions in `osv-scanner.toml` as in `deny.toml`.
+  same exceptions in `osv-scanner.toml` as in `deny.toml`, and
+  cargo-machete: a dependency no code names fails (a false alarm goes in
+  that crate's `[package.metadata.cargo-machete] ignored`; `check.sh` runs
+  it too where it's installed).
 - The Linux runners are pinned (`ubuntu-24.04`), not `ubuntu-latest`: a
   release binary needs at least the glibc it was built against, so
   building on the newest Ubuntu would leave out older systems.

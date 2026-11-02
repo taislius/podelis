@@ -93,6 +93,12 @@ view), `popups` (each popup's state), `ask` (a question being answered),
 (checking an idle connection) and `hits` (where the UI drew what can be
 clicked).
 
+`app/mod.rs` is `App` itself, building it, what's said, and where keys,
+clicks and pastes go first; each part's types and methods live in its own
+file (`confirm.rs` the y/n questions, `schema.rs` the navigator,
+`events.rs` the background events, `results.rs` what's shown and its
+popups, `tabs.rs` which tab runs what, `query/` running and exports).
+
 A few pieces in `app/` are shared, so the same thing works the same way
 everywhere:
 
