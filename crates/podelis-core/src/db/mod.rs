@@ -5,8 +5,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
-use sqlx::pool::PoolConnection;
-use sqlx::{AssertSqlSafe, Column, Either, Executor, Row, SqlSafeStr, Statement, TypeInfo, ValueRef};
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, mpsc, oneshot};
@@ -37,6 +35,7 @@ pub mod services;
 pub mod tests;
 mod tunnel;
 mod types;
+mod via_sqlx;
 
 pub use activity::Activity;
 pub use backend::{Backend, Capabilities, ContainerLogin, ContainerSecret};
@@ -181,6 +180,16 @@ impl RowStream {
     }
 }
 
+/// A row as a driver streams it: its cells as text, and the columns with
+/// the first row.
+struct FetchedRow {
+    columns: Option<Vec<(String, String)>>,
+    cells: Vec<Option<String>>,
+}
+
+/// One statement's rows as a driver streams them (`driver::fetch`).
+type Rows<'c> = futures_util::stream::BoxStream<'c, Result<FetchedRow>>;
+
 type FirstPage = (Option<Vec<(String, String)>>, Vec<Vec<Option<String>>>, bool);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -209,21 +218,6 @@ pub struct ColumnInfo {
     pub primary_key: bool,
 }
 
-/// What went wrong with TLS, if that's why connecting failed: the TLS
-/// library's error, or the handshake on the socket (rustls reports a
-/// rejected protocol version or cipher as an I/O error).
-fn tls_failure(e: &anyhow::Error) -> Option<String> {
-    let looks_tls = |text: &str| {
-        let text = text.to_ascii_lowercase();
-        ["handshake", "alert", "tls", "ssl", "protocol version"].iter().any(|w| text.contains(w))
-    };
-    e.chain().find_map(|cause| match cause.downcast_ref::<sqlx::Error>()? {
-        sqlx::Error::Tls(tls) => Some(tls.to_string()),
-        sqlx::Error::Io(io) if looks_tls(&io.to_string()) => Some(io.to_string()),
-        _ => None,
-    })
-}
-
 /// Why a connection to a server failed, in a user's words.
 fn io_reason(e: &std::io::Error) -> String {
     match e.kind() {
@@ -243,7 +237,7 @@ const REACH_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Whether something answers at `host:port` (a TCP connection, closed at
 /// once): the reason in words when not (no such host, refused, no route,
-/// no answer), which sqlx's pool would only report as a timeout.
+/// no answer), which a pool would only report as a timeout.
 pub(super) async fn reach(host: &str, port: u16) -> Result<()> {
     let at = address_text(host, port);
     let unreachable = |why: String| anyhow::Error::new(errors::Unreachable(format!("can't reach {at}: {why}")));
@@ -320,8 +314,12 @@ impl Database {
         // `prefer` means TLS if the server can: when it offers TLS the
         // client can't speak (an old MySQL's TLS 1.0/1.1), try without.
         let (pool, mut session, tls_failed) = match open(params.clone()).await {
-            Err(e) if params.ssl_mode == SslMode::Prefer && !host.starts_with('/') && tls_failure(&e).is_some() => {
-                let why = tls_failure(&e).unwrap_or_default();
+            Err(e)
+                if params.ssl_mode == SslMode::Prefer
+                    && !host.starts_with('/')
+                    && errors::tls_failure(&e).is_some() =>
+            {
+                let why = errors::tls_failure(&e).unwrap_or_default();
                 tracing::warn!(why, "TLS failed; connecting without it (SSL mode prefer)");
                 let (pool, session) = open(ConnectParams { ssl_mode: SslMode::Disable, ..params.clone() }).await?;
                 (pool, session, Some(why))

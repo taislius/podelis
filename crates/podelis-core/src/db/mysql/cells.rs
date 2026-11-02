@@ -1,6 +1,7 @@
 //! Decoding MySQL values as text.
 
 use super::super::*;
+use sqlx::{Row, TypeInfo, ValueRef};
 use sqlx::mysql::MySqlRow;
 
 /// Formats a MySQL value. `raw_sql` uses the text protocol, so every value

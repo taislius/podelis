@@ -235,31 +235,10 @@ pub trait SqlDialect: Backend {
     fn keeps_only_affinity(&self) -> bool {
         false
     }
-    /// `err`'s message made readable (a detail and hint added, boilerplate
-    /// cut), if it's this engine's error; `None` leaves it as it came.
-    fn database_error_message(&self, _err: &dyn sqlx::error::DatabaseError) -> Option<String> {
-        None
-    }
-    /// Whether `err` (this engine's) is a syntax error or an unknown
-    /// function: what a feature newer than the server looks like (see
-    /// [`SqlDialect::too_new`]). By its code, whatever language the server
-    /// speaks.
-    fn missing_feature_error(&self, _err: &dyn sqlx::error::DatabaseError) -> bool {
-        false
-    }
-    /// Where in the submitted SQL `err` says it is, if it's this engine's.
-    fn database_error_position(&self, _err: &dyn sqlx::error::DatabaseError) -> Option<super::ErrorPos> {
-        None
-    }
     /// A position only the message's text gives (SQLite's `near "x"`), for
     /// the background syntax check.
     fn position_in_message(&self, _message: &str) -> Option<super::ErrorPos> {
         None
-    }
-    /// Whether `err` is what this engine says as it closes the connection
-    /// (beyond SQL's own connection exceptions).
-    fn closes_connection(&self, _err: &dyn sqlx::error::DatabaseError) -> bool {
-        false
     }
     /// What AI agents may send (`db::agent_constraints`).
     fn agent_constraints(&self) -> &'static super::agent_constraints::AgentConstraints;

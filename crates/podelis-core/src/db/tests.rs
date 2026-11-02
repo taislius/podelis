@@ -109,21 +109,6 @@ pub fn test_sql(engine: Engine) -> &'static TestSql {
     on_driver!(engine, &engine::db_tests::TEST_SQL)
 }
 
-#[test]
-fn tls_failures_are_told_from_other_connect_errors() {
-    let io = |text: &str| -> anyhow::Error {
-        anyhow::Error::from(sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, text.to_string())))
-            .context("failed to connect to database")
-    };
-    assert_eq!(
-        super::tls_failure(&io("received fatal alert: HandshakeFailure")).as_deref(),
-        Some("received fatal alert: HandshakeFailure")
-    );
-    assert!(super::tls_failure(&io("Connection refused (os error 111)")).is_none());
-    let denied = anyhow::Error::from(sqlx::Error::Protocol("Access denied for user".into()));
-    assert!(super::tls_failure(&denied).is_none());
-}
-
 pub(in crate::db) fn cells(o: &QueryOutcome) -> Vec<Vec<Option<&str>>> {
     o.rows.iter().map(|r| r.iter().map(|c| c.as_deref()).collect()).collect()
 }

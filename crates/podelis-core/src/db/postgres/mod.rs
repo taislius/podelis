@@ -7,6 +7,8 @@ mod plan;
 pub(super) mod cells;
 #[cfg(feature = "postgres")]
 pub(super) mod connect;
+#[cfg(feature = "postgres")]
+pub(super) mod driver;
 #[cfg(all(any(test, feature = "test-support"), feature = "postgres"))]
 pub(in crate::db) mod db_tests;
 #[cfg(feature = "postgres")]
@@ -170,41 +172,9 @@ impl SqlDialect for Postgres {
         })
     }
 
-    #[cfg(feature = "postgres")]
-    fn database_error_message(&self, err: &dyn sqlx::error::DatabaseError) -> Option<String> {
-        let pg = err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()?;
-        let mut msg = pg.message().to_string();
-        if let Some(detail) = pg.detail() {
-            msg = format!("{msg}. {detail}");
-        }
-        if let Some(hint) = pg.hint() {
-            msg = format!("{msg} (hint: {hint})");
-        }
-        Some(msg)
-    }
 
-    #[cfg(feature = "postgres")]
-    fn missing_feature_error(&self, err: &dyn sqlx::error::DatabaseError) -> bool {
-        // syntax_error, undefined_function
-        err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>().is_some_and(|pg| matches!(pg.code(), "42601" | "42883"))
-    }
 
-    #[cfg(feature = "postgres")]
-    fn database_error_position(&self, err: &dyn sqlx::error::DatabaseError) -> Option<super::ErrorPos> {
-        let pg = err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>()?;
-        match pg.position() {
-            Some(sqlx::postgres::PgErrorPosition::Original(p)) => Some(super::ErrorPos::Char(p.saturating_sub(1))),
-            _ => None,
-        }
-    }
 
-    /// Admin and crash shutdowns (57P01–57P03): said just before the
-    /// connection goes.
-    #[cfg(feature = "postgres")]
-    fn closes_connection(&self, err: &dyn sqlx::error::DatabaseError) -> bool {
-        err.try_downcast_ref::<sqlx::postgres::PgDatabaseError>().is_some()
-            && err.code().is_some_and(|c| matches!(c.as_ref(), "57P01" | "57P02" | "57P03"))
-    }
 
     fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
         &agent_constraints::AGENT_CONSTRAINTS
