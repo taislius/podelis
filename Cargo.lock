@@ -2348,6 +2348,7 @@ version = "0.7.5"
 dependencies = [
  "chrono",
  "futures-util",
+ "insta",
  "podelis-core",
  "reqwest",
  "serde",

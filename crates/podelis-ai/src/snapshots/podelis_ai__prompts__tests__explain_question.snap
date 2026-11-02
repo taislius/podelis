@@ -1,0 +1,9 @@
+---
+source: crates/podelis-ai/src/prompts.rs
+expression: "explain_question(\"SELECT 1\")"
+---
+What does this query do?
+
+```sql
+SELECT 1
+```

@@ -15,6 +15,7 @@ use tokio::net::unix::OwnedWriteHalf;
 use super::protocol::{self, RpcError, code};
 use podelis_ai::context::Schema;
 use podelis_ai::models::{self, ModelConfig, Prompt};
+use podelis_ai::prompts;
 
 /// The models in `config.toml`. A file that doesn't parse is said as it
 /// is, not taken for one with no models (its defaults would have none).
@@ -376,42 +377,13 @@ async fn load(
 /// Times a model's SQL with unknown names goes back to it.
 const NAME_RETRIES: usize = 2;
 
-/// What the model is told when asked to write SQL; the context follows.
-fn ask_system(engine: &str, context: &str) -> String {
-    format!(
-        "You write SQL for {engine}. Using only the tables and columns below (and what the team has \
-         said about them, where it's given), write one query that answers the user's question. Reply with the query in a ```sql block, then one or two sentences \
-         on what it does and any assumption you made (say how you read anything ambiguous). Write a \
-         read-only query (SELECT or WITH); never change data. If these tables can't answer the \
-         question, say so instead of writing a query. If you had to assume what a column or a value \
-         means and nothing below says it, end with each assumption on a line of its own, as \
-         `FACT: subject | relation | value` (for example `FACT: orders.status | means | 3 = cancelled`, \
-         `FACT: customer | also called | client` for another name the question used, or \
-         `FACT: revenue | defined as | sum(payment.amount)` for a business term you had to define, or \
-         `FACT: customer | excluded by default | active = false` for rows you left out), \
-         at most three: the user will confirm or correct them.\n\n{context}"
-    )
-}
-
-/// What the model is told when asked what a query does; the context follows.
-fn explain_system(engine: &str, context: &str) -> String {
-    format!(
-        "You explain SQL for {engine} to the person about to run it. Using the tables and columns below (and \
-         what the team has said about them, where it's given), say in plain words what the user's query does \
-         and what its result holds: a short paragraph, then the steps worth knowing (joins, filters, grouping, \
-         anything slow on big tables) as short lines starting with `- `. If something in it looks wrong (a join \
-         that multiplies rows, a filter that can't match, a name not below), say so, and only then add the \
-         query as you'd write it in a ```sql block. Don't write a query otherwise.\n\n{context}"
-    )
-}
-
 /// The system prompt and the user's message: to write SQL for a
 /// question, or (`explain`) to say what the SQL in `question` does.
 fn ask_or_explain(explain: bool, engine: &str, context: &str, question: &str) -> (String, String) {
     if explain {
-        (explain_system(engine, context), format!("What does this query do?\n\n```sql\n{question}\n```"))
+        (prompts::explain(engine, context), prompts::explain_question(question))
     } else {
-        (ask_system(engine, context), question.to_string())
+        (prompts::ask(engine, context), question.to_string())
     }
 }
 
@@ -420,19 +392,13 @@ fn ask_or_explain(explain: bool, engine: &str, context: &str, question: &str) ->
 const LOOKUP_ROUNDS: usize = 2;
 const LOOKUP_TABLES: usize = 8;
 
-/// Added to the system prompt when the model may look for itself.
-const LOOKUP_NOTE: &str = "\n\nIf the question needs a table that isn't below, look for it: `find_tables` with \
-    words for it (its name, a column, what it holds), then `describe_table` for the ones that fit. At most \
-    two rounds of lookups; then write the query, or say what's missing.";
-
 /// The tools a model asked for SQL may call: they read the schema the
 /// context comes from (names, columns, keys, comments), never rows.
 fn lookup_tools() -> Vec<models::Tool> {
     vec![
         models::Tool {
             name: "find_tables",
-            description: "Find tables in this database whose names, columns or comments match the words, \
-                          for what the tables you were shown don't cover. Returns each table's name and what matched.",
+            description: prompts::find_tables_tool(),
             input: json!({
                 "type": "object",
                 "properties": { "words": { "type": "string", "description": "words for what's needed, e.g. \"payments revenue\"" } },
@@ -441,8 +407,7 @@ fn lookup_tools() -> Vec<models::Tool> {
         },
         models::Tool {
             name: "describe_table",
-            description: "Show one table's columns, keys, where its foreign keys point and its comments, \
-                          as the tables you were shown are listed.",
+            description: prompts::describe_table_tool(),
             input: json!({
                 "type": "object",
                 "properties": { "name": { "type": "string", "description": "the table, as `schema.table` or `table`" } },
@@ -509,10 +474,7 @@ async fn converse(
         }
         // Back to the model, in the same conversation.
         prompt.messages.push(models::Message::new("assistant", reply.text.clone()));
-        let feedback = format!(
-            "That doesn't fit the schema: {}. Use only the tables and columns given, and write the query again.",
-            problems.join("; ")
-        );
+        let feedback = prompts::names_feedback(&problems.join("; "));
         prompt.messages.push(models::Message::new("user", feedback));
     }
 }
@@ -614,7 +576,8 @@ pub async fn ask(
     if config.uses_tools() && !explain {
         prompt.tools = lookup_tools();
         if let Some(system) = &mut prompt.system {
-            system.push_str(LOOKUP_NOTE);
+            system.push_str("\n\n");
+            system.push_str(prompts::lookups());
         }
     }
     let answered = match converse(&config, key.as_deref(), &mut prompt, id, write, &source.schema, explain).await {

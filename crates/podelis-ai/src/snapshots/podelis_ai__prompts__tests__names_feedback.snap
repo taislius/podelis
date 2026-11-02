@@ -1,0 +1,5 @@
+---
+source: crates/podelis-ai/src/prompts.rs
+expression: "names_feedback(\"no table `x`\")"
+---
+That doesn't fit the schema: no table `x`. Use only the tables and columns given, and write the query again.
