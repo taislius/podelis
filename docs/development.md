@@ -63,7 +63,7 @@ there still go to your OS keychain (service `podelis`, account
 The Rust version is pinned in `rust-toolchain.toml` (rustup installs it on
 first use), so local builds and CI see the same lints. Lints are configured
 in `Cargo.toml` (`[lints]`), formatting in `rustfmt.toml`, and
-licence/advisory policy in `deny.toml`.
+licence/advisory policy in `tools/deny.toml`.
 
 **Unix only, POSIX where it can be.** Podėlis needs a Unix: file modes
 (`0600` for what holds secrets), process groups for password commands,
@@ -118,7 +118,7 @@ GitHub Actions, kept small to save minutes:
   Actions → Platforms → Run workflow).
 - `deny.yml` — `cargo deny` when dependencies change, and weekly; beside
   it osv-scanner (OSV: GitHub's advisories as well as RustSec's), with the
-  same exceptions in `osv-scanner.toml` as in `deny.toml`, and
+  same exceptions in `tools/osv-scanner.toml` as in `tools/deny.toml`, and
   cargo-machete: a dependency no code names fails (a false alarm goes in
   that crate's `[package.metadata.cargo-machete] ignored`; `check.sh` runs
   it too where it's installed).
