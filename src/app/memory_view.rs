@@ -118,7 +118,7 @@ impl App {
                 }
                 InputResult::Submit => {
                     // Not a fact (no value): said, and what's typed stays.
-                    if crate::gateway::memory::parse_fact(input.text()).is_none() {
+                    if podelis_ai::memory::parse_fact(input.text()).is_none() {
                         return self.set_status(t!("memory.add_hint").into(), true);
                     }
                     let text = view.adding.take().map(|i| i.text().trim().to_string()).unwrap_or_default();

@@ -16,13 +16,14 @@ use std::path::{Path, PathBuf};
 
 /// Each module, and the modules its code must not use. From the bottom up:
 /// the text editor (only the core below it), the databases' small helpers
-/// `related` and `chart` (above `podelis-core`), what's on disk, the
-/// machine, data in and out, agents and the gateway, then the app, its
-/// drawing and the command line.
+/// `related` and `chart` (above `podelis-core`, beside `podelis-ai`: neither
+/// uses it), what's on disk (the first to use `podelis-ai`, for
+/// `[[models]]`), the machine, data in and out, agents and the gateway,
+/// then the app, its drawing and the command line.
 const RULES: &[(&str, &[&str])] = &[
     ("editor", ALL),
-    ("related", &["config", "system", "transfer", "agents", "gateway", "app", "ui", "cli", "chart"]),
-    ("chart", &["config", "system", "transfer", "agents", "gateway", "app", "ui", "cli", "related"]),
+    ("related", &["ai", "config", "system", "transfer", "agents", "gateway", "app", "ui", "cli", "chart"]),
+    ("chart", &["ai", "config", "system", "transfer", "agents", "gateway", "app", "ui", "cli", "related"]),
     ("config", &["system", "transfer", "agents", "gateway", "app", "ui", "cli"]),
     ("system", &["transfer", "agents", "gateway", "app", "ui", "cli"]),
     ("transfer", &["agents", "gateway", "app", "ui", "cli"]),
@@ -32,8 +33,10 @@ const RULES: &[(&str, &[&str])] = &[
     ("ui", &["cli"]),
 ];
 
-/// Every module of the app's crate, for `editor`, which uses only the core.
-const ALL: &[&str] = &["related", "chart", "config", "system", "transfer", "agents", "gateway", "app", "ui", "cli"];
+/// Every module of the app's crate and the AI crate (`ai`), for `editor`,
+/// which uses only the core.
+const ALL: &[&str] =
+    &["ai", "related", "chart", "config", "system", "transfer", "agents", "gateway", "app", "ui", "cli"];
 
 #[test]
 fn modules_use_only_the_layers_below_them() {
@@ -139,11 +142,12 @@ fn shipped_lines(text: &str) -> Vec<(usize, String)> {
     out
 }
 
-/// The modules `code` names after `crate::` (or the core's own name), a
+/// The modules `code` names after `crate::` (or the other crates' names), a
 /// `crate::{…}` group's too.
 fn modules_named(code: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let code = code.replace("podelis_core::", "crate::");
+    // The core's modules by their own names; the AI crate as `ai`.
+    let code = code.replace("podelis_core::", "crate::").replace("podelis_ai::", "crate::ai::");
     for (i, _) in code.match_indices("crate::") {
         let rest = &code[i + "crate::".len()..];
         if let Some(group) = rest.strip_prefix('{') {
@@ -180,6 +184,7 @@ fn the_check_sees_what_it_should() {
     assert_eq!(modules_named("    let x = crate::cli::classify(a);"), ["cli"]);
     assert_eq!(modules_named("use crate::application::X;"), ["application"]);
     assert_eq!(modules_named("use podelis_core::db::Engine;"), ["db"]);
+    assert_eq!(modules_named("let m = podelis_ai::models::on_this_machine(c);"), ["ai"]);
     assert_eq!(modules_named("use crate::{app::ConnectForm, config::{store, draft}, db};"), ["app", "config", "db"]);
     let text = "\
 use crate::db::Engine;

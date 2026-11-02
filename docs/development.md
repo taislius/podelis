@@ -76,16 +76,17 @@ installed. Windows isn't supported.
 
 **The context's eval.** `cargo test retrieval -- --nocapture` prints
 recall, precision and the context's size per database for the gold set
-in `src/gateway/eval/questions.txt` (`PODELIS_EVAL_ALL=1` also
+in `crates/podelis-ai/src/context/eval/questions.txt` (`PODELIS_EVAL_ALL=1` also
 lists each question's extra tables and why they came); it fails under
 the floors in `eval.rs`, to raise as the builder improves. The schemas
 are snapshots (`eval/<database>.json`, no rows); to make them again from
-live databases:
+live databases (the app's `gateway/eval_snapshots.rs`, which opens them by
+URL):
 
 ```sh
 PODELIS_EVAL_DUMP="pagila=postgres://postgres:…@127.0.0.1:55433/pagila?sslmode=disable \
   sakila=mysql://root:…@127.0.0.1:53385/sakila?ssl-mode=disabled \
-  chinook=$HOME/podelis-test/Chinook.sqlite" cargo test dump_schemas -- --ignored
+  chinook=$HOME/podelis-test/Chinook.sqlite" cargo test -p podelis dump_schemas -- --ignored
 ```
 
 GitHub Actions, kept small to save minutes:

@@ -33,7 +33,8 @@ const MAX_COLUMNS: usize = 40;
 /// A comment is cut at this many characters.
 const MAX_COMMENT: usize = 200;
 
-/// The database as the builder sees it.
+/// The database as the builder sees it (as JSON, the eval's snapshots).
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Schema {
     /// Its name, for the model ("PostgreSQL").
     pub engine: String,
@@ -632,5 +633,16 @@ fn cut(text: &str) -> String {
     short
 }
 
+/// The context for `question` once memory's been read: what `ask` builds,
+/// and what the retrieval eval (`context/eval.rs`) measures.
+pub fn for_question(schema: &Schema, question: &str, memory: &crate::memory::ForQuestion) -> Context {
+    let built = build(schema, &format!("{question}{}", memory.words()));
+    let tables: Vec<String> = built.tables.iter().map(|t| t.name.clone()).collect();
+    let facts = memory.about(&tables);
+    built.with_facts(&facts, schema)
+}
+
+#[cfg(test)]
+mod eval;
 #[cfg(test)]
 mod tests;

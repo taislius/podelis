@@ -58,6 +58,8 @@ use config::store::ConnectionStore;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // The real keychain, even in a binary `cargo test` built (see there).
+    db::keychain::use_os_keychain();
     let args = match cli::parse(std::env::args().skip(1)) {
         cli::ParseOutcome::Run(args) => *args,
         cli::ParseOutcome::Exit(code, text) => {
