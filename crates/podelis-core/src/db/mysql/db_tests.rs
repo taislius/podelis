@@ -26,6 +26,7 @@ pub static TEST_SQL: TestSql = TestSql {
         WITH RECURSIVE s(g) AS (SELECT 1 UNION ALL SELECT g + 1 FROM s WHERE g < 2500) SELECT g FROM s",
     // The classic table before 8.0.16 and on MariaDB; the tree after.
     plan_shows: &["select_type", "-> "],
+    analyzed_shows: "actual time",
     analyze: "ANALYZE TABLE {table}",
     binary: ["CREATE TEMPORARY TABLE bin_t (b blob)", "X'00FF275C'", "0x00FF275C"],
     comments: Some(&["CREATE TABLE noted (id INT PRIMARY KEY, total DECIMAL(10,2) COMMENT 'VAT included', plain INT) \

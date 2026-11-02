@@ -194,6 +194,14 @@ smaller program with fewer dependencies), pick them by feature:
 cargo install --locked --git https://github.com/taislius/podelis --no-default-features --features postgres,sqlite
 ```
 
+DuckDB is opt-in for now (`--features duckdb`, beside the default ones or
+alone): its driver builds DuckDB from C++, which takes minutes and a few
+GB of disk while building.
+
+```sh
+cargo install --locked --git https://github.com/taislius/podelis --features duckdb
+```
+
 ## Run
 
 ```sh

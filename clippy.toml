@@ -1,5 +1,5 @@
 # Words doc comments may use as words, besides clippy's own list ("..").
-doc-valid-idents = ["OpenAI", "BigQuery", ".."]
+doc-valid-idents = ["OpenAI", "BigQuery", "DuckDB", ".."]
 
 # Tests may unwrap: a panic there is the failed assertion.
 allow-unwrap-in-tests = true

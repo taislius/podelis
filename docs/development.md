@@ -118,7 +118,8 @@ GitHub Actions, kept small to save minutes:
 - `ci.yml` — on pushes to master (not docs-only ones): format,
   clippy and tests on Linux against real PostgreSQL and MySQL; beside it,
   clippy and tests built with fewer engines (`--no-default-features
-  --features …`: the README's `postgres,sqlite`, and each engine alone), so
+  --features …`: the README's `postgres,sqlite`, each engine alone, and
+  the opt-in DuckDB beside the others and alone), so
   nothing assumes an engine is there (a test that needs SQLite's files
   carries `#[cfg(feature = "sqlite")]`); a newer push
   cancels the older run. A force-push may not start it; run it by hand
@@ -211,3 +212,13 @@ docker compose -f docker/compose.yaml down -v                          # stop an
 The checkout is mounted, so edits show up without rebuilding; builds go to
 a volume, apart from the macOS `target/`. Inside, the servers are
 `postgres:5432` (password `postgres`) and `mysql:3306` (password `root`).
+
+## DuckDB's build and disk
+
+DuckDB (`--features duckdb`) builds from C++: a few minutes, and about
+3 GB under `target/debug/build/libduckdb-sys-*`, once for each set of
+features a command builds with. Keep to the workspace's commands
+(`cargo clippy --all-targets --features duckdb`, `cargo test --features
+duckdb`), which share one build: `-p podelis-core` and other feature sets
+make another copy each. On a nearly full disk, delete the old copies (or
+`cargo clean`) first.

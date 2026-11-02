@@ -17,9 +17,10 @@ fn toggling_engine_updates_default_port_only() {
 #[test]
 fn sqlite_form_shows_only_file_fields() {
     let mut form = ConnectForm::new();
-    // The first engine is a server's; SQLite is listed last.
-    form.cycle_engine(false);
-    assert_eq!(form.engine, Engine::Sqlite);
+    // The first engine is a server's; SQLite is listed after them.
+    while form.engine != Engine::Sqlite {
+        form.cycle_engine(false);
+    }
     assert!(form.host.is_empty() && form.port.is_empty());
     assert_eq!(form.visible_fields().len(), 7);
     assert!(form.params().unwrap_err().contains("file"));

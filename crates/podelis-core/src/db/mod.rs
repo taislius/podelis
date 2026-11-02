@@ -35,6 +35,7 @@ pub mod services;
 pub mod tests;
 mod tunnel;
 mod types;
+#[cfg(feature = "via-sqlx")]
 mod via_sqlx;
 
 pub use activity::Activity;

@@ -56,16 +56,18 @@ jobs:
       - run: cargo test --locked
 
   # Built with fewer engines (`--no-default-features --features …`): the
-  # README's PostgreSQL and SQLite, and each engine alone. Code and tests
+  # README's PostgreSQL and SQLite, and each engine alone; and with DuckDB,
+  # opt-in for now (its driver builds DuckDB from C++), beside the others
+  # and alone. Code and tests
   # mustn't assume an engine is there (a test that needs SQLite's files
   # says so with `#[cfg(feature = "sqlite")]`); clippy as well, as what goes
   # unused with fewer engines is allowed only in such builds. Beside the
   # job above, so a run takes no longer; the same servers, so each build's
   # live tests run.
   engines:
-    name: Fewer engines (${{ matrix.features }})
+    name: Engines (${{ matrix.features }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -75,6 +77,8 @@ jobs:
           - { features: postgres, key: postgres }
           - { features: mysql, key: mysql }
           - { features: sqlite, key: sqlite }
+          - { features: "postgres,mysql,sqlite,duckdb", key: with-duckdb }
+          - { features: duckdb, key: duckdb }
     services:
       postgres:
         image: postgres:17

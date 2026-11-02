@@ -32,6 +32,7 @@ default = ["postgres", "mysql", "sqlite"]
 postgres = ["podelis-core/postgres"]
 mysql = ["podelis-core/mysql"]
 sqlite = ["podelis-core/sqlite"]
+duckdb = ["podelis-core/duckdb"]
 
 [dev-dependencies]
 insta.workspace = true

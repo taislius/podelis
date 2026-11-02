@@ -185,7 +185,9 @@ db/
                   function through the dispatch macros
   via_sqlx.rs     what the engines that talk through sqlx share: their
                   `driver.rs` is `via_sqlx::driver!()` and their errors'
-                  reading; nothing outside them names sqlx
+                  reading; nothing outside them names sqlx. Built with
+                  the `via-sqlx` feature, which those engines' features
+                  turn on (DuckDB's driver is the `duckdb` crate)
   errors.rs  diagnose.rs  tunnel.rs  options.rs  types.rs  passwords.rs
                   shared: error messages and a failed connection's hints
                   (the network's and TLS's here, each engine's from its
@@ -200,9 +202,11 @@ db/
                   the shape of what AI agents may send (each engine fills
                   it in); `agents/` applies it without naming engines
   tests.rs        the tests every engine shares, and their helpers
-  postgres/  mysql/  sqlite/
+  postgres/  mysql/  sqlite/  duckdb/
     engine.toml   its name (the Engine variant, as connections.toml writes
-                  it) and its order in lists
+                  it), its order in lists, its feature, and `opt_in`
+                  (DuckDB's, for now: not in `default`, and `every_engine`
+                  doesn't wait for it)
     mod.rs        its Backend (names, ports, capabilities, connection
                   hints, container images and logins…) and its
                   SqlDialect (quoting, lexer rules, placeholders, EXPLAIN,
@@ -307,6 +311,32 @@ through `links` metadata, so the lints allowed only with fewer engines
    their own; tests that need a database always there use the file
    engine (`file_engine()`: SQLite, so a test using it says `#[cfg(feature = "sqlite")]`). Its own
    statements for agents are tested in its `agent_constraints.rs`.
+
+### DuckDB
+
+The first engine without sqlx (`db/duckdb/`): the `duckdb` crate, which
+is sync, so each call runs on a blocking thread holding the connection,
+and streamed rows come through a channel. Its results are Arrow batches,
+shown with Arrow's own formatting (lists, structs, maps) and DuckDB's
+type names (`cells.rs`). What's its own:
+
+- **One instance per file in a process.** Two would each cache the file
+  and write over each other, so another connection to an open file
+  shares its instance (`connect.rs`). A read-only connection may share one
+  that writes, and its driver runs only reads and transactions on it (not
+  `SET`: many settings are the instance's); one that writes can't share a
+  read-only instance, and says so.
+- **Its plan is drawn in boxes.** Full scans are the boxes that say `Type:
+  Sequential Scan`, a long table name wrapping over lines; a scan its
+  filters narrow by the table's key isn't one (on a small table DuckDB
+  scans rather than use the index), nor one a `STREAMING_LIMIT` stops.
+  A filter outside a column's least and greatest plans as `EMPTY_RESULT`.
+- **Names DuckDB keeps are quoted** (`at`, `order`: its `reserved` and
+  `type_function` keywords), and it keeps no string lengths
+  (`keeps_string_lengths`: `VARCHAR(120)` is `VARCHAR`).
+- **Not yet:** a sandbox's copy (`copy_into`: DuckDB's needs the
+  database's name, and it has no savepoints for the other way), its
+  macros as routines, its plan notes.
 
 ## The gateway
 

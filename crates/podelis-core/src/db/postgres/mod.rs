@@ -239,7 +239,8 @@ impl SqlDialect for Postgres {
     fn modify_column(&self, table: &str, column: &str, data_type: &str, nullable: bool) -> Option<String> {
         let null = if nullable { "DROP NOT NULL" } else { "SET NOT NULL" };
         Some(format!("ALTER TABLE {table} ALTER COLUMN {column} TYPE {data_type}, ALTER COLUMN {column} {null}"))
-    }}
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -636,14 +636,16 @@ mod tests {
         assert!(is_keyword("select", MY) && is_keyword("TRANSACTION", MY) && !is_keyword("TRANSACTIONS", MY));
     }
 
-    /// An engine's own words are its alone: `ILIKE` is PostgreSQL's,
-    /// `PRAGMA` SQLite's, `DESCRIBE` MySQL's.
+    /// An engine's own words are its, not an engine's without them:
+    /// `ILIKE` is PostgreSQL's, not MySQL's; `PRAGMA` SQLite's, not
+    /// PostgreSQL's; `DESCRIBE` MySQL's, not SQLite's.
     #[test]
     fn engine_words_are_only_their_engines() {
         let on = |word: &str| Engine::ALL.into_iter().filter(|e| is_keyword(word, *e)).collect::<Vec<_>>();
-        assert_eq!(on("ilike"), [Engine::Postgres]);
-        assert_eq!(on("PRAGMA"), [Engine::Sqlite]);
-        assert_eq!(on("describe"), [Engine::MySql]);
+        let (pg, my, lite) = (Engine::Postgres, Engine::MySql, Engine::Sqlite);
+        assert!(on("ilike").contains(&pg) && !on("ilike").contains(&my));
+        assert!(on("PRAGMA").contains(&lite) && !on("PRAGMA").contains(&pg));
+        assert!(on("describe").contains(&my) && !on("describe").contains(&lite));
         assert_eq!(on("select").len(), Engine::ALL.len());
     }
 
