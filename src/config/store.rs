@@ -476,6 +476,7 @@ pub fn saved_password(project_id: &str, profile: &ConnectionProfile) -> (String,
 
 #[cfg(test)]
 /// A saved connection `name` to the file database at `path`.
+#[cfg(feature = "sqlite")]
 pub(crate) fn file_profile(name: &str, path: &std::path::Path) -> ConnectionProfile {
     ConnectionProfile {
         unknown: Unknown::default(),
@@ -529,6 +530,26 @@ mod tests {
 
     fn names(store: &ConnectionStore, project: &str) -> Vec<String> {
         store.project(project).unwrap().connections.iter().map(|c| c.name.clone()).collect()
+    }
+
+    /// Opt-in (`PODELIS_TEST_KEYCHAIN=1`): a connection's password under its
+    /// real account name (project and connection, with what names may hold)
+    /// in the OS keychain, moved to another project as `m` does.
+    #[test]
+    fn live_keychain_accounts_of_connections() {
+        if std::env::var("PODELIS_TEST_KEYCHAIN").as_deref() != Ok("1") {
+            return;
+        }
+        let p = profile("shop db / ąčę: \"prod\"");
+        let from = format!("podelis-test-{}", uuid::Uuid::new_v4());
+        let to = format!("podelis-test-{} (2)", uuid::Uuid::new_v4());
+        let (a, b) = (keychain_account(&from, &p), keychain_account(&to, &p));
+        crate::db::keychain::store_password(&a, "s3cret").unwrap();
+        assert_eq!(saved_password(&from, &p).0, "s3cret");
+        crate::db::keychain::store_password(&b, &get_password(&a).unwrap()).unwrap();
+        crate::db::keychain::delete_password(&a).unwrap();
+        assert_eq!((saved_password(&from, &p).0, saved_password(&to, &p).0), (String::new(), "s3cret".to_string()));
+        crate::db::keychain::delete_password(&b).unwrap();
     }
 
     #[test]

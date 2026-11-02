@@ -4,7 +4,8 @@
 
 ```sh
 cargo install cargo-deny --locked   # once: check.sh requires it
-./scripts/check.sh   # rustfmt, clippy (pedantic, warnings as errors), tests (all engines, then PostgreSQL and SQLite only), cargo-deny
+./scripts/check.sh   # rustfmt, clippy (pedantic, warnings as errors), tests, cargo-deny
+PODELIS_CHECK_ENGINES=1 ./scripts/check.sh   # also built with PostgreSQL and SQLite only, as CI
 ```
 
 How the code is organised — the app/UI/database layers, and the database

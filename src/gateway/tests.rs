@@ -309,6 +309,7 @@ async fn complete_says_why_a_model_cant_answer() {
 }
 
 /// A saved file connection (SQLite) `shop` in project `p`, in `dir`'s config.
+#[cfg(feature = "sqlite")]
 pub(crate) async fn saved_shop(dir: &Path) {
     use crate::db::{AgentAccess, ConnectionMode};
     let file = dir.join("shop.db");
