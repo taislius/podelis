@@ -162,10 +162,13 @@ impl App {
         if !writes {
             return self.run_now(explain, 0, infos, RunPurpose::Explain, None);
         }
+        let dialect = engine.dialect();
         let sql = if self.connection.txn == TxnState::Idle {
-            format!("BEGIN;\n{explain};\nROLLBACK")
+            format!("{};\n{explain};\n{}", dialect.begin(false), dialect.end(TxEnd::Rollback))
         } else {
-            format!("SAVEPOINT podelis_explain;\n{explain};\nROLLBACK TO SAVEPOINT podelis_explain")
+            let (savepoint, back) =
+                (dialect.savepoint("podelis_explain"), dialect.rollback_to_savepoint("podelis_explain"));
+            format!("{savepoint};\n{explain};\n{back}")
         };
         let action = ConfirmAction::Run { sql, offset: 0, infos, purpose: RunPurpose::Explain, filled: None };
         self.popups.confirm = Some(Confirm {

@@ -463,8 +463,8 @@ impl App {
             Action::Heartbeat => self.toggle_heartbeat(),
             Action::TxMode => self.open_tx_picker(),
             Action::Projects => self.open_manager(Screen::Projects),
-            Action::Commit => self.end_transaction("COMMIT"),
-            Action::Rollback => self.end_transaction("ROLLBACK"),
+            Action::Commit => self.end_transaction(TxEnd::Commit),
+            Action::Rollback => self.end_transaction(TxEnd::Rollback),
         }
     }
 
@@ -628,7 +628,7 @@ pub enum RunPurpose {
     /// place instead of replacing the results.
     CellEdit { row: usize, col: usize, value: Option<String> },
     /// COMMIT or ROLLBACK of a reviewed transaction: keeps the results.
-    TxControl(&'static str),
+    TxControl(TxEnd),
     /// An INSERT or DELETE from the result grid ("Added"/"Deleted"); the
     /// query runs again afterwards.
     RowChange(&'static str),

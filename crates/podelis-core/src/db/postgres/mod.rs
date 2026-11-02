@@ -173,8 +173,11 @@ impl Dialect for Postgres {
             dollar_quotes: true,
         }
     }
+    fn keywords(&self) -> &'static [&'static str] {
+        &["FETCH", "FULL", "FUNCTION", "GRANT", "ILIKE", "LATERAL", "RETURNING", "REVOKE", "SCHEMA", "SHOW", "TRUNCATE"]
+    }
     fn placeholders(&self) -> Placeholders {
-        Placeholders { dollar: true, question: false, sqlite: false }
+        Placeholders { dollar_number: true, ..Placeholders::default() }
     }
     fn is_system_table(&self, schema: &str, _table: &str) -> bool {
         matches!(schema, "pg_catalog" | "information_schema")

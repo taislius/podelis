@@ -37,6 +37,10 @@ impl Dialect for MySql {
         if read_only { "START TRANSACTION READ ONLY" } else { "START TRANSACTION" }
     }
 
+    fn sandbox_session(&self) -> Option<(&'static str, &'static str)> {
+        Some(("SET autocommit = 0", "SET autocommit = 1"))
+    }
+
     fn tables_without_rollback(&self) -> Option<&'static str> {
         Some(
             "SELECT CAST(GROUP_CONCAT(table_name SEPARATOR ', ') AS CHAR) FROM information_schema.tables \
@@ -194,8 +198,11 @@ impl Dialect for MySql {
             dollar_quotes: false,
         }
     }
+    fn keywords(&self) -> &'static [&'static str] {
+        &["DESCRIBE", "FETCH", "FUNCTION", "GRANT", "LATERAL", "REVOKE", "SCHEMA", "SHOW", "TRUNCATE", "USE"]
+    }
     fn placeholders(&self) -> Placeholders {
-        Placeholders { dollar: false, question: true, sqlite: false }
+        Placeholders { question: true, ..Placeholders::default() }
     }
     fn is_system_table(&self, schema: &str, _table: &str) -> bool {
         ["information_schema", "performance_schema", "mysql", "sys"].iter().any(|s| s.eq_ignore_ascii_case(schema))

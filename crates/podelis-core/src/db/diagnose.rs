@@ -297,7 +297,7 @@ async fn login_and_session(params: &ConnectParams, steps: &mut Vec<Step>) {
     let mut times = Vec::new();
     for _ in 0..3 {
         let t = Instant::now();
-        if db.run("SELECT 1", 1).await.is_ok() {
+        if db.run(db.engine().dialect().ping(), 1).await.is_ok() {
             times.push(t.elapsed());
         }
     }

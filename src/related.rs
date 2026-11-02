@@ -66,22 +66,15 @@ mod tests {
     /// `Database::links` reads them (the shape this module relies on).
     #[tokio::test]
     async fn describes_the_links_each_engine_reads() {
-        use crate::db::{Engine, tests::own_live_db};
+        use crate::db::Engine;
+        use crate::db::tests::{drop_linked_tables, linked_tables, own_live_db};
         for engine in Engine::BUILT {
             let Some((db, _)) = own_live_db(engine, "podelis_related").await else { continue };
-            for sql in [
-                "DROP TABLE IF EXISTS rel_child",
-                "DROP TABLE IF EXISTS rel_parent",
-                "CREATE TABLE rel_parent (id INT PRIMARY KEY)",
-                "CREATE TABLE rel_child (id INT PRIMARY KEY, parent_id INT, FOREIGN KEY (parent_id) REFERENCES rel_parent (id))",
-            ] {
-                db.run(sql, 1).await.unwrap();
-            }
+            linked_tables(&db, "rel_parent", "rel_child").await;
             let links = db.links().await.unwrap();
             let text = describe(&links, "", "rel_parent");
             assert!(text.contains("← rel_child (parent_id → id)"), "{engine:?}: {text}");
-            db.run("DROP TABLE rel_child", 1).await.unwrap();
-            db.run("DROP TABLE rel_parent", 1).await.unwrap();
+            drop_linked_tables(&db, "rel_parent", "rel_child").await;
         }
     }
 

@@ -119,16 +119,27 @@ pub struct LexerRules {
     pub dollar_quotes: bool,
 }
 
-/// Placeholders besides `:name` (which works everywhere).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The parameter forms an engine's SQL takes, each declared by its dialect,
+/// besides `:name` (Podėlis fills that in itself, so it works everywhere).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Placeholders {
     /// `$1`, `$2`…
-    pub dollar: bool,
-    /// `?`
+    pub dollar_number: bool,
+    /// `?`, numbered in order.
     pub question: bool,
-    /// SQLite's other forms: `?NNN` numbered, and `@name` and `$name`
-    /// besides `:name`.
-    pub sqlite: bool,
+    /// `?3`: a `?` with its number.
+    pub question_number: bool,
+    /// `@name`
+    pub at_name: bool,
+    /// `$name`
+    pub dollar_name: bool,
+}
+
+/// How a transaction ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TxEnd {
+    Commit,
+    Rollback,
 }
 
 /// An engine's SQL, apart from talking to the server.
@@ -211,6 +222,43 @@ pub trait Dialect: Sync {
     /// where the engine can.
     fn begin(&self, _read_only: bool) -> &'static str {
         "BEGIN"
+    }
+    /// The statement that ends a transaction, `how`.
+    fn end(&self, how: TxEnd) -> &'static str {
+        match how {
+            TxEnd::Commit => "COMMIT",
+            TxEnd::Rollback => "ROLLBACK",
+        }
+    }
+    /// A savepoint `name`, within a transaction.
+    fn savepoint(&self, name: &str) -> String {
+        format!("SAVEPOINT {name}")
+    }
+    /// Back to savepoint `name`, undoing what ran since.
+    fn rollback_to_savepoint(&self, name: &str) -> String {
+        format!("ROLLBACK TO SAVEPOINT {name}")
+    }
+    /// The engine's own keywords besides SQL's (`sql::KEYWORDS`), for
+    /// highlighting and completion: words its SQL has and not every
+    /// engine's. Upper case, sorted.
+    fn keywords(&self) -> &'static [&'static str] {
+        &[]
+    }
+    /// The cheapest query that shows the connection answers.
+    fn ping(&self) -> &'static str {
+        "SELECT 1"
+    }
+    /// What a session runs before a sandbox's transaction and after it ends,
+    /// where the engine needs it (MySQL: autocommit off, so a statement
+    /// that ends the transaction leaves the next in a new one, not
+    /// committing as it goes); `None` elsewhere.
+    fn sandbox_session(&self) -> Option<(&'static str, &'static str)> {
+        None
+    }
+    /// The statement that copies a file database to `path` (a sandbox works
+    /// on the copy); `None` where the engine has none.
+    fn copy_into(&self, _path: &str) -> Option<String> {
+        None
     }
     /// A query listing the tables a rollback doesn't undo (MySQL's
     /// non-InnoDB ones), as one text value; `None` where every table rolls
@@ -309,6 +357,27 @@ pub trait Dialect: Sync {
     /// An INSERT of a row with every column at its default.
     fn insert_defaults(&self, table: &str) -> String {
         format!("INSERT INTO {table} DEFAULT VALUES")
+    }
+    // The statements Podėlis writes for the rows it shows: names and values
+    // come quoted and as literals already (`quote_ident`, `sql_literal`).
+    /// Rows of `table`: all, or those `filter` keeps, at most `limit`.
+    fn select_rows(&self, table: &str, filter: Option<&str>, limit: Option<usize>) -> String {
+        let filter = filter.map(|f| format!(" WHERE {f}")).unwrap_or_default();
+        let limit = limit.map(|n| format!(" LIMIT {n}")).unwrap_or_default();
+        format!("SELECT * FROM {table}{filter}{limit}")
+    }
+    /// An INSERT of `rows` (each `(value, …)`) into `columns` of `table`.
+    fn insert(&self, table: &str, columns: &[String], rows: &[String]) -> String {
+        format!("INSERT INTO {table} ({}) VALUES {}", columns.join(", "), rows.join(", "))
+    }
+    /// An UPDATE of `table` setting each column to its value, where `filter`.
+    fn update(&self, table: &str, set: &[(String, String)], filter: &str) -> String {
+        let set: Vec<String> = set.iter().map(|(column, value)| format!("{column} = {value}")).collect();
+        format!("UPDATE {table} SET {} WHERE {filter}", set.join(", "))
+    }
+    /// A DELETE from `table` of the rows `filter` keeps.
+    fn delete(&self, table: &str, filter: &str) -> String {
+        format!("DELETE FROM {table} WHERE {filter}")
     }
     /// Column types for imported integers, decimals, booleans and
     /// timestamps (dates are `DATE` everywhere).

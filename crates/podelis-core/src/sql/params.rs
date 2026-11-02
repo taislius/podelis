@@ -1,6 +1,7 @@
-//! Query parameters: `:name` placeholders (every engine), `$1` (Postgres),
-//! `?` (MySQL, SQLite) and SQLite's `?NNN`, `@name` and `$name`, filled in
-//! as literals before the query runs.
+//! Query parameters, filled in as literals before the query runs: `:name`
+//! on every engine, and the forms an engine's dialect declares it takes
+//! (`Placeholders`: `$1`, `?`, `?3`, `@name`, `$name`). Nothing here knows
+//! which engine takes which.
 
 use std::ops::Range;
 
@@ -10,15 +11,15 @@ use crate::sql::{self, TokenKind};
 /// One parameter and every place it appears.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Param {
-    /// As written (`:customer_id`, `$1`, SQLite's `?2`), or `?1`, `?2`… for
+    /// As written (`:customer_id`, `$1`, `?2`), or `?1`, `?2`… for bare
     /// `?`s.
     pub name: String,
     pub ranges: Vec<Range<usize>>,
 }
 
 /// The parameters in `text`, in order of first appearance. Placeholders
-/// inside strings, quoted names and comments don't count, nor do
-/// Postgres `::type` casts.
+/// inside strings, quoted names and comments don't count, nor do `::type`
+/// casts.
 pub fn find(text: &str, engine: Engine) -> Vec<Param> {
     let tokens = sql::tokenize(text, engine);
     let b = text.as_bytes();
@@ -27,8 +28,8 @@ pub fn find(text: &str, engine: Engine) -> Vec<Param> {
         Some(p) => p.ranges.push(range),
         None => params.push(Param { name, ranges: vec![range] }),
     };
-    // A bare `?` is numbered after the highest number so far, as SQLite
-    // does: `?3, ?` is ?3 and ?4.
+    // A bare `?` is numbered after the highest number so far, as engines
+    // with numbered ones do: `?3, ?` is ?3 and ?4.
     let mut questions = 0;
     let placeholders = engine.dialect().placeholders();
     // The token right after `i`, if it touches it.
@@ -52,7 +53,7 @@ pub fn find(text: &str, engine: Engine) -> Vec<Param> {
                 }
             }
             TokenKind::Word
-                if placeholders.dollar
+                if placeholders.dollar_number
                     && word.len() > 1
                     && word.starts_with('$')
                     && word[1..].bytes().all(|c| c.is_ascii_digit()) =>
@@ -61,7 +62,7 @@ pub fn find(text: &str, engine: Engine) -> Vec<Param> {
             }
             TokenKind::Punct if word == "?" && placeholders.question => {
                 let numbered = touching(i)
-                    .filter(|n| placeholders.sqlite && n.kind == TokenKind::Number)
+                    .filter(|n| placeholders.question_number && n.kind == TokenKind::Number)
                     .and_then(|n| Some((text[n.range.clone()].parse::<u32>().ok()?, n.range.end)));
                 if let Some((n, end)) = numbered {
                     questions = questions.max(n);
@@ -71,14 +72,14 @@ pub fn find(text: &str, engine: Engine) -> Vec<Param> {
                     add(format!("?{questions}"), tok.range.clone());
                 }
             }
-            TokenKind::Punct if word == "@" && placeholders.sqlite => {
+            TokenKind::Punct if word == "@" && placeholders.at_name => {
                 if let Some(next) = touching(i).filter(|n| n.kind == TokenKind::Word && is_name(&text[n.range.clone()]))
                 {
                     add(format!("@{}", &text[next.range.clone()]), tok.range.start..next.range.end);
                 }
             }
             TokenKind::Word
-                if placeholders.sqlite && word.len() > 1 && word.starts_with('$') && is_name(&word[1..]) =>
+                if placeholders.dollar_name && word.len() > 1 && word.starts_with('$') && is_name(&word[1..]) =>
             {
                 add(word.to_string(), tok.range.clone());
             }
@@ -205,6 +206,22 @@ mod tests {
         assert_eq!(names("select ?, ?", Engine::MySql), ["?1", "?2"]);
         assert_eq!(names("select '?', ?", Engine::Sqlite), ["?1"]);
         assert_eq!(names("select $1", Engine::MySql), Vec::<String>::new());
+    }
+
+    /// Each engine finds the forms its dialect declares, and only those
+    /// (`:name` on all of them), whichever engines there are.
+    #[test]
+    fn each_engine_finds_the_forms_its_dialect_declares() {
+        for engine in Engine::ALL {
+            let takes = engine.dialect().placeholders();
+            let found = |sql: &str| names(sql, engine);
+            assert_eq!(found("select :n"), [":n"], "{engine:?}");
+            assert_eq!(found("select $1") == ["$1"], takes.dollar_number, "{engine:?}: $1");
+            assert_eq!(found("select ?") == ["?1"], takes.question, "{engine:?}: ?");
+            assert_eq!(found("select ?3") == ["?3"], takes.question_number, "{engine:?}: ?3");
+            assert_eq!(found("select @n") == ["@n"], takes.at_name, "{engine:?}: @name");
+            assert_eq!(found("select $n") == ["$n"], takes.dollar_name, "{engine:?}: $name");
+        }
     }
 
     /// SQLite's numbered and named forms, numbered as SQLite numbers them,

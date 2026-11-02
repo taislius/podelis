@@ -353,7 +353,8 @@ pub async fn import(
         .collect();
     let quoted = engine.quote_ident(table);
     let cols: Vec<String> = header.iter().map(|h| engine.quote_ident(h)).collect();
-    db.run("BEGIN", 1).await?;
+    let dialect = db.engine().dialect();
+    db.run(dialect.begin(false), 1).await?;
     let result = async {
         if !exists {
             let defs: Vec<String> = cols.iter().zip(&types).map(|(c, t)| format!("{c} {}", t.sql(engine))).collect();
@@ -407,11 +408,11 @@ pub async fn import(
     .await;
     match result {
         Ok(rows) => {
-            db.run("COMMIT", 1).await?;
+            db.run(dialect.end(crate::db::TxEnd::Commit), 1).await?;
             Ok(Imported { rows, created: !exists })
         }
         Err(e) => {
-            let _ = db.run("ROLLBACK", 1).await;
+            let _ = db.run(dialect.end(crate::db::TxEnd::Rollback), 1).await;
             Err(e)
         }
     }
@@ -447,7 +448,7 @@ async fn insert(db: &Database, table: &str, cols: &[String], batch: &mut Vec<Str
     if batch.is_empty() {
         return Ok(0);
     }
-    let sql = format!("INSERT INTO {table} ({}) VALUES {}", cols.join(", "), batch.join(", "));
+    let sql = db.engine().dialect().insert(table, cols, batch);
     let n = batch.len() as u64;
     batch.clear();
     db.run(&sql, 1).await?;

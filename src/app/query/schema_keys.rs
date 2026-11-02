@@ -119,11 +119,8 @@ impl App {
             KeyCode::Char('s') => {
                 let Some(t) = node.table() else { return };
                 let info = &panel.tables[t].info;
-                let query = format!(
-                    "SELECT * FROM {}.{} LIMIT 100;",
-                    engine.quote_ident(&info.schema),
-                    engine.quote_ident(&info.name)
-                );
+                let table = format!("{}.{}", engine.quote_ident(&info.schema), engine.quote_ident(&info.name));
+                let query = format!("{};", engine.dialect().select_rows(&table, None, Some(100)));
                 // After everything, a blank line apart: never inside another
                 // statement. Then it runs, alone (as F6 would).
                 self.append_statement(&query);
