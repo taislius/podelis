@@ -60,7 +60,21 @@ fn find_engines(db: &Path) -> Vec<Found> {
         engines.iter().any(|e| e.built),
         "no database engine is built: turn on at least one of the features {features:?}"
     );
+    tell_every_engine(&engines);
     engines
+}
+
+/// `every_engine` when each engine's feature is on: what's left unused with
+/// fewer is allowed only without it (lib.rs). The app's build script gets the
+/// same from `links` (`DEP_PODELIS_CORE_EVERY_ENGINE`), so no crate lists the
+/// engines.
+fn tell_every_engine(engines: &[Found]) {
+    let every = engines.iter().all(|e| e.built);
+    println!("cargo::rustc-check-cfg=cfg(every_engine)");
+    if every {
+        println!("cargo::rustc-cfg=every_engine");
+    }
+    println!("cargo::metadata=every_engine={every}");
 }
 
 fn main() {

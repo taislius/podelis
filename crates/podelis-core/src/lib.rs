@@ -3,12 +3,12 @@
 //! (`sql`), and the words it says (`lang`, with `t!` and `tn!`). Nothing
 //! here knows of the app, the gateway or the command line.
 
-// Built with fewer database engines than all three (Cargo features), code
+// Built with fewer database engines than all of them (Cargo features), code
 // only the others use goes unused, and with one engine its own pool can't
-// be another's: that's expected there. Not keyed on `default`: the app
-// turns the core's defaults off and names the engines it wants.
+// be another's: that's expected there. `every_engine` is build.rs's, from
+// the engines it finds, so no list of them here.
 #![cfg_attr(
-    not(all(feature = "postgres", feature = "mysql", feature = "sqlite")),
+    not(every_engine),
     allow(
         dead_code,
         unused_imports,

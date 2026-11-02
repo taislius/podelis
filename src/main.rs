@@ -1,9 +1,9 @@
-// Built with fewer database engines than all three (Cargo features), code
+// Built with fewer database engines than all of them (Cargo features), code
 // only the others use goes unused, and with one engine its own pool can't
-// be another's: that's expected there. Not keyed on `default`, which
-// `--features postgres,mysql,sqlite` leaves off with every engine built.
+// be another's: that's expected there. `every_engine` comes from the core's
+// build script, which finds the engines (build.rs here), so no list of them.
 #![cfg_attr(
-    not(all(feature = "postgres", feature = "mysql", feature = "sqlite")),
+    not(every_engine),
     allow(
         dead_code,
         unused_imports,
