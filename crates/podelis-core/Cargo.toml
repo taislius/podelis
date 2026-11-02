@@ -1,0 +1,49 @@
+[package]
+name = "podelis-core"
+description = "Podėlis's databases and SQL: the engines (ports and adapters), SQL text and analysis, and the words it says"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+futures-util.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlformat.workspace = true
+sqlparser.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+unicode-width.workspace = true
+uuid.workspace = true
+# For `test-support`: the shared test helpers make scratch databases.
+tempfile = { workspace = true, optional = true }
+
+[features]
+# The database engines built in (each a `src/db/<engine>/` folder): build
+# fewer with `--no-default-features --features postgres`, say.
+default = ["postgres", "mysql", "sqlite"]
+postgres = ["sqlx/postgres"]
+# With RSA: MySQL 8's login sends the password RSA-encrypted when there's no
+# TLS and the server hasn't cached the user's login (after a restart). The
+# patched sqlx-mysql (patches/) does it with aws-lc-rs, not the `rsa` crate.
+mysql = ["sqlx/mysql", "sqlx/mysql-rsa"]
+sqlite = []
+# The tests' helpers (`db::tests`: test servers, scratch databases, file
+# connections), for the app's own tests.
+test-support = ["dep:tempfile"]
+
+[dev-dependencies]
+insta.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

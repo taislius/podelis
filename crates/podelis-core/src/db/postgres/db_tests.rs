@@ -15,7 +15,7 @@ pub(in crate::db) async fn own_live_db(_name: &str) -> Option<(Database, Connect
     Some((Database::connect(params.clone()).await.expect("connect"), params))
 }
 
-pub(crate) static TEST_SQL: TestSql = TestSql {
+pub static TEST_SQL: TestSql = TestSql {
     sleep: Some("SELECT pg_sleep({s})"),
     count_to_2500: "SELECT g FROM generate_series(1, 2500) g",
     plan_shows: &["Scan on t"],

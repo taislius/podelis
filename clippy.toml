@@ -3,3 +3,8 @@ doc-valid-idents = ["OpenAI", "BigQuery", ".."]
 
 # Tests may unwrap: a panic there is the failed assertion.
 allow-unwrap-in-tests = true
+
+# The workspace's library crates aren't published: their API is the app's,
+# so lints that spare a public API (passing by value, …) apply as they do
+# in the binary.
+avoid-breaking-exported-api = false

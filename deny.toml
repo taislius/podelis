@@ -30,8 +30,10 @@ allow = [
 ]
 confidence-threshold = 0.9
 exceptions = [
-    # Podelis itself. Dependencies stay permissive, so closed builds are possible.
+    # Podelis itself (both crates of its workspace). Dependencies stay
+    # permissive, so closed builds are possible.
     { allow = ["AGPL-3.0-only"], crate = "podelis" },
+    { allow = ["AGPL-3.0-only"], crate = "podelis-core" },
     # File-level copyleft, used unmodified (pulled in by `dirs`).
     { allow = ["MPL-2.0"], crate = "option-ext" },
 ]
@@ -39,6 +41,8 @@ exceptions = [
 [bans]
 multiple-versions = "allow"
 wildcards = "deny"
+# The workspace's own crates by path (`podelis-core`), not a version range.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"

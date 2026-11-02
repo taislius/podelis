@@ -13,22 +13,24 @@
 )]
 
 #[macro_use]
-mod lang;
+extern crate podelis_core;
+
 mod agents;
 mod app;
 mod chart;
 mod cli;
 mod config;
-mod db;
 mod editor;
 #[cfg(test)]
 mod fuzz_tests;
 mod gateway;
 mod related;
-mod sql;
 mod system;
 mod transfer;
 mod ui;
+
+// The lower layers, under the names the code has always used.
+use podelis_core::{db, lang, sql};
 
 use std::io::{Write as _, stdout};
 use std::sync::Arc;

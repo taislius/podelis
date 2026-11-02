@@ -5,7 +5,7 @@ mod agent_constraints;
 pub(super) mod cells;
 #[cfg(feature = "mysql")]
 pub(super) mod connect;
-#[cfg(all(test, feature = "mysql"))]
+#[cfg(all(any(test, feature = "test-support"), feature = "mysql"))]
 pub(in crate::db) mod db_tests;
 #[cfg(feature = "mysql")]
 pub(super) mod passwords;

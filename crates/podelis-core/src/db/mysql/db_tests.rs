@@ -20,7 +20,7 @@ pub(in crate::db) async fn own_live_db(name: &str) -> Option<(Database, ConnectP
     Some((Database::connect(params.clone()).await.expect("connect"), params))
 }
 
-pub(crate) static TEST_SQL: TestSql = TestSql {
+pub static TEST_SQL: TestSql = TestSql {
     sleep: Some("SELECT SLEEP({s})"),
     count_to_2500: "SET SESSION cte_max_recursion_depth = 5000; \
         WITH RECURSIVE s(g) AS (SELECT 1 UNION ALL SELECT g + 1 FROM s WHERE g < 2500) SELECT g FROM s",

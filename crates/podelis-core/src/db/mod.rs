@@ -31,15 +31,15 @@ pub mod password_command;
 pub mod passwords;
 mod run;
 pub mod supabase;
-#[cfg(test)]
-pub(crate) mod tests;
+#[cfg(any(test, feature = "test-support"))]
+pub mod tests;
 mod tunnel;
 mod types;
 
 pub use activity::Activity;
 pub use details::{Comment, ForeignKey, IndexInfo, Link, RoutineInfo, TableDetails};
 pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use dialect::PlanNote;
 pub use dialect::{ContainerLogin, ContainerSecret, Dialect, LexerRules, Plan, human_rows};
 pub use errors::{

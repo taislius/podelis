@@ -2325,6 +2325,7 @@ dependencies = [
  "futures-util",
  "insta",
  "keyring",
+ "podelis-core",
  "proptest",
  "ratatui",
  "reqwest",
@@ -2343,6 +2344,29 @@ dependencies = [
  "tracing-subscriber",
  "unicode-width",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "podelis-core"
+version = "0.7.3"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "futures-util",
+ "insta",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "sqlformat",
+ "sqlparser",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "unicode-width",
  "uuid",
 ]
 

@@ -7,7 +7,7 @@ mod agent_constraints;
 pub(super) mod cells;
 #[cfg(feature = "sqlite")]
 pub(super) mod connect;
-#[cfg(all(test, feature = "sqlite"))]
+#[cfg(all(any(test, feature = "test-support"), feature = "sqlite"))]
 pub(in crate::db) mod db_tests;
 #[cfg(feature = "sqlite")]
 pub(super) mod passwords;
