@@ -182,7 +182,7 @@ mod tests {
     use crate::db::Engine;
 
     /// The rules for every engine, in SQL any of them takes; each engine's
-    /// own statements are tested in its folder (`agent_constraints.rs`).
+    /// own statements are tested in `engines.rs`.
     #[test]
     fn what_agents_may_run() {
         use AgentAccess::{Approve, Read, Write};
@@ -272,5 +272,36 @@ mod tests {
             let outside = engine.dialect().agent_constraints().outside;
             assert!(outside.iter().all(|(word, _)| e(&format!("select {word}(1)")).is_err()), "{engine:?}");
         }
+    }
+
+    /// A sandbox on an engine that commits schema changes at once (MySQL)
+    /// runs writes in its transaction but refuses the schema change, by
+    /// name, even beside a write.
+    #[test]
+    fn a_sandbox_refuses_only_schema_changes_that_commit() {
+        let engines: Vec<Engine> = Engine::ALL.into_iter().filter(|e| e.capabilities().ddl_commits).collect();
+        assert!(!engines.is_empty(), "an engine whose DDL commits (MySQL)");
+        for engine in engines {
+            let v = |sql| verdict(AgentAccess::Sandbox, ConnectionMode::Normal, sql, engine);
+            assert_eq!(v("insert into t values (1)"), Verdict::Run(Wrap::Sandbox), "{engine:?}");
+            match v("insert into t values (1); create table u (id int)") {
+                Verdict::Refuse(said) => {
+                    assert!(said.contains("changes the schema"), "{engine:?}: {said}");
+                    assert!(said.to_lowercase().contains("create table"), "{engine:?}: names the CREATE: {said}");
+                }
+                Verdict::Run(wrap) => panic!("{engine:?}: ran a CREATE in a sandbox: {wrap:?}"),
+            }
+        }
+    }
+
+    /// A statement quoted in a refusal: one line, at most 60 characters
+    /// and an ellipsis.
+    #[test]
+    fn quoted_statements_fit_on_a_line() {
+        assert_eq!(one_line("select  *\n  from t"), "select * from t");
+        let sixty = "x".repeat(60);
+        assert_eq!(one_line(&sixty), sixty, "60 fit");
+        assert_eq!(one_line(&format!("{sixty}y")), format!("{sixty}…"));
+        assert_eq!(one_line(&"ą".repeat(61)), format!("{}…", "ą".repeat(60)), "characters, not bytes");
     }
 }

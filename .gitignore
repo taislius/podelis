@@ -3,3 +3,5 @@
 /THIRD-PARTY-LICENSES.txt
 # SBOMs made by cargo cyclonedx (release.yml)
 /*.cdx.json
+# cargo-mutants' results
+/mutants.out*
