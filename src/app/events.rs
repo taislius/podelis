@@ -739,6 +739,139 @@ fn version_note(engine: Engine, version: &str, text: &str, at: Option<usize>, mi
     Some(t!("run.needs_version", feature = n.feature, needs = n.needs, server = n.server))
 }
 
+/// How a connection check failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ping {
+    /// The server said no, or the connection broke.
+    Failed,
+    /// Nothing came back in time: the session may be stuck on a dead link.
+    NoAnswer,
+}
+
+pub struct DbEvent {
+    pub(in crate::app) generation: u64,
+    /// A run's outcome, by its id: it outlives connection switches (another
+    /// tab shown meanwhile), not a disconnect.
+    pub(in crate::app) run: Option<u64>,
+    pub(in crate::app) kind: DbEventKind,
+}
+
+pub(super) enum DbEventKind {
+    /// A saved connection's password, and why it's missing if the keychain
+    /// couldn't be read.
+    PasswordLoaded(ConnectionProfile, String, Option<String>),
+    Connected(Database),
+    ConnectFailed(String),
+    /// A finished run, with a stream of further rows if it was streamed.
+    QueryDone(QueryOutcome, Option<TxnState>, Option<RowStream>),
+    /// Another page of a streamed result; true when `M` asked for it (the
+    /// first of its rows gets selected, so they're seen arriving).
+    MoreRows(Page, bool),
+    MoreFailed(String),
+    /// Why, where, the transaction after it, and whether it's a syntax
+    /// error or unknown function (maybe a feature the server lacks).
+    QueryFailed(String, Option<ErrorPos>, Option<TxnState>, bool),
+    /// Why not, and whether the server couldn't be reached at all.
+    CancelFailed(String, bool),
+    Catalog(Result<Vec<(TableInfo, Vec<ColumnInfo>)>, String>),
+    Routines(Vec<RoutineInfo>),
+    TableDetails {
+        schema: String,
+        table: String,
+        result: Result<TableDetails, String>,
+    },
+    /// The server's sessions, for the activity view.
+    ActivityLoaded(Result<Vec<crate::db::Activity>, String>),
+    /// A session's query was cancelled or the session ended.
+    SessionStopped(Result<String, String>),
+    /// A keep-alive check: latency and whether it had to reconnect.
+    /// A connection check: its latency and whether it reconnected, or why
+    /// not and whether it got no answer at all (`Ping::NoAnswer`).
+    Pinged(Result<(Duration, bool), (String, Ping)>),
+    /// A connection test's report (title, text).
+    Diagnosed(String, String),
+    /// The output of piping rows through a command.
+    PipeDone(String, Result<String, String>),
+    /// A SQLite file's copy for a sandbox, opened (or why not).
+    SandboxCopied(Result<(Database, PathBuf), String>),
+    /// A definition to show (title, text).
+    Definition(String, Result<String, String>),
+    /// Rows opened in an app (what, the command), or why they couldn't be.
+    Opened(String, String, Result<(), String>),
+    /// The row a foreign key points to (`f`), looked up.
+    Followed(Box<(follow::Followed, Result<QueryOutcome, String>)>),
+    /// The background syntax check of `text`: the server's problem, else
+    /// the parser's hint, else the first lint warning.
+    SyntaxChecked {
+        text: String,
+        hint: Option<SyntaxHint>,
+    },
+    /// A read on production, planned: the tables it would read in full.
+    Guarded {
+        sql: String,
+        offset: usize,
+        infos: Vec<StatementInfo>,
+        filled: Option<Filled>,
+        scans: Vec<(String, f64)>,
+    },
+    /// A plan made on a connection of its own while a query ran: the
+    /// statement, its line, and the plan (`None`: it couldn't be made there).
+    PlanAside {
+        tab: usize,
+        stmt: String,
+        line: usize,
+        plan: Option<QueryOutcome>,
+    },
+    /// A schema snapshot saved: its file and how many tables, or why not.
+    SnapshotSaved(Result<(PathBuf, usize), String>),
+    /// This connection's schema and a saved snapshot of it, to compare.
+    SnapshotCompared(Result<(Vec<crate::transfer::diff::TableShape>, crate::transfer::snapshots::Snapshot), String>),
+    /// Both sides' schemas, for comparing.
+    SchemaCompared {
+        other: compare::Other,
+        result: Result<compare::Shapes, String>,
+    },
+    /// The same query's result on both sides.
+    RowsCompared {
+        other: compare::Other,
+        result: Box<Result<(QueryOutcome, QueryOutcome), String>>,
+    },
+    /// Not about the connection shown: see [`Background`].
+    Background(Background),
+}
+
+/// Events that go on while other tabs and connections are used: reopening
+/// the session's connections (matched by name), container searches (by
+/// their own number), an export, a question to the gateway, the sandbox's
+/// locks. None is dropped for a newer generation.
+pub(super) enum Background {
+    /// Rows written so far by "export all rows".
+    ExportProgress(u64),
+    /// "Export all rows" finished: the file, and how many rows (or why not).
+    ExportDone(PathBuf, Result<u64, String>),
+    /// A connection reopened at startup.
+    Restored { project_id: String, form: Box<ConnectForm>, result: Result<Database, String> },
+    /// The running database containers, or why they couldn't be listed.
+    ContainersFound(u64, Result<Vec<crate::system::containers::Container>, String>),
+    /// Characters of an answer being written, for ask `n`.
+    AskProgress(u64, usize),
+    /// Ask `n`'s key is slow to come: the keychain (or a password
+    /// manager) is asking the user.
+    AskWaitingKey(u64),
+    /// The locks a sandbox's session holds (or why that can't be seen).
+    SandboxLocks(String),
+    /// Ask `n`'s answer: the SQL and what the model said, or why not.
+    AskDone(u64, Box<Result<serde_json::Value, ask::AskFailure>>),
+    /// A gateway call's answer (the memory window's).
+    GatewayDone(memory_view::GatewayPurpose, Box<Result<serde_json::Value, ask::AskFailure>>),
+}
+
+impl From<Background> for DbEventKind {
+    fn from(event: Background) -> Self {
+        DbEventKind::Background(event)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Engine, version_note};

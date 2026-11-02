@@ -808,10 +808,83 @@ fn is_default_tab_name(name: &str) -> bool {
     })
 }
 
+impl App {
+    /// Tab `i`'s run: the shown tab's, or a parked one's.
+    pub fn tab_run(&self, i: usize) -> Option<&Run> {
+        if i == self.active_tab { Some(&self.tab.run) } else { self.parked.get(i)?.as_ref().map(|t| &t.run) }
+    }
+
+    /// Whether tab `i`'s query is running.
+    pub fn tab_running(&self, i: usize) -> bool {
+        self.tab_run(i).is_some_and(|r| r.executing)
+    }
+
+    /// The tabs whose queries are running, the shown one's too.
+    pub fn running_tabs(&self) -> Vec<usize> {
+        (0..self.tabs.len()).filter(|&i| self.tab_running(i)).collect()
+    }
+
+    /// The shown tab's query is running.
+    pub(super) fn running_here(&self) -> bool {
+        self.tab.run.executing
+    }
+
+    /// This tab's connection is running a query: its own, or another
+    /// tab's on the same connection (a session runs one at a time).
+    pub(super) fn conn_busy(&self) -> bool {
+        self.tab.run.executing || self.busy_conn_tab().is_some()
+    }
+
+    /// A run that keeps every tab where it is: a write, a check, a comparison.
+    pub(super) fn blocks_tabs(&self) -> bool {
+        self.tab.run.executing && self.tab.run.holds_tabs
+    }
+
+    /// A fresh run id, unique across the tabs (events find their tab by it).
+    pub(super) fn next_run_id(&mut self) -> u64 {
+        self.run_ids += 1;
+        self.run_ids
+    }
+
+    /// Stops every tab's query (the project's tabs are being replaced):
+    /// their tasks end, and anything they still send finds no tab.
+    pub(super) fn stop_all_runs(&mut self) {
+        self.invalidate_tasks();
+        for tab in self.parked.iter_mut().flatten() {
+            if let Some(task) = tab.run.task.take() {
+                task.abort();
+            }
+            tab.run.set_stream(None);
+            tab.run.executing = false;
+            tab.run.db = None;
+        }
+    }
+
+    /// What runs, for the results pane's title: with whole seconds once
+    /// it's been one, so a long run is seen to go on.
+    pub fn running_label(&self) -> Option<String> {
+        if !self.running_here() {
+            return None;
+        }
+        let secs = self.tab.run.since.map_or(0, |since| since.elapsed().as_secs());
+        Some(match secs {
+            0 => t!("run.running_label").to_string(),
+            1..60 => format!("{} {secs} s", t!("run.running_label")),
+            _ => format!("{} {}", t!("run.running_label"), mm_ss(secs)),
+        })
+    }
+
+    /// The tab the running query (or check) is for: its own, or for a run
+    /// that holds every tab (a write, a check) the shown one.
+    pub(super) fn run_tab(&self) -> Option<usize> {
+        self.tab.run.executing.then_some(self.active_tab)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
-    fn default_tab_names_in_any_language() {
+    pub(super) fn default_tab_names_in_any_language() {
         for name in ["Query 1", "Query 12", "Užklausa 3"] {
             assert!(super::is_default_tab_name(name), "{name}");
         }

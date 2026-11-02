@@ -40,6 +40,7 @@ mod activity;
 mod agents;
 pub mod ask;
 mod compare;
+mod confirm;
 mod connections;
 mod edit;
 mod events;
@@ -77,10 +78,16 @@ mod vim;
 mod watch;
 
 use crate::config::draft::{ConnectionDraft, looks_like_url};
+pub use confirm::{Confirm, ConfirmAction};
 pub use connections::{ConnectField, ConnectForm, fields_for};
+use events::{Background, DbEventKind};
+pub use events::{DbEvent, Ping};
+pub use query::{ExportFormat, PagedFormat, Run, RunPurpose};
+pub use results::{CellEdit, CellView};
 pub use results::{NULL_TEXT, display_prefix, format_elapsed, visible_columns};
 use results::{column_widths, compute_view, one_line, pretty_value, widen_columns};
 pub use review::TxMode;
+pub use schema::{SchemaNode, SchemaPanel, SchemaSection, SchemaSort, SchemaTable};
 #[cfg(test)]
 pub use session::Splash;
 
@@ -101,213 +108,6 @@ pub enum Focus {
     Schema,
 }
 
-pub struct SchemaTable {
-    pub info: TableInfo,
-    pub expanded: bool,
-    pub columns: Vec<ColumnInfo>,
-    /// Indexes, foreign keys and definition, loaded on first expand.
-    pub details: Option<TableDetails>,
-    pub details_loading: bool,
-}
-
-impl SchemaTable {
-    fn new(info: TableInfo, columns: Vec<ColumnInfo>) -> Self {
-        SchemaTable { info, expanded: false, columns, details: None, details_loading: false }
-    }
-
-    /// Where column `name` points as a foreign key (`orders.id`).
-    pub fn foreign_key(&self, column: &str) -> Option<&str> {
-        let details = self.details.as_ref()?;
-        details.foreign_keys.iter().find(|f| f.column == column).map(|f| f.target.as_str())
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SchemaSection {
-    Tables,
-    Views,
-    /// The database's own catalog tables and views, when shown.
-    System,
-    Routines,
-}
-
-impl SchemaSection {
-    /// Whether `info` is listed in this section.
-    pub fn holds(self, info: &TableInfo) -> bool {
-        match self {
-            SchemaSection::Tables => !info.system && !info.is_view,
-            SchemaSection::Views => !info.system && info.is_view,
-            SchemaSection::System => info.system,
-            SchemaSection::Routines => false,
-        }
-    }
-}
-
-/// The order of the navigator's tables (`o` cycles it).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SchemaSort {
-    #[default]
-    Name,
-    /// Most rows first (the server's estimate).
-    Rows,
-    /// Biggest on disk first, indexes included.
-    Size,
-}
-
-impl SchemaSort {
-    pub fn next(self) -> Self {
-        match self {
-            SchemaSort::Name => SchemaSort::Rows,
-            SchemaSort::Rows => SchemaSort::Size,
-            SchemaSort::Size => SchemaSort::Name,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            SchemaSort::Name => t!("navigator.by_name"),
-            SchemaSort::Rows => t!("navigator.by_rows"),
-            SchemaSort::Size => t!("navigator.by_size"),
-        }
-    }
-}
-
-/// One visible row of the schema tree.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SchemaNode {
-    /// A section header; not selectable.
-    Section(SchemaSection),
-    Table(usize),
-    Column(usize, usize),
-    Index(usize, usize),
-    Routine(usize),
-}
-
-impl SchemaNode {
-    fn table(self) -> Option<usize> {
-        match self {
-            SchemaNode::Table(t) | SchemaNode::Column(t, _) | SchemaNode::Index(t, _) => Some(t),
-            SchemaNode::Section(_) | SchemaNode::Routine(_) => None,
-        }
-    }
-}
-
-/// The database catalog: shown in the schema browser and used for
-/// autocomplete. Loaded on connect.
-#[derive(Default)]
-pub struct SchemaPanel {
-    pub tables: Vec<SchemaTable>,
-    pub loading: bool,
-    pub error: Option<String>,
-    pub selected: usize,
-    /// Only tables whose name contains this (case-insensitive) are shown.
-    pub filter: LineInput,
-    pub filter_editing: bool,
-    /// Functions and procedures.
-    pub routines: Vec<RoutineInfo>,
-    /// A table whose definition opens once its details arrive.
-    pub show_definition_of: Option<(String, String)>,
-    pub sort: SchemaSort,
-    /// The first row on screen, and how many fit (as last drawn).
-    pub scroll: usize,
-    pub page: usize,
-}
-
-impl SchemaPanel {
-    /// Scrolls so the selected row shows, with an expanded table's
-    /// columns and indexes as far as they fit (the table stays on screen),
-    /// for `height` rows. Returns the first row to show.
-    pub fn scroll_into_view(&mut self, nodes: &[SchemaNode], height: usize) -> usize {
-        self.page = height.max(1);
-        let selected = self.selected.min(nodes.len().saturating_sub(1));
-        if let Some(SchemaNode::Table(t)) = nodes.get(selected) {
-            let children = nodes[selected + 1..].iter().take_while(|n| n.table() == Some(*t)).count();
-            let wanted = (selected + children + 1).saturating_sub(self.page).min(selected);
-            self.scroll = self.scroll.max(wanted);
-        }
-        if selected < self.scroll {
-            // A section's heading comes along with its first table.
-            let heading = selected.checked_sub(1).filter(|&i| matches!(nodes[i], SchemaNode::Section(_)));
-            self.scroll = heading.unwrap_or(selected);
-        }
-        if selected >= self.scroll + self.page {
-            self.scroll = selected + 1 - self.page;
-        }
-        // No empty space below the last row.
-        self.scroll = self.scroll.min(nodes.len().saturating_sub(self.page));
-        self.scroll
-    }
-
-    /// The visible rows: a TABLES section, then VIEWS, then SYSTEM (if
-    /// loaded), each with its (filtered) tables and the columns of expanded
-    /// ones.
-    pub fn nodes(&self) -> Vec<SchemaNode> {
-        let needle = self.filter.text().to_lowercase();
-        let mut nodes = Vec::new();
-        let mut buf = String::new();
-        // Each name lowercased once, to filter and rank it.
-        let mut rank = |name: &str| match_rank(name, &needle, &mut buf);
-        for section in [SchemaSection::Tables, SchemaSection::Views, SchemaSection::System] {
-            let mut ranked: Vec<(u8, usize)> = (0..self.tables.len())
-                .filter(|&t| section.holds(&self.tables[t].info))
-                .filter_map(|t| Some((rank(&self.tables[t].info.name)?, t)))
-                .collect();
-            // Biggest first; unknown sizes last. The sort is stable, so
-            // ties stay by name. By name while filtering, the best matches
-            // first: `products` before `alternative_prod` for "produc".
-            match self.sort {
-                SchemaSort::Name => ranked.sort_by_key(|&(rank, _)| rank),
-                SchemaSort::Rows => ranked.sort_by_key(|&(_, t)| std::cmp::Reverse(self.tables[t].info.rows)),
-                SchemaSort::Size => ranked.sort_by_key(|&(_, t)| std::cmp::Reverse(self.tables[t].info.bytes)),
-            }
-            let matching: Vec<usize> = ranked.into_iter().map(|(_, t)| t).collect();
-            if matching.is_empty() {
-                continue;
-            }
-            nodes.push(SchemaNode::Section(section));
-            for t in matching {
-                nodes.push(SchemaNode::Table(t));
-                let table = &self.tables[t];
-                if table.expanded {
-                    nodes.extend((0..table.columns.len()).map(|c| SchemaNode::Column(t, c)));
-                    let indexes = table.details.as_ref().map_or(0, |d| d.indexes.len());
-                    nodes.extend((0..indexes).map(|i| SchemaNode::Index(t, i)));
-                }
-            }
-        }
-        let mut routines: Vec<(u8, usize)> =
-            (0..self.routines.len()).filter_map(|r| Some((rank(&self.routines[r].name)?, r))).collect();
-        routines.sort_by_key(|&(rank, _)| rank);
-        if !routines.is_empty() {
-            nodes.push(SchemaNode::Section(SchemaSection::Routines));
-            nodes.extend(routines.into_iter().map(|(_, r)| SchemaNode::Routine(r)));
-        }
-        nodes
-    }
-}
-
-/// How well `name` matches the filter `needle` (lowercase), best first: the
-/// name itself, a name starting with it, a word in it starting with it
-/// (after `_`, `.`, `-` or a space), anywhere else; `None` when it isn't in
-/// it at all. Case is folded as the results' filter folds it, in `buf`. No
-/// filter: all alike.
-fn match_rank(name: &str, needle: &str, buf: &mut String) -> Option<u8> {
-    if needle.is_empty() {
-        return Some(0);
-    }
-    let name = results::lowered_for(name, needle, buf).filter(|n| n.contains(needle))?;
-    Some(if name == needle {
-        0
-    } else if name.starts_with(needle) {
-        1
-    } else if name.match_indices(needle).any(|(i, _)| name[..i].ends_with(['_', '.', '-', ' '])) {
-        // (A match right after a separator: `order_p` in `big_order_products` too.)
-        2
-    } else {
-        3
-    })
-}
-
 /// The database containers found by `c` in the connections, to pick one.
 #[derive(Default)]
 pub struct ContainerPicker {
@@ -320,139 +120,6 @@ pub struct ContainerPicker {
     /// About the selected container (why it can't be used), until the
     /// selection moves.
     pub note: Option<String>,
-}
-
-/// How a connection check failed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Ping {
-    /// The server said no, or the connection broke.
-    Failed,
-    /// Nothing came back in time: the session may be stuck on a dead link.
-    NoAnswer,
-}
-
-pub struct DbEvent {
-    generation: u64,
-    /// A run's outcome, by its id: it outlives connection switches (another
-    /// tab shown meanwhile), not a disconnect.
-    run: Option<u64>,
-    kind: DbEventKind,
-}
-
-enum DbEventKind {
-    /// A saved connection's password, and why it's missing if the keychain
-    /// couldn't be read.
-    PasswordLoaded(ConnectionProfile, String, Option<String>),
-    Connected(Database),
-    ConnectFailed(String),
-    /// A finished run, with a stream of further rows if it was streamed.
-    QueryDone(QueryOutcome, Option<TxnState>, Option<RowStream>),
-    /// Another page of a streamed result; true when `M` asked for it (the
-    /// first of its rows gets selected, so they're seen arriving).
-    MoreRows(Page, bool),
-    MoreFailed(String),
-    /// Why, where, the transaction after it, and whether it's a syntax
-    /// error or unknown function (maybe a feature the server lacks).
-    QueryFailed(String, Option<ErrorPos>, Option<TxnState>, bool),
-    /// Why not, and whether the server couldn't be reached at all.
-    CancelFailed(String, bool),
-    Catalog(Result<Vec<(TableInfo, Vec<ColumnInfo>)>, String>),
-    Routines(Vec<RoutineInfo>),
-    TableDetails {
-        schema: String,
-        table: String,
-        result: Result<TableDetails, String>,
-    },
-    /// The server's sessions, for the activity view.
-    ActivityLoaded(Result<Vec<crate::db::Activity>, String>),
-    /// A session's query was cancelled or the session ended.
-    SessionStopped(Result<String, String>),
-    /// A keep-alive check: latency and whether it had to reconnect.
-    /// A connection check: its latency and whether it reconnected, or why
-    /// not and whether it got no answer at all (`Ping::NoAnswer`).
-    Pinged(Result<(Duration, bool), (String, Ping)>),
-    /// A connection test's report (title, text).
-    Diagnosed(String, String),
-    /// The output of piping rows through a command.
-    PipeDone(String, Result<String, String>),
-    /// A SQLite file's copy for a sandbox, opened (or why not).
-    SandboxCopied(Result<(Database, PathBuf), String>),
-    /// A definition to show (title, text).
-    Definition(String, Result<String, String>),
-    /// Rows opened in an app (what, the command), or why they couldn't be.
-    Opened(String, String, Result<(), String>),
-    /// The row a foreign key points to (`f`), looked up.
-    Followed(Box<(follow::Followed, Result<QueryOutcome, String>)>),
-    /// The background syntax check of `text`: the server's problem, else
-    /// the parser's hint, else the first lint warning.
-    SyntaxChecked {
-        text: String,
-        hint: Option<SyntaxHint>,
-    },
-    /// A read on production, planned: the tables it would read in full.
-    Guarded {
-        sql: String,
-        offset: usize,
-        infos: Vec<StatementInfo>,
-        filled: Option<Filled>,
-        scans: Vec<(String, f64)>,
-    },
-    /// A plan made on a connection of its own while a query ran: the
-    /// statement, its line, and the plan (`None`: it couldn't be made there).
-    PlanAside {
-        tab: usize,
-        stmt: String,
-        line: usize,
-        plan: Option<QueryOutcome>,
-    },
-    /// A schema snapshot saved: its file and how many tables, or why not.
-    SnapshotSaved(Result<(PathBuf, usize), String>),
-    /// This connection's schema and a saved snapshot of it, to compare.
-    SnapshotCompared(Result<(Vec<crate::transfer::diff::TableShape>, crate::transfer::snapshots::Snapshot), String>),
-    /// Both sides' schemas, for comparing.
-    SchemaCompared {
-        other: compare::Other,
-        result: Result<compare::Shapes, String>,
-    },
-    /// The same query's result on both sides.
-    RowsCompared {
-        other: compare::Other,
-        result: Box<Result<(QueryOutcome, QueryOutcome), String>>,
-    },
-    /// Not about the connection shown: see [`Background`].
-    Background(Background),
-}
-
-/// Events that go on while other tabs and connections are used: reopening
-/// the session's connections (matched by name), container searches (by
-/// their own number), an export, a question to the gateway, the sandbox's
-/// locks. None is dropped for a newer generation.
-enum Background {
-    /// Rows written so far by "export all rows".
-    ExportProgress(u64),
-    /// "Export all rows" finished: the file, and how many rows (or why not).
-    ExportDone(PathBuf, Result<u64, String>),
-    /// A connection reopened at startup.
-    Restored { project_id: String, form: Box<ConnectForm>, result: Result<Database, String> },
-    /// The running database containers, or why they couldn't be listed.
-    ContainersFound(u64, Result<Vec<crate::system::containers::Container>, String>),
-    /// Characters of an answer being written, for ask `n`.
-    AskProgress(u64, usize),
-    /// Ask `n`'s key is slow to come: the keychain (or a password
-    /// manager) is asking the user.
-    AskWaitingKey(u64),
-    /// The locks a sandbox's session holds (or why that can't be seen).
-    SandboxLocks(String),
-    /// Ask `n`'s answer: the SQL and what the model said, or why not.
-    AskDone(u64, Box<Result<serde_json::Value, ask::AskFailure>>),
-    /// A gateway call's answer (the memory window's).
-    GatewayDone(memory_view::GatewayPurpose, Box<Result<serde_json::Value, ask::AskFailure>>),
-}
-
-impl From<Background> for DbEventKind {
-    fn from(event: Background) -> Self {
-        DbEventKind::Background(event)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -492,166 +159,6 @@ pub struct Message {
     pub is_error: bool,
 }
 
-/// File formats for exporting results.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExportFormat {
-    Csv,
-    Json,
-    /// `INSERT` statements.
-    Sql,
-    /// A table with `+--+` borders.
-    Ascii,
-}
-
-/// What every row of a result can be exported as, page by page as they
-/// arrive (an ASCII table can't: its widths need every row first).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PagedFormat {
-    Csv,
-    Json,
-    Sql,
-}
-
-impl From<ExportFormat> for pipes::OpenFormat {
-    fn from(format: ExportFormat) -> Self {
-        match format {
-            ExportFormat::Csv => pipes::OpenFormat::Csv,
-            ExportFormat::Json => pipes::OpenFormat::Json,
-            ExportFormat::Sql => pipes::OpenFormat::Sql,
-            ExportFormat::Ascii => pipes::OpenFormat::Ascii,
-        }
-    }
-}
-
-impl From<PagedFormat> for ExportFormat {
-    fn from(format: PagedFormat) -> Self {
-        match format {
-            PagedFormat::Csv => ExportFormat::Csv,
-            PagedFormat::Json => ExportFormat::Json,
-            PagedFormat::Sql => ExportFormat::Sql,
-        }
-    }
-}
-
-impl Run {
-    /// A new stream of rows, or none: an `M` waiting for the old one's
-    /// page is forgotten with it.
-    fn set_stream(&mut self, stream: Option<RowStream>) {
-        self.stream = stream;
-        self.more_wanted = false;
-    }
-}
-
-/// The query running, one at a time across the tabs: whose it is, on
-/// which connection, since when, and what it's for.
-#[derive(Default)]
-pub struct Run {
-    /// A query (or check, or comparison) is running.
-    pub executing: bool,
-    /// Which run the events in flight are for.
-    id: u64,
-    /// When the running query (or check, or comparison) started.
-    since: Option<Instant>,
-    /// A write, a check or a comparison: every tab stays where it is until
-    /// it ends. (A read leaves the others free, and runs on in its tab.)
-    holds_tabs: bool,
-    /// The connection the running query runs on: cancelled there, whichever
-    /// tab (and connection) is shown meanwhile.
-    db: Option<Database>,
-    /// Purpose of the next run, and of the one in flight.
-    purpose: RunPurpose,
-    /// Timeout and review state of the running query.
-    extra: RunExtra,
-    /// Its cancel was asked for and hasn't come back yet.
-    pub cancelling: bool,
-    /// Cancelling the running query failed: Esc again stops waiting.
-    pub cancel_failed: bool,
-    /// Further rows of the current (streamed) result, fetched on demand.
-    pub stream: Option<RowStream>,
-    /// More rows of the stream are on their way.
-    pub fetching_more: bool,
-    /// `M` was pressed while they were: its rows are fetched once they've
-    /// come (for this stream only; [`Run::set_stream`] forgets it).
-    more_wanted: bool,
-    /// What the statements of the running query do (for transaction tracking).
-    infos: Vec<StatementInfo>,
-    /// Parameter substitutions in the last run, for mapping error positions.
-    filled: Option<Filled>,
-    /// The SQL running: a failure says if it uses what the server is too
-    /// old for.
-    sql: String,
-    /// The failure that came is a syntax error or an unknown function
-    /// (`db::missing_feature`), for `on_query_failed`.
-    missing_feature: bool,
-    /// The running connect or query task, aborted on cancel/disconnect.
-    task: Option<JoinHandle<()>>,
-    /// The statement of the EXPLAIN on its way, and whether it's ANALYZE.
-    /// And the editor line it starts on.
-    plan_request: Option<(String, bool, usize)>,
-    /// F7 while a query ran: the statement to plan (and its line) next.
-    queued_plan: Option<(String, usize)>,
-}
-
-/// Extra state of the running query.
-#[derive(Default)]
-struct RunExtra {
-    /// When it hits the connection's timeout, and the timeout.
-    deadline: Option<(Instant, Duration)>,
-    /// It was cancelled by the timeout.
-    timed_out: Option<Duration>,
-    /// It was started by `run_in_transaction`.
-    reviewing: bool,
-    /// It is a dry run, rolled back when it ends.
-    dry_run: Option<review::DryRun>,
-    /// It's a sandbox step: added to the sandbox when it ends well.
-    sandbox_step: Option<sandbox::PendingStep>,
-    /// Said before the next result's status (what an edit just did).
-    status_prefix: Option<String>,
-    /// When it started, to announce a long run's end.
-    started: Option<Instant>,
-    /// It ended a statement with `\G`: show the result one column per line.
-    vertical: bool,
-    /// It ran past `long_query`, and the status bar said how to cancel it.
-    offered_cancel: bool,
-}
-
-/// What a run's result is for.
-#[derive(Default)]
-pub enum RunPurpose {
-    /// Show the result set.
-    #[default]
-    Query,
-    /// Show the query plan in the QUERY PLAN tab.
-    Explain,
-    /// An UPDATE saving one edited cell; on success the cell is updated in
-    /// place instead of replacing the results.
-    CellEdit { row: usize, col: usize, value: Option<String> },
-    /// COMMIT or ROLLBACK of a reviewed transaction: keeps the results.
-    TxControl(&'static str),
-    /// An INSERT or DELETE from the result grid ("Added"/"Deleted"); the
-    /// query runs again afterwards.
-    RowChange(&'static str),
-    /// Back to before sandbox step `number`: it failed, or (`undo`) the
-    /// user undid it.
-    SandboxBack { number: usize, undo: bool },
-}
-
-/// The inline "SET column = …" prompt for editing a result cell.
-pub struct CellEdit {
-    /// Index into `results.rows` and the column.
-    pub row: usize,
-    pub col: usize,
-    pub column: String,
-    /// Quoted, possibly schema-qualified table name.
-    pub table: String,
-    /// Primary key column names and this row's values, as literals.
-    pub key: Vec<(String, String)>,
-    /// The column's type, as the result names it.
-    pub column_type: String,
-    pub nullable: bool,
-    pub text: LineInput,
-}
-
 /// Outcome of checking the editor text with the server.
 pub enum ServerCheck {
     /// The session stayed busy; fall back to the local parser.
@@ -661,102 +168,12 @@ pub enum ServerCheck {
     Done(Option<(SyntaxHint, bool)>),
 }
 
-/// Something to do once the user answers "y".
-pub enum ConfirmAction {
-    /// A read on production that would read a whole big table: run it as
-    /// it is, without asking again.
-    RunHeavy {
-        sql: String,
-        offset: usize,
-        infos: Vec<StatementInfo>,
-        filled: Option<Filled>,
-    },
-    Run {
-        sql: String,
-        offset: usize,
-        infos: Vec<StatementInfo>,
-        purpose: RunPurpose,
-        filled: Option<Filled>,
-    },
-    Disconnect,
-    /// Close an open connection (`Ctrl+K j`, `Ctrl+D`): every tab on it
-    /// is disconnected.
-    CloseConnection(u64),
-    Quit,
-    CloseTab,
-    /// Leave the project, for another one (or the project list); `true`
-    /// lands in its connections.
-    LeaveProject(Option<String>, bool),
-    /// An agent's write waiting for the user: y approves it, anything else
-    /// says no.
-    AgentWrite(crate::agents::Request),
-    /// The project doesn't share its schema with the model asked: `y`
-    /// sends it this once, `a` always for the project.
-    ShareSchema {
-        question: ask::Question,
-        project_id: Option<String>,
-    },
-}
-
 /// The autocomplete popup.
 pub struct Completion {
     pub items: Vec<Candidate>,
     pub selected: usize,
     /// Chars before the cursor that the chosen item replaces.
     pub prefix_len: usize,
-}
-
-pub struct CellView {
-    pub title: String,
-    pub text: String,
-    pub scroll: u16,
-    /// Showing the selected row as `column  value` lines (`x`): ←/→ move
-    /// to the previous/next row.
-    pub record: bool,
-    /// SQL that comes with the text (a schema comparison's), and the
-    /// connection it's for: `y` copies it, `e` opens it in a tab there.
-    pub sql: Option<(String, u64)>,
-    /// How far it scrolls, as last drawn (the text wraps to the popup).
-    pub max_scroll: u16,
-    /// A definition opened from the navigator (`d`): ←/→ show the previous
-    /// or next table's, view's or function's.
-    pub browse: bool,
-    /// `y` copies the text itself (a message), saying this.
-    pub copies_text: Option<&'static str>,
-    /// A row a foreign key points to (`f`): `e` opens its lookup (the
-    /// tab's name, the SQL) in a tab of its own.
-    pub follow: Option<(String, String)>,
-}
-
-impl CellView {
-    pub fn new(title: String, text: String) -> Self {
-        CellView {
-            title,
-            text,
-            scroll: 0,
-            record: false,
-            sql: None,
-            max_scroll: u16::MAX,
-            browse: false,
-            copies_text: None,
-            follow: None,
-        }
-    }
-
-    /// A navigator definition (`d`), browsable with ←/→.
-    pub fn definition(title: String, text: String) -> Self {
-        CellView { browse: true, ..CellView::new(title, text) }
-    }
-}
-
-pub struct Confirm {
-    pub message: String,
-    pub details: Vec<String>,
-    /// Style the dialog as dangerous (production, destructive statements).
-    pub danger: bool,
-    pub action: ConfirmAction,
-    /// Offer `t`: run the writes in a transaction to review before committing.
-    pub offer_transaction: bool,
 }
 
 pub struct App {
@@ -1096,43 +513,6 @@ impl App {
         }
     }
 
-    /// Tab `i`'s run: the shown tab's, or a parked one's.
-    pub fn tab_run(&self, i: usize) -> Option<&Run> {
-        if i == self.active_tab { Some(&self.tab.run) } else { self.parked.get(i)?.as_ref().map(|t| &t.run) }
-    }
-
-    /// Whether tab `i`'s query is running.
-    pub fn tab_running(&self, i: usize) -> bool {
-        self.tab_run(i).is_some_and(|r| r.executing)
-    }
-
-    /// The tabs whose queries are running, the shown one's too.
-    pub fn running_tabs(&self) -> Vec<usize> {
-        (0..self.tabs.len()).filter(|&i| self.tab_running(i)).collect()
-    }
-
-    /// The shown tab's query is running.
-    pub(super) fn running_here(&self) -> bool {
-        self.tab.run.executing
-    }
-
-    /// This tab's connection is running a query: its own, or another
-    /// tab's on the same connection (a session runs one at a time).
-    pub(super) fn conn_busy(&self) -> bool {
-        self.tab.run.executing || self.busy_conn_tab().is_some()
-    }
-
-    /// A run that keeps every tab where it is: a write, a check, a comparison.
-    pub(super) fn blocks_tabs(&self) -> bool {
-        self.tab.run.executing && self.tab.run.holds_tabs
-    }
-
-    /// A fresh run id, unique across the tabs (events find their tab by it).
-    pub(super) fn next_run_id(&mut self) -> u64 {
-        self.run_ids += 1;
-        self.run_ids
-    }
-
     fn invalidate_tasks(&mut self) {
         self.tab.run.db = None;
         // A check on its way is for the connection before: its answer will
@@ -1143,20 +523,6 @@ impl App {
         self.tab.run.queued_plan = None;
         if let Some(task) = self.tab.run.task.take() {
             task.abort();
-        }
-    }
-
-    /// Stops every tab's query (the project's tabs are being replaced):
-    /// their tasks end, and anything they still send finds no tab.
-    pub(super) fn stop_all_runs(&mut self) {
-        self.invalidate_tasks();
-        for tab in self.parked.iter_mut().flatten() {
-            if let Some(task) = tab.run.task.take() {
-                task.abort();
-            }
-            tab.run.set_stream(None);
-            tab.run.executing = false;
-            tab.run.db = None;
         }
     }
 
@@ -1261,26 +627,6 @@ impl App {
         self.notes.status_in_results = false;
     }
 
-    /// What runs, for the results pane's title: with whole seconds once
-    /// it's been one, so a long run is seen to go on.
-    pub fn running_label(&self) -> Option<String> {
-        if !self.running_here() {
-            return None;
-        }
-        let secs = self.tab.run.since.map_or(0, |since| since.elapsed().as_secs());
-        Some(match secs {
-            0 => t!("run.running_label").to_string(),
-            1..60 => format!("{} {secs} s", t!("run.running_label")),
-            _ => format!("{} {}", t!("run.running_label"), mm_ss(secs)),
-        })
-    }
-
-    /// The tab the running query (or check) is for: its own, or for a run
-    /// that holds every tab (a write, a check) the shown one.
-    pub(super) fn run_tab(&self) -> Option<usize> {
-        self.tab.run.executing.then_some(self.active_tab)
-    }
-
     /// A run's progress or outcome, in the results pane's footer.
     fn set_result_status(&mut self, status: String, is_error: bool) {
         self.notes.status = status;
@@ -1296,94 +642,6 @@ impl App {
         handle(self);
         self.handling_input = outer;
         self.recheck_lost_connection();
-    }
-
-    #[cfg(test)]
-    pub fn set_status_for_tests(&mut self, status: &str) {
-        self.set_status(status.to_string(), false);
-    }
-
-    #[cfg(test)]
-    pub fn show_results_for_tests(&mut self, outcome: QueryOutcome) {
-        self.show_results(outcome);
-    }
-
-    /// A run of the editor's `range` starting, as `run_now` would: its
-    /// own result, kept.
-    #[cfg(test)]
-    pub fn open_run_for_tests(&mut self, range: std::ops::Range<usize>) {
-        let text = self.tab.editor.text();
-        self.open_run(Some((&text[range.clone()], range.start)));
-    }
-
-    #[cfg(test)]
-    pub fn show_plan_for_tests(&mut self, outcome: QueryOutcome) {
-        self.show_plan(outcome);
-    }
-
-    fn show_results(&mut self, outcome: QueryOutcome) {
-        self.close_cell_popups();
-        let sets = self.tab.grid.show(outcome);
-        let Some(outcome) = &self.tab.grid.results else { return };
-
-        let elapsed = format_elapsed(outcome.elapsed);
-        let mut status = if outcome.statements == 0 {
-            t!("run.nothing").to_string()
-        } else if !outcome.columns.is_empty() {
-            if outcome.truncated() {
-                t!("run.showing_first", shown = outcome.rows.len(), total = outcome.total_rows, time = elapsed)
-            } else {
-                tn!("run.rows_in", outcome.rows.len(), time = elapsed)
-            }
-        } else {
-            tn!("run.affected_in", outcome.rows_affected.unwrap_or(0), time = elapsed)
-        };
-        if outcome.statements > 1 {
-            let _ = write!(status, " · {}", tn!("run.statements", outcome.statements));
-        }
-        if sets > 1 {
-            let _ = write!(status, " · {}", tn!("run.result_sets", sets));
-        }
-        self.set_status(status, false);
-    }
-
-    /// The popups about one cell of the old result.
-    fn close_cell_popups(&mut self) {
-        self.popups.cell_view = None;
-        self.cell_edit = None;
-    }
-
-    /// Shows result set `index` of a script's results.
-    fn show_result_set(&mut self, index: usize) {
-        if !self.tab.grid.select_set(index) {
-            return;
-        }
-        self.close_cell_popups();
-        let Some(next) = &self.tab.grid.results else { return };
-        let from = if next.statement > 0 {
-            format!(", {}", t!("run.from_statement", n = next.statement))
-        } else {
-            String::new()
-        };
-        let status = t!(
-            "run.result_set",
-            n = index + 1,
-            of = self.tab.grid.result_sets.len(),
-            from = from,
-            rows = tn!("rows.rows", next.total_rows)
-        );
-        self.set_status(status, false);
-        self.set_result_tab(ResultTab::Rows);
-    }
-
-    /// The next (or previous) result set, wrapping around.
-    fn step_result_set(&mut self, forward: bool) {
-        match self.tab.grid.step_set(forward) {
-            Some(index) => self.show_result_set(index),
-            None => {
-                self.set_status(t!("run.one_result_set").into(), false);
-            }
-        }
     }
 
     pub fn handle_paste(&mut self, text: &str) {
@@ -1416,81 +674,6 @@ impl App {
                 }
             }
             _ => {}
-        }
-    }
-
-    /// A key while a confirmation is open: what it answers. `quit_key`:
-    /// Ctrl+C or Ctrl+Q, which confirm quitting.
-    fn answer_confirm(&mut self, confirm: Confirm, key: KeyEvent, quit_key: bool) {
-        // A second Ctrl+C or Ctrl+Q confirms quitting.
-        if confirm.offer_transaction
-            && matches!(key.code, KeyCode::Char('t' | 'T'))
-            && let ConfirmAction::Run { sql, offset, filled, .. } = confirm.action
-        {
-            return self.run_in_transaction(&sql, offset, filled, RunPurpose::Query);
-        }
-        let yes =
-            matches!(key.code, KeyCode::Char('y' | 'Y')) || (quit_key && matches!(confirm.action, ConfirmAction::Quit));
-        if let ConfirmAction::AgentWrite(request) = &confirm.action {
-            // Only y, or n / Esc, answer; and not in the first moment
-            // (a key being typed as it appeared).
-            let settled = self.agents.asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
-            let answer = match key.code {
-                KeyCode::Char('y' | 'Y') => Some(true),
-                KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(false),
-                _ => None,
-            };
-            match answer {
-                Some(approve) if settled => {
-                    let request = request.clone();
-                    return self.answer_agent(&request, approve);
-                }
-                _ => {
-                    self.popups.confirm = Some(confirm);
-                    return;
-                }
-            }
-        }
-        if let ConfirmAction::ShareSchema { question, project_id } = &confirm.action {
-            // It came by itself, maybe while typing: only y, a, or n / Esc
-            // answer it, and not in its first moment (as an agent's write).
-            let settled = self.agents.asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
-            let answer = match key.code {
-                KeyCode::Char('y' | 'Y') => Some(Some(false)),
-                KeyCode::Char('a' | 'A') => Some(Some(true)),
-                KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(None),
-                _ => None,
-            };
-            match answer {
-                Some(Some(always)) if settled => {
-                    return self.answer_share(question.clone(), project_id.as_deref(), always);
-                }
-                Some(None) if settled => return self.set_status(t!("app.not_sent").into(), false),
-                _ => {
-                    self.popups.confirm = Some(confirm);
-                    return;
-                }
-            }
-        }
-        if !yes {
-            self.tab.run.queued_plan = None;
-            self.set_status("Cancelled".to_string(), false);
-            return;
-        }
-        match confirm.action {
-            ConfirmAction::Run { sql, offset, infos, purpose, filled } => {
-                self.run_writes(sql, offset, infos, purpose, filled);
-            }
-            ConfirmAction::RunHeavy { sql, offset, infos, filled } => {
-                self.run_writes(sql, offset, infos, RunPurpose::Query, filled);
-            }
-            ConfirmAction::Disconnect => self.disconnect(),
-            ConfirmAction::CloseConnection(id) => self.close_connection(id),
-            ConfirmAction::Quit => self.should_quit = true,
-            ConfirmAction::CloseTab => self.close_tab(),
-            ConfirmAction::LeaveProject(target, panes) => self.go_to_project(target, panes),
-            // Answered above.
-            ConfirmAction::AgentWrite(_) | ConfirmAction::ShareSchema { .. } => {}
         }
     }
 
@@ -1566,24 +749,4 @@ impl App {
 /// A run's time so far, as minutes and seconds (`3:07`).
 pub(super) fn mm_ss(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
-}
-
-#[cfg(test)]
-mod match_tests {
-    #[test]
-    fn the_best_matches_come_first() {
-        let mut names = vec!["alternative_prod", "order_products", "products", "productsx", "prod", "reproduce"];
-        let mut buf = String::new();
-        names.sort_by_key(|n| super::match_rank(n, "prod", &mut buf));
-        assert_eq!(names, ["prod", "products", "productsx", "alternative_prod", "order_products", "reproduce"]);
-        assert_eq!(super::match_rank("cats", "prod", &mut buf), None, "not in it");
-        // A filter with a separator in it still starts a word.
-        assert_eq!(super::match_rank("big_order_products", "order_p", &mut buf), Some(2));
-        assert_eq!(super::match_rank("xorder_px", "order_p", &mut buf), Some(3));
-        // Folded as the filter folds it: a Lithuanian name ranks as itself.
-        assert_eq!(super::match_rank("Žąsys", "žąsys", &mut buf), Some(0));
-        assert_eq!(super::match_rank("ŽĄSYS_seni", "žąs", &mut buf), Some(1));
-        // Greek's final sigma, as the filter's text lowercases it.
-        assert_eq!(super::match_rank("ΟΔΟΣ", &"ΟΔΟΣ".to_lowercase(), &mut buf), Some(0));
-    }
 }

@@ -145,3 +145,44 @@ impl App {
         self.set_status(t!("export.stopped").to_string(), false);
     }
 }
+
+/// File formats for exporting results.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportFormat {
+    Csv,
+    Json,
+    /// `INSERT` statements.
+    Sql,
+    /// A table with `+--+` borders.
+    Ascii,
+}
+
+/// What every row of a result can be exported as, page by page as they
+/// arrive (an ASCII table can't: its widths need every row first).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PagedFormat {
+    Csv,
+    Json,
+    Sql,
+}
+
+impl From<ExportFormat> for pipes::OpenFormat {
+    fn from(format: ExportFormat) -> Self {
+        match format {
+            ExportFormat::Csv => pipes::OpenFormat::Csv,
+            ExportFormat::Json => pipes::OpenFormat::Json,
+            ExportFormat::Sql => pipes::OpenFormat::Sql,
+            ExportFormat::Ascii => pipes::OpenFormat::Ascii,
+        }
+    }
+}
+
+impl From<PagedFormat> for ExportFormat {
+    fn from(format: PagedFormat) -> Self {
+        match format {
+            PagedFormat::Csv => ExportFormat::Csv,
+            PagedFormat::Json => ExportFormat::Json,
+            PagedFormat::Sql => ExportFormat::Sql,
+        }
+    }
+}
