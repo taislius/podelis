@@ -69,8 +69,26 @@ impl Dialect for Postgres {
     }
 
     /// `real` is a 4-byte float here (MySQL's is a double).
-    fn type_kind(&self, base: &str) -> Option<crate::db::TypeKind> {
-        (base == "real").then_some(crate::db::TypeKind::Float4)
+    fn type_kind(&self, ty: &str) -> Option<crate::db::TypeKind> {
+        use crate::db::TypeKind as Kind;
+        use crate::db::types::{arguments, base};
+        if ty.ends_with("[]") {
+            return Some(Kind::Other(ty.to_string()));
+        }
+        Some(match base(ty) {
+            "int2" => Kind::Int(2),
+            "int4" => Kind::Int(4),
+            "int8" => Kind::Int(8),
+            "bool" => Kind::Bool,
+            "float4" | "real" => Kind::Float4,
+            "float8" => Kind::Float8,
+            "bpchar" => Kind::Char(arguments(ty).first().copied()),
+            "timestamptz" => Kind::TimestampTz,
+            "bytea" => Kind::Binary,
+            "json" | "jsonb" => Kind::Json,
+            "uuid" => Kind::Uuid,
+            _ => return None,
+        })
     }
 
     fn type_name(&self, kind: &crate::db::TypeKind) -> Option<String> {
