@@ -549,7 +549,6 @@ pub fn is_word_char(c: char) -> bool {
 }
 
 /// Splits `text` into lines of highlighted fragments.
-#[cfg(any(test, feature = "test-support"))]
 pub fn highlight_lines(text: &str, engine: Engine) -> HighlightedLines<'_> {
     highlight_lines_and_starts(text, engine).0
 }

@@ -22,8 +22,6 @@ mod chart;
 mod cli;
 mod config;
 mod editor;
-#[cfg(test)]
-mod fuzz_tests;
 mod gateway;
 #[cfg(test)]
 mod lang_keys;

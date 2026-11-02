@@ -255,6 +255,23 @@ fn join(group: &str, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest::proptest! {
+    // Cases that failed once are kept in tests/ (proptest's default would
+    // be a folder at the crate's root) and tried again first.
+    #![proptest_config(ProptestConfig {
+        failure_persistence: Some(Box::new(proptest::test_runner::FileFailurePersistence::Direct(
+            "tests/proptest-regressions/library.txt",
+        ))),
+        ..ProptestConfig::with_cases(400)
+    })]
+
+        #[test]
+        fn library_search_never_panics(query in "\\PC{0,20}", text in "\\PC{0,40}") {
+            let _ = matches(&query, &[&text]);
+        }
+    }
 
     #[test]
     fn paths_split_on_the_last_slash() {

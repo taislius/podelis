@@ -2370,6 +2370,7 @@ dependencies = [
  "futures-util",
  "insta",
  "keyring",
+ "proptest",
  "rust_decimal",
  "serde",
  "serde_json",

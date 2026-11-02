@@ -697,6 +697,51 @@ fn floor_char_boundary(s: &str, mut idx: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest::proptest! {
+    // Cases that failed once are kept in tests/ (proptest's default would
+    // be a folder at the crate's root) and tried again first.
+    #![proptest_config(ProptestConfig {
+        failure_persistence: Some(Box::new(proptest::test_runner::FileFailurePersistence::Direct(
+            "tests/proptest-regressions/editor.txt",
+        ))),
+        ..ProptestConfig::with_cases(400)
+    })]
+
+        /// Random editing keeps the cursor inside the text and never panics.
+        #[test]
+        fn editor_survives_random_edits(ops in prop::collection::vec((0u8..18, any::<char>(), "[a-zž\n ]{0,4}"), 0..60)) {
+            let mut ed = TextEditor::new();
+            for (op, ch, s) in ops {
+                match op {
+                    0 => ed.insert_char(if ch.is_control() { 'x' } else { ch }),
+                    1 => ed.insert_str(&s),
+                    2 => ed.insert_newline(),
+                    3 => ed.backspace(),
+                    4 => ed.delete(),
+                    5 => { ed.prepare_move(ch.is_alphabetic()); ed.move_left(); }
+                    6 => { ed.prepare_move(ch.is_alphabetic()); ed.move_right(); }
+                    7 => { ed.prepare_move(ch.is_alphabetic()); ed.move_up(); }
+                    8 => { ed.prepare_move(ch.is_alphabetic()); ed.move_down(); }
+                    9 => { ed.prepare_move(false); ed.move_word_left(); }
+                    10 => { ed.prepare_move(false); ed.move_word_right(); }
+                    11 => { ed.undo(); }
+                    12 => { ed.redo(); }
+                    13 => ed.select_all(),
+                    14 => { ed.cut(); }
+                    15 => ed.replace_before_cursor(s.chars().count() % 3, &s),
+                    16 => ed.set_text(&s),
+                    _ => ed.scroll_to_cursor(5, 10),
+                }
+                prop_assert!(ed.cursor_row < ed.lines.len());
+                prop_assert!(ed.cursor_col <= ed.lines[ed.cursor_row].chars().count());
+                let offset = ed.cursor_offset();
+                prop_assert!(offset <= ed.text().len());
+                prop_assert_eq!(ed.pos_of_offset(offset), (ed.cursor_row, ed.cursor_col));
+            }
+        }
+    }
 
     fn editor(text: &str) -> TextEditor {
         TextEditor::with_text(text)
