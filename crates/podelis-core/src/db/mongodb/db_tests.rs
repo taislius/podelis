@@ -1,7 +1,7 @@
 //! MongoDB's own `Database` tests (the shared ones are SQL's, and skip
 //! it). Live with `PODELIS_TEST_MONGO_PORT` set (`_HOST`, `_USER`,
-//! `_PASSWORD`, `_DB` as for the other servers): a `mongo:8` container,
-//! as CI runs.
+//! `_PASSWORD`, `_DB` as for the other servers): a `mongo:7.0` container,
+//! as CI runs (8.0 and later crash on Linux 6.19 and newer: SERVER-121912).
 
 use crate::db::tests::*;
 use crate::db::*;

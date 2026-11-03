@@ -97,8 +97,10 @@ jobs:
         ports: ["3306:3306"]
         options: >-
           --health-cmd "mysqladmin ping -proot" --health-interval 2s --health-timeout 5s --health-retries 60
+      # 7.0, not 8: MongoDB 8.0 and later crash on Linux 6.19 and newer
+      # kernels, as the runners' (SERVER-121912); 7.0 is supported to 2027.
       mongo:
-        image: mongo:8
+        image: mongo:7.0
         ports: ["27017:27017"]
         options: >-
           --health-cmd "mongosh --quiet --eval 'db.runCommand({ping: 1}).ok'" --health-interval 2s --health-timeout 5s --health-retries 30
