@@ -90,6 +90,8 @@ async fn live_mongodb() {
     // The session info: its version.
     let info = db.session_info().await;
     assert!(info.iter().any(|(k, v)| k == "Version" && v.starts_with(db.version())), "{info:?}");
+    let connections = info.iter().find(|(k, _)| k == "Connections").map(|(_, v)| v.as_str());
+    assert!(connections.is_some_and(|c| c.contains(" in use, up to ")), "{info:?}");
     db.close().await;
 
     // Read-only: reads run, writes don't.

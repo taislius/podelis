@@ -55,6 +55,33 @@ const RESERVED: &[&str] = &[
 ];
 
 impl Backend for DuckDb {
+    /// Its own names beside the standard's (`DESCRIBE` writes them in
+    /// capitals; `db::types` lowercases them first).
+    fn type_kind(&self, ty: &str) -> Option<crate::db::TypeKind> {
+        use crate::db::TypeKind as Kind;
+        use crate::db::types::base;
+        if ty.ends_with("[]") || ty.ends_with(']') {
+            return Some(Kind::Other(ty.to_string()));
+        }
+        Some(match base(ty) {
+            "tinyint" | "int1" => Kind::Int(1),
+            "int2" | "short" => Kind::Int(2),
+            "int4" | "signed" => Kind::Int(4),
+            "int8" | "long" => Kind::Int(8),
+            "bool" | "logical" => Kind::Bool,
+            "float" | "float4" => Kind::Float4,
+            "double" | "float8" => Kind::Float8,
+            "string" | "bpchar" => Kind::Text,
+            "timestamptz" => Kind::TimestampTz,
+            "bytea" | "varbinary" => Kind::Binary,
+            "uuid" => Kind::Uuid,
+            // Wider or unsigned integers hold what nothing else does.
+            "hugeint" | "uhugeint" | "utinyint" | "usmallint" | "uinteger" | "ubigint" => {
+                Kind::Other(ty.to_string())
+            }
+            _ => return None,
+        })
+    }
     /// "v1.4.1".
     fn version_query(&self) -> &'static str {
         "SELECT version()"
@@ -176,33 +203,6 @@ impl SqlDialect for DuckDb {
             Kind::Json => "JSON".into(),
             Kind::Uuid => "UUID".into(),
             Kind::Other(_) => return None,
-        })
-    }
-    /// Its own names beside the standard's (`DESCRIBE` writes them in
-    /// capitals; `db::types` lowercases them first).
-    fn type_kind(&self, ty: &str) -> Option<crate::db::TypeKind> {
-        use crate::db::TypeKind as Kind;
-        use crate::db::types::base;
-        if ty.ends_with("[]") || ty.ends_with(']') {
-            return Some(Kind::Other(ty.to_string()));
-        }
-        Some(match base(ty) {
-            "tinyint" | "int1" => Kind::Int(1),
-            "int2" | "short" => Kind::Int(2),
-            "int4" | "signed" => Kind::Int(4),
-            "int8" | "long" => Kind::Int(8),
-            "bool" | "logical" => Kind::Bool,
-            "float" | "float4" => Kind::Float4,
-            "double" | "float8" => Kind::Float8,
-            "string" | "bpchar" => Kind::Text,
-            "timestamptz" => Kind::TimestampTz,
-            "bytea" | "varbinary" => Kind::Binary,
-            "uuid" => Kind::Uuid,
-            // Wider or unsigned integers hold what nothing else does.
-            "hugeint" | "uhugeint" | "utinyint" | "usmallint" | "uinteger" | "ubigint" => {
-                Kind::Other(ty.to_string())
-            }
-            _ => return None,
         })
     }
     /// `VARCHAR(n)` is `VARCHAR`, and `CHAR(n)` too.

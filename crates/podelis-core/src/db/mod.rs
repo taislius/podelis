@@ -52,6 +52,7 @@ pub use errors::{
 pub use options::{AgentAccess, ConnectParams, ConnectionMode, PasswordSource, SslMode, TxMode};
 pub use run::RunError;
 use tunnel::{Tunnel, open_tunnel};
+pub use types::kind as type_kind;
 pub use types::{TypeKind, same_type, translate_type};
 
 /// Default for the rows kept in memory per result set. Rows beyond the limit

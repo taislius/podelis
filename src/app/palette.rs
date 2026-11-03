@@ -12,6 +12,8 @@ pub enum Command {
     ExportJson,
     ExportInserts,
     ExportAscii,
+    /// The rows shown as a Parquet file.
+    ExportParquet,
     /// Every row, not just those loaded.
     ExportAll(PagedFormat),
     /// The marked rows (or those shown) to the clipboard.
@@ -52,9 +54,11 @@ impl Command {
             Command::ExportJson,
             Command::ExportInserts,
             Command::ExportAscii,
+            Command::ExportParquet,
             Command::ExportAll(PagedFormat::Csv),
             Command::ExportAll(PagedFormat::Json),
             Command::ExportAll(PagedFormat::Sql),
+            Command::ExportAll(PagedFormat::Parquet),
             Command::CopyRows(ExportFormat::Csv),
             Command::CopyRows(ExportFormat::Json),
             Command::CopyRows(ExportFormat::Sql),
@@ -81,11 +85,13 @@ impl Command {
             Command::ExportAll(PagedFormat::Csv) => t!("menu.export_all_csv_full"),
             Command::ExportAll(PagedFormat::Json) => t!("palette.export_all_json"),
             Command::ExportAll(PagedFormat::Sql) => t!("palette.export_all_sql"),
+            Command::ExportAll(PagedFormat::Parquet) => t!("palette.export_all_parquet"),
             Command::CopyRows(ExportFormat::Csv) => t!("palette.copy_csv"),
             Command::CopyRows(ExportFormat::Json) => t!("palette.copy_json"),
             Command::CopyRows(ExportFormat::Sql) => t!("palette.copy_sql"),
             Command::CopyRows(ExportFormat::Ascii) => t!("menu.copy_ascii"),
             Command::ExportAscii => t!("menu.export_ascii"),
+            Command::ExportParquet => t!("menu.export_parquet"),
             Command::AgentActivity => t!("palette.agents"),
             Command::LoadMore => t!("menu.load_more"),
             Command::PipeRows => t!("palette.pipe"),
@@ -150,6 +156,7 @@ impl Command {
             Command::CopyDiagnostics
             | Command::ExportAll(_)
             | Command::ExportAscii
+            | Command::ExportParquet
             | Command::CopyRows(_)
             | Command::OpenRowsAs(_)
             | Command::AgentActivity
@@ -486,6 +493,7 @@ impl App {
             Command::ExportJson => self.export(ExportFormat::Json),
             Command::ExportInserts => self.export(ExportFormat::Sql),
             Command::ExportAscii => self.export(ExportFormat::Ascii),
+            Command::ExportParquet => self.export_parquet(),
             Command::ExportAll(format) => self.export_all(format),
             Command::CopyRows(format) => self.copy_rows_as(format),
             Command::AgentActivity => self.open_agents(),

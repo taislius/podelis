@@ -139,6 +139,22 @@ pub(in crate::db) async fn stop_session(_db: &Database, _id: i64, _terminate: bo
     anyhow::bail!("MongoDB's operations aren't listed yet")
 }
 
+/// Connections in use, and how many the server takes in all (`serverStatus`:
+/// those in use and those still free); `None` where this user may not ask.
+pub(in crate::db) async fn connections(db: &Database) -> Option<String> {
+    let Pool::MongoDb(p) = &db.0.pool else { unreachable!("engine matches pool") };
+    let status = p.client.database("admin").run_command(doc! {"serverStatus": 1}).await.ok()?;
+    let connections = status.get_document("connections").ok()?;
+    let number = |key: &str| match connections.get(key)? {
+        ::mongodb::bson::Bson::Int32(n) => Some(i64::from(*n)),
+        ::mongodb::bson::Bson::Int64(n) => Some(*n),
+        _ => None,
+    };
+    let (current, available) = (number("current")?, number("available")?);
+    Some(format!("{current} in use, up to {}", current + available))
+}
+
+
 pub(in crate::db) async fn tls_info(_db: &Database) -> Option<String> {
     None
 }

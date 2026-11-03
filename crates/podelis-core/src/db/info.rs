@@ -18,6 +18,11 @@ impl Database {
                 out.push(((*name).to_string(), value));
             }
         }
+        // How many connections are in use, and how many this user may have
+        // (left out where the server won't say: not every user may read it).
+        if let Some(connections) = on_driver!(self.0.engine, engine::queries::connections(self).await) {
+            out.push(("Connections".to_string(), connections));
+        }
         if let Some(tls) = self.tls_info().await {
             out.push(("TLS".to_string(), tls));
         } else if let Some(why) = self.tls_failed() {

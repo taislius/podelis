@@ -191,6 +191,12 @@ pub(in crate::db) async fn stop_session(_db: &Database, _id: i64, _terminate: bo
     anyhow::bail!("DuckDB has no server sessions")
 }
 
+/// A file: no connections to count.
+pub(in crate::db) async fn connections(_db: &Database) -> Option<String> {
+    None
+}
+
+
 /// … and no network to encrypt.
 pub(in crate::db) async fn tls_info(_db: &Database) -> Option<String> {
     None
