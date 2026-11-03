@@ -121,16 +121,28 @@ macro_rules! driver {
                 .boxed()
         }
 
+        /// The driver's prepared statements dropped, so the next prepare
+        /// asks the server: one kept from before a schema change (made
+        /// elsewhere: another tool, a migration) would answer for the old
+        /// shape. Runs don't use them (`raw_sql`), so nothing else is slower.
+        async fn forget_prepared(c: &mut DriverConnection) -> anyhow::Result<()> {
+            use sqlx::Connection as _;
+            c.clear_cached_statements().await?;
+            Ok(())
+        }
+
         /// Prepares `sql` without running it: the server's parser and
-        /// catalog check it.
+        /// catalog check it, as the schema is now.
         pub(in crate::db) async fn prepare(c: &mut DriverConnection, sql: &str) -> anyhow::Result<()> {
+            forget_prepared(c).await?;
             (&mut **c).prepare(AssertSqlSafe(sql.to_string()).into_sql_str()).await?;
             Ok(())
         }
 
-        /// The columns `sql` would return, from preparing it; `None` if it
-        /// can't be prepared.
+        /// The columns `sql` would return, from preparing it, as the schema
+        /// is now; `None` if it can't be prepared.
         pub(in crate::db) async fn columns(c: &mut DriverConnection, sql: &str) -> Option<Vec<(String, String)>> {
+            forget_prepared(c).await.ok()?;
             let stmt = (&mut **c).prepare(AssertSqlSafe(sql.to_string()).into_sql_str()).await.ok()?;
             Some(stmt.columns().iter().map(|c| (c.name().to_string(), c.type_info().name().to_string())).collect())
         }

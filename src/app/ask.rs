@@ -16,6 +16,11 @@ use crate::gateway::protocol::code;
 pub struct AskState {
     /// The question being answered.
     pub asking: Option<Asking>,
+    /// The gateway has the schema this app last loaded: it was told to read
+    /// it again since. Not at first (the gateway outlives the app, so it
+    /// may keep a schema from before a change), nor after a reload here
+    /// (`load_catalog`: after DDL, `r` in the navigator).
+    pub(super) gateway_current: bool,
     /// Numbers the asks, so a stopped one's answer is dropped.
     pub(super) count: u64,
     /// The sharing question, waiting while another confirmation is open.
@@ -135,6 +140,10 @@ impl App {
             serde_json::json!({ "project": project, "connection": connection, "question": question.text, "dir": dir });
         if share_once {
             params["share_once"] = serde_json::json!(true);
+        }
+        // The schema read again where the gateway may keep an older one.
+        if !std::mem::replace(&mut self.ask.gateway_current, true) {
+            params["refresh"] = serde_json::json!(true);
         }
         if question.explain {
             params["explain"] = serde_json::json!(true);

@@ -461,6 +461,37 @@ async fn ask_checks_the_models_sql_against_the_schema_and_never_runs_it() {
     assert!(!log.contains("products sold") && !log.contains("SELECT"), "{log}");
 }
 
+/// The gateway keeps a connection's schema a while, and outlives the app:
+/// an ask with `refresh` (an app just started, or one that loaded its
+/// schema again) has it read the schema again, so a table made meanwhile
+/// is there. Without it, the kept schema is used.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn ask_with_refresh_reads_the_schema_again() {
+    let answer = || claude_answer("```sql\nSELECT 1\n```\nOne.");
+    let (url, server) = fake_model(vec![(200, answer()), (200, answer()), (200, answer())]).await;
+    let dir = tempfile::tempdir().unwrap();
+    saved_shop(dir.path()).await;
+    let config =
+        format!("[[models]]\nname = \"near\"\napi = \"anthropic\"\nurl = \"{url}\"\nmodel = \"claude-opus-5-5\"\n");
+    std::fs::write(dir.path().join("config.toml"), config).unwrap();
+    let _gateway = start(dir.path(), None);
+    let mut client = connect(dir.path()).await;
+    let ask = |refresh: bool| json!({ "project": "p", "connection": "shop", "question": "refunds per order", "refresh": refresh });
+    client.call("ask", ask(false)).await.unwrap();
+    // A table made elsewhere, after the gateway read the schema.
+    let db =
+        crate::db::Database::connect(crate::db::tests::file_params(&dir.path().join("shop.db"), false)).await.unwrap();
+    db.run("create table refunds (id integer primary key, order_id integer, amount_back numeric)", 1).await.unwrap();
+    db.close().await;
+    client.call("ask", ask(false)).await.unwrap();
+    client.call("ask", ask(true)).await.unwrap();
+    let requests = server.await.unwrap();
+    // (The question says "refunds": its column is what only the schema has.)
+    assert!(!requests[1].contains("amount_back"), "the kept schema, from before");
+    assert!(requests[2].contains("amount_back"), "read again: {}", requests[2]);
+}
+
 /// A model that may look for itself asks for a table it wasn't shown;
 /// it gets the table's columns (never rows), and says what it looked at.
 #[cfg(feature = "sqlite")]

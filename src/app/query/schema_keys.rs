@@ -19,6 +19,9 @@ impl App {
     /// visible meanwhile.
     pub(in crate::app) fn load_catalog(&mut self) {
         let Some(db) = self.connection.database.clone() else { return };
+        // The schema may have changed: the next ask has the gateway read it
+        // again too.
+        self.ask.gateway_current = false;
         self.connection.schema.get_or_insert_with(SchemaPanel::default).loading = true;
         let send = self.sender();
         let system = self.settings.system_tables;
