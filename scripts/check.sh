@@ -36,6 +36,7 @@ fi
 if command -v shellcheck > /dev/null; then
     echo "==> shellcheck"
     shellcheck -s sh scripts/*.sh .githooks/*
+    scripts/check-changed.sh --self-test
 elif command -v dash > /dev/null; then
     echo "==> dash -n"
     for f in scripts/*.sh .githooks/*; do dash -n "$f"; done
