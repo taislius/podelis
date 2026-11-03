@@ -4,12 +4,17 @@ What changed in each release of Podėlis, newest first. Drafted from the
 commits by [git-cliff](https://git-cliff.org) (`cliff.toml`), then edited.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.8.0] — 2026-11-03
 
 ### Added
 
 - DuckDB, opt-in (--features duckdb): the first engine without sqlx, on the driver seam; the duckdb crate on blocking threads, rows streamed through a channel, values as text by Arrow's formatting and DuckDB's type names; one instance per file in a process (a read-only connection shares a writing one and runs only reads; a writer can't share a read-only one); full scans read from its drawn plan (wrapped names, scans its key narrows or a streaming limit stops left out); names it keeps quoted, no string lengths compared; its catalog, details, comments, cancel and errors; its tests, live always (a file), and CI entries with it and alone. Beside it: engine.toml's opt_in (every_engine doesn't wait for it), the via-sqlx feature for what the sqlx engines share, TestSql's analyzed_shows, keywords and tests that no longer assume three engines, async-executor 1.13.3 (1.14.0 yanked); not yet: a sandbox's copy, macros, plan notes
 - MongoDB, opt-in (--features mongodb): the first engine without SQL. The query language is the engine's (Backend::language: SQL, which its dialect fills in, or a QueryLanguage of its own), and the sql module's entry points (split, tokenize, highlight, parse, analyze) ask it; engine.dialect() is an Option, each of its callers deciding what an engine without SQL gets (what's SQL's says so: edits, row forms, follow, review, sandboxes, plans, INSERT exports, imports, agents; literals are JSON's, transactions off); ping, the version and sql_mode queries, system tables, agents' rules and login failures are each engine's Backend's. MongoDB: mongosh's calls (db.<collection>.<method>(…) with sort, limit, skip and projection chained, getCollection, runCommand) in relaxed JSON with the shell's helpers; reads, writes and schema changes by the method, escapes undone, unknown commands and empty-filter deletes asked about; the official driver, documents as rows (_id first, fields as first seen, nested as JSON), cursors kept to the row limit and streamed, a cancel kept until the next run; the catalog sampled from the pool's client; read-only runs only reads; what it can't read is a syntax error before the server sees it. sql = false in engine.toml sets the sql_engine cfg for SQL's own tests; its live tests on a mongo:8 server and CI's matrix entries; docs
+- Parquet export, from every engine (MongoDB too): the rows shown, and every row of a result (to a scratch file as it streams, the types settled once every value is read); each column typed by its engine's type name (type_kind is each engine's Backend's now, MongoDB's own), widened where a value doesn't fit (integers to floats unless past 2^53, booleans to integers, moments without a zone to timestamps) and text otherwise, a decimal of no given scale by its values'; Snappy, row groups of 65,536; off the UI thread, Esc stops it; parquet 59 (no thrift, no paste). The connection pane says how many connections are in use and how many this user may have (PostgreSQL's reserved slots taken off, never said; MySQL's; MongoDB's), on a pool connection. Tests for each, live; README
+
+### Fixed
+
+- A schema changed elsewhere is seen at once: the driver's prepared statements are dropped before preparing (an empty result's columns and the syntax check came from the shape a statement was first prepared against), and an AI ask has the gateway read the schema again when it may keep an older one (its first after the app starts, as the gateway outlives it, and its first after the app loaded the schema again: after DDL, r in the navigator); the gateway's ask takes refresh, as its context did
 
 ### Changed
 
@@ -29,6 +34,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - SECURITY.md: report privately through GitHub's advisories; only the latest version gets fixes; what counts (secrets leaving, another user reaching yours, schemas sent against share_schema, a way past agents' rules, which are a safety net, not the boundary)
 - README: Extending and scripting, each extension point in the app and headless (rows out, data in, passwords and keys from your tools, agents, ask and memory, exit codes); fuzzing in the development guide; the agent activity is opened from the palette, not Ctrl+K a (EXPLAIN ANALYZE's)
 - Nothing outside db/ names an engine, not even to say all are built (every_engine); the prompts' folder
+- README: cargo install builds the default engines without asking, and a --path . install warns which
 
 ### Development
 
@@ -42,6 +48,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - scripts/check-changed.sh: a change checked by what it touches (rustfmt, the workspace's clippy, and the tests its map picks: an engine's folder its tests with its feature, sql/ the SQL and editor tests, podelis-ai its own…), saying what it ran and left out; --dry-run, --paths, --full, --self-test (run by check.sh); development.md: which checks when
 - The DuckDB jobs free the runner's disk first (its unused SDKs: .NET, Android, Haskell, a spare CodeQL): DuckDB's C++ build and its cache filled it
 - scripts/build.sh: asks which databases to build with (checkboxes by whiptail or dialog, else a numbered list), then installs or builds with their features; the engines from their engine.toml (each with a label, tested to match Backend::label, and a note: DuckDB's build cost), opt-in ones unticked; --engines, --build, --print; no questions without a terminal; the last choice kept in .podelis-engines; README and architecture
+- CHANGELOG.md, one for Podėlis (its crates aren't published), drafted by git-cliff from each commit's kind (cliff.toml: [feat] Added, [fix] Fixed, [refactor] Changed, [deps], [docs], and [build]/[ci]/[test] Development; release candidates with their release), every release from 0.2.0 on; development.md says how to make a release's section and its text; check-changed.sh runs nothing for cliff.toml
+- A release build with the default engines says which it has and how to choose (cargo install --path . can't ask): a cargo warning naming them, scripts/build.sh and --features duckdb,mongodb; none in debug builds or with --no-default-features (build.sh's)
 
 ## [0.7.5] — 2026-11-02
 
