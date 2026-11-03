@@ -23,6 +23,11 @@ use crate::sql::scope::{self, Source};
 /// What's wrong with `sql` for `schema`: names it uses that aren't
 /// there, or why it couldn't be read at all.
 pub fn problems(sql: &str, engine: Engine, schema: &Schema) -> Vec<String> {
+    // SQL's names, by SQL's parse: nothing to say about another language
+    // (it would read as SQL that doesn't parse, and send the model back).
+    if engine.dialect().is_none() {
+        return Vec::new();
+    }
     let script = crate::sql::parse::parse(sql, engine);
     let mut statements: Vec<Statement> = Vec::new();
     for s in &script.statements {
@@ -70,7 +75,7 @@ pub fn problems(sql: &str, engine: Engine, schema: &Schema) -> Vec<String> {
         }
     }
     // Columns every table has without listing them.
-    let builtin = engine.dialect().hidden_columns();
+    let builtin = engine.dialect().map_or(&[][..], |d| d.hidden_columns());
     let reads_tables = !columns.is_empty();
     columns.extend(builtin.iter().map(|c| (*c).to_string()));
     if plain && reads_tables {

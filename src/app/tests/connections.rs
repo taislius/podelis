@@ -62,7 +62,9 @@ fn password_command_replaces_the_password() {
     #[cfg(feature = "sqlite")]
     {
         form.password_command = "pass show db".into();
-        form.cycle_engine(false);
+        while !form.engine.is_file_based() {
+            form.cycle_engine(false);
+        }
         form.host = "/tmp/x.db".into();
         assert!(form.params().unwrap().password_command.is_empty());
     }

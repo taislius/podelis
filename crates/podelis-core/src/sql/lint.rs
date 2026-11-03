@@ -56,7 +56,7 @@ pub fn risk(stmt: &ParsedStatement, engine: Engine) -> Option<&'static str> {
 fn findings(stmt: &ParsedStatement, engine: Engine, sql_mode: &str) -> Vec<(Range<usize>, Finding)> {
     let Ok(parsed) = &stmt.ast else { return Vec::new() };
     let mut lints = Lints {
-        pipes_are_or: engine.dialect().pipes_are_or(sql_mode),
+        pipes_are_or: engine.dialect().is_some_and(|d| d.pipes_are_or(sql_mode)),
         findings: Vec::new(),
         any_rows_ok: HashSet::new(),
     };

@@ -184,7 +184,10 @@ impl App {
         };
         let literal = crate::sql::params::literal(&value, engine);
         let filter = format!("{} = {literal}", engine.quote_ident(&target_column));
-        let sql = format!("{};", engine.dialect().select_rows(&table, Some(&filter), None));
+        let Some(dialect) = engine.dialect() else {
+            return Err(t!("editor.no_sql", engine = engine.label()));
+        };
+        let sql = format!("{};", dialect.select_rows(&table, Some(&filter), None));
         Ok(Some(Followed {
             title: format!("{} · {target_column} = {}", fk.target_table, truncate_value(&value)),
             tab_name: format!("→ {}", fk.target_table),

@@ -115,7 +115,11 @@ pub fn explainable(sql: &str, engine: Engine) -> Result<(), String> {
 /// transaction (not SET, BEGIN, COMMIT, USE, CALL, DO, COPY, LOCK, GRANT…:
 /// they change the session, end Podėlis's transaction, or reach outside).
 fn allowed(sql: &str, engine: Engine) -> Result<Vec<crate::sql::analyze::StatementInfo>, String> {
-    let rules = engine.dialect().agent_constraints();
+    // Podėlis's safety for agents is SQL's (its transactions and plans).
+    if engine.dialect().is_none() {
+        return Err(format!("agents need SQL here for now, which {} doesn't have", engine.label()));
+    }
+    let rules = engine.backend().agent_constraints();
     // MySQL runs what's in `/*! … */` (MariaDB `/*M! … */` too): code the
     // checks below wouldn't see (`/*! INTO OUTFILE '…' */`). The whole text,
     // as the server gets it: a statement's comments around it aren't in
@@ -187,7 +191,7 @@ mod tests {
     fn what_agents_may_run() {
         use AgentAccess::{Approve, Read, Write};
         use ConnectionMode::{Normal, Production, ReadOnly};
-        for engine in Engine::ALL {
+        for engine in Engine::ALL.into_iter().filter(|e| e.dialect().is_some()) {
             let v = |access, mode, sql| verdict(access, mode, sql, engine);
             let refused = |access, mode, sql| matches!(v(access, mode, sql), Verdict::Refuse(_));
             assert_eq!(v(Read, Normal, "select * from t"), Verdict::Run(Wrap::ReadOnly), "{engine:?}");
@@ -238,8 +242,8 @@ mod tests {
     /// another engine's words are names like any other.
     #[test]
     fn each_engine_by_its_own_constraints() {
-        for engine in Engine::ALL {
-            let rules = engine.dialect().agent_constraints();
+        for engine in Engine::ALL.into_iter().filter(|e| e.dialect().is_some()) {
+            let rules = engine.backend().agent_constraints();
             let said = |sql: &str| match verdict(AgentAccess::Write, ConnectionMode::Normal, sql, engine) {
                 Verdict::Refuse(said) => said,
                 Verdict::Run(wrap) => panic!("{engine:?} ran {sql}: {wrap:?}"),
@@ -250,8 +254,10 @@ mod tests {
             for (word, way) in rules.instead {
                 assert!(said(&format!("{word} x")).contains(way), "{engine:?} {word}");
             }
-            let theirs =
-                Engine::ALL.iter().flat_map(|e| e.dialect().agent_constraints().outside.iter().map(|(w, _)| *w));
+            let theirs = Engine::ALL
+                .iter()
+                .filter(|e| e.dialect().is_some())
+                .flat_map(|e| e.backend().agent_constraints().outside.iter().map(|(w, _)| *w));
             for word in theirs.filter(|w| !rules.outside.iter().any(|(o, _)| o == w)) {
                 let sql = format!("select {word} from t");
                 let ran = verdict(AgentAccess::Write, ConnectionMode::Normal, &sql, engine);
@@ -262,14 +268,14 @@ mod tests {
 
     #[test]
     fn what_agents_may_explain() {
-        for engine in Engine::ALL {
+        for engine in Engine::ALL.into_iter().filter(|e| e.dialect().is_some()) {
             let e = |sql: &str| explainable(sql, engine);
             assert!(e("select * from t where id = 1").is_ok(), "{engine:?}");
             assert!(e("delete from t").is_ok(), "planning it doesn't run it");
             assert!(e("select 1; delete from t").is_err(), "{engine:?}");
             // A message quoting the agent's own SQL can't open the door.
             assert!(e("set x = 'destructive'").is_err(), "{engine:?}");
-            let outside = engine.dialect().agent_constraints().outside;
+            let outside = engine.backend().agent_constraints().outside;
             assert!(outside.iter().all(|(word, _)| e(&format!("select {word}(1)")).is_err()), "{engine:?}");
         }
     }
@@ -303,5 +309,14 @@ mod tests {
         assert_eq!(one_line(&sixty), sixty, "60 fit");
         assert_eq!(one_line(&format!("{sixty}y")), format!("{sixty}…"));
         assert_eq!(one_line(&"ą".repeat(61)), format!("{}…", "ą".repeat(60)), "characters, not bytes");
+    }
+
+    /// On an engine whose language isn't SQL, agents are refused, saying why.
+    #[test]
+    fn agents_need_sql_for_now() {
+        for engine in Engine::ALL.into_iter().filter(|e| e.dialect().is_none()) {
+            let Err(why) = allowed("db.t.find()", engine) else { panic!("{engine:?}") };
+            assert!(why.contains("need SQL"), "{engine:?}: {why}");
+        }
     }
 }

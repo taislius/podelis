@@ -50,7 +50,10 @@ pub(in crate::db) fn server_params(engine: Engine, prefix: &str, user: &str) -> 
 
 /// The engine's test server, if one is set (none for a file database, nor
 /// for an engine this build leaves out).
+/// The shared tests are SQL's: an engine without SQL tests itself, in its
+/// folder's `db_tests.rs`.
 pub(in crate::db) fn live_params(engine: Engine) -> Option<ConnectParams> {
+    engine.dialect()?;
     on_driver!(engine, engine::db_tests::live_params(), other => None)
 }
 
@@ -64,6 +67,8 @@ pub async fn live_db(engine: Engine) -> Option<Database> {
 /// tests every engine shares, so each runs on each engine there is; none
 /// for an engine this build leaves out.
 pub async fn own_live_db(engine: Engine, name: &str) -> Option<(Database, ConnectParams)> {
+    // SQL's tests (an engine without SQL tests itself).
+    engine.dialect()?;
     on_driver!(engine, engine::db_tests::own_live_db(name).await, other => None)
 }
 
@@ -139,10 +144,16 @@ pub(in crate::db) async fn live_common(db: &Database) {
 
     // EXPLAIN output formats as a plan on every engine.
     let o = db
-        .run(&db.engine().dialect().explain("SELECT id FROM t WHERE id = 1", db.version()), DEFAULT_ROW_LIMIT)
+        .run(
+            &db.engine()
+                .dialect()
+                .expect("an SQL engine's test")
+                .explain("SELECT id FROM t WHERE id = 1", db.version()),
+            DEFAULT_ROW_LIMIT,
+        )
         .await
         .unwrap();
-    let plan = db.engine().dialect().format_plan(&o.columns, &o.rows).unwrap().text;
+    let plan = db.engine().dialect().expect("an SQL engine's test").format_plan(&o.columns, &o.rows).unwrap().text;
     assert!(test_sql(db.engine()).plan_shows.iter().any(|s| plan.contains(s)), "{plan}");
 
     // Zero-row result still has column headers.
@@ -379,9 +390,12 @@ pub(in crate::db) async fn live_activity(engine: Engine, slow: &str, cancelled_i
         assert!(result.is_err());
     }
     // MySQL before 8.0.18 has none.
-    let Some(explain) = engine.dialect().explain_analyze("SELECT 1", db.version()) else { return };
+    let Some(explain) = engine.dialect().expect("an SQL engine's test").explain_analyze("SELECT 1", db.version())
+    else {
+        return;
+    };
     let o = db.run(&explain, 10).await.unwrap();
-    let plan = engine.dialect().format_plan(&o.columns, &o.rows).unwrap().text;
+    let plan = engine.dialect().expect("an SQL engine's test").format_plan(&o.columns, &o.rows).unwrap().text;
     // MariaDB's ANALYZE: the actual rows in a column of their own.
     assert!(plan.contains("actual time") || plan.contains("r_rows"), "{plan}");
 }
@@ -487,7 +501,7 @@ async fn full_scans_on_live_servers() {
 async fn live_plans_aside_while_the_session_is_busy() {
     for engine in Engine::BUILT {
         let Some((db, _)) = own_live_db(engine, "podelis_aside").await else { continue };
-        let explain = engine.dialect().explain("SELECT 1", db.version());
+        let explain = engine.dialect().expect("an SQL engine's test").explain("SELECT 1", db.version());
         // Where a query can't wait, there's nothing to plan around.
         let Some(sleep) = test_sql(engine).sleep.map(|s| s.replace("{s}", "1")) else {
             assert!(db.run_aside(&explain, DEFAULT_ROW_LIMIT).await.unwrap().is_none(), "{engine:?}");
@@ -541,7 +555,7 @@ async fn a_session_given_up_on_is_opened_again() {
 #[test]
 fn the_statements_podelis_writes() {
     for engine in Engine::ALL {
-        let d = engine.dialect();
+        let Some(d) = engine.dialect() else { continue };
         assert_eq!((d.end(TxEnd::Commit), d.end(TxEnd::Rollback)), ("COMMIT", "ROLLBACK"), "{engine:?}");
         assert_eq!(d.savepoint("p_1"), "SAVEPOINT p_1");
         assert_eq!(d.rollback_to_savepoint("p_1"), "ROLLBACK TO SAVEPOINT p_1");
@@ -560,7 +574,7 @@ fn the_statements_podelis_writes() {
         assert_eq!(d.update("t", &set, "id = 7"), "UPDATE t SET a = 1, b = NULL WHERE id = 7");
         assert_eq!(d.delete("t", "(id = 7) OR (id = 8)"), "DELETE FROM t WHERE (id = 7) OR (id = 8)");
     }
-    let copy = Engine::ALL.into_iter().find(|e| e.is_file_based()).and_then(|e| e.dialect().copy_into("/tmp/o'k.db"));
+    let copy = Engine::ALL.into_iter().find(|e| e.is_file_based()).and_then(|e| e.dialect()?.copy_into("/tmp/o'k.db"));
     assert_eq!(copy.as_deref(), Some("VACUUM INTO '/tmp/o''k.db'"), "the path quoted as a literal");
 }
 

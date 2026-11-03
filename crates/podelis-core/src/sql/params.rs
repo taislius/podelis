@@ -31,7 +31,10 @@ pub fn find(text: &str, engine: Engine) -> Vec<Param> {
     // A bare `?` is numbered after the highest number so far, as engines
     // with numbered ones do: `?3, ?` is ?3 and ?4.
     let mut questions = 0;
-    let placeholders = engine.dialect().placeholders();
+    // Parameters are SQL's: in another language (MongoDB's JSON,
+    // `{"active":true}`) a `:` is something else.
+    let Some(dialect) = engine.dialect() else { return params };
+    let placeholders = dialect.placeholders();
     // The token right after `i`, if it touches it.
     let touching = |i: usize| tokens.get(i + 1).filter(|n| n.range.start == tokens[i].range.end);
     let is_name = |s: &str| s.bytes().next().is_some_and(|c| c.is_ascii_alphabetic() || c == b'_');
@@ -209,11 +212,16 @@ mod tests {
     }
 
     /// Each engine finds the forms its dialect declares, and only those
-    /// (`:name` on all of them), whichever engines there are.
+    /// (`:name` on all of them), whichever engines there are; one without
+    /// SQL, none.
     #[test]
     fn each_engine_finds_the_forms_its_dialect_declares() {
         for engine in Engine::ALL {
-            let takes = engine.dialect().placeholders();
+            let Some(dialect) = engine.dialect() else {
+                assert!(names(r#"db.t.find({"active":true, a: :n})"#, engine).is_empty(), "{engine:?}");
+                continue;
+            };
+            let takes = dialect.placeholders();
             let found = |sql: &str| names(sql, engine);
             assert_eq!(found("select :n"), [":n"], "{engine:?}");
             assert_eq!(found("select $1") == ["$1"], takes.dollar_number, "{engine:?}: $1");

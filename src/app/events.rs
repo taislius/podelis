@@ -735,7 +735,7 @@ fn version_note(engine: Engine, version: &str, text: &str, at: Option<usize>, mi
             _ => return None,
         },
     };
-    let n = engine.dialect().too_new(&text[range], version)?;
+    let n = engine.dialect()?.too_new(&text[range], version)?;
     Some(t!("run.needs_version", feature = n.feature, needs = n.needs, server = n.server))
 }
 

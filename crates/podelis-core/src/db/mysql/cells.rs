@@ -1,6 +1,5 @@
 //! Decoding MySQL values as text.
 
-use super::super::*;
 use sqlx::{Row, TypeInfo, ValueRef};
 use sqlx::mysql::MySqlRow;
 
@@ -17,7 +16,7 @@ pub(in crate::db) fn mysql_cell(row: &MySqlRow, idx: usize) -> Option<String> {
     let ty = raw.type_info().name().to_string();
     let is_bit = ty == "BIT";
     let bytes: Vec<u8> = row.try_get_unchecked(idx).unwrap_or_default();
-    let dialect = Engine::MySql.dialect();
+    let dialect = super::sql();
     if dialect.is_binary_type(&ty) {
         return Some(dialect.hex(&bytes));
     }

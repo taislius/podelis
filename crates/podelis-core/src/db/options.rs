@@ -21,9 +21,10 @@ impl Engine {
         self.capabilities().file_based
     }
 
-    /// Quotes an identifier if it isn't a plain lowercase/underscore name.
+    /// Quotes an identifier if it isn't a plain lowercase/underscore name,
+    /// in SQL; as it is in a language without SQL's quoting.
     pub fn quote_ident(self, ident: &str) -> String {
-        self.dialect().quote_ident(ident)
+        self.dialect().map_or_else(|| ident.to_string(), |d| d.quote_ident(ident))
     }
 }
 

@@ -80,7 +80,8 @@ fn a_folder_is_read_in_name_order_with_its_subfolders() {
 /// are read as the name.
 #[test]
 fn names_quoted_the_engines_way() {
-    for engine in Engine::ALL {
+    // SQL migrations: on the engines with SQL.
+    for engine in Engine::ALL.into_iter().filter(|e| e.dialect().is_some()) {
         let table = engine.quote_ident("Order Archive");
         let sql = format!(
             "-- Old orders, kept for audits.\nCREATE TABLE {table} (id int);\nALTER TABLE {table} ADD COLUMN note text;\n"

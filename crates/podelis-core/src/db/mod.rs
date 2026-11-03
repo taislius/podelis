@@ -39,7 +39,7 @@ mod types;
 mod via_sqlx;
 
 pub use activity::Activity;
-pub use backend::{Backend, Capabilities, ContainerLogin, ContainerSecret};
+pub use backend::{Backend, Capabilities, ContainerLogin, ContainerSecret, Language, QueryLanguage};
 pub use details::{Comment, ForeignKey, IndexInfo, Link, RoutineInfo, TableDetails};
 pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint};
 #[cfg(any(test, feature = "test-support"))]

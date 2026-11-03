@@ -33,6 +33,7 @@ postgres = ["podelis-core/postgres"]
 mysql = ["podelis-core/mysql"]
 sqlite = ["podelis-core/sqlite"]
 duckdb = ["podelis-core/duckdb"]
+mongodb = ["podelis-core/mongodb"]
 
 [dev-dependencies]
 insta.workspace = true

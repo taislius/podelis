@@ -79,8 +79,8 @@ mod tests {
 
     #[test]
     fn every_engine_lets_agents_read_and_write_the_common_way() {
-        for engine in Engine::ALL {
-            let rules = engine.dialect().agent_constraints();
+        for engine in Engine::ALL.into_iter().filter(|e| e.dialect().is_some()) {
+            let rules = engine.backend().agent_constraints();
             for word in COMMON_READS {
                 assert!(rules.reads.contains(word), "{engine:?} reads {word}");
             }

@@ -26,6 +26,8 @@ sqlparser.workspace = true
 sqlx.workspace = true
 # DuckDB's driver (`duckdb`, opt-in): sync, run on blocking threads.
 duckdb = { workspace = true, optional = true }
+# MongoDB's driver (`mongodb`, opt-in): the official one, async on tokio.
+mongodb = { workspace = true, optional = true }
 tokio.workspace = true
 toml.workspace = true
 tracing.workspace = true
@@ -46,6 +48,8 @@ mysql = ["sqlx/mysql", "sqlx/mysql-rsa", "via-sqlx"]
 sqlite = ["via-sqlx"]
 # Opt-in (not in `default`): its driver builds DuckDB from C++.
 duckdb = ["dep:duckdb"]
+# Opt-in (not in `default`): the first engine without SQL.
+mongodb = ["dep:mongodb"]
 # What the engines that talk through sqlx share (`db/via_sqlx.rs`): each
 # of their features turns it on.
 via-sqlx = []

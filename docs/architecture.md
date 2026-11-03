@@ -202,11 +202,14 @@ db/
                   the shape of what AI agents may send (each engine fills
                   it in); `agents/` applies it without naming engines
   tests.rs        the tests every engine shares, and their helpers
-  postgres/  mysql/  sqlite/  duckdb/
+  postgres/  mysql/  sqlite/  duckdb/  mongodb/
     engine.toml   its name (the Engine variant, as connections.toml writes
-                  it), its order in lists, its feature, and `opt_in`
-                  (DuckDB's, for now: not in `default`, and `every_engine`
-                  doesn't wait for it)
+                  it), its order in lists, its feature, `opt_in` (DuckDB's
+                  and MongoDB's, for now: not in `default`, and
+                  `every_engine` doesn't wait for them), and `sql = false`
+                  for a language other than SQL (MongoDB's: build.rs sets
+                  `sql_engine` when a built engine speaks SQL, for the
+                  tests of SQL's own features)
     mod.rs        its Backend (names, ports, capabilities, connection
                   hints, container images and logins…) and its
                   SqlDialect (quoting, lexer rules, placeholders, EXPLAIN,
@@ -239,10 +242,19 @@ Three concerns are kept apart:
 
 - **Backend** (`engine.backend()`): what every engine has, SQL or not —
   its name, URL schemes, port and socket, capabilities, its connection
-  errors' hints, its clients' password files, its containers. Code that
-  doesn't need SQL asks this, so an engine without SQL would implement
-  only `Backend` (`engine.dialect()` would then become an `Option`; the
-  query path and the catalog are SQL's today).
+  errors' hints, its clients' password files, its containers, which tables
+  are its own, what agents may send, the cheapest query that answers, the
+  version's query — and its **language** (`Backend::language`): SQL, which
+  its dialect fills in, or one of its own (`QueryLanguage`: its statements,
+  tokens, what each does, its words). The `sql` module's entry points
+  (`split_statements`, `tokenize`, highlighting, `parse`, `analyze`) ask
+  it, so their callers needn't know which language it is.
+- **`engine.dialect()` is an `Option`**: `None` for an engine whose
+  language isn't SQL (MongoDB). What's SQL's says so and stops there —
+  edits in the grid, the row forms, follow, review, sandboxes, plans,
+  exports as INSERTs, imports, agents (`App::sql_dialect` sets the status:
+  "MongoDB has no SQL: this works on SQL databases only"); string literals
+  are JSON's, names stay as written, types and placeholders are none.
 - **SQL dialect** (`engine.dialect()`, `SqlDialect: Backend`): what differs
   in SQL text and facts,
   with no I/O — identifier quoting and string literals, lexer rules
@@ -311,6 +323,30 @@ through `links` metadata, so the lints allowed only with fewer engines
    their own; tests that need a database always there use the file
    engine (`file_engine()`: SQLite, so a test using it says `#[cfg(feature = "sqlite")]`). Its own
    statements for agents are tested in its `agent_constraints.rs`.
+
+### MongoDB
+
+The first engine without SQL (`db/mongodb/`). Its **language**
+(`language.rs`, built without its driver, like a dialect) is mongosh's
+shape: `db.<collection>.<method>(…)` with `.sort()`, `.limit()`,
+`.skip()`, `.projection()` chained, `db.getCollection("…")`, and
+`db.runCommand({…})`; statements end at `;` or at a line starting a new
+`db.`. It tells reads (`find`, `aggregate` without `$out`/`$merge`,
+`countDocuments`…) from writes and schema changes by the method, and
+flags `deleteMany({})`, `updateMany({})` and `drop()`.
+
+Its **driver** (`driver.rs`) is the official `mongodb` crate: each call
+maps to the driver's (`args.rs` reads the arguments as relaxed JSON with
+the shell's `ObjectId()`, `ISODate()`, `NumberLong()`…). Documents become
+rows: `_id` first, then each field as first seen, a nested value as JSON;
+a change is its count. The catalog: the connection's database as the
+schema, collections as tables, fields sampled from 100 documents, `_id`
+the key; details are its indexes. Read-only refuses all but reads; a
+cancel stops the call Podėlis waits on; what Podėlis can't read is a
+syntax error before the server sees it (`check_statement`).
+
+**Not yet:** plans, activity, agents (they need SQL), editing in the grid,
+imports and exports as statements; the AI's prompts say SQL.
 
 ### DuckDB
 

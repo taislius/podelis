@@ -158,11 +158,11 @@ fn table_changes(here: &TableShape, there: &TableShape, this: Side, other: Side)
                         sql.push(untranslatable(column, engine));
                         continue;
                     };
-                    match dialect.modify_column(&table, &name, &ty, column.nullable) {
+                    match dialect.and_then(|d| d.modify_column(&table, &name, &ty, column.nullable)) {
                         Some(stmt) => sql.push(format!("{stmt};")),
                         None => sql.push(format!(
                             "-- {} can't change column {name} in place: rebuild {table}",
-                            dialect.label()
+                            engine.label()
                         )),
                     }
                 }
@@ -193,7 +193,7 @@ fn table_changes(here: &TableShape, there: &TableShape, this: Side, other: Side)
             lines.push(format!("foreign key {} → {}: only here", fk.column, fk.target));
             let target = qualified(engine, &there.info.schema, &fk.target_table);
             let added = fk.target_column.as_ref().and_then(|tc| {
-                dialect.add_foreign_key(&table, &engine.quote_ident(&fk.column), &target, &engine.quote_ident(tc))
+                dialect?.add_foreign_key(&table, &engine.quote_ident(&fk.column), &target, &engine.quote_ident(tc))
             });
             sql.push(match added {
                 Some(stmt) => format!("{stmt};"),

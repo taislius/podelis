@@ -298,7 +298,7 @@ impl Database {
         let Some(syntax) = server.check else { return Ok(CheckOutcome::Unsupported) };
         let missing_feature = server.missing_feature;
         let message = error_message(&err);
-        let position = server.position.or_else(|| self.0.engine.dialect().position_in_message(&message));
+        let position = server.position.or_else(|| self.0.engine.backend().position_in_message(&message));
         Ok(CheckOutcome::Problem { message, position, syntax, missing_feature })
     }
 

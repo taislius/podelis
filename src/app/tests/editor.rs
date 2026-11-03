@@ -201,6 +201,7 @@ async fn rebound_keys_take_effect() {
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("7".to_string())]]);
 }
 
+#[cfg(sql_engine)] // SQL's own: not with MongoDB alone
 #[test]
 fn find_replace_comment_and_format() {
     let (mut app, _dir) = test_app();
@@ -241,6 +242,7 @@ fn find_replace_comment_and_format() {
     assert!(text.contains("select c, d\nfrom u\nwhere y = 2;") && text.ends_with("select e from v;"), "{text}");
 }
 
+#[cfg(sql_engine)] // SQL's own: not with MongoDB alone
 #[test]
 fn command_palette_finds_and_runs_commands() {
     let (mut app, _dir) = test_app();
@@ -579,6 +581,7 @@ fn pastes_go_to_the_input_in_front() {
     assert_eq!(app.popups.pipe_prompt.as_ref().map(LineInput::text), Some("grep -i vilnius"));
 }
 
+#[cfg(sql_engine)] // SQL's own: not with MongoDB alone
 #[test]
 fn appended_sql_never_joins_the_statement_before_it() {
     let (mut app, _dir) = test_app();

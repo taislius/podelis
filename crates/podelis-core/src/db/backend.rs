@@ -4,7 +4,38 @@
 //! its containers. Each engine implements [`Backend`] in its own module; an
 //! SQL engine also implements `SqlDialect` (`dialect.rs`).
 
+use std::ops::Range;
+
 use super::Engine;
+use super::dialect::SqlDialect;
+use crate::sql::Token;
+use crate::sql::analyze::Kind;
+
+/// An engine's query language: SQL (the `sql` module, which its dialect
+/// fills in), or a language of its own.
+#[derive(Clone, Copy)]
+pub enum Language {
+    Sql(&'static dyn SqlDialect),
+    Other(&'static dyn QueryLanguage),
+}
+
+/// A query language other than SQL: what Podėlis needs of it to split a
+/// script, colour it, and tell reads from writes (the `sql` module's
+/// entry points ask it, so their callers needn't know which language).
+pub trait QueryLanguage: Sync {
+    /// `text`'s statements: each one's whole segment, and the code in it
+    /// (`None` for one with only blanks and comments).
+    fn segments(&self, text: &str) -> Vec<(Range<usize>, Option<Range<usize>>)>;
+    /// Tokens covering every byte of `text`, on ASCII boundaries.
+    fn tokenize(&self, text: &str) -> Vec<Token>;
+    /// What a statement does (reads, writes, changes the schema), and why
+    /// it needs a confirmation, if it does.
+    fn classify(&self, statement: &str) -> (Kind, Option<&'static str>);
+    /// Its words, upper case and sorted, for colouring and completion.
+    fn keywords(&self) -> &'static [&'static str] {
+        &[]
+    }
+}
 
 /// What an engine can do, for the app to decide what to offer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +85,34 @@ pub enum ContainerSecret {
 
 /// What any engine has, apart from talking to the server and from SQL.
 pub trait Backend: Sync {
+    /// Its query language.
+    fn language(&self) -> Language;
+    /// Whether a failed connection's `message` (lower case) is its login
+    /// failing for the password (wrong, or none): Podėlis then asks for it.
+    fn auth_failed(&self, _message: &str) -> bool {
+        false
+    }
+    /// A query returning the server's version string.
+    fn version_query(&self) -> &'static str;
+    /// Reads session settings that change what SQL text means.
+    fn sql_mode_query(&self) -> Option<&'static str> {
+        None
+    }
+    /// Part of the database's own catalog: listed in the navigator only when
+    /// system tables are shown.
+    fn is_system_table(&self, schema: &str, table: &str) -> bool;
+    /// The cheapest query that shows the connection answers, in its
+    /// language (SQL's, unless the engine says).
+    fn ping(&self) -> &'static str {
+        "SELECT 1"
+    }
+    /// What AI agents may send (`db::agent_constraints`).
+    fn agent_constraints(&self) -> &'static super::agent_constraints::AgentConstraints;
+    /// A position only the message's text gives (SQLite's `near "x"`), for
+    /// the background syntax check.
+    fn position_in_message(&self, _message: &str) -> Option<super::ErrorPos> {
+        None
+    }
     fn label(&self) -> &'static str;
     /// URL schemes that select this engine.
     fn url_schemes(&self) -> &'static [&'static str];

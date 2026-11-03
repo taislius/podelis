@@ -56,9 +56,10 @@ jobs:
       - run: cargo test --locked
 
   # Built with fewer engines (`--no-default-features --features …`): the
-  # README's PostgreSQL and SQLite, and each engine alone; and with DuckDB,
-  # opt-in for now (its driver builds DuckDB from C++), beside the others
-  # and alone. Code and tests
+  # README's PostgreSQL and SQLite, and each engine alone; and with the
+  # opt-in ones, beside the others and alone: DuckDB (its driver builds
+  # DuckDB from C++) and MongoDB (the first engine without SQL, its live
+  # tests on the mongo service). Code and tests
   # mustn't assume an engine is there (a test that needs SQLite's files
   # says so with `#[cfg(feature = "sqlite")]`); clippy as well, as what goes
   # unused with fewer engines is allowed only in such builds. Beside the
@@ -79,6 +80,8 @@ jobs:
           - { features: sqlite, key: sqlite }
           - { features: "postgres,mysql,sqlite,duckdb", key: with-duckdb }
           - { features: duckdb, key: duckdb }
+          - { features: "postgres,mysql,sqlite,mongodb", key: with-mongodb }
+          - { features: mongodb, key: mongodb }
     services:
       postgres:
         image: postgres:17
@@ -94,11 +97,17 @@ jobs:
         ports: ["3306:3306"]
         options: >-
           --health-cmd "mysqladmin ping -proot" --health-interval 2s --health-timeout 5s --health-retries 60
+      mongo:
+        image: mongo:8
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping: 1}).ok'" --health-interval 2s --health-timeout 5s --health-retries 30
     env:
       PODELIS_TEST_PG_PORT: 5432
       PODELIS_TEST_PG_PASSWORD: postgres
       PODELIS_TEST_MYSQL_PORT: 3306
       PODELIS_TEST_MYSQL_PASSWORD: root
+      PODELIS_TEST_MONGO_PORT: 27017
     steps:
       - uses: actions/checkout@v5
       - run: rustup toolchain install

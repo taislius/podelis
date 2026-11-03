@@ -1,6 +1,5 @@
 //! Decoding SQLite values as text.
 
-use super::super::*;
 use sqlx::{Row, TypeInfo, ValueRef};
 use sqlx::sqlite::SqliteRow;
 
@@ -18,7 +17,7 @@ pub(in crate::db) fn sqlite_cell(row: &SqliteRow, idx: usize) -> Option<String> 
         "REAL" => row.try_get_unchecked::<f64, _>(idx).map(|v| v.to_string()).unwrap_or_default(),
         "BLOB" => {
             let bytes: Vec<u8> = row.try_get_unchecked(idx).unwrap_or_default();
-            Engine::Sqlite.dialect().hex(&bytes)
+            super::sql().hex(&bytes)
         }
         _ => row.try_get_unchecked::<String, _>(idx).unwrap_or_default(),
     })

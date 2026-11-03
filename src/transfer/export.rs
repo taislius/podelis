@@ -102,6 +102,9 @@ pub fn json(outcome: &QueryOutcome, view: &[usize]) -> String {
 /// Numbers in numeric columns stay unquoted, binary values are written in
 /// hex, and NULL stays NULL.
 pub fn sql_inserts(outcome: &QueryOutcome, view: &[usize], table: &str, engine: Engine) -> String {
+    let Some(dialect) = engine.dialect() else {
+        return format!("-- {} has no SQL: no INSERT statements\n", engine.label());
+    };
     let numeric = |i: usize| {
         let ty = outcome.column_types.get(i).map(|t| t.to_ascii_uppercase()).unwrap_or_default();
         ["INT", "NUMERIC", "DECIMAL", "FLOAT", "DOUBLE", "REAL"].iter().any(|n| ty.contains(n))
@@ -118,7 +121,7 @@ pub fn sql_inserts(outcome: &QueryOutcome, view: &[usize], table: &str, engine: 
                 Some(v) => crate::db::value_literal(v, outcome.column_types.get(i).map_or("", |t| t), engine),
             })
             .collect();
-        let _ = writeln!(out, "{};", engine.dialect().insert(table, &columns, &[format!("({})", values.join(", "))]));
+        let _ = writeln!(out, "{};", dialect.insert(table, &columns, &[format!("({})", values.join(", "))]));
     }
     out
 }

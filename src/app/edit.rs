@@ -117,7 +117,8 @@ impl App {
         };
         let condition: Vec<String> = edit.key.iter().map(|(k, v)| format!("{} = {v}", engine.quote_ident(k))).collect();
         let set = [(engine.quote_ident(&edit.column), literal(value.as_deref()))];
-        let sql = engine.dialect().update(&edit.table, &set, &condition.join(" AND "));
+        let Some(dialect) = self.sql_dialect() else { return };
+        let sql = dialect.update(&edit.table, &set, &condition.join(" AND "));
         self.execute_with(sql, 0, RunPurpose::CellEdit { row: edit.row, col: edit.col, value });
     }
 

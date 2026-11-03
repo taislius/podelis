@@ -36,10 +36,32 @@ pub(super) type DriverPool = sqlx::PgPool;
 #[cfg(feature = "postgres")]
 pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::Postgres>;
 
+/// Its SQL dialect, for its own modules (`Engine::dialect` is an `Option`
+/// for the rest).
+#[cfg(any(test, feature = "postgres"))]
+fn sql() -> &'static dyn SqlDialect {
+    &DIALECT
+}
+
 /// This engine's dialect, for `Engine::dialect`.
 pub(super) static DIALECT: Postgres = Postgres;
 
 impl Backend for Postgres {
+    fn auth_failed(&self, message: &str) -> bool {
+        message.contains("password authentication failed")
+    }
+    fn version_query(&self) -> &'static str {
+        "SHOW server_version"
+    }
+    fn is_system_table(&self, schema: &str, _table: &str) -> bool {
+        matches!(schema, "pg_catalog" | "information_schema")
+    }
+    fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
+        &agent_constraints::AGENT_CONSTRAINTS
+    }
+    fn language(&self) -> crate::db::Language {
+        crate::db::Language::Sql(&DIALECT)
+    }
     fn password_files_note(&self) -> &'static str {
         " (or ~/.pgpass)"
     }
@@ -176,9 +198,6 @@ impl SqlDialect for Postgres {
 
 
 
-    fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
-        &agent_constraints::AGENT_CONSTRAINTS
-    }
     fn lexer(&self) -> LexerRules {
         LexerRules {
             hash_comments: false,
@@ -197,9 +216,6 @@ impl SqlDialect for Postgres {
     fn placeholders(&self) -> Placeholders {
         Placeholders { dollar_number: true, ..Placeholders::default() }
     }
-    fn is_system_table(&self, schema: &str, _table: &str) -> bool {
-        matches!(schema, "pg_catalog" | "information_schema")
-    }
     fn parser(&self) -> Box<dyn sqlparser::dialect::Dialect> {
         Box::new(sqlparser::dialect::PostgreSqlDialect {})
     }
@@ -211,9 +227,6 @@ impl SqlDialect for Postgres {
             "SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid() AND granted \
              AND locktype IN ('relation', 'tuple', 'transactionid')",
         )
-    }
-    fn version_query(&self) -> &'static str {
-        "SHOW server_version"
     }
     fn too_new(&self, sql: &str, version: &str) -> Option<crate::db::dialect::TooNew> {
         versions::too_new(sql, version)
@@ -260,7 +273,7 @@ mod tests {
 
     #[test]
     fn explain_statements() {
-        let d = Engine::Postgres.dialect();
+        let d = super::sql();
         assert_eq!(d.explain_analyze("select 1", "").unwrap(), "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) select 1");
         assert_eq!(d.explain("select 1", ""), "EXPLAIN (FORMAT JSON) select 1");
     }
@@ -273,7 +286,7 @@ mod tests {
     #[test]
     fn full_scans_in_plans() {
         let rows = |text: &str| vec![vec![Some(text.to_string())]];
-        let pg = |plan: &str| Engine::Postgres.dialect().full_scans(&["QUERY PLAN".into()], &rows(plan));
+        let pg = |plan: &str| super::sql().full_scans(&["QUERY PLAN".into()], &rows(plan));
         let join = r#"[{"Plan": {"Node Type": "Hash Join", "Plans": [
             {"Node Type": "Seq Scan", "Relation Name": "orders", "Schema": "shop", "Plan Rows": 5000},
             {"Node Type": "Index Scan", "Relation Name": "customers"}]}}]"#;

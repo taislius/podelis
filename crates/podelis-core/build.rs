@@ -28,6 +28,8 @@ struct Found {
     /// Not in the default build yet (`opt_in = true`): `every_engine`
     /// doesn't wait for it.
     opt_in: bool,
+    /// Its language is SQL (all but those with `sql = false`).
+    sql: bool,
 }
 
 /// `key = "value"` and `key = 1` lines; `#` starts a comment.
@@ -55,7 +57,8 @@ fn find_engines(db: &Path) -> Vec<Found> {
         println!("cargo::rerun-if-env-changed={var}");
         let built = std::env::var_os(&var).is_some();
         let opt_in = field(&text, "opt_in").is_some_and(|v| v == "true");
-        engines.push(Found { module, name, order, feature, built, opt_in });
+        let sql = field(&text, "sql").is_none_or(|v| v != "false");
+        engines.push(Found { module, name, order, feature, built, opt_in, sql });
     }
     engines.sort_by(|a, b| (a.order, &a.module).cmp(&(b.order, &b.module)));
     assert!(!engines.is_empty(), "no engine in src/db (a folder with an engine.toml)");
@@ -79,6 +82,15 @@ fn tell_every_engine(engines: &[Found]) {
         println!("cargo::rustc-cfg=every_engine");
     }
     println!("cargo::metadata=every_engine={every}");
+    // `sql_engine` when an engine built speaks SQL: tests of SQL's own
+    // features (formatting, lint) need one, and a build with MongoDB alone
+    // has none.
+    let sql = engines.iter().any(|e| e.built && e.sql);
+    println!("cargo::rustc-check-cfg=cfg(sql_engine)");
+    if sql {
+        println!("cargo::rustc-cfg=sql_engine");
+    }
+    println!("cargo::metadata=sql_engine={sql}");
 }
 
 fn main() {

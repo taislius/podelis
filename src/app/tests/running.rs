@@ -100,6 +100,7 @@ async fn lint_warnings_after_a_syntax_check_finds_nothing() {
     assert_eq!(app.tab.syntax_hint, None);
 }
 
+#[cfg(sql_engine)] // SQL's own: not with MongoDB alone
 #[test]
 fn next_warning_steps_through_lints_and_wraps() {
     let (mut app, _dir) = test_app();

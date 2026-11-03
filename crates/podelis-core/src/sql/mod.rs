@@ -10,7 +10,7 @@ pub mod parse;
 pub mod scope;
 use std::ops::Range;
 
-use crate::db::{Engine, LexerRules};
+use crate::db::{Engine, Language, LexerRules};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TokenKind {
@@ -34,7 +34,14 @@ pub struct Token {
 /// fall on ASCII bytes (or the ends of the text), so they are valid `str`
 /// indices.
 pub fn tokenize(text: &str, engine: Engine) -> Vec<Token> {
-    let rules = engine.dialect().lexer();
+    match engine.backend().language() {
+        Language::Sql(dialect) => tokenize_sql(text, dialect.lexer()),
+        Language::Other(language) => language.tokenize(text),
+    }
+}
+
+/// SQL's tokens, by the engine's lexer rules.
+fn tokenize_sql(text: &str, rules: LexerRules) -> Vec<Token> {
     let b = text.as_bytes();
     let mut tokens = Vec::new();
     let mut i = 0;
@@ -235,6 +242,9 @@ fn skip_number(b: &[u8], mut i: usize) -> usize {
 /// A statement's byte range within the text, including its terminating `;`
 /// if any, excluding surrounding whitespace and comments.
 fn statement_segments(text: &str, engine: Engine) -> Vec<(Range<usize>, Option<Range<usize>>)> {
+    if let Language::Other(language) = engine.backend().language() {
+        return language.segments(text);
+    }
     // Each segment: (full range up to and including `;`, code range if any).
     let mut segments = Vec::new();
     let mut seg_start = 0;
@@ -365,6 +375,7 @@ pub fn sets_password(text: &str, engine: Engine) -> bool {
 /// as they were: the formatter would rewrite inside `$$` bodies and split
 /// `U&'…'`. If anything but spacing still differs afterwards, it's refused.
 pub fn format(text: &str, engine: Engine) -> Option<String> {
+    let Language::Sql(dialect) = engine.backend().language() else { return None };
     let tokens = tokenize(text, engine);
     let mut kept: Vec<Range<usize>> = Vec::new();
     for (i, t) in tokens.iter().enumerate() {
@@ -404,7 +415,7 @@ pub fn format(text: &str, engine: Engine) -> Option<String> {
         indent: sqlformat::Indent::Spaces(2),
         max_inline_arguments: Some(80),
         max_inline_top_level: Some(80),
-        dialect: engine.dialect().formatter(),
+        dialect: dialect.formatter(),
         ..sqlformat::FormatOptions::default()
     };
     let mut formatted = sqlformat::format(&masked, &sqlformat::QueryParams::None, &options);
@@ -603,12 +614,19 @@ pub fn is_keyword(word: &str, engine: Engine) -> bool {
     // Upper case and sorted lists, so no upper-cased copy of the word.
     let found =
         |list: &[&str]| list.binary_search_by(|k| k.bytes().cmp(word.bytes().map(|b| b.to_ascii_uppercase()))).is_ok();
-    found(KEYWORDS) || found(engine.dialect().keywords())
+    match engine.backend().language() {
+        Language::Sql(dialect) => found(KEYWORDS) || found(dialect.keywords()),
+        Language::Other(language) => found(language.keywords()),
+    }
 }
 
 /// Every keyword on `engine`, for completion: SQL's, then the engine's.
 pub fn keywords(engine: Engine) -> impl Iterator<Item = &'static str> {
-    KEYWORDS.iter().chain(engine.dialect().keywords()).copied()
+    let (shared, own): (&[&str], _) = match engine.backend().language() {
+        Language::Sql(dialect) => (KEYWORDS, dialect.keywords()),
+        Language::Other(language) => (&[], language.keywords()),
+    };
+    shared.iter().chain(own).copied()
 }
 
 #[cfg(test)]
@@ -626,7 +644,7 @@ mod tests {
             |list: &[&str]| list.windows(2).all(|w| w[0] < w[1]) && list.iter().all(|k| *k == k.to_ascii_uppercase());
         assert!(upper_sorted(KEYWORDS));
         for engine in Engine::ALL {
-            let own = engine.dialect().keywords();
+            let own = engine.dialect().map_or(&[][..], |d| d.keywords());
             assert!(upper_sorted(own), "{engine:?}: {own:?}");
             assert!(own.iter().all(|k| !KEYWORDS.contains(k)), "{engine:?} repeats SQL's words: {own:?}");
             for k in own {
@@ -646,7 +664,7 @@ mod tests {
         assert!(on("ilike").contains(&pg) && !on("ilike").contains(&my));
         assert!(on("PRAGMA").contains(&lite) && !on("PRAGMA").contains(&pg));
         assert!(on("describe").contains(&my) && !on("describe").contains(&lite));
-        assert_eq!(on("select").len(), Engine::ALL.len());
+        assert_eq!(on("select").len(), Engine::ALL.into_iter().filter(|e| e.dialect().is_some()).count());
     }
 
     #[test]

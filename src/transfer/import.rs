@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use flate2::read::MultiGzDecoder;
 
-use crate::db::{Database, Engine, sql_literal};
+use crate::db::{Database, sql_literal};
 
 const BATCH: usize = 500;
 
@@ -33,8 +33,7 @@ enum ColType {
 }
 
 impl ColType {
-    fn sql(self, engine: Engine) -> &'static str {
-        let dialect = engine.dialect();
+    fn sql(self, dialect: &dyn crate::db::SqlDialect) -> &'static str {
         match self {
             ColType::Integer => dialect.integer_type(),
             ColType::Real => dialect.real_type(),
@@ -353,11 +352,13 @@ pub async fn import(
         .collect();
     let quoted = engine.quote_ident(table);
     let cols: Vec<String> = header.iter().map(|h| engine.quote_ident(h)).collect();
-    let dialect = db.engine().dialect();
+    let Some(dialect) = db.engine().dialect() else {
+        anyhow::bail!("{} has no SQL: importing writes INSERT statements", db.engine().label());
+    };
     db.run(dialect.begin(false), 1).await?;
     let result = async {
         if !exists {
-            let defs: Vec<String> = cols.iter().zip(&types).map(|(c, t)| format!("{c} {}", t.sql(engine))).collect();
+            let defs: Vec<String> = cols.iter().zip(&types).map(|(c, t)| format!("{c} {}", t.sql(dialect))).collect();
             db.run(&format!("CREATE TABLE {quoted} ({})", defs.join(", ")), 1).await?;
         }
         // Second pass: the rows.
@@ -448,7 +449,10 @@ async fn insert(db: &Database, table: &str, cols: &[String], batch: &mut Vec<Str
     if batch.is_empty() {
         return Ok(0);
     }
-    let sql = db.engine().dialect().insert(table, cols, batch);
+    let Some(dialect) = db.engine().dialect() else {
+        anyhow::bail!("{} has no SQL: importing writes INSERT statements", db.engine().label());
+    };
+    let sql = dialect.insert(table, cols, batch);
     let n = batch.len() as u64;
     batch.clear();
     db.run(&sql, 1).await?;
@@ -458,6 +462,7 @@ async fn insert(db: &Database, table: &str, cols: &[String], batch: &mut Vec<Str
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::db::Engine;
 
     async fn import_quietly(db: &Database, path: &Path, table: &str) -> Result<Imported> {
         import(db, path, table, None, &mut |_| {}).await

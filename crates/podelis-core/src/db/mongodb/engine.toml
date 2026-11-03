@@ -1,0 +1,6 @@
+# This folder is a database engine: build.rs finds it by this file.
+name = "MongoDb"   # its Engine variant, as connections.toml writes it
+order = 5    # its place in lists (the connection form cycles in this order)
+feature = "mongodb"   # its Cargo feature: builds its driver
+opt_in = true   # not in `default` yet: "every engine" doesn't wait for it
+sql = false   # its language isn't SQL (`mongodb/language.rs`)

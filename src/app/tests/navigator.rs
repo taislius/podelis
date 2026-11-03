@@ -115,6 +115,7 @@ fn space_in_the_schema_opens_the_command_menu() {
     assert!(app.popups.palette.is_some());
 }
 
+#[cfg(sql_engine)] // SQL's own: not with MongoDB alone
 #[test]
 fn s_in_the_navigator_adds_the_select_after_everything() {
     let (mut app, _dir) = test_app();

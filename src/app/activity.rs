@@ -149,7 +149,10 @@ impl App {
             return self.set_status(t!("editor.no_statement").to_string(), true);
         };
         let version = self.connection.database.as_ref().map_or("", |db| db.version());
-        let Some(explain) = engine.dialect().explain_analyze(&stmt, version) else {
+        let Some(dialect) = engine.dialect() else {
+            return self.set_status(t!("editor.no_sql", engine = engine.label()), true);
+        };
+        let Some(explain) = dialect.explain_analyze(&stmt, version) else {
             let server = if engine.is_file_based() { engine.label() } else { t!("activity.this_server") };
             self.set_status(t!("activity.no_analyze", server = server), false);
             return self.explain_current();
@@ -162,7 +165,6 @@ impl App {
         if !writes {
             return self.run_now(explain, 0, infos, RunPurpose::Explain, None);
         }
-        let dialect = engine.dialect();
         let sql = if self.connection.txn == TxnState::Idle {
             format!("{};\n{explain};\n{}", dialect.begin(false), dialect.end(TxEnd::Rollback))
         } else {
