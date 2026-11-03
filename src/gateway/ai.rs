@@ -526,7 +526,11 @@ pub async fn ask(
         return (Err(RpcError::new(code::INVALID_PARAMS, "ask needs `connection` and `question`")), Value::Null);
     };
     let mut about = json!({ "connection": connection });
-    let source = match load(config_dir, caches, text("project"), connection, text("dir"), false).await {
+    // `refresh`: the schema read again, not the one kept (the client knows
+    // it changed, or can't know what the gateway kept: a client just
+    // started, as the gateway outlives it).
+    let refresh = params.get("refresh").and_then(Value::as_bool).unwrap_or(false);
+    let source = match load(config_dir, caches, text("project"), connection, text("dir"), refresh).await {
         Ok(source) => source,
         Err(e) => return (Err(RpcError::new(code::DATABASE, e)), about),
     };
