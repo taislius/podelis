@@ -43,6 +43,32 @@ fn sql() -> &'static dyn SqlDialect {
 pub(super) static DIALECT: MySql = MySql;
 
 impl Backend for MySql {
+    /// `float` is a 4-byte float here; `timestamp` a moment in time (stored
+    /// in UTC, shown in the session's zone).
+    fn type_kind(&self, ty: &str) -> Option<crate::db::TypeKind> {
+        use crate::db::TypeKind as Kind;
+        use crate::db::types::{arguments, base};
+        // Nothing elsewhere holds an unsigned integer's range.
+        if ty.contains("unsigned") {
+            return Some(Kind::Other(ty.to_string()));
+        }
+        Some(match base(ty) {
+            // `tinyint(1)` is what `boolean` becomes.
+            "tinyint" if arguments(ty) == [1] => Kind::Bool,
+            "tinyint" => Kind::Int(1),
+            "mediumint" => Kind::Int(3),
+            "float" => Kind::Float4,
+            // `real` is a `double` unless REAL_AS_FLOAT is set.
+            "double" | "real" => Kind::Float8,
+            "tinytext" | "mediumtext" | "longtext" => Kind::Text,
+            "datetime" => Kind::Timestamp,
+            // Stored in UTC, shown in the session's zone: a moment in time.
+            "timestamp" => Kind::TimestampTz,
+            "tinyblob" | "mediumblob" | "longblob" => Kind::Binary,
+            "json" => Kind::Json,
+            _ => return None,
+        })
+    }
     /// It says "(using password: …)" only then; its other "access denied"
     /// errors (no rights on the database) a password can't fix.
     fn auth_failed(&self, message: &str) -> bool {
@@ -156,32 +182,6 @@ impl SqlDialect for MySql {
         Some("SELECT COUNT(*) FROM performance_schema.data_locks WHERE thread_id = PS_CURRENT_THREAD_ID()")
     }
 
-    /// `float` is a 4-byte float here; `timestamp` a moment in time (stored
-    /// in UTC, shown in the session's zone).
-    fn type_kind(&self, ty: &str) -> Option<crate::db::TypeKind> {
-        use crate::db::TypeKind as Kind;
-        use crate::db::types::{arguments, base};
-        // Nothing elsewhere holds an unsigned integer's range.
-        if ty.contains("unsigned") {
-            return Some(Kind::Other(ty.to_string()));
-        }
-        Some(match base(ty) {
-            // `tinyint(1)` is what `boolean` becomes.
-            "tinyint" if arguments(ty) == [1] => Kind::Bool,
-            "tinyint" => Kind::Int(1),
-            "mediumint" => Kind::Int(3),
-            "float" => Kind::Float4,
-            // `real` is a `double` unless REAL_AS_FLOAT is set.
-            "double" | "real" => Kind::Float8,
-            "tinytext" | "mediumtext" | "longtext" => Kind::Text,
-            "datetime" => Kind::Timestamp,
-            // Stored in UTC, shown in the session's zone: a moment in time.
-            "timestamp" => Kind::TimestampTz,
-            "tinyblob" | "mediumblob" | "longblob" => Kind::Binary,
-            "json" => Kind::Json,
-            _ => return None,
-        })
-    }
 
     fn type_name(&self, kind: &crate::db::TypeKind) -> Option<String> {
         use crate::db::TypeKind as Kind;

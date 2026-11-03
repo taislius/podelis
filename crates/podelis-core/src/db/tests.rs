@@ -691,3 +691,66 @@ fn each_manifest_names_its_engine_as_its_backend_does() {
     }
     assert_eq!(seen, Engine::ALL.len());
 }
+
+/// The connection pane says how many connections are in use and how many
+/// this user may have: never what's kept back for superusers or
+/// administrators.
+#[tokio::test]
+async fn connections_in_use_and_the_user_s_limit() {
+    for engine in Engine::BUILT {
+        let Some(db) = live_db(engine).await else { continue };
+        let info = db.session_info().await;
+        let connections = info.iter().find(|(k, _)| k == "Connections").map(|(_, v)| v.clone());
+        let said = connections.unwrap_or_else(|| panic!("{engine:?}: {info:?}"));
+        assert!(said.contains(" in use, up to "), "{engine:?}: {said}");
+        let lower = said.to_lowercase();
+        assert!(
+            !lower.contains("reserved") && !lower.contains("superuser") && !lower.contains("admin"),
+            "{engine:?}: {said}"
+        );
+        db.close().await;
+    }
+}
+
+/// A schema changed from another connection (another tool, a migration)
+/// while the session is open: the session sees it without reconnecting.
+/// The editor's SELECT of a new column and a new table works; an empty
+/// result's columns (from a prepared statement, which the driver caches)
+/// are the new ones; the catalog loaded again has them; the server's
+/// syntax check takes them.
+#[tokio::test]
+async fn a_schema_changed_elsewhere_is_seen() {
+    for engine in Engine::BUILT {
+        let Some((db, params)) = own_live_db(engine, "podelis_elsewhere").await else { continue };
+        for drop in ["DROP TABLE IF EXISTS el_t", "DROP TABLE IF EXISTS el_new"] {
+            db.run(drop, 1).await.unwrap();
+        }
+        db.run("CREATE TABLE el_t (id INTEGER)", 1).await.unwrap();
+        // Seen once, so whatever is kept of it (a prepared statement, the
+        // catalog) is the old shape.
+        assert_eq!(db.run("SELECT * FROM el_t WHERE 1 = 0", 1).await.unwrap().columns, ["id"], "{engine:?}");
+        assert!(db.catalog(false).await.unwrap().iter().any(|(t, _)| t.name == "el_t"), "{engine:?}");
+
+        // Elsewhere: another connection to the same database.
+        let other = Database::connect(params.clone()).await.unwrap();
+        other.run("ALTER TABLE el_t ADD COLUMN note VARCHAR(20)", 1).await.unwrap();
+        other.run("CREATE TABLE el_new (id INTEGER)", 1).await.unwrap();
+        other.run("INSERT INTO el_t (id, note) VALUES (1, 'x')", 1).await.unwrap();
+        other.close().await;
+
+        let o = db.run("SELECT id, note FROM el_t", DEFAULT_ROW_LIMIT).await.unwrap();
+        assert_eq!(cells(&o), vec![vec![Some("1"), Some("x")]], "{engine:?}: the new column");
+        assert!(db.run("SELECT * FROM el_new", DEFAULT_ROW_LIMIT).await.is_ok(), "{engine:?}: the new table");
+        let empty = db.run("SELECT * FROM el_t WHERE 1 = 0", 1).await.unwrap();
+        assert_eq!(empty.columns, ["id", "note"], "{engine:?}: an empty result's columns, not the cached ones");
+        let catalog = db.catalog(false).await.unwrap();
+        let (_, columns) = catalog.iter().find(|(t, _)| t.name == "el_t").unwrap();
+        assert_eq!(columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "note"], "{engine:?}");
+        assert!(catalog.iter().any(|(t, _)| t.name == "el_new"), "{engine:?}: the new table listed");
+        assert_eq!(db.check_statement("SELECT note FROM el_t").await.unwrap(), CheckOutcome::Ok, "{engine:?}");
+        for drop in ["DROP TABLE el_t", "DROP TABLE el_new"] {
+            db.run(drop, 1).await.unwrap();
+        }
+        db.close().await;
+    }
+}

@@ -269,6 +269,52 @@ async fn results_filter_sort_view_and_load_more() {
     assert!(!app.tab.run.executing && said_error(&app));
 }
 
+/// Parquet: the rows shown, and every row of a streamed result, page by
+/// page, its column typed (SQLite's `n` an integer).
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn export_parquet_shown_and_all_rows() {
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+    let (mut app, dir) = connected_app(ConnectionMode::Normal).await;
+    app.settings.row_limit = 10;
+    app.settings.export_dir = Some(dir.path().to_string_lossy().into_owned());
+    let parquet_files = || -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|e| e == "parquet"))
+            .collect()
+    };
+    let rows_in = |path: &std::path::Path| {
+        let reader = SerializedFileReader::new(std::fs::File::open(path).unwrap()).unwrap();
+        reader.metadata().file_metadata().num_rows()
+    };
+    run_sql(&mut app, "WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 2500) SELECT n FROM s")
+        .await;
+    app.focus = Focus::Results;
+    app.run_command(crate::app::palette::Command::ExportParquet);
+    // Written off the UI thread: done when its word comes.
+    while app.export_task.is_some() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    assert!(said(&app).contains("10 rows loaded"), "{}", said(&app));
+    let shown = parquet_files();
+    assert_eq!(rows_in(&shown[0]), 10);
+    std::fs::remove_file(&shown[0]).unwrap();
+
+    app.export_all(PagedFormat::Parquet);
+    loop {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+        if app.export_task.is_none() {
+            break;
+        }
+    }
+    assert!(app.notes.status.starts_with("Exported all 2500 rows to"), "{}", app.notes.status);
+    assert_eq!(rows_in(&parquet_files()[0]), 2500);
+}
+
 /// "Export all rows" writes every row of a streamed result, not just those
 /// loaded, without loading them into the grid; Esc stops it.
 #[cfg(feature = "sqlite")]

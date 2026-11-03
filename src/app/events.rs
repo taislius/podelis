@@ -45,6 +45,13 @@ impl App {
             Background::ContainersFound(request, result) => self.containers_found(request, result),
             Background::ExportProgress(rows) => self.export_progress(rows),
             Background::ExportDone(path, result) => self.export_done(&path, result),
+            Background::ExportShownDone(path, result, note) => {
+                // One stopped meanwhile: its word comes after it went.
+                if self.export_task.as_ref().is_some_and(|(_, p)| *p == path) {
+                    self.export_task = None;
+                    self.export_said(&path, result, &note);
+                }
+            }
             Background::AskProgress(id, chars) => self.ask_progress(id, chars),
             Background::AskWaitingKey(id) => self.ask_waiting_key(id),
             Background::SandboxLocks(said) => self.sandbox_locks(said),
@@ -849,6 +856,9 @@ pub(super) enum Background {
     ExportProgress(u64),
     /// "Export all rows" finished: the file, and how many rows (or why not).
     ExportDone(PathBuf, Result<u64, String>),
+    /// An export of the rows shown, written off the UI thread (Parquet):
+    /// where, and how many of them it had (" (10 rows loaded)").
+    ExportShownDone(PathBuf, Result<(), String>, String),
     /// A connection reopened at startup.
     Restored { project_id: String, form: Box<ConnectForm>, result: Result<Database, String> },
     /// The running database containers, or why they couldn't be listed.

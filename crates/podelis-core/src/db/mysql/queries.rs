@@ -275,6 +275,24 @@ pub(in crate::db) const SESSION_INFO: (&str, &[&str]) = (
     ],
 );
 
+/// Connections in use, and how many may be open: the server's limit, and
+/// each user's where it's set (MySQL's one more for administrators isn't
+/// said). `SHOW GLOBAL STATUS` works without `performance_schema` and on
+/// MariaDB alike; on a pool connection, not the session.
+pub(in crate::db) async fn connections(db: &Database) -> Option<String> {
+    let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
+    let (_, in_use): (String, String) =
+        sqlx::query_as("SHOW GLOBAL STATUS LIKE 'Threads_connected'").fetch_one(p).await.ok()?;
+    let (max, per_user): (i64, i64) =
+        sqlx::query_as("SELECT CAST(@@max_connections AS SIGNED), CAST(@@max_user_connections AS SIGNED)")
+            .fetch_one(p)
+            .await
+            .ok()?;
+    let each = if per_user > 0 { format!("; each user: up to {per_user}") } else { String::new() };
+    Some(format!("{in_use} in use, up to {max}{each}"))
+}
+
+
 /// The session's TLS version and cipher, if it's encrypted.
 pub(in crate::db) async fn tls_info(db: &Database) -> Option<String> {
     let o = db.run("SHOW SESSION STATUS WHERE Variable_name IN ('Ssl_version', 'Ssl_cipher')", 2).await.ok()?;

@@ -208,12 +208,6 @@ pub trait SqlDialect: Backend {
     fn hidden_columns(&self) -> &'static [&'static str] {
         &[]
     }
-    /// What type `ty` (as the catalog reports it, lowercase) means here:
-    /// this engine's own names, and the standard's it reads otherwise;
-    /// `None` leaves it to the standard's meaning (`db::types`).
-    fn type_kind(&self, _ty: &str) -> Option<super::TypeKind> {
-        None
-    }
     /// How this engine writes a type of `kind`; `None` if it has nothing
     /// like it.
     fn type_name(&self, kind: &super::TypeKind) -> Option<String>;

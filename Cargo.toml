@@ -39,6 +39,10 @@ tracing-subscriber.workspace = true
 unicode-width.workspace = true
 url.workspace = true
 uuid.workspace = true
+# Parquet exports (transfer/parquet.rs): Snappy only, no other codecs.
+parquet.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
 
 [features]
 # The database engines built in (each a `crates/podelis-core/src/db/<engine>/`
@@ -97,6 +101,12 @@ sqlparser = { version = "0.63", features = ["visitor"] }
 # The other drivers come with their engines' features.
 duckdb = { version = "=1.10506.1", features = ["bundled"] }
 mongodb = { version = "=3.9.1" }
+# 59: the first without thrift (an unbounded allocation reading its
+# protocol: RUSTSEC) and paste (unmaintained). DuckDB's arrow is 58: a
+# build with both has two arrows, which never meet.
+parquet = { version = "=59.3.1", default-features = false, features = ["arrow", "snap"] }
+arrow-array = "59"
+arrow-schema = "59"
 sqlx = { version = "0.9.0", features = ["sqlite", "runtime-tokio", "tls-rustls-aws-lc-rs", "chrono", "rust_decimal", "uuid", "json"] }
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "time", "sync", "net", "process", "io-util", "signal"] }
 toml = "1.1.6"

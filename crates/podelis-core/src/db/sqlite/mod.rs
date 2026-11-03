@@ -42,6 +42,25 @@ fn sql() -> &'static dyn SqlDialect {
 pub(super) static DIALECT: Sqlite = Sqlite;
 
 impl Backend for Sqlite {
+    /// SQLite keeps any name it's given; these are the ones its
+    /// documentation lists (Datatypes In SQLite, 3.1.1) beside the
+    /// standard's.
+    fn type_kind(&self, ty: &str) -> Option<crate::db::TypeKind> {
+        use crate::db::TypeKind as Kind;
+        use crate::db::types::{arguments, base};
+        let length = arguments(ty).first().copied();
+        Some(match base(ty) {
+            "tinyint" => Kind::Int(1),
+            "int2" => Kind::Int(2),
+            "mediumint" => Kind::Int(3),
+            "int8" | "unsigned big int" => Kind::Int(8),
+            "double" => Kind::Float8,
+            "varying character" | "nvarchar" => Kind::Varchar(length),
+            "nchar" | "native character" => Kind::Char(length),
+            "datetime" => Kind::Timestamp,
+            _ => return None,
+        })
+    }
     fn version_query(&self) -> &'static str {
         "SELECT sqlite_version()"
     }
@@ -117,25 +136,6 @@ impl SqlDialect for Sqlite {
         })
     }
 
-    /// SQLite keeps any name it's given; these are the ones its
-    /// documentation lists (Datatypes In SQLite, 3.1.1) beside the
-    /// standard's.
-    fn type_kind(&self, ty: &str) -> Option<crate::db::TypeKind> {
-        use crate::db::TypeKind as Kind;
-        use crate::db::types::{arguments, base};
-        let length = arguments(ty).first().copied();
-        Some(match base(ty) {
-            "tinyint" => Kind::Int(1),
-            "int2" => Kind::Int(2),
-            "mediumint" => Kind::Int(3),
-            "int8" | "unsigned big int" => Kind::Int(8),
-            "double" => Kind::Float8,
-            "varying character" | "nvarchar" => Kind::Varchar(length),
-            "nchar" | "native character" => Kind::Char(length),
-            "datetime" => Kind::Timestamp,
-            _ => return None,
-        })
-    }
     fn keeps_only_affinity(&self) -> bool {
         true
     }

@@ -342,6 +342,50 @@ pub(in crate::db) const SESSION_INFO: (&str, &[&str]) = (
     ],
 );
 
+/// Connections in use, and how many this user may open: the server's
+/// limit, less what's kept back for superusers unless the user is one, and
+/// PostgreSQL 16's reserved slots unless the user may use them (only the
+/// result is said, never what's kept back); the role's and the database's
+/// own limits where they're set. On a pool connection, not the session: a
+/// query that fails there can't spoil an open transaction. Before
+/// PostgreSQL 10 (no `backend_type`) every row of `pg_stat_activity` is a
+/// client's.
+pub(in crate::db) async fn connections(db: &Database) -> Option<String> {
+    const SQL: &str = r"
+        SELECT {in_use}::text
+               || ' in use, up to '
+               || (current_setting('max_connections')::int
+                   - CASE WHEN r.rolsuper THEN 0
+                          ELSE current_setting('superuser_reserved_connections')::int
+                               -- A CASE in a CASE: PostgreSQL before 16 has no
+                               -- such role, and pg_has_role would fail on it.
+                               + CASE WHEN NOT EXISTS (SELECT 1 FROM pg_roles
+                                                       WHERE rolname = 'pg_use_reserved_connections')
+                                      THEN 0
+                                      ELSE CASE WHEN pg_has_role(current_user, 'pg_use_reserved_connections', 'member')
+                                                THEN 0
+                                                ELSE coalesce(nullif(current_setting('reserved_connections', true), '')::int, 0)
+                                           END
+                                 END
+                     END)::text
+               || CASE WHEN r.rolconnlimit >= 0 THEN '; this user: up to ' || r.rolconnlimit ELSE '' END
+               || CASE WHEN d.datconnlimit >= 0 THEN '; this database: up to ' || d.datconnlimit ELSE '' END
+        FROM pg_roles r, pg_database d
+        WHERE r.rolname = current_user AND d.datname = current_database()";
+    let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
+    for in_use in [
+        "(SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend')",
+        "(SELECT count(*) FROM pg_stat_activity)",
+    ] {
+        let sql = AssertSqlSafe(SQL.replace("{in_use}", in_use));
+        if let Ok(said) = sqlx::query_scalar::<_, String>(sql).fetch_one(p).await {
+            return Some(said);
+        }
+    }
+    None
+}
+
+
 /// The session's TLS version and cipher, if it's encrypted.
 pub(in crate::db) async fn tls_info(db: &Database) -> Option<String> {
     let o = db.run("SELECT version, cipher FROM pg_stat_ssl WHERE pid = pg_backend_pid() AND ssl", 1).await.ok()?;

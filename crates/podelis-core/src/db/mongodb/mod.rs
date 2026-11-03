@@ -33,6 +33,24 @@ pub(super) type DriverConnection = driver::MongoConnection;
 pub(super) static DIALECT: MongoDb = MongoDb;
 
 impl Backend for MongoDb {
+    /// Its values' types, as `driver::table` names them (mongosh's): a
+    /// `date` is a moment, not a calendar day (so it matches a SQL
+    /// `timestamptz`, not a `date`, in a comparison); a name of its own is
+    /// its own, never read as the SQL standard's.
+    fn type_kind(&self, ty: &str) -> Option<crate::db::TypeKind> {
+        use crate::db::TypeKind as Kind;
+        Some(match ty {
+            "int" => Kind::Int(4),
+            "long" => Kind::Int(8),
+            "double" => Kind::Float8,
+            "decimal" => Kind::Decimal(None),
+            "bool" => Kind::Bool,
+            "date" => Kind::TimestampTz,
+            "string" => Kind::Text,
+            "object" | "array" => Kind::Json,
+            other => Kind::Other(other.to_string()),
+        })
+    }
     fn auth_failed(&self, message: &str) -> bool {
         message.contains("scram failure") || message.contains("(authenticationfailed)")
     }
@@ -130,6 +148,17 @@ mod tests {
         use crate::sql::analyze::Kind;
         assert_eq!(kinds, [(Kind::Read, None), (Kind::Write, Some("deleteMany with an empty filter"))]);
         assert!(crate::sql::is_keyword("find", Engine::MongoDb) && !crate::sql::is_keyword("select", Engine::MongoDb));
+    }
+
+    /// Its type names are its own: a `date` is a moment, so it compares
+    /// with and translates to a SQL `timestamptz`, not a `date`.
+    #[test]
+    fn its_types_in_a_comparison() {
+        use crate::db::{same_type, translate_type};
+        assert!(same_type(Engine::MongoDb, "date", Engine::Postgres, "timestamptz"));
+        assert!(!same_type(Engine::MongoDb, "date", Engine::Postgres, "date"));
+        assert_eq!(translate_type(Engine::MongoDb, "long", Engine::Postgres).as_deref(), Some("bigint"));
+        assert_eq!(translate_type(Engine::MongoDb, "objectId", Engine::Postgres), None, "nothing like it");
     }
 
     #[test]

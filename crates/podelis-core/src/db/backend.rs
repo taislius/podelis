@@ -87,6 +87,12 @@ pub enum ContainerSecret {
 pub trait Backend: Sync {
     /// Its query language.
     fn language(&self) -> Language;
+    /// What type `ty` (as the catalog reports it, lowercase) means here:
+    /// this engine's own names, and the standard's it reads otherwise;
+    /// `None` leaves it to the standard's meaning (`db::types`); its columns' types, for exports and comparing.
+    fn type_kind(&self, _ty: &str) -> Option<super::TypeKind> {
+        None
+    }
     /// Whether a failed connection's `message` (lower case) is its login
     /// failing for the password (wrong, or none): Podėlis then asks for it.
     fn auth_failed(&self, _message: &str) -> bool {

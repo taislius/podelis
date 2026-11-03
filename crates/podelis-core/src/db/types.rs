@@ -2,7 +2,9 @@
 //! differently, and what a type is called on another engine, for comparing
 //! schemas and the SQL that aligns them. The vocabulary (`TypeKind`) and the
 //! SQL standard's names are here; each engine's own names, and how it writes
-//! each kind, are its dialect's (`Dialect::type_kind`, `Dialect::type_name`).
+//! each kind, are its own: what its names hold is its `Backend`'s
+//! (`Backend::type_kind`, every engine, MongoDB's too), how it writes each
+//! kind its SQL dialect's (`SqlDialect::type_name`).
 
 use super::Engine;
 
@@ -45,11 +47,11 @@ pub fn arguments(ty: &str) -> Vec<u32> {
         .unwrap_or_default()
 }
 
-/// What `ty` holds on `engine`: the engine's own meaning first, then the
-/// standard's.
-fn kind(engine: Engine, ty: &str) -> TypeKind {
+/// What a column of type `ty` holds on `engine`: the engine's own meaning
+/// first, then the standard's (for exports that keep types: Parquet).
+pub fn kind(engine: Engine, ty: &str) -> TypeKind {
     let ty = ty.trim().to_ascii_lowercase();
-    engine.dialect().and_then(|d| d.type_kind(&ty)).unwrap_or_else(|| standard(&ty))
+    engine.backend().type_kind(&ty).unwrap_or_else(|| standard(&ty))
 }
 
 /// What a type the SQL standard names holds (and `text`, which every
