@@ -222,3 +222,20 @@ features a command builds with. Keep to the workspace's commands
 duckdb`), which share one build: `-p podelis-core` and other feature sets
 make another copy each. On a nearly full disk, delete the old copies (or
 `cargo clean`) first.
+
+## Which checks when
+
+A change is checked by what it touches; the whole matrix runs before
+master.
+
+| When | Run | Time |
+|---|---|---|
+| each change | `scripts/check-changed.sh`: rustfmt, the workspace's clippy, and the tests of what changed (by its map: an engine's folder its tests, `sql/` the SQL and editor tests, `podelis-ai` its own…), with an opt-in engine's feature when its folder changed | about a minute |
+| before pushing | `scripts/check.sh` (the pre-push hook): the default build's clippy and every test, cargo-deny, cargo-machete, shellcheck | about 10 minutes |
+| before master | CI on the branch (`gh workflow run ci.yml --ref <branch>`): every build, fewer engines and the opt-in ones, each with the live servers | about 15 minutes, in parallel |
+
+`check-changed.sh --dry-run` says what it would run and what it leaves
+out; `--paths <path>…` asks for given paths; `--full` runs `check.sh`.
+Its map is `scope_of` in the script (its `--self-test` runs in
+`check.sh`). Keep to the workspace's commands: each set of features is a
+build of its own (DuckDB's ~3 GB).
