@@ -371,6 +371,7 @@ async fn a_script_shows_every_result_set() {
     assert!(app.tab.grid.result_sets.is_empty());
 }
 
+#[cfg(sql_engine)] // SQL's own: not with MongoDB alone
 #[tokio::test]
 async fn the_syntax_check_runs_off_the_ui_thread_and_drops_stale_results() {
     let (mut app, _dir) = test_app();

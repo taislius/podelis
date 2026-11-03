@@ -32,10 +32,37 @@ pub(super) type DriverPool = sqlx::MySqlPool;
 #[cfg(feature = "mysql")]
 pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::MySql>;
 
+/// Its SQL dialect, for its own modules (`Engine::dialect` is an `Option`
+/// for the rest).
+#[cfg(any(test, feature = "mysql"))]
+fn sql() -> &'static dyn SqlDialect {
+    &DIALECT
+}
+
 /// This engine's dialect, for `Engine::dialect`.
 pub(super) static DIALECT: MySql = MySql;
 
 impl Backend for MySql {
+    /// It says "(using password: …)" only then; its other "access denied"
+    /// errors (no rights on the database) a password can't fix.
+    fn auth_failed(&self, message: &str) -> bool {
+        message.contains("access denied for user") && message.contains("using password:")
+    }
+    fn version_query(&self) -> &'static str {
+        "SELECT VERSION()"
+    }
+    fn sql_mode_query(&self) -> Option<&'static str> {
+        Some("SELECT @@SESSION.sql_mode")
+    }
+    fn is_system_table(&self, schema: &str, _table: &str) -> bool {
+        ["information_schema", "performance_schema", "mysql", "sys"].iter().any(|s| s.eq_ignore_ascii_case(schema))
+    }
+    fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
+        &agent_constraints::AGENT_CONSTRAINTS
+    }
+    fn language(&self) -> crate::db::Language {
+        crate::db::Language::Sql(&DIALECT)
+    }
     fn password_files_note(&self) -> &'static str {
         " (or ~/.my.cnf)"
     }
@@ -189,9 +216,6 @@ impl SqlDialect for MySql {
 
 
 
-    fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
-        &agent_constraints::AGENT_CONSTRAINTS
-    }
     fn lexer(&self) -> LexerRules {
         LexerRules {
             hash_comments: true,
@@ -210,9 +234,6 @@ impl SqlDialect for MySql {
     fn placeholders(&self) -> Placeholders {
         Placeholders { question: true, ..Placeholders::default() }
     }
-    fn is_system_table(&self, schema: &str, _table: &str) -> bool {
-        ["information_schema", "performance_schema", "mysql", "sys"].iter().any(|s| s.eq_ignore_ascii_case(schema))
-    }
     fn parser(&self) -> Box<dyn sqlparser::dialect::Dialect> {
         Box::new(sqlparser::dialect::MySqlDialect {})
     }
@@ -220,9 +241,6 @@ impl SqlDialect for MySql {
     /// too).
     fn pipes_are_or(&self, sql_mode: &str) -> bool {
         !sql_mode.split(',').any(|mode| mode.trim().eq_ignore_ascii_case("PIPES_AS_CONCAT"))
-    }
-    fn sql_mode_query(&self) -> Option<&'static str> {
-        Some("SELECT @@SESSION.sql_mode")
     }
     fn identifier_quote(&self) -> char {
         '`'
@@ -245,9 +263,6 @@ impl SqlDialect for MySql {
             return Some("X''".into());
         }
         digits.chars().all(|c| c.is_ascii_hexdigit()).then(|| shown.to_string())
-    }
-    fn version_query(&self) -> &'static str {
-        "SELECT VERSION()"
     }
     /// FORMAT=TREE where the server has it (MySQL 8.0.16+); older MySQL
     /// and MariaDB get the classic table.
@@ -358,7 +373,7 @@ mod tests {
 
     #[test]
     fn explain_statements() {
-        assert_eq!(Engine::MySql.dialect().explain("select 1", ""), "EXPLAIN FORMAT=TREE select 1");
+        assert_eq!(super::sql().explain("select 1", ""), "EXPLAIN FORMAT=TREE select 1");
     }
 
     #[test]
@@ -374,7 +389,7 @@ mod tests {
     fn full_scans_in_plans() {
         let scan = |table: &str, rows| Scan::new(table, rows);
         let rows = |text: &str| vec![vec![Some(text.to_string())]];
-        let my = |plan: &str| Engine::MySql.dialect().full_scans(&["EXPLAIN".into()], &rows(plan));
+        let my = |plan: &str| super::sql().full_scans(&["EXPLAIN".into()], &rows(plan));
         let tree = "-> Filter: (t.x = 1)  (cost=10.5 rows=2)\n    -> Table scan on t  (cost=10.5 rows=5200)";
         assert_eq!(my(tree), [scan("t", Some(5200.0))]);
         assert!(my("-> Limit: 5 row(s)  (cost=1 rows=5)\n    -> Table scan on t  (cost=1 rows=5200)").is_empty());
@@ -385,7 +400,7 @@ mod tests {
         let cols: Vec<String> = ["id", "select_type", "table", "type", "rows"].map(String::from).to_vec();
         let classic =
             vec![vec![Some("1".into()), Some("SIMPLE".into()), Some("t".into()), Some("ALL".into()), Some("99".into())]];
-        assert_eq!(Engine::MySql.dialect().full_scans(&cols, &classic), [scan("t", Some(99.0))]);
+        assert_eq!(super::sql().full_scans(&cols, &classic), [scan("t", Some(99.0))]);
     }
 
     #[test]

@@ -28,13 +28,20 @@ pub struct ParsedStatement<'a> {
 /// Splits `script` with our own lexer and parses each statement with the
 /// engine's `sqlparser` dialect.
 pub fn parse(script: &str, engine: Engine) -> ParsedScript<'_> {
-    let dialect = engine.dialect().parser();
+    // A language other than SQL: its statements, with no SQL tree.
+    let dialect = match engine.backend().language() {
+        crate::db::Language::Sql(dialect) => Some(dialect.parser()),
+        crate::db::Language::Other(_) => None,
+    };
     let statements = sql::split_statements(script, engine)
         .into_iter()
         .map(|text| ParsedStatement {
             text,
             offset: text.as_ptr() as usize - script.as_ptr() as usize,
-            ast: Parser::parse_sql(&*dialect, text),
+            ast: match &dialect {
+                Some(dialect) => Parser::parse_sql(&**dialect, text),
+                None => Err(sqlparser::parser::ParserError::ParserError("not SQL".into())),
+            },
         })
         .collect();
     ParsedScript { engine, statements }

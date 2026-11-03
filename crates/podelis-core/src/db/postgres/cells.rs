@@ -1,6 +1,5 @@
 //! Decoding Postgres values as text.
 
-use super::super::*;
 use sqlx::{Row, TypeInfo, ValueRef};
 use rust_decimal::Decimal;
 use sqlx::postgres::{PgRow, PgValueFormat};
@@ -60,7 +59,7 @@ pub(in crate::db) fn pg_binary_cell(row: &PgRow, idx: usize) -> Option<String> {
         serde_json::Value,
     );
     if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(idx) {
-        return v.map(|b| Engine::Postgres.dialect().hex(&b));
+        return v.map(|b| super::sql().hex(&b));
     }
     Some("<unsupported>".to_string())
 }

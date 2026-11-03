@@ -31,10 +31,35 @@ pub(super) type DriverPool = sqlx::SqlitePool;
 #[cfg(feature = "sqlite")]
 pub(super) type DriverConnection = sqlx::pool::PoolConnection<sqlx::Sqlite>;
 
+/// Its SQL dialect, for its own modules (`Engine::dialect` is an `Option`
+/// for the rest).
+#[cfg(any(test, feature = "sqlite"))]
+fn sql() -> &'static dyn SqlDialect {
+    &DIALECT
+}
+
 /// This engine's dialect, for `Engine::dialect`.
 pub(super) static DIALECT: Sqlite = Sqlite;
 
 impl Backend for Sqlite {
+    fn version_query(&self) -> &'static str {
+        "SELECT sqlite_version()"
+    }
+    fn is_system_table(&self, _schema: &str, table: &str) -> bool {
+        table.starts_with("sqlite_")
+    }
+    fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
+        &agent_constraints::AGENT_CONSTRAINTS
+    }
+    /// SQLite reports no position, only `near "token": syntax error`.
+    fn position_in_message(&self, message: &str) -> Option<super::ErrorPos> {
+        let start = message.find("near \"")? + "near \"".len();
+        let token = &message[start..start + message[start..].find('"')?];
+        Some(super::ErrorPos::Token(token.to_string()))
+    }
+    fn language(&self) -> crate::db::Language {
+        crate::db::Language::Sql(&DIALECT)
+    }
     fn label(&self) -> &'static str {
         "SQLite"
     }
@@ -115,16 +140,7 @@ impl SqlDialect for Sqlite {
         true
     }
 
-    /// SQLite reports no position, only `near "token": syntax error`.
-    fn position_in_message(&self, message: &str) -> Option<super::ErrorPos> {
-        let start = message.find("near \"")? + "near \"".len();
-        let token = &message[start..start + message[start..].find('"')?];
-        Some(super::ErrorPos::Token(token.to_string()))
-    }
 
-    fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
-        &agent_constraints::AGENT_CONSTRAINTS
-    }
 
     /// `X'DEADBEEF'`, as SQLite's `quote()` writes it.
     fn hex(&self, bytes: &[u8]) -> String {
@@ -155,14 +171,8 @@ impl SqlDialect for Sqlite {
     fn placeholders(&self) -> Placeholders {
         Placeholders { question: true, question_number: true, at_name: true, dollar_name: true, ..Placeholders::default() }
     }
-    fn is_system_table(&self, _schema: &str, table: &str) -> bool {
-        table.starts_with("sqlite_")
-    }
     fn parser(&self) -> Box<dyn sqlparser::dialect::Dialect> {
         Box::new(sqlparser::dialect::SQLiteDialect {})
-    }
-    fn version_query(&self) -> &'static str {
-        "SELECT sqlite_version()"
     }
     fn explain(&self, stmt: &str, _version: &str) -> String {
         format!("EXPLAIN QUERY PLAN {stmt}")
@@ -245,7 +255,7 @@ mod tests {
 
     #[test]
     fn explain_statements() {
-        let d = crate::db::Engine::Sqlite.dialect();
+        let d = super::sql();
         assert!(d.explain_analyze("select 1", "").is_none());
         assert_eq!(d.explain("select 1", ""), "EXPLAIN QUERY PLAN select 1");
     }
@@ -265,7 +275,7 @@ mod tests {
             vec![Some("3".into()), Some("0".into()), Some("0".into()), Some("SEARCH u USING INDEX i (x=?)".into())],
             vec![Some("4".into()), Some("0".into()), Some("0".into()), Some("SCAN v USING COVERING INDEX j".into())],
         ];
-        assert_eq!(crate::db::Engine::Sqlite.dialect().full_scans(&[], &sqlite), [Scan::new("t", None)]);
+        assert_eq!(super::sql().full_scans(&[], &sqlite), [Scan::new("t", None)]);
     }
 
     #[test]

@@ -26,8 +26,9 @@ impl App {
     /// F7 while a query runs: made at once on a connection of its own where
     /// that sees the same as the session, else after the query.
     pub(in crate::app) fn explain_aside(&mut self, stmt: String, line: usize) {
+        let Some(dialect) = self.sql_dialect() else { return };
         let version = self.connection.database.as_ref().map_or("", |db| db.version());
-        let explain = self.engine().dialect().explain(&stmt, version);
+        let explain = dialect.explain(&stmt, version);
         // (A file never: see `run_aside`.)
         let aside = !self.engine().is_file_based()
             && self.connection.txn == TxnState::Idle
@@ -89,8 +90,9 @@ impl App {
     }
 
     pub(in crate::app) fn explain_statement(&mut self, stmt: String, line: usize) {
+        let Some(dialect) = self.sql_dialect() else { return };
         let version = self.connection.database.as_ref().map_or("", |db| db.version());
-        let explain = self.engine().dialect().explain(&stmt, version);
+        let explain = dialect.explain(&stmt, version);
         self.tab.run.plan_request = Some((stmt, false, line));
         if self.ask_for_params(&explain, 0, true) {
             return;
@@ -189,7 +191,7 @@ impl App {
         let plan = self
             .engine()
             .dialect()
-            .format_plan(&outcome.columns, &outcome.rows)
+            .and_then(|d| d.format_plan(&outcome.columns, &outcome.rows))
             .unwrap_or_else(|| crate::db::Plan { text: t!("plan.none").to_string(), notes: Vec::new() });
         self.tab.plan = Some(plan);
         self.tab.plan_selected = None;

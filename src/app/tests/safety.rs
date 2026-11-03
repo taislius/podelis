@@ -239,7 +239,7 @@ async fn explain_analyze_of_a_write_is_rolled_back() {
         // Where the engine runs this statement under EXPLAIN ANALYZE (not
         // MySQL: a one-table UPDATE it plans without running).
         let version = app.connection.database.as_ref().unwrap().version().to_string();
-        if engine.dialect().explain_analyze("update ea set x = 2", &version).is_none() {
+        if engine.dialect().is_none_or(|d| d.explain_analyze("update ea set x = 2", &version).is_none()) {
             continue;
         }
         run_sql(&mut app, "create temporary table ea (x int); insert into ea values (1)").await;

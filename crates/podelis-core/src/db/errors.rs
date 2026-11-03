@@ -1,21 +1,21 @@
 use super::*;
 
-/// A SQL string literal for `value`. MySQL also treats backslashes as
-/// escapes, so they're doubled there.
+/// A string literal for `value` in the engine's language: SQL's (MySQL
+/// also doubles backslashes), or JSON's where the language isn't SQL.
 pub fn sql_literal(value: &str, engine: Engine) -> String {
-    engine.dialect().string_literal(value)
+    engine.dialect().map_or_else(|| serde_json::Value::from(value).to_string(), |d| d.string_literal(value))
 }
 
 /// A literal for `value` from a result column of type `ty`: a binary
 /// value in the engine's hex notation, anything else as a string.
 pub fn value_literal(value: &str, ty: &str, engine: Engine) -> String {
-    let dialect = engine.dialect();
-    if dialect.is_binary_type(ty)
+    if let Some(dialect) = engine.dialect()
+        && dialect.is_binary_type(ty)
         && let Some(literal) = dialect.binary_literal(value)
     {
         return literal;
     }
-    dialect.string_literal(value)
+    sql_literal(value, engine)
 }
 
 /// What the server said about a statement it prepared but didn't run.

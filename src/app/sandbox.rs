@@ -157,8 +157,8 @@ impl App {
         if self.connection.sandbox.is_none() && self.connection.txn == TxnState::Idle && self.copies_file() {
             return self.copy_for_sandbox(sql.to_string(), offset, filled, purpose);
         }
+        let Some(dialect) = self.sql_dialect() else { return };
         let number = self.connection.sandbox.as_ref().map_or(0, |s| s.steps.len()) + 1;
-        let dialect = self.engine().dialect();
         let begin =
             if self.connection.txn == TxnState::Idle { format!("{};\n", dialect.begin(false)) } else { String::new() };
         let original = filled.as_ref().map_or_else(|| sql.to_string(), |f| f.original.clone());
@@ -200,7 +200,7 @@ impl App {
                 // Copies left by a sandbox that never ended (a crash) go first.
                 let _ = std::fs::remove_dir_all(&dir);
                 std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-                let copy = db.engine().dialect().copy_into(&path.to_string_lossy());
+                let copy = db.engine().dialect().and_then(|d| d.copy_into(&path.to_string_lossy()));
                 let copy = copy.ok_or_else(|| format!("{} can't copy its database", db.engine().label()))?;
                 db.run_once(&copy, 1).await.map_err(|e| crate::db::error_message(&e))?;
                 let copy = Database::connect(params).await.map_err(|e| crate::db::error_message(&e))?;
@@ -255,7 +255,8 @@ impl App {
     /// Back to before step `number` (`ROLLBACK TO SAVEPOINT`): a failed one,
     /// or the last one undone.
     fn sandbox_back_to(&mut self, number: usize, undo: bool) {
-        let sql = self.engine().dialect().rollback_to_savepoint(&format!("podelis_{number}"));
+        let Some(dialect) = self.sql_dialect() else { return };
+        let sql = dialect.rollback_to_savepoint(&format!("podelis_{number}"));
         let infos = analyze::analyze(&parse(&sql, self.engine()));
         self.run_now(sql, 0, infos, RunPurpose::SandboxBack { number, undo }, None);
     }
@@ -283,7 +284,9 @@ impl App {
             let locks = if copied { t!("sandbox.on_a_copy") } else { t!("sandbox.file_lock") };
             return self.sandbox_locks(locks.to_string());
         }
-        let (Some(db), Some(query)) = (self.connection.database.clone(), engine.dialect().locks_held_query()) else {
+        let (Some(db), Some(query)) =
+            (self.connection.database.clone(), engine.dialect().and_then(crate::db::SqlDialect::locks_held_query))
+        else {
             return;
         };
         // (Not while a query runs on the session: the window says nothing.)

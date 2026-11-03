@@ -399,6 +399,7 @@ async fn closing_another_tab_while_asking_keeps_the_question() {
     assert!(app.ask.asking.is_none());
 }
 
+#[cfg(sql_engine)] // SQL's own: not with MongoDB alone
 /// What an agent wrote in its sandbox comes back as a script: its writes
 /// that ran, in order, never its reads or failures.
 #[test]

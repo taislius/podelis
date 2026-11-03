@@ -107,18 +107,11 @@ pub trait SqlDialect: Backend {
     fn placeholders(&self) -> Placeholders;
     /// For statement analysis.
     fn parser(&self) -> Box<dyn sqlparser::dialect::Dialect>;
-    /// Part of the database's own catalog: listed in the navigator only when
-    /// system tables are shown.
-    fn is_system_table(&self, schema: &str, table: &str) -> bool;
     /// `||` is logical OR, not string concatenation, under the session's
     /// `sql_mode` (see `sql_mode_query`). `sqlparser` reads it as
     /// concatenation either way, so lint rules ask this.
     fn pipes_are_or(&self, _sql_mode: &str) -> bool {
         false
-    }
-    /// Reads session settings that change what SQL text means.
-    fn sql_mode_query(&self) -> Option<&'static str> {
-        None
     }
     /// For "format SQL".
     fn formatter(&self) -> sqlformat::Dialect {
@@ -162,8 +155,6 @@ pub trait SqlDialect: Backend {
         None
     }
 
-    /// A query returning the server's version string.
-    fn version_query(&self) -> &'static str;
     /// The statement that starts a transaction, read-only if `read_only`
     /// where the engine can.
     fn begin(&self, _read_only: bool) -> &'static str {
@@ -189,10 +180,6 @@ pub trait SqlDialect: Backend {
     /// engine's. Upper case, sorted.
     fn keywords(&self) -> &'static [&'static str] {
         &[]
-    }
-    /// The cheapest query that shows the connection answers.
-    fn ping(&self) -> &'static str {
-        "SELECT 1"
     }
     /// What a session runs before a sandbox's transaction and after it ends,
     /// where the engine needs it (MySQL: autocommit off, so a statement
@@ -240,13 +227,6 @@ pub trait SqlDialect: Backend {
     fn keeps_string_lengths(&self) -> bool {
         true
     }
-    /// A position only the message's text gives (SQLite's `near "x"`), for
-    /// the background syntax check.
-    fn position_in_message(&self, _message: &str) -> Option<super::ErrorPos> {
-        None
-    }
-    /// What AI agents may send (`db::agent_constraints`).
-    fn agent_constraints(&self) -> &'static super::agent_constraints::AgentConstraints;
 
     /// Something in `sql` that this server's `version` (as `version_query`
     /// returned it) is too old for: what to say when it fails, so a syntax
@@ -327,9 +307,13 @@ pub trait SqlDialect: Backend {
 }
 
 impl Engine {
-    /// Its engine module's SQL dialect (`DIALECT`).
-    pub fn dialect(self) -> &'static dyn SqlDialect {
-        on_engine!(self, &engine::DIALECT)
+    /// Its SQL dialect; `None` for an engine whose language isn't SQL,
+    /// where what's SQL's (edits, exports, plans…) is off.
+    pub fn dialect(self) -> Option<&'static dyn SqlDialect> {
+        match self.backend().language() {
+            super::Language::Sql(dialect) => Some(dialect),
+            super::Language::Other(_) => None,
+        }
     }
 }
 

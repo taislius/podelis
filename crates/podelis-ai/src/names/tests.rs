@@ -128,3 +128,16 @@ fn a_date_part_counts_only_where_a_date_function_takes_one() {
     // BigQuery's order: the unit last.
     assert_eq!(check("SELECT date_trunc(placed_at, MONTH) FROM orders"), Vec::<String>::new());
 }
+
+/// Another language than SQL has no SQL names to check: no problems, not
+/// "it doesn't parse" (which would send the model back each time).
+#[test]
+fn a_language_other_than_sql_is_left_alone() {
+    for engine in Engine::ALL.into_iter().filter(|e| e.dialect().is_none()) {
+        assert_eq!(
+            problems("db.orders.find({total: {$gt: 5}})", engine, &schema()),
+            Vec::<String>::new(),
+            "{engine:?}"
+        );
+    }
+}

@@ -223,7 +223,10 @@ async fn agents_get_shared_connections_safely() {
         serde_json::json!({ "connection": "reads", "sql": "SELECT x FROM t ORDER BY id", "limit": 2 }),
     )
     .await;
-    assert_eq!(rows, r#"{"columns":["x"],"more_rows":true,"rows":[["1"],["2"]]}"#);
+    // As values: the keys' order is serde_json's (a feature another
+    // engine's driver turns on keeps them as inserted).
+    let rows: serde_json::Value = serde_json::from_str(&rows).unwrap();
+    assert_eq!(rows, serde_json::json!({"columns": ["x"], "more_rows": true, "rows": [["1"], ["2"]]}));
     assert!(
         call(&client, "schema", serde_json::json!({ "connection": "reads" })).await.contains("t: id INTEGER PK, x INT")
     );

@@ -27,7 +27,8 @@ impl App {
     /// (or, in a dry run, are rolled back as soon as it finishes).
     pub(super) fn run_in_transaction(&mut self, sql: &str, offset: usize, filled: Option<Filled>, purpose: RunPurpose) {
         let original = filled.as_ref().map_or_else(|| sql.to_string(), |f| f.original.clone());
-        let begin = format!("{};\n", self.engine().dialect().begin(false));
+        let Some(dialect) = self.sql_dialect() else { return };
+        let begin = format!("{};\n", dialect.begin(false));
         let wrapped = Filled::prefixed(filled, &original, &begin);
         let infos = analyze::analyze(&parse(&wrapped.sql, self.engine()));
         if self.connection.tx_mode == TxMode::RollbackOnly {
@@ -50,11 +51,14 @@ impl App {
     ) {
         let writes = infos.iter().any(StatementInfo::modifies)
             && matches!(purpose, RunPurpose::Query | RunPurpose::RowChange(_) | RunPurpose::CellEdit { .. });
+        // Transactions are SQL's: without SQL a write runs as it is, whatever
+        // the mode (a production connection's starts as a review).
+        let tx_mode = if self.engine().dialect().is_some() { self.connection.tx_mode } else { TxMode::AutoCommit };
         // In a sandbox every write is a step of its one transaction.
-        if writes && self.connection.tx_mode == TxMode::Sandbox {
+        if writes && tx_mode == TxMode::Sandbox {
             return self.run_sandbox_step(&sql, offset, filled, purpose);
         }
-        let wrap = self.connection.tx_mode != TxMode::AutoCommit && self.connection.txn == TxnState::Idle && writes;
+        let wrap = tx_mode != TxMode::AutoCommit && self.connection.txn == TxnState::Idle && writes;
         if wrap {
             self.run_in_transaction(&sql, offset, filled, purpose);
         } else {
@@ -97,6 +101,8 @@ impl App {
             self.not_connected_message()
         } else if self.connection.mode == ConnectionMode::ReadOnly {
             t!("review.read_only").to_string()
+        } else if self.engine().dialect().is_none() {
+            t!("editor.no_sql", engine = self.engine().label())
         } else if self.connection.txn != TxnState::Idle {
             t!(
                 "review.finish_first",
@@ -203,7 +209,8 @@ impl App {
         if self.connection.txn == TxnState::Idle {
             return self.set_status(t!("review.none_open").to_string(), true);
         }
-        let command = self.engine().dialect().end(how);
+        let Some(dialect) = self.sql_dialect() else { return };
+        let command = dialect.end(how);
         let infos = analyze::analyze(&parse(command, self.engine()));
         self.run_now(command.to_string(), 0, infos, RunPurpose::TxControl(how), None);
     }

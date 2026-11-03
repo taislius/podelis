@@ -7,13 +7,11 @@ use std::time::{Duration, Instant};
 
 use super::{ConnectParams, Database, Engine, PasswordSource, SslMode, error_message, open_tunnel};
 
-/// Whether a connect failed because of the password (wrong, or none).
-/// MySQL says "(using password: …)" only then; its other "access denied"
-/// errors (no rights on the database) a password can't fix.
+/// Whether a connect failed because of the password (wrong, or none), as
+/// each engine words it (`Backend::auth_failed`).
 pub fn is_auth_failure(message: &str) -> bool {
     let m = message.to_lowercase();
-    m.contains("password authentication failed")
-        || (m.contains("access denied for user") && m.contains("using password:"))
+    Engine::ALL.into_iter().any(|e| e.backend().auth_failed(&m))
 }
 
 /// A plain-language hint for a connection error message, if there is one:
@@ -297,7 +295,7 @@ async fn login_and_session(params: &ConnectParams, steps: &mut Vec<Step>) {
     let mut times = Vec::new();
     for _ in 0..3 {
         let t = Instant::now();
-        if db.run(db.engine().dialect().ping(), 1).await.is_ok() {
+        if db.run(db.engine().backend().ping(), 1).await.is_ok() {
             times.push(t.elapsed());
         }
     }

@@ -202,6 +202,11 @@ GB of disk while building.
 cargo install --locked --git https://github.com/taislius/podelis --features duckdb
 ```
 
+MongoDB is opt-in too (`--features mongodb`): the first engine whose
+language isn't SQL. Write mongosh's calls (`db.users.find({age: {$gt:
+30}}).sort({name: 1})`); documents show as rows. What's SQL's (editing
+cells, plans, agents) is off on it for now.
+
 ## Run
 
 ```sh

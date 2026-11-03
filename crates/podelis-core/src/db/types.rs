@@ -49,7 +49,7 @@ pub fn arguments(ty: &str) -> Vec<u32> {
 /// standard's.
 fn kind(engine: Engine, ty: &str) -> TypeKind {
     let ty = ty.trim().to_ascii_lowercase();
-    engine.dialect().type_kind(&ty).unwrap_or_else(|| standard(&ty))
+    engine.dialect().and_then(|d| d.type_kind(&ty)).unwrap_or_else(|| standard(&ty))
 }
 
 /// What a type the SQL standard names holds (and `text`, which every
@@ -87,8 +87,10 @@ pub fn same_type(a_engine: Engine, a: &str, b_engine: Engine, b: &str) -> bool {
     use TypeKind as Kind;
     let (a, b) = (kind(a_engine, a), kind(b_engine, b));
     let (da, db) = (a_engine.dialect(), b_engine.dialect());
-    if !da.keeps_only_affinity() && !db.keeps_only_affinity() {
-        if da.keeps_string_lengths() && db.keeps_string_lengths() {
+    let affinity = |d: Option<&dyn crate::db::SqlDialect>| d.is_some_and(crate::db::SqlDialect::keeps_only_affinity);
+    let lengths = |d: Option<&dyn crate::db::SqlDialect>| d.is_none_or(crate::db::SqlDialect::keeps_string_lengths);
+    if !affinity(da) && !affinity(db) {
+        if lengths(da) && lengths(db) {
             return a == b;
         }
         let text = |k: Kind| if matches!(k, Kind::Varchar(_) | Kind::Char(_)) { Kind::Text } else { k };
@@ -111,7 +113,7 @@ pub fn translate_type(from: Engine, ty: &str, to: Engine) -> Option<String> {
     if from == to {
         return Some(ty.to_string());
     }
-    to.dialect().type_name(&kind(from, ty))
+    to.dialect()?.type_name(&kind(from, ty))
 }
 
 /// `name(n)`, or `name` without a length: for `Dialect::type_name`.

@@ -35,7 +35,7 @@ impl Database {
 
     pub async fn tables(&self, system: bool) -> Result<Vec<TableInfo>> {
         let rows: Vec<TableRow> = on_driver!(self.0.engine, engine::queries::table_rows(self, system).await?);
-        let dialect = self.0.engine.dialect();
+        let backend = self.0.engine.backend();
         Ok(rows
             .into_iter()
             .map(|(schema, name, kind, rows, bytes)| {
@@ -46,7 +46,7 @@ impl Database {
                     .and_then(|parent| parent.split_once('\x1f'))
                     .map(|(s, t)| (s.to_string(), t.to_string()));
                 TableInfo {
-                    system: dialect.is_system_table(&schema, &name)
+                    system: backend.is_system_table(&schema, &name)
                         || self.0.service.is_some_and(|s| s.is_internal_schema(&schema)),
                     schema,
                     name,

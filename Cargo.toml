@@ -49,6 +49,8 @@ mysql = ["podelis-core/mysql"]
 sqlite = ["podelis-core/sqlite"]
 # Opt-in for now (`--features duckdb`): its driver builds DuckDB from C++.
 duckdb = ["podelis-core/duckdb"]
+# Opt-in for now (`--features mongodb`): the first engine without SQL.
+mongodb = ["podelis-core/mongodb"]
 
 [dev-dependencies]
 podelis-core = { path = "crates/podelis-core", default-features = false, features = ["test-support"] }
@@ -94,6 +96,7 @@ sqlparser = { version = "0.63", features = ["visitor"] }
 # SQLite is always built: the gateway keeps each project's memory in it.
 # The other drivers come with their engines' features.
 duckdb = { version = "=1.10506.1", features = ["bundled"] }
+mongodb = { version = "=3.9.1" }
 sqlx = { version = "0.9.0", features = ["sqlite", "runtime-tokio", "tls-rustls-aws-lc-rs", "chrono", "rust_decimal", "uuid", "json"] }
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "time", "sync", "net", "process", "io-util", "signal"] }
 toml = "1.1.6"

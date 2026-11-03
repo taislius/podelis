@@ -224,7 +224,7 @@ pub(in crate::db) async fn routine_definition(_db: &Database, _routine: &Routine
 /// by the table's key (`id=5`): on a small table DuckDB scans rather than
 /// use the key's index, skipping blocks by their least and greatest values.
 pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Option<Vec<Scan>> {
-    let dialect = db.engine().dialect();
+    let dialect = super::sql();
     let plan = db.run(&dialect.explain(statement, db.version()), 10_000).await.ok()?;
     let text: Vec<&str> = plan.rows.iter().filter_map(|r| r.last()?.as_deref()).collect();
     let text = text.join("\n");

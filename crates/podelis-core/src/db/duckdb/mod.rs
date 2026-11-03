@@ -27,6 +27,13 @@ pub(super) type DriverPool = driver::DuckPool;
 #[cfg(feature = "duckdb")]
 pub(super) type DriverConnection = driver::DuckConnection;
 
+/// Its SQL dialect, for its own modules (`Engine::dialect` is an `Option`
+/// for the rest).
+#[cfg(any(test, feature = "duckdb"))]
+fn sql() -> &'static dyn SqlDialect {
+    &DIALECT
+}
+
 /// This engine's dialect, for `Engine::dialect`.
 pub(super) static DIALECT: DuckDb = DuckDb;
 
@@ -48,6 +55,19 @@ const RESERVED: &[&str] = &[
 ];
 
 impl Backend for DuckDb {
+    /// "v1.4.1".
+    fn version_query(&self) -> &'static str {
+        "SELECT version()"
+    }
+    fn is_system_table(&self, schema: &str, _table: &str) -> bool {
+        matches!(schema, "information_schema" | "pg_catalog")
+    }
+    fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
+        &agent_constraints::AGENT_CONSTRAINTS
+    }
+    fn language(&self) -> crate::db::Language {
+        crate::db::Language::Sql(&DIALECT)
+    }
     fn label(&self) -> &'static str {
         "DuckDB"
     }
@@ -112,13 +132,6 @@ impl SqlDialect for DuckDb {
     fn formatter(&self) -> sqlformat::Dialect {
         sqlformat::Dialect::PostgreSql
     }
-    fn is_system_table(&self, schema: &str, _table: &str) -> bool {
-        matches!(schema, "information_schema" | "pg_catalog")
-    }
-    /// "v1.4.1".
-    fn version_query(&self) -> &'static str {
-        "SELECT version()"
-    }
     fn explain(&self, stmt: &str, _version: &str) -> String {
         format!("EXPLAIN {stmt}")
     }
@@ -137,9 +150,6 @@ impl SqlDialect for DuckDb {
     fn full_scans(&self, _columns: &[String], rows: &[Vec<Option<String>>]) -> Vec<crate::db::dialect::Scan> {
         let text: Vec<&str> = rows.iter().filter_map(|r| r.last()?.as_deref()).collect();
         full_scans_in(&text.join("\n"))
-    }
-    fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
-        &agent_constraints::AGENT_CONSTRAINTS
     }
     fn type_name(&self, kind: &crate::db::TypeKind) -> Option<String> {
         use crate::db::TypeKind as Kind;
@@ -340,14 +350,14 @@ mod tests {
 
     #[test]
     fn its_kept_words_are_quoted() {
-        let d = Engine::DuckDb.dialect();
+        let d = super::sql();
         assert_eq!((d.quote_ident("at"), d.quote_ident("x"), d.quote_ident("Name")), ("\"at\"".into(), "x".into(), "\"Name\"".into()));
         assert!(super::RESERVED.windows(2).all(|w| w[0] < w[1]), "sorted, for the binary search");
     }
 
     #[test]
     fn its_plan_is_drawn_already() {
-        let d = Engine::DuckDb.dialect();
+        let d = super::sql();
         assert_eq!(d.explain("SELECT 1", ""), "EXPLAIN SELECT 1");
         let rows = vec![vec![Some("physical_plan".into()), Some("┌───┐\n│ X │\n└───┘\n".into())]];
         assert_eq!(d.format_plan(&[], &rows).unwrap().text, "┌───┐\n│ X │\n└───┘");

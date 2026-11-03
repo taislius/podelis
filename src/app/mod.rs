@@ -413,6 +413,17 @@ impl App {
         self.connection.database.as_ref().map_or(self.connection.form.engine, Database::engine)
     }
 
+    /// The engine's SQL dialect; `None` where its language isn't SQL, the
+    /// status saying what's asked needs SQL.
+    pub(super) fn sql_dialect(&mut self) -> Option<&'static dyn crate::db::SqlDialect> {
+        let engine = self.engine();
+        let dialect = engine.dialect();
+        if dialect.is_none() {
+            self.set_status(t!("editor.no_sql", engine = engine.label()), true);
+        }
+        dialect
+    }
+
     /// Whether asking a model works here, for the status bar: no model
     /// set up, or the default one, and whether the open project's schemas
     /// may go to it (`share_schema`).

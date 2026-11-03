@@ -365,7 +365,7 @@ pub(in crate::db) async fn cancel(db: &Database, id: i64) -> Result<()> {
 pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Option<Vec<Scan>> {
     let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
     let json = guard_plan(p, statement).await?;
-    Some(db.engine().dialect().full_scans(&[], &[vec![Some(json)]]))
+    Some(super::sql().full_scans(&[], &[vec![Some(json)]]))
 }
 
 /// Each scan's rows: the plan's, else the catalog's estimate for that

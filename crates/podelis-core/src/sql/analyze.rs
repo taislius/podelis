@@ -47,6 +47,17 @@ impl StatementInfo {
 }
 
 pub fn analyze(script: &ParsedScript) -> Vec<StatementInfo> {
+    // A language other than SQL says what its statements do.
+    if let crate::db::Language::Other(language) = script.engine.backend().language() {
+        return script
+            .statements
+            .iter()
+            .map(|stmt| {
+                let (kind, risk) = language.classify(stmt.text);
+                StatementInfo { summary: summarize(stmt.text), kind, risk }
+            })
+            .collect();
+    }
     script
         .statements
         .iter()

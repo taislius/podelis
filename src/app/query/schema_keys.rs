@@ -43,6 +43,7 @@ impl App {
 
     pub(in crate::app) fn handle_schema_key(&mut self, key: KeyEvent) {
         let engine = self.engine();
+        let dialect = engine.dialect();
         let Some(panel) = &mut self.connection.schema else { return };
         if panel.filter_editing {
             match panel.filter.handle(key) {
@@ -120,7 +121,9 @@ impl App {
                 let Some(t) = node.table() else { return };
                 let info = &panel.tables[t].info;
                 let table = format!("{}.{}", engine.quote_ident(&info.schema), engine.quote_ident(&info.name));
-                let query = format!("{};", engine.dialect().select_rows(&table, None, Some(100)));
+                // Without SQL, no rows statement to write (yet).
+                let Some(dialect) = dialect else { return };
+                let query = format!("{};", dialect.select_rows(&table, None, Some(100)));
                 // After everything, a blank line apart: never inside another
                 // statement. Then it runs, alone (as F6 would).
                 self.append_statement(&query);

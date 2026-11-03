@@ -109,7 +109,7 @@ impl Database {
     /// A statement's full scans from its EXPLAIN on the session (for
     /// engines whose plans don't need a connection of their own).
     pub(super) async fn scans_by_explain(&self, statement: &str) -> Option<Vec<Scan>> {
-        let dialect = self.engine().dialect();
+        let dialect = self.engine().dialect()?;
         let plan = self.run(&dialect.explain(statement, self.version()), 10_000).await.ok()?;
         Some(dialect.full_scans(&plan.columns, &plan.rows))
     }

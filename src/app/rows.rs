@@ -171,11 +171,12 @@ impl App {
             .filter(|(_, v)| !v.is_empty())
             .map(|(c, v)| (engine.quote_ident(&c.name), crate::sql::params::literal(v, engine)))
             .collect();
+        let Some(dialect) = self.sql_dialect() else { return };
         let sql = if filled.is_empty() {
-            engine.dialect().insert_defaults(&form.table_sql)
+            dialect.insert_defaults(&form.table_sql)
         } else {
             let (cols, vals): (Vec<String>, Vec<String>) = filled.into_iter().unzip();
-            engine.dialect().insert(&form.table_sql, &cols, &[format!("({})", vals.join(", "))])
+            dialect.insert(&form.table_sql, &cols, &[format!("({})", vals.join(", "))])
         };
         self.execute_with(sql, 0, RunPurpose::RowChange(t!("rows.added")));
     }
@@ -197,7 +198,8 @@ impl App {
                 Err(why) => return self.set_status(t!("rows.cant_delete", why = why), true),
             }
         }
-        let sql = self.engine().dialect().delete(&table.sql_name, &conditions.join(" OR "));
+        let Some(dialect) = self.sql_dialect() else { return };
+        let sql = dialect.delete(&table.sql_name, &conditions.join(" OR "));
         let mut details: Vec<String> =
             conditions.iter().take(5).map(|c| c.trim_matches(['(', ')']).to_string()).collect();
         if conditions.len() > 5 {

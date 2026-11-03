@@ -444,7 +444,7 @@ impl Server {
             self.write_log(entry);
             return failed(why);
         }
-        let dialect = engine.dialect();
+        let Some(dialect) = engine.dialect() else { return failed(no_sql(engine)) };
         let explain = dialect.explain(args.sql.trim().trim_end_matches(';'), db.version());
         let started = Instant::now();
         // In an open sandbox: planned in its transaction, which sees its
@@ -579,10 +579,11 @@ impl Server {
             if let Some(why) = unrollable(db).await {
                 return Err(why);
             }
-            if let Some((before, _)) = db.engine().dialect().sandbox_session() {
+            let Some(dialect) = db.engine().dialect() else { return Err(no_sql(db.engine())) };
+            if let Some((before, _)) = dialect.sandbox_session() {
                 db.run_once(before, 1).await.map_err(failed)?;
             }
-            db.run_once(db.engine().dialect().begin(false), 1).await.map_err(failed)?;
+            db.run_once(dialect.begin(false), 1).await.map_err(failed)?;
             let number = self.sandbox_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
             let open =
                 AgentSandbox { number, db: db.clone(), session: db.session_id(), calls: 0, last: Instant::now() };
@@ -595,7 +596,8 @@ impl Server {
         let n = open.calls + 1;
         // No savepoint: the transaction is gone.
         let savepoint = format!("podelis_{n}");
-        if let Err(e) = db.run_once(&db.engine().dialect().savepoint(&savepoint), 1).await {
+        let Some(dialect) = db.engine().dialect() else { return Err(no_sql(db.engine())) };
+        if let Err(e) = db.run_once(&dialect.savepoint(&savepoint), 1).await {
             self.forget_sandbox(db, &profile.name).await;
             return Err(format!("{} ({LOST})", failed(e)));
         }
@@ -603,7 +605,7 @@ impl Server {
         // A failed call goes back to before it; if even that fails, the
         // transaction is gone (a deadlock rolls all of it back on MySQL).
         if let Err(e) = &result
-            && db.run_once(&db.engine().dialect().rollback_to_savepoint(&savepoint), 1).await.is_err()
+            && db.run_once(&dialect.rollback_to_savepoint(&savepoint), 1).await.is_err()
         {
             self.forget_sandbox(db, &profile.name).await;
             return Err(format!("{e} ({LOST})"));
@@ -757,7 +759,7 @@ impl Server {
 /// tables a rollback doesn't undo (`MyISAM`, `MEMORY`…). A write to them would
 /// stay while the agent is told nothing changed.
 async fn unrollable(db: &Database) -> Option<String> {
-    let sql = db.engine().dialect().tables_without_rollback()?;
+    let sql = db.engine().dialect()?.tables_without_rollback()?;
     // (Not run again on a new session: inside a sandbox that would leave it.)
     let outcome = match db.run_once(sql, 1).await {
         Ok(outcome) => outcome,
@@ -796,11 +798,12 @@ async fn run_wrapped(
     sql: &str,
     limit: usize,
 ) -> Result<QueryOutcome, String> {
-    let begin = db.engine().dialect().begin(wrap == Wrap::ReadOnly);
+    let Some(dialect) = db.engine().dialect() else { return Err(no_sql(db.engine())) };
+    let begin = dialect.begin(wrap == Wrap::ReadOnly);
     db.run_once(begin, 1).await.map_err(|e| crate::db::error_message(&e))?;
     let result = db.run_within(sql, limit, Some(call_timeout(profile)), false).await.map_err(|e| ran_error(&e));
     let how = if wrap == Wrap::Commit && result.is_ok() { TxEnd::Commit } else { TxEnd::Rollback };
-    let end = db.engine().dialect().end(how);
+    let end = dialect.end(how);
     let ended = db.run_once(end, 1).await;
     let outcome = result?;
     ended.map_err(|e| format!("couldn't {}: {}", end.to_lowercase(), crate::db::error_message(&e)))?;
@@ -814,11 +817,17 @@ const LOST: &str = "the sandbox was lost (the connection was opened again, or th
 /// A sandbox's end on `db`: rolled back, and the session as before it
 /// (MySQL's autocommit on again).
 async fn end_sandbox(db: &Database) {
-    let dialect = db.engine().dialect();
+    let Some(dialect) = db.engine().dialect() else { return };
     let _ = db.run_once(dialect.end(TxEnd::Rollback), 1).await;
     if let Some((_, after)) = dialect.sandbox_session() {
         let _ = db.run_once(after, 1).await;
     }
+}
+
+/// What an agent is told on an engine whose language isn't SQL: agents
+/// need SQL for now (its transactions and plans are Podėlis's safety).
+fn no_sql(engine: crate::db::Engine) -> String {
+    format!("agents need SQL here for now, which {} doesn't have", engine.label())
 }
 
 /// How long one call may run: the connection's Timeout, else 30 s.
