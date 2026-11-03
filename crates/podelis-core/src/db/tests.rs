@@ -669,3 +669,25 @@ mod types {
         assert_eq!(translate_type(LITE, "DATETIME", PG).as_deref(), Some("timestamp"));
     }
 }
+
+/// Each folder's `engine.toml` names its engine as its `Backend` does
+/// (`label`, which `scripts/build.sh` shows), so the two can't drift.
+#[test]
+fn each_manifest_names_its_engine_as_its_backend_does() {
+    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/db");
+    let mut seen = 0;
+    for entry in std::fs::read_dir(db).unwrap().flatten() {
+        let Ok(text) = std::fs::read_to_string(entry.path().join("engine.toml")) else { continue };
+        let field = |key: &str| {
+            text.lines().find_map(|l| {
+                let (k, v) = l.split('#').next()?.split_once('=')?;
+                (k.trim() == key).then(|| v.trim().trim_matches('"').to_string())
+            })
+        };
+        let name = field("name").unwrap();
+        let engine = Engine::ALL.into_iter().find(|e| format!("{e:?}") == name).unwrap();
+        assert_eq!(field("label").as_deref(), Some(engine.backend().label()), "{name}");
+        seen += 1;
+    }
+    assert_eq!(seen, Engine::ALL.len());
+}

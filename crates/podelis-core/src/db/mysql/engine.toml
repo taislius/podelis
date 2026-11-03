@@ -1,4 +1,5 @@
 # This folder is a database engine: build.rs finds it by this file.
 name = "MySql"   # its Engine variant, as connections.toml writes it
 order = 2    # its place in lists (the connection form cycles in this order)
+label = "MySQL"   # its name as people know it (Backend::label; scripts/build.sh shows it)
 feature = "mysql"   # its Cargo feature: builds its driver

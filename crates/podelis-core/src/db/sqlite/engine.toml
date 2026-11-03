@@ -1,4 +1,5 @@
 # This folder is a database engine: build.rs finds it by this file.
 name = "Sqlite"   # its Engine variant, as connections.toml writes it
 order = 3    # its place in lists (the connection form cycles in this order)
+label = "SQLite"   # its name as people know it (Backend::label; scripts/build.sh shows it)
 feature = "sqlite"   # its Cargo feature: builds its driver
