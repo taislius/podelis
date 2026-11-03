@@ -1,0 +1,58 @@
+# git-cliff's settings: CHANGELOG.md drafted from the commits, by the kind
+# each one starts with ([feat], [fix], [refactor]…). One changelog for
+# Podėlis: its crates aren't published, and a change is the program's.
+#
+#   git cliff --unreleased --tag vX.Y.Z --prepend CHANGELOG.md   a release's section
+#   git cliff --latest --strip all                                its text, for the release
+#
+# See docs/development.md (Releasing).
+
+[changelog]
+header = """
+# Changelog
+
+What changed in each release of Podėlis, newest first. Drafted from the
+commits by [git-cliff](https://git-cliff.org) (`cliff.toml`), then edited.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+"""
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] — {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [Unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\n") | first | split(pat="] ") | slice(start=1) | join(sep="] ") | trim }}\
+{% endfor %}
+{% endfor %}\n
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = false
+filter_unconventional = false
+split_commits = false
+# (The kind's tag comes off in `body`: the parsers below read it first.)
+commit_preprocessors = []
+# Each kind to its section, in this order (the comments sort them).
+commit_parsers = [
+    { message = '^\[feat(ure)?\]', group = "<!-- 0 -->Added" },
+    { message = '^\[fix\]', group = "<!-- 1 -->Fixed" },
+    { message = '^\[refactor\]', group = "<!-- 2 -->Changed" },
+    { message = '^\[deps\]', group = "<!-- 3 -->Dependencies" },
+    { message = '^\[docs\]', group = "<!-- 4 -->Documentation" },
+    { message = '^\[(build|ci|test)\]', group = "<!-- 5 -->Development" },
+    # A release's own commit (the version bump) says nothing new.
+    { message = '^\[release\]', skip = true },
+    { message = '.*', skip = true },
+]
+protect_breaking_commits = false
+filter_commits = true
+# Releases only: a release candidate's commits go with its release.
+tag_pattern = '^v[0-9]+\.[0-9]+\.[0-9]+$'
+topo_order = false
+sort_commits = "oldest"
