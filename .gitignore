@@ -5,3 +5,6 @@
 /*.cdx.json
 # cargo-mutants' results
 /mutants.out*
+
+# The engines scripts/build.sh last built with
+/.podelis-engines

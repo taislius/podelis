@@ -187,8 +187,11 @@ source, with Rust 1.94 or newer (distro packages are often older; get it with
 cargo install --locked --git https://github.com/taislius/podelis
 ```
 
-Every engine is built in by default. To build only the ones you use (a
-smaller program with fewer dependencies), pick them by feature:
+Every engine but the opt-in ones is built in by default. To choose, from
+a clone: `scripts/build.sh` asks which databases to build with
+(checkboxes, or a numbered list), then installs that build;
+`--engines postgres,sqlite` chooses without asking. Or pick them by
+feature (a smaller program with fewer dependencies):
 
 ```sh
 cargo install --locked --git https://github.com/taislius/podelis --no-default-features --features postgres,sqlite

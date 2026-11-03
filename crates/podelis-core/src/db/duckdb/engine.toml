@@ -1,5 +1,7 @@
 # This folder is a database engine: build.rs finds it by this file.
 name = "DuckDb"   # its Engine variant, as connections.toml writes it
 order = 4    # its place in lists (the connection form cycles in this order)
+label = "DuckDB"   # its name as people know it (Backend::label; scripts/build.sh shows it)
 feature = "duckdb"   # its Cargo feature: builds its driver
 opt_in = true   # not in `default` yet: "every engine" doesn't wait for it
+note = "builds DuckDB from C++: minutes, ~3 GB of disk while building"   # said beside it when choosing what to build

@@ -204,7 +204,9 @@ db/
   tests.rs        the tests every engine shares, and their helpers
   postgres/  mysql/  sqlite/  duckdb/  mongodb/
     engine.toml   its name (the Engine variant, as connections.toml writes
-                  it), its order in lists, its feature, `opt_in` (DuckDB's
+                  it), its `label` (as Backend::label, tested; and a `note`,
+                  which scripts/build.sh shows beside it), its order in
+                  lists, its feature, `opt_in` (DuckDB's
                   and MongoDB's, for now: not in `default`, and
                   `every_engine` doesn't wait for them), and `sql = false`
                   for a language other than SQL (MongoDB's: build.rs sets
