@@ -22,7 +22,7 @@ cd "$(dirname "$0")/.."
 # path, as the tests' names start).
 scope_of() {
     case "$1" in
-        *.md | docs/* | LICENSE* | packaging/* | docker/* | .dockerignore) echo skip ;;
+        *.md | docs/* | LICENSE* | packaging/* | docker/* | .dockerignore | cliff.toml) echo skip ;;
         scripts/*.sh | .githooks/*) echo shell ;;
         Cargo.toml | Cargo.lock | */Cargo.toml | tools/deny.toml) echo deps all ;;
         build.rs | */build.rs | */engine.toml | rust-toolchain.toml | clippy.toml | rustfmt.toml) echo all ;;
@@ -70,6 +70,7 @@ self_test() {
         fi
     }
     expect README.md "skip"
+    expect cliff.toml "skip"
     expect scripts/check.sh "shell"
     expect Cargo.lock "deps all"
     expect crates/podelis-core/src/db/postgres/queries.rs "db::postgres::"

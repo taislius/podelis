@@ -239,3 +239,21 @@ out; `--paths <path>…` asks for given paths; `--full` runs `check.sh`.
 Its map is `scope_of` in the script (its `--self-test` runs in
 `check.sh`). Keep to the workspace's commands: each set of features is a
 build of its own (DuckDB's ~3 GB).
+
+## The changelog
+
+`CHANGELOG.md` is one for Podėlis (its crates aren't published, and a
+change is the program's), drafted from the commits by
+[git-cliff](https://git-cliff.org) (`brew install git-cliff`), by the kind
+each commit starts with: `[feat]` Added, `[fix]` Fixed, `[refactor]`
+Changed, `[deps]` Dependencies, `[docs]` Documentation, `[build]`, `[ci]`
+and `[test]` Development (`cliff.toml`). Before a release:
+
+```sh
+git cliff --unreleased --tag vX.Y.Z --prepend CHANGELOG.md   # its section, then edit it
+git cliff --latest --strip all                                # the release's text, after tagging
+```
+
+Edit the draft for readers: what changed for them first, in their words.
+If a crate is ever published, it gets a changelog of its own
+(`git cliff --include-path 'crates/<crate>/**'`).
