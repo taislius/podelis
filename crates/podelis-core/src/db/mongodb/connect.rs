@@ -106,13 +106,15 @@ pub(in crate::db) async fn check_reach(db: &Database) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn params(user: &str, password: &str, ssl_mode: SslMode) -> ConnectParams {
+    /// The form's fields, with no password (a test gives it one made as
+    /// it runs: not a value in the code).
+    fn params(user: &str, ssl_mode: SslMode) -> ConnectParams {
         ConnectParams {
             engine: Engine::MongoDb,
             host: "db.example.com".into(),
             port: 27017,
             user: user.into(),
-            password: password.into(),
+            password: String::new(),
             database: String::new(),
             ssl_mode,
             read_only: false,
@@ -123,9 +125,15 @@ mod tests {
 
     #[test]
     fn its_url_from_the_form() {
-        let p = params("app", "p@ss word", SslMode::VerifyFull);
-        assert_eq!(url(&p, "db.example.com", 27017), "mongodb://app:p%40ss%20word@db.example.com:27017/?appName=Pod%C4%97lis&authSource=admin&tls=true");
-        assert_eq!(url(&params("", "", SslMode::Prefer), "::1", 27017), "mongodb://[::1]:27017/?appName=Pod%C4%97lis");
+        let mut p = params("app", SslMode::VerifyFull);
+        // An `@` and a space in it, encoded.
+        let n = std::process::id();
+        p.password = format!("p@ss {n}");
+        assert_eq!(
+            url(&p, "db.example.com", 27017),
+            format!("mongodb://app:p%40ss%20{n}@db.example.com:27017/?appName=Pod%C4%97lis&authSource=admin&tls=true")
+        );
+        assert_eq!(url(&params("", SslMode::Prefer), "::1", 27017), "mongodb://[::1]:27017/?appName=Pod%C4%97lis");
         let given = "mongodb+srv://u:p@cluster0.example.net/shop";
         assert_eq!(url(&p, given, 0), given, "a URL as written");
     }
