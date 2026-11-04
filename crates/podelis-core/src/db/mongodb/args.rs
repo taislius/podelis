@@ -228,7 +228,7 @@ impl Reader<'_> {
                         None => Bson::DateTime(::mongodb::bson::DateTime::now()),
                         Some(Bson::Int32(ms)) => Bson::DateTime(::mongodb::bson::DateTime::from_millis(ms.into())),
                         Some(Bson::Int64(ms)) => Bson::DateTime(::mongodb::bson::DateTime::from_millis(ms)),
-                        Some(_) => Bson::DateTime(::mongodb::bson::DateTime::parse_rfc3339_str(text()?)?),
+                        Some(_) => Bson::DateTime(shell_date(&text()?)?),
                     },
                     "NumberLong" => Bson::Int64(text()?.trim().parse()?),
                     "NumberInt" => Bson::Int32(text()?.trim().parse()?),
@@ -250,6 +250,24 @@ impl Reader<'_> {
         self.expect(b')')?;
         Ok(Some(value))
     }
+}
+
+/// A date as the shell's `ISODate()` reads it: the day alone is that day's
+/// midnight, a time without a zone is UTC, and its seconds may be left out.
+fn shell_date(text: &str) -> anyhow::Result<::mongodb::bson::DateTime> {
+    let text = text.trim();
+    let full = match text.split_once(['T', 't', ' ']) {
+        None => format!("{text}T00:00:00Z"),
+        Some((day, time)) => {
+            let zone_at = time.find(['Z', 'z', '+', '-']).unwrap_or(time.len());
+            let (clock, zone) = time.split_at(zone_at);
+            let seconds = if clock.matches(':').count() == 1 { ":00" } else { "" };
+            let zone = if zone.is_empty() { "Z" } else { zone };
+            format!("{day}T{clock}{seconds}{zone}")
+        }
+    };
+    ::mongodb::bson::DateTime::parse_rfc3339_str(&full)
+        .map_err(|_| anyhow::anyhow!("`{text}` isn't a date: write it like 2026-01-05 or 2026-01-05T10:00:00Z"))
 }
 
 #[cfg(test)]
@@ -274,6 +292,27 @@ mod tests {
         assert_eq!(got[0], Bson::ObjectId(::mongodb::bson::oid::ObjectId::parse_str(id).unwrap()));
         assert!(matches!(got[1], Bson::DateTime(_)));
         assert_eq!(got[2], Bson::DateTime(::mongodb::bson::DateTime::from_millis(0)));
+    }
+
+    #[test]
+    fn a_date_reads_as_the_shell_reads_it() {
+        let millis = |text: &str| shell_date(text).unwrap().timestamp_millis();
+        let midnight = millis("2026-01-05T00:00:00Z");
+        assert_eq!(millis("2026-01-05"), midnight);
+        assert_eq!(millis("2026-01-05T00:00"), midnight);
+        assert_eq!(millis("2026-01-05 00:00:00"), midnight);
+        assert_eq!(millis("2026-01-05T02:00:00+02:00"), midnight);
+        assert_eq!(millis("2026-01-05T01:00+01:00"), midnight);
+        assert_eq!(millis("2026-01-05T00:00:00.000Z"), midnight);
+        // In a statement, and by `new Date`.
+        let got = values("ISODate('2026-01-05'), new Date('2026-01-05')").unwrap();
+        assert_eq!(got[0], Bson::DateTime(::mongodb::bson::DateTime::from_millis(midnight)));
+        assert_eq!(got[1], got[0]);
+        // What isn't one says what it wants, not what the parser tripped on.
+        for bad in ["yesterday", "2026-13-05", "2026-01-05T25:00"] {
+            let said = shell_date(bad).unwrap_err().to_string();
+            assert!(said.contains(bad) && said.contains("2026-01-05T10:00:00Z"), "{said}");
+        }
     }
 
     #[test]
