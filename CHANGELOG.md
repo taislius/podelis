@@ -25,6 +25,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Long menus ran off small terminals, and the selection with them.
+- MongoDB: `ISODate("2026-01-05")` and `new Date("2026-01-05")` read as the shell reads them, a time without a zone as UTC; what isn't a date says what it wants.
+- `duckdb:/path`, `duckdb:./path` and `sqlite3:/path` open the file: they were taken for a SQLite file of that name. `a.duckdb` and `a.ddb` open as DuckDB.
+- Pasting a `duckdb:` or `mongodb://` URL into a connection's form fills it in, as the others do.
 - "Export every row" of a fully loaded result wrote only the rows a filter was showing; it writes them all, as they're sorted.
 - A pane's command chosen from the palette goes to that pane, so a filter takes what's typed.
 - Ctrl or Alt with a letter no longer runs that letter's command in the results and the navigator (Alt+E wrote a CSV file, an unbound Ctrl+A opened the add-row form).
