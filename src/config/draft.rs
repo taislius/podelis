@@ -87,7 +87,10 @@ impl ConnectionDraft {
         let mut draft = Self::new();
         match target {
             Target::Url(url) => draft.apply_url(url)?,
-            Target::File(path) => draft.apply_url(&format!("sqlite:{path}"))?,
+            Target::File(path) => {
+                let engine = if is_duckdb_file(path) { "duckdb" } else { "sqlite" };
+                draft.apply_url(&format!("{engine}:{path}"))?;
+            }
             Target::Saved(_) => return Err("not an address".into()),
         }
         Ok(draft)
@@ -278,7 +281,8 @@ impl ConnectionDraft {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Target {
     Url(String),
-    /// A SQLite database file (or `:memory:`).
+    /// A database file (or `:memory:`): SQLite's, unless it's named as
+    /// DuckDB's.
     File(String),
     /// A saved connection's name.
     Saved(String),
@@ -286,22 +290,36 @@ pub enum Target {
 
 pub fn classify(arg: &str) -> Target {
     let lower = arg.to_ascii_lowercase();
-    if lower.contains("://") || lower.starts_with("sqlite:") {
+    if lower.contains("://") || url_engine(arg).is_some() {
         return Target::Url(arg.to_string());
     }
-    let looks_like_file = [".db", ".sqlite", ".sqlite3", ".db3"].iter().any(|ext| lower.ends_with(ext))
-        || arg == ":memory:"
-        || arg.contains('/')
-        || std::path::Path::new(arg).is_file();
+    let looks_like_file =
+        [".db", ".sqlite", ".sqlite3", ".db3", ".duckdb", ".ddb"].iter().any(|ext| lower.ends_with(ext))
+            || arg == ":memory:"
+            || arg.contains('/')
+            || std::path::Path::new(arg).is_file();
     if looks_like_file { Target::File(arg.to_string()) } else { Target::Saved(arg.to_string()) }
+}
+
+/// A path named as a DuckDB file.
+fn is_duckdb_file(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("duckdb") || ext.eq_ignore_ascii_case("ddb"))
+}
+
+/// The engine `text` is a URL for: `scheme://…`, or for an engine of files
+/// also `scheme:path`. Every engine's schemes count, built in or not: one
+/// that isn't says so when it's opened.
+fn url_engine(text: &str) -> Option<Engine> {
+    let (scheme, rest) = text.split_once(':')?;
+    let engine = Engine::from_scheme(scheme)?;
+    (!rest.is_empty() && (engine.is_file_based() || rest.starts_with("//"))).then_some(engine)
 }
 
 /// Whether pasted text is a connection URL rather than a field value.
 pub fn looks_like_url(text: &str) -> bool {
-    let t = text.trim();
-    ["postgres://", "postgresql://", "mysql://", "mariadb://", "sqlite:", "sqlite3:"]
-        .iter()
-        .any(|p| t.len() > p.len() && t[..p.len()].eq_ignore_ascii_case(p))
+    url_engine(text.trim()).is_some()
 }
 
 fn percent_decode(s: &str) -> Option<String> {

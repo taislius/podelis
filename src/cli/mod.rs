@@ -25,7 +25,8 @@ Usage: podelis [OPTIONS] [CONNECTION]
        podelis gateway key <model> | test [<model>]
        podelis gateway context [-p <project>] <connection> <question>
 
-CONNECTION is a URL (postgres://…, mysql://…, sqlite:…), a SQLite file, or
+CONNECTION is a URL (postgres://…, mysql://…, mongodb://…, sqlite:…, duckdb:…),
+a SQLite or DuckDB file, or
 the name of a saved connection in the project (with no project yet, a URL
 or file goes into a project named default). Without one, Podėlis reopens
 your last session.
@@ -718,6 +719,53 @@ mod tests {
         assert_eq!(classify("prod"), Target::Saved("prod".into()));
         let form = ConnectionDraft::from_address(&Target::File("w.db".into())).unwrap();
         assert_eq!((form.engine, form.host.as_str()), (crate::db::Engine::Sqlite, "w.db"));
+    }
+
+    #[test]
+    fn a_file_engines_url_is_a_url_however_its_path_is_written() {
+        use crate::config::draft::looks_like_url;
+        use crate::db::Engine;
+        let opened = |arg: &str| {
+            let target = classify(arg);
+            assert_eq!(target, Target::Url(arg.into()), "{arg}");
+            let form = ConnectionDraft::from_address(&target).unwrap();
+            (form.engine, form.host)
+        };
+        // `duckdb:/abs` once went to SQLite, as a file of that name.
+        assert_eq!(opened("duckdb:/abs/a.duckdb"), (Engine::DuckDb, "/abs/a.duckdb".to_string()));
+        assert_eq!(opened("duckdb:./a.duckdb"), (Engine::DuckDb, "./a.duckdb".to_string()));
+        assert_eq!(opened("duckdb:///abs/a.duckdb"), (Engine::DuckDb, "/abs/a.duckdb".to_string()));
+        assert_eq!(opened("sqlite3:/abs/a.db"), (Engine::Sqlite, "/abs/a.db".to_string()));
+        assert_eq!(opened("sqlite:/abs/a.db"), (Engine::Sqlite, "/abs/a.db".to_string()));
+        // A bare file by its name.
+        for path in ["a.duckdb", "./data/a.ddb", "/abs/A.DUCKDB"] {
+            let target = classify(path);
+            assert_eq!(target, Target::File(path.into()));
+            let form = ConnectionDraft::from_address(&target).unwrap();
+            assert_eq!((form.engine, form.host.as_str()), (Engine::DuckDb, path));
+        }
+        // A colon alone doesn't make a URL: a file, a saved name.
+        assert_eq!(classify("notes:2026/a.db"), Target::File("notes:2026/a.db".into()));
+        assert_eq!(classify("mysql:prod"), Target::Saved("mysql:prod".into()));
+        // Pasted into the form: every engine's.
+        for url in [
+            "postgres://h/d",
+            "postgresql://h/d",
+            "mysql://h/d",
+            "mariadb://h/d",
+            "sqlite:a.db",
+            "sqlite3:a.db",
+            "duckdb:a.duckdb",
+            "duckdb:///a.duckdb",
+            "mongodb://h/d",
+            "mongodb+srv://h/d",
+            "  postgres://h/d  ",
+        ] {
+            assert!(looks_like_url(url), "{url}");
+        }
+        for text in ["prod", "sqlite:", "mysql:prod", "http://h", "12:30"] {
+            assert!(!looks_like_url(text), "{text}");
+        }
     }
 
     #[test]
