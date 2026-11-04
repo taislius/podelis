@@ -20,7 +20,8 @@ podelis -e "select 1"                                       # uses $DATABASE_URL
 podelis prod -e "select * from events" --limit 1000         # at most 1000 rows
 ```
 
-The connection is a URL, a SQLite file or a saved connection's name (in
+The connection is a URL, a database file (SQLite's, or DuckDB's if it ends in
+`.duckdb` or `.ddb`) or a saved connection's name (in
 the last project opened, or in `-p`). Without one, `-e`, `--import` and
 `--test` use `$DATABASE_URL`.
 

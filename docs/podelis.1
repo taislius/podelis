@@ -99,9 +99,11 @@ is one of:
 .It
 a URL:
 .Li postgres://user@host:port/db ,
-.Li mysql://user@host/db
+.Li mysql://user@host/db ,
+.Li mongodb://host/db ,
+.Li sqlite:path
 or
-.Li sqlite:path ;
+.Li duckdb:path ;
 .It
 a SQLite file (a path with a slash, or ending in
 .Pa .db ,
@@ -109,6 +111,10 @@ a SQLite file (a path with a slash, or ending in
 .Pa .sqlite3
 or
 .Pa .db3 ) ,
+or a DuckDB file (ending in
+.Pa .duckdb
+or
+.Pa .ddb ) ,
 or
 .Li :memory: ;
 .It
