@@ -45,7 +45,7 @@ Configuration](configuration.md#ai-models).
   connection, `Enter`. The SQL comes to the end of the editor under the
   question and the model's note, as comments; `F6` runs it once you've
   read it. Details in [the query screen](query-screen.md).
-- **AI explain:** `Ctrl+K y` on a statement: the model says in plain
+- **AI explain:** `Ctrl+K y y` on a statement: the model says in plain
   words what it does, in a pop-over, shown the same tables and facts as
   a question about it would be.
 - **From the command line:** `podelis ask prod "revenue per country last
@@ -115,7 +115,7 @@ confirm. A fact about a column of a table the database doesn't have (since
 dropped or renamed) isn't shown to the model; `podelis gateway context`
 lists such facts as maybe stale, to fix or forget.
 
-In the app, `Ctrl+K k` lists them: `a` adds, `e` (or `Enter`) changes the
+In the app, `Ctrl+K y k` lists them: `a` adds, `e` (or `Enter`) changes the
 selected one (`podelis memory edit <number> …` on the command line), `d`
 forgets. A fact you change is yours from then on: confirmed, and kept
 when `memory learn` reads its folder again; a model's guess you correct

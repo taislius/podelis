@@ -125,8 +125,8 @@ OS and the server version when something is off.
   is coming says so, and its rows follow that page), and memory stays
   reasonable.
 - [ ] Run another query while rows are still streaming: the stream is
-  cancelled on the server (check with the activity monitor, `Ctrl+K s`).
-- [ ] Sort (`s`), filter (`/`), export (`e` / `J` / `i`), and pipe through
+  cancelled on the server (check with the activity monitor, `Ctrl+K s s`).
+- [ ] Sort (`s`), filter (`/`), export (`E`, `e` / `J` / `i`), and pipe through
   `sort | uniq -c` (`|`) on a large result.
 - [ ] Open the rows (`o`) as each format, on macOS and on Linux: CSV in a
   spreadsheet, JSON and SQL in an editor, each in its own window while
@@ -134,13 +134,13 @@ OS and the server version when something is off.
   (`vd`) runs in the terminal and Podėlis comes back after it. A program
   that isn't installed says so in the status bar; `podelis doctor` lists
   the viewers.
-- [ ] The ASCII table (`+--+`): from `export ▾` to a `.txt` file, copied
-  (menu, Ctrl+K "Copy the rows as an ASCII table") and opened (`o`), it
+- [ ] The ASCII table (`+--+`): from `E` or `export ▾` to a `.txt` file, copied
+  (`C`, or Ctrl+K `/` "Copy the rows as an ASCII table") and opened (`o`), it
   lines up with Lithuanian and wide (CJK) text, `NULL`s say so, a cell
   with line breaks (or a log's ANSI colours) stays one line and lines up,
   and a huge JSON cell is cut with `…` at
   120 columns (a long column name stays whole). It opens with `[viewers] ascii`, else with what `txt` uses.
-  "Export all rows" doesn't offer it.
+  "Export every row" doesn't offer it.
 - [ ] A wide table (many columns): sideways scrolling, and the record view
   (`x`).
 - [ ] Over a slow link (a public server): the UI stays responsive while a
@@ -266,7 +266,7 @@ OS and the server version when something is off.
 Use two databases with the same tables, e.g. `pgbench -i -s 10 a` and
 `pgbench -i -s 20 b`, then change one: add a column, an index and a table.
 
-- [ ] Open both in tabs (`Ctrl+O`), then Ctrl+K and type "compare":
+- [ ] Open both in tabs (`Ctrl+O`), then Ctrl+K, `/` and type "compare":
   "Compare the schema with …" lists what's only on one side and what
   differs, with the SQL to align the other side. `y` copies it; `e` opens
   it in a tab on the other connection, where running it makes the schemas
@@ -289,7 +289,7 @@ Use two databases with the same tables, e.g. `pgbench -i -s 10 a` and
   and notifies from another window; typing meanwhile (even `y`) goes into
   the editor and cancels nothing.
 - [ ] `query_timeout = 5`: a 15-second query on a connection without a
-  Timeout is cancelled at 5 s ("timed out"); `Ctrl+K u` shows "5 s
+  Timeout is cancelled at 5 s ("timed out"); `Ctrl+K s i` shows "5 s
   (query_timeout, for every connection)". With Timeout `0` on the
   connection, it runs to the end.
 
@@ -324,9 +324,9 @@ Use two databases with the same tables, e.g. `pgbench -i -s 10 a` and
   scrolls the editor
   without losing a selection (click the statement line above a plan, then
   scroll).
-- [ ] The activity monitor (`Ctrl+K s`): sessions show, and cancelling or
+- [ ] The activity monitor (`Ctrl+K s s`): sessions show, and cancelling or
   ending one works.
-- [ ] Connection info (`Ctrl+K u`).
+- [ ] Connection info (`Ctrl+K s i`).
 
 ### AI models and the gateway
 
@@ -352,7 +352,7 @@ With a real key (a few cents) and, if you have it, Ollama:
   uses it.
 - [ ] A fresh build (or a Homebrew update) on macOS, then `Ctrl+K q`: while
   the keychain's Allow dialog waits, the status bar says so.
-- [ ] `Ctrl+K y` on a statement (one with a wrong join, too): a pop-over
+- [ ] `Ctrl+K y y` on a statement (one with a wrong join, too): a pop-over
   says what it does, step by step, and what looks wrong, any query it
   suggests indented as written; the editor isn't touched and nothing runs.
   Closing the tab meanwhile doesn't stop it.
@@ -361,7 +361,7 @@ With a real key (a few cents) and, if you have it, Ollama:
 - [ ] `podelis memory learn` on a real repository's migrations; a fact
   added with `podelis memory add` shows in `podelis gateway context` for a
   question about its table; a model's `-- assumed:` fact waits in
-  `Ctrl+K k` (orange) until `c`.
+  `Ctrl+K y k` (orange) until `c`.
 - [ ] An agent through `podelis mcp` (Claude Code): the tools work, a
   write is approved in the app, Agent activity shows the session. With the
   gateway stopped first, the agent's first call starts it.
@@ -388,7 +388,7 @@ With a real key (a few cents) and, if you have it, Ollama:
 - [ ] The status bar's right end: `AI off` with no `[[models]]`; `AI
   claude` with one; `AI claude · asks to share` on a project that keeps
   its schema to local models; gone while a message shows, back after.
-- [ ] `Ctrl+K k`, `e` on a fact: it opens whole, filled in; change its
+- [ ] `Ctrl+K y k`, `e` on a fact: it opens whole, filled in; change its
   value and `↵`: the list shows it changed (and confirmed, if it was a
   model's guess), `podelis gateway context` uses the new wording, and
   `podelis memory list <new word>` finds it. `Esc` while changing keeps it.
@@ -473,6 +473,23 @@ Run the basics (connect, run, scroll, a popup, the mouse, copying with
 - [ ] MESSAGES: `↑` selects the newest message, `Enter` shows it whole
   (`y` there copies it), `y` / `Ctrl+C` copy it, `Y` copies all; a click
   selects one, a double click opens it.
+- [ ] Menus: in each pane `m` (`F10` in the editor) lists groups with
+  separators, Delete last and apart; an item's key works in it, `Space` too;
+  a dimmed item says why when chosen. On a read-only connection Edit, Add
+  and Delete are dimmed. At 80×24 the longest menu still shows every item
+  (no separators); shorter than that it scrolls and its title says where
+  you are. A click takes the row it's on, scrolled or not.
+- [ ] "Export every row" of a loaded result with a filter on writes every row.
+- [ ] `C` opens the copy menu (`C` again or `Enter`: Markdown; pasting TSV into a
+  spreadsheet gives columns); `E` opens the export menu. Palette: `Ctrl+K /`,
+  "filter" from the editor, then type: it goes in the filter, not the SQL.
+- [ ] `?` outside the editor, and `F1` anywhere, show every key; `↑↓`,
+  `PgUp`/`PgDn` scroll it. In the editor `?` is just a character.
+- [ ] Ctrl+K groups: `Ctrl+K s` then `s`, `i`, `h`; `Ctrl+K y` then `y`, `q`,
+  `k`. The group's menu after the pause, or with `?`. A letter not in it
+  (`Ctrl+K s c` with a transaction open) runs nothing and shows the group;
+  `Backspace` goes back, `Esc` closes. A key file with `zoom = "Ctrl+K s"`
+  warns at startup that the group's keys won't work.
 - [ ] `export ▾` and `menu ▾` right of the results' tabs open their menus
   under them; the status bar shows `m  menu · right-click` (`^K m` in the
   editor), not while a filter is being typed.

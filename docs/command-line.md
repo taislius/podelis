@@ -161,7 +161,7 @@ A fact goes to a model with the tables it's about (`orders`,
 `orders`) or when it matches the question's words, labelled as what the
 team says; `podelis gateway context` shows which ones. Facts you add, and
 those from your migrations, are confirmed; only confirmed ones are shown.
-In the app, `Ctrl+K k` shows them. They're kept per project in `memory/<project-id>.db`, and
+In the app, `Ctrl+K y k` shows them. They're kept per project in `memory/<project-id>.db`, and
 the gateway's log never has their text.
 
 ## The gateway
