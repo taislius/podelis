@@ -7,25 +7,13 @@ impl App {
     pub(in crate::app) fn handle_results_key(&mut self, key: KeyEvent) {
         let tabs = [ResultTab::Rows, ResultTab::Messages, ResultTab::Plan];
         let current = tabs.iter().position(|t| *t == self.tab.result_tab).unwrap_or(0);
-        let switch = match key.code {
-            KeyCode::Char('1') => Some(0),
-            KeyCode::Char('2') => Some(1),
-            KeyCode::Char('3') => Some(2),
-            KeyCode::Char(']') => Some((current + 1) % 3),
-            KeyCode::Char('[') => Some((current + 2) % 3),
-            _ => None,
-        };
-        if let Some(i) = switch {
-            return self.set_result_tab(tabs[i]);
-        }
         match key.code {
-            KeyCode::Char('m') => return self.open_menu(None),
-            // The results kept from earlier runs.
-            // (Not over a plan's table, which isn't a run's result.)
-            KeyCode::Char(',') if !self.tab.plan_swapped => return self.step_run(false),
-            KeyCode::Char('.') if !self.tab.plan_swapped => return self.step_run(true),
-            KeyCode::Char('p') if !self.tab.plan_swapped => return self.toggle_pin_run(),
+            KeyCode::Char(']') => return self.set_result_tab(tabs[(current + 1) % 3]),
+            KeyCode::Char('[') => return self.set_result_tab(tabs[(current + 2) % 3]),
             _ => {}
+        }
+        if let Some(command) = self.pane_command(key) {
+            return self.run_command(command);
         }
         if self.tab.result_tab == ResultTab::Messages && self.handle_messages_key(key) {
             return;
@@ -36,36 +24,14 @@ impl App {
         if !self.grid_shown() {
             return self.handle_tab_scroll_key(key);
         }
-        // A plan's table can be looked at, not changed.
-        if self.tab.plan_swapped && matches!(key.code, KeyCode::Char('c' | 'a' | 'd' | 'f' | 'M' | 'i' | '<' | '>')) {
-            return self.set_status(t!("results.not_for_plan").to_string(), true);
-        }
         let Some(results) = &self.tab.grid.results else { return };
         let cols = results.columns.len();
         if cols == 0 {
             return;
         }
-        match key.code {
-            KeyCode::Char('/') => return self.tab.grid.filter_editing = true,
-            KeyCode::Esc if !self.tab.grid.filter.is_empty() => {
-                self.tab.grid.filter.clear();
-                return self.tab.grid.refresh_view();
-            }
-            KeyCode::Char('s') => return self.cycle_sort(),
-            KeyCode::Char('b') => return self.chart_column(),
-            KeyCode::Char('e') => return self.export(ExportFormat::Csv),
-            KeyCode::Char('J') => return self.export(ExportFormat::Json),
-            KeyCode::Char('i') => return self.export(ExportFormat::Sql),
-            KeyCode::Char('M') => return self.load_more(),
-            KeyCode::Char('c') => return self.start_cell_edit(),
-            KeyCode::Char('a') => return self.start_row_insert(),
-            KeyCode::Char('d') => return self.delete_rows(),
-            KeyCode::Char('C') => return self.copy_markdown(),
-            KeyCode::Char('z') => return self.toggle_zoom(),
-            KeyCode::Char('>') => return self.step_result_set(true),
-            KeyCode::Char('<') => return self.step_result_set(false),
-            KeyCode::Char('X') => return self.toggle_vertical(),
-            _ => {}
+        if key.code == KeyCode::Esc && !self.tab.grid.filter.is_empty() {
+            self.tab.grid.filter.clear();
+            return self.tab.grid.refresh_view();
         }
         let len = self.tab.grid.view.len();
         if len == 0 {
@@ -91,14 +57,6 @@ impl App {
             }
             KeyCode::Char('0' | '^') => self.tab.grid.selected_col = 0,
             KeyCode::Char('$') => self.tab.grid.selected_col = cols - 1,
-            KeyCode::Char('y') => self.copy_cell(),
-            KeyCode::Char('Y') => self.copy_row(),
-            KeyCode::Enter | KeyCode::Char('v') => self.open_cell_view(),
-            KeyCode::Char('x') => self.open_record_view(),
-            KeyCode::Char(' ') => self.toggle_mark(),
-            KeyCode::Char('f') => self.follow_foreign_key(),
-            KeyCode::Char('|') => self.open_pipe_prompt(),
-            KeyCode::Char('o') => self.open_in_viewer(),
             _ => {}
         }
     }

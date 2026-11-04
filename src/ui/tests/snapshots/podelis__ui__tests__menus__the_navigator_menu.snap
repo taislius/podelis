@@ -1,0 +1,20 @@
+---
+source: src/ui/tests/menus.rs
+expression: items(&app)
+---
+NAVIGATOR
+Expand / collapse, or show a function  [↵]
+Show the definition  [d]
+Related tables (foreign keys, both ways)  [f]
+---
+SELECT * from it: add to the editor and run  [s]
+Copy the name  [y]
+---
+Filter by name  [/]
+Order by name, rows or size  [o]
+Show / hide system tables  [.]
+Refresh  [r]  (dimmed)
+Zoom this pane (and back)  [z]
+---
+Compare the schema with another connection  []  (dimmed)
+Save a schema snapshot, to compare with later  []

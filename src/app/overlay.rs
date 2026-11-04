@@ -17,7 +17,7 @@ pub struct Popups {
     /// `Ctrl+K q`: the question being typed (the one being answered is
     /// `App::ask`).
     pub ask_prompt: Option<LineInput>,
-    /// `Ctrl+K k`: the project's memory.
+    /// `Ctrl+K y k`: the project's memory.
     pub memory_view: Option<memory_view::MemoryView>,
     /// The add-row form (`a`).
     pub row_form: Option<rows::RowForm>,
@@ -51,7 +51,7 @@ pub enum Overlay {
     PipePrompt,
     /// The question to ask a model (`Ctrl+K q`).
     AskPrompt,
-    /// The project's memory (`Ctrl+K k`).
+    /// The project's memory (`Ctrl+K y k`).
     Memory,
     RowForm,
     Palette,

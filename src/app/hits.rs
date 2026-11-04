@@ -53,8 +53,11 @@ pub struct Hits {
     /// The result table's body rows, and each visible column's x range.
     pub result_rows: Rect,
     pub result_cols: Vec<(u16, u16, usize)>,
-    /// The open pop-up menu.
+    /// The terminal is too narrow to draw the navigator, on or not.
+    pub navigator_too_narrow: bool,
+    /// The open pop-up menu, and which item each row of it draws.
     pub menu: Rect,
+    pub menu_rows: Vec<(u16, usize)>,
     /// The library window's rows, and the index of the first one shown.
     pub library_list: (Rect, usize),
     /// The projects and connections panes: each list's rows and the

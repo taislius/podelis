@@ -203,9 +203,7 @@ async fn result_tabs_messages_and_help() {
     assert!(app.help_visible && app.tab.result_tab == ResultTab::Messages);
     app.handle_key(key(KeyCode::Esc));
     assert!(!app.help_visible);
-    // `?` outside the editor is Ctrl+K; `?` in its menu shows every key.
-    app.handle_key(key(KeyCode::Char('?')));
-    assert!(app.popups.palette.as_ref().is_some_and(|p| !p.searching));
+    // `?` outside the editor is every key.
     app.handle_key(key(KeyCode::Char('?')));
     assert!(app.popups.palette.is_none() && app.help_visible);
     app.handle_key(key(KeyCode::Esc));
@@ -391,13 +389,13 @@ fn the_tab_list_finds_a_tab_by_name_connection_or_sql() {
     app.handle_key(ctrl('k'));
     app.handle_key(key(KeyCode::Char('g')));
     let palette = app.popups.palette.as_ref().expect("the tab list");
-    assert!(palette.tabs_only && palette.selected == app.active_tab);
+    assert!(palette.tabs_only() && palette.selected == app.active_tab);
     // All of them, the shown one marked.
     assert_eq!(app.palette_items().len(), 12);
     assert!(app.tab_entry(app.active_tab).ends_with("(this one)"), "{}", app.tab_entry(app.active_tab));
     // By the SQL in a tab.
     type_text(&mut app, "orders_7");
-    assert_eq!(app.palette_items(), [crate::app::palette::Command::SwitchTab(6)]);
+    assert_eq!(app.palette_items(), [crate::app::commands::Command::SwitchTab(6)]);
     app.handle_key(key(KeyCode::Enter));
     assert!(app.popups.palette.is_none());
     assert_eq!((app.active_tab, app.tabs[app.active_tab].name.as_str()), (6, "report 7"));
@@ -410,7 +408,7 @@ fn the_tab_list_finds_a_tab_by_name_connection_or_sql() {
     for _ in 0..12 {
         app.handle_key(key(KeyCode::Backspace));
     }
-    assert!(app.popups.palette.as_ref().is_some_and(|p| p.tabs_only && p.searching));
+    assert!(app.popups.palette.as_ref().is_some_and(|p| p.tabs_only() && p.searching()));
     app.handle_key(key(KeyCode::Esc));
     assert_eq!(app.active_tab, 6);
 }

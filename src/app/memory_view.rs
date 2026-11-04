@@ -1,4 +1,4 @@
-//! The project's memory in the app (`Ctrl+K k`): what models are told
+//! The project's memory in the app (`Ctrl+K y k`): what models are told
 //! about its data. Facts a model suggested wait (orange) until the user
 //! confirms them (`c`); `a` adds one, `e` changes one, `d` forgets one. The gateway keeps
 //! them, so every change goes through it.
@@ -37,7 +37,7 @@ pub enum GatewayPurpose {
 }
 
 impl App {
-    /// `Ctrl+K k`: the project's memory.
+    /// `Ctrl+K y k`: the project's memory.
     pub(super) fn open_memory(&mut self) {
         let Some(project_id) = self.current_project.clone() else {
             return self.set_status(t!("memory.need_project").into(), true);

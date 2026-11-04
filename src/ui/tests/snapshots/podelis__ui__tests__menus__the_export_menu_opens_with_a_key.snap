@@ -1,0 +1,15 @@
+---
+source: src/ui/tests/menus.rs
+expression: items(&app)
+---
+EXPORT
+Export the rows shown as CSV  [e]
+Export the rows shown as JSON  [J]
+Export the rows shown as an ASCII table (+--+)  []
+Export the rows shown as INSERT statements  [i]
+Export the rows shown as Parquet  []
+---
+Export every row as CSV  []
+Export every row as JSON  []
+Export every row as INSERT statements  []
+Export every row as Parquet  []

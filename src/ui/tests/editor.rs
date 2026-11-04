@@ -155,7 +155,7 @@ fn the_active_tab_shows_its_whole_name_and_stays_in_sight() {
         row: app.hits.tabs_y,
         modifiers: KeyModifiers::NONE,
     });
-    assert!(app.popups.palette.as_ref().is_some_and(|p| p.tabs_only), "the tab list");
+    assert!(app.popups.palette.as_ref().is_some_and(crate::app::palette::Palette::tabs_only), "the tab list");
     assert_eq!(app.active_tab, 10, "no tab picked yet");
     app.popups.palette = None;
     // Whatever is beside the name (a saved query's " ●", wide characters,
@@ -189,25 +189,22 @@ fn the_statement_zoom_shows_the_statement_alone() {
 }
 
 #[test]
-fn ctrl_k_menu_shows_letters_and_the_panes_keys() {
+fn ctrl_k_menu_shows_its_letters_by_group() {
     let (mut app, _dir) = query_app();
     app.panes.schema_visible = true;
     app.focus = Focus::Schema;
     app.notes.status.clear();
     let screen = render(&mut app, 90, 30);
     assert!(screen.contains("^K  keys") && !screen.contains("REFRESH"), "minimal hints, no pane footer:\n{screen}");
-    // `?` outside the editor opens the same menu as Ctrl+K.
-    app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+    // Ctrl+K's menu here (Space opens it in the navigator too).
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    app.show_palette_menu();
     let screen = render(&mut app, 90, 30);
-    assert!(screen.contains("IN THE NAVIGATOR") && screen.contains("zoom pane"), "{screen}");
-    // The editor's own keys only from the editor.
-    assert!(
-        !screen.contains("format SQL")
-            && !screen.contains("explain analyze")
-            && !screen.contains("rename tab")
-            && !screen.contains("transaction mode"),
-        "{screen}"
-    );
+    assert!(screen.contains("TRANSACTION") && screen.contains("z zoom"), "{screen}");
+    // The pane's own keys are in its menu, not here.
+    assert!(!screen.contains("REFRESH") && screen.contains("m this pane's menu"), "{screen}");
+    // The editor's own keys are there from everywhere, dimmed, in their place.
+    assert!(screen.contains("format SQL") && screen.contains("rename tab"), "{screen}");
     assert_snapshot!(screen);
     // A letter runs its action.
     app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
@@ -218,25 +215,23 @@ fn ctrl_k_menu_shows_letters_and_the_panes_keys() {
         app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
     }
     let screen = render(&mut app, 90, 30);
-    assert!(screen.contains("COMMANDS") && screen.contains("Export rows as CSV"), "{screen}");
+    assert!(screen.contains("COMMANDS") && screen.contains("Export the rows shown as CSV"), "{screen}");
     // From the editor, its own keys are there.
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     app.panes.zoomed = false;
     app.focus = Focus::Editor;
     app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
-    if let Some(palette) = &mut app.popups.palette {
-        palette.menu = true;
-    }
+    app.show_palette_menu();
     let screen = render(&mut app, 90, 30);
     assert!(
         screen.contains("format SQL")
             && screen.contains("explain analyze")
             && screen.contains("rename tab")
-            && screen.contains("transaction mode"),
+            && screen.contains("x mode"),
         "{screen}"
     );
-    // Commit and roll back only with a transaction open.
-    assert!(!screen.contains("commit") && !screen.contains("roll back"), "{screen}");
+    // Commit and roll back keep their places, dimmed with no transaction.
+    assert!(screen.contains("c commit") && screen.contains("r roll back"), "{screen}");
     app.connection.txn = TxnState::Open;
     let screen = render(&mut app, 90, 30);
     assert!(screen.contains("c commit") && screen.contains("r roll back"), "{screen}");
@@ -272,7 +267,8 @@ fn ctrl_k_lists_the_tabs_and_finds_them_by_name() {
     assert_eq!(app.active_tab, 1);
     app.focus = Focus::Results;
     let first = app.tabs[0].name.clone();
-    app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+    app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+    app.show_palette_menu();
     let screen = render(&mut app, 100, 40);
     assert!(screen.contains("TABS") && screen.contains("(this one)") && screen.contains(&first), "{screen}");
     assert_snapshot!(screen);

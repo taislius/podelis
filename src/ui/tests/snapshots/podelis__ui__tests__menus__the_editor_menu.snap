@@ -1,0 +1,35 @@
+---
+source: src/ui/tests/menus.rs
+expression: items(&app)
+---
+EDITOR
+Copy  [Ctrl+C]
+Cut  [Ctrl+X]  (dimmed)
+Paste  [Ctrl+V]
+---
+Run (the selection, or everything)  [F5]
+Run the statement at the cursor  [F6]
+Explain (plan only)  [F7]
+Explain analyze (runs it)  [Shift+F7]
+Explain in plain words (AI)  [Ctrl+K y y]
+---
+Commit the open transaction  [F8]  (dimmed)
+Roll back the open transaction  [Shift+F8]  (dimmed)
+Transaction mode…  [Ctrl+K x]
+---
+Select the statement  [Ctrl+K v]
+Zoom the statement (alone)  [Ctrl+K b]
+Format SQL  [Ctrl+K f]
+Comment / uncomment lines  [Ctrl+K -]
+Find and replace  [Ctrl+F]
+Go to the next lint warning  [Ctrl+K w]
+---
+Insert a snippet or saved query  [Ctrl+K i]
+Save the statement to the library  []
+Save the tab to the library  [Ctrl+S]
+Search saved queries and history  [Ctrl+K l]
+---
+Zoom this pane (and back)  [Ctrl+K z]
+All commands…  [Ctrl+K /]
+---
+Close the tab  [Ctrl+W]

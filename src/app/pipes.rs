@@ -103,14 +103,14 @@ impl App {
     }
 
     /// What opens rows in `format` (`Settings::viewer_for`).
-    pub(super) fn viewer_for(&self, format: OpenFormat) -> Viewer {
+    pub(super) fn viewer_for(&self, format: Format) -> Viewer {
         self.settings.viewer_for(format.key())
     }
 
     /// Writes the rows (the marked ones, or those shown) in `format` to a
     /// file of their own and opens it: in its app, which Podėlis doesn't
     /// wait for, or in this terminal for a viewer that runs in one.
-    pub(super) fn open_rows_as(&mut self, format: OpenFormat) {
+    pub(super) fn open_rows_as(&mut self, format: Format) {
         let Some((rows, text)) = self.rows_as(format) else {
             return self.set_status(t!("pipes.nothing_to_open").to_string(), true);
         };
@@ -170,55 +170,6 @@ impl App {
     }
 }
 
-/// The formats rows open in (`o`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OpenFormat {
-    Csv,
-    Tsv,
-    Json,
-    /// `INSERT` statements.
-    Sql,
-    /// Aligned columns, as `-e` prints them.
-    Text,
-    /// A table with `+--+` borders.
-    Ascii,
-}
-
-impl OpenFormat {
-    pub const ALL: [OpenFormat; 6] =
-        [OpenFormat::Csv, OpenFormat::Json, OpenFormat::Sql, OpenFormat::Tsv, OpenFormat::Text, OpenFormat::Ascii];
-
-    /// Its key in `[viewers]`.
-    pub fn key(self) -> &'static str {
-        match self {
-            OpenFormat::Ascii => "ascii",
-            other => other.ext(),
-        }
-    }
-
-    /// Its file's extension.
-    pub fn ext(self) -> &'static str {
-        match self {
-            OpenFormat::Csv => "csv",
-            OpenFormat::Tsv => "tsv",
-            OpenFormat::Json => "json",
-            OpenFormat::Sql => "sql",
-            OpenFormat::Text | OpenFormat::Ascii => "txt",
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            OpenFormat::Csv => "CSV",
-            OpenFormat::Tsv => "TSV",
-            OpenFormat::Json => "JSON",
-            OpenFormat::Sql => t!("pipes.format_sql"),
-            OpenFormat::Text => t!("pipes.format_text"),
-            OpenFormat::Ascii => t!("pipes.format_ascii"),
-        }
-    }
-}
-
 /// Rows opened in an app stay this long (the app reads the file when it
 /// likes), then go the next time rows are opened.
 const OPENED_KEPT: std::time::Duration = std::time::Duration::from_hours(24);
@@ -231,7 +182,7 @@ fn opened_dir(config_dir: &std::path::Path) -> PathBuf {
 
 /// Writes `text` to a new file in `dir` (made the user's alone), after
 /// removing what's been there for a day.
-fn write_opened(dir: &std::path::Path, format: OpenFormat, text: &str) -> Result<PathBuf, String> {
+fn write_opened(dir: &std::path::Path, format: Format, text: &str) -> Result<PathBuf, String> {
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));

@@ -22,6 +22,7 @@ use crate::sql::complete::{CandKind, Candidate};
 mod agents;
 mod editor;
 mod layout;
+mod menus;
 mod navigator;
 mod plans;
 mod results;

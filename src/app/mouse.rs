@@ -41,10 +41,10 @@ impl App {
             return;
         }
         if self.popups.menu.is_some() {
-            if matches!(ev.kind, MouseEventKind::Down(_)) {
-                self.click_menu(x, y);
-            }
-            return;
+            return self.menu_mouse(ev.kind, x, y);
+        }
+        if self.help_visible {
+            return self.help_mouse(ev.kind);
         }
         // The library: a click picks a row, a double click opens it, the
         // wheel moves through them.
@@ -204,6 +204,26 @@ impl App {
         match self.panes.drag_out.filter(|_| self.panes.dragging && editor_there) {
             Some((x, y, _)) => self.on_input(|app| app.drag_editor(x, y)),
             None => self.panes.drag_out = None,
+        }
+    }
+
+    /// Over a menu: a click chooses, the wheel moves.
+    fn menu_mouse(&mut self, kind: MouseEventKind, x: u16, y: u16) {
+        let Some(menu) = &mut self.popups.menu else { return };
+        match kind {
+            MouseEventKind::Down(_) => self.click_menu(x, y),
+            MouseEventKind::ScrollDown => menu.selected = (menu.selected + 1).min(menu.items.len().saturating_sub(1)),
+            MouseEventKind::ScrollUp => menu.selected = menu.selected.saturating_sub(1),
+            _ => {}
+        }
+    }
+
+    /// Over every key's window: the wheel scrolls it.
+    fn help_mouse(&mut self, kind: MouseEventKind) {
+        match kind {
+            MouseEventKind::ScrollDown => self.help_scroll = self.help_scroll.saturating_add(WHEEL_LINES as u16),
+            MouseEventKind::ScrollUp => self.help_scroll = self.help_scroll.saturating_sub(WHEEL_LINES as u16),
+            _ => {}
         }
     }
 

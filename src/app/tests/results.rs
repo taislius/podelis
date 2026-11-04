@@ -135,7 +135,6 @@ fn kept_results_are_dropped_past_a_row_budget() {
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn rows_open_in_the_app_for_their_format() {
-    use crate::app::pipes::OpenFormat;
     use crate::config::settings::Viewer;
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
     run_sql(&mut app, "select 1 as n, 'a' as s").await;
@@ -145,12 +144,12 @@ async fn rows_open_in_the_app_for_their_format() {
     for (format, given) in [("json", "open"), ("sql", "xdg-open"), ("txt", "open")] {
         app.settings.viewers.insert(format.into(), Viewer::Command(given.into()));
     }
-    assert_eq!(app.viewer_for(OpenFormat::Csv), Viewer::Command("libreoffice --calc".into()));
+    assert_eq!(app.viewer_for(Format::Csv), Viewer::Command("libreoffice --calc".into()));
     app.open_viewer_menu();
     let keys: Vec<String> = app.popups.menu.as_ref().unwrap().items.iter().map(|i| i.keys.clone()).collect();
-    assert_eq!(keys, ["libreoffice", "its app", "its app", "here: less", "its app", "its app"]);
+    assert_eq!(keys, ["libreoffice", "here: less", "its app", "its app", "its app", "its app"]);
     // One in the terminal: the main loop runs it, on a file of the user's alone.
-    app.open_rows_as(OpenFormat::Tsv);
+    app.open_rows_as(Format::Tsv);
     let external = app.take_external().expect("run in the terminal");
     assert!(external.command.starts_with("less -S '") && external.command.ends_with(".tsv'"), "{}", external.command);
     assert_eq!(std::fs::read_to_string(&external.file).unwrap(), "n\ts\n1\ta\n");
@@ -292,7 +291,7 @@ async fn export_parquet_shown_and_all_rows() {
     run_sql(&mut app, "WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 2500) SELECT n FROM s")
         .await;
     app.focus = Focus::Results;
-    app.run_command(crate::app::palette::Command::ExportParquet);
+    app.run_command(crate::app::commands::Command::Rows { to: Dest::ExportShown, format: Format::Parquet });
     // Written off the UI thread: done when its word comes.
     while app.export_task.is_some() {
         let event = app.poll_db_event().await.unwrap();
@@ -303,7 +302,7 @@ async fn export_parquet_shown_and_all_rows() {
     assert_eq!(rows_in(&shown[0]), 10);
     std::fs::remove_file(&shown[0]).unwrap();
 
-    app.export_all(PagedFormat::Parquet);
+    app.export_all(Format::Parquet);
     loop {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
@@ -315,7 +314,38 @@ async fn export_parquet_shown_and_all_rows() {
     assert_eq!(rows_in(&parquet_files()[0]), 2500);
 }
 
-/// "Export all rows" writes every row of a streamed result, not just those
+/// A result all here: "every row" is every row, whatever a filter shows, in
+/// Parquet as in the text formats.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn export_every_row_as_parquet_ignores_a_filter() {
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+    let (mut app, dir) = connected_app(ConnectionMode::Normal).await;
+    app.settings.export_dir = Some(dir.path().to_string_lossy().into_owned());
+    run_sql(&mut app, "SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3").await;
+    app.focus = Focus::Results;
+    while app.tab.run.stream.is_some() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    app.tab.grid.filter.insert_str("2");
+    app.tab.grid.refresh_view();
+    assert_eq!(app.tab.grid.view.len(), 1);
+    app.run_command(crate::app::commands::Command::Rows { to: Dest::ExportAll, format: Format::Parquet });
+    while app.export_task.is_some() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    let file = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .find(|p| p.extension().is_some_and(|e| e == "parquet"))
+        .expect("the file");
+    let reader = SerializedFileReader::new(std::fs::File::open(&file).unwrap()).unwrap();
+    assert_eq!(reader.metadata().file_metadata().num_rows(), 3);
+}
+
+/// "Export every row" writes every row of a streamed result, not just those
 /// loaded, without loading them into the grid; Esc stops it.
 #[cfg(feature = "sqlite")]
 #[tokio::test]
@@ -328,7 +358,7 @@ async fn export_all_rows_of_a_streamed_result() {
     app.focus = Focus::Results;
     // A plain export says only the loaded rows went, and how to get all.
     app.handle_key(key(KeyCode::Char('e')));
-    assert!(said(&app).contains("10 rows loaded") && said(&app).contains("export all"), "{}", said(&app));
+    assert!(said(&app).contains("10 rows loaded") && said(&app).contains("Export every row"), "{}", said(&app));
     let exports = || {
         let mut files: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
@@ -342,7 +372,7 @@ async fn export_all_rows_of_a_streamed_result() {
         std::fs::remove_file(file).unwrap();
     }
 
-    app.export_all(PagedFormat::Csv);
+    app.export_all(Format::Csv);
     loop {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
@@ -362,7 +392,7 @@ async fn export_all_rows_of_a_streamed_result() {
     std::fs::remove_file(&exports()[0]).unwrap();
     run_sql(&mut app, many).await;
     app.focus = Focus::Results;
-    app.export_all(PagedFormat::Json);
+    app.export_all(Format::Json);
     assert!(app.export_task.is_some());
     app.handle_key(key(KeyCode::Esc));
     assert!(app.export_task.is_none() && said(&app).contains("Export stopped"), "{}", said(&app));
@@ -458,7 +488,7 @@ async fn copying_names_rows_as_csv_and_where_messages_show() {
     assert!(app.take_clipboard().is_some());
     // Rows as CSV: those marked, else all shown.
     app.focus = Focus::Results;
-    app.run_command(crate::app::palette::Command::CopyRows(ExportFormat::Csv));
+    app.run_command(crate::app::commands::Command::Rows { to: Dest::Copy, format: Format::Csv });
     assert_eq!(app.take_clipboard().as_deref(), Some("id,name\r\n1,Rex\r\n2,Tom\r\n"));
     // A results key's message is in the results' footer, and in MESSAGES.
     app.handle_key(key(KeyCode::Char('Y')));
@@ -711,6 +741,21 @@ async fn add_mark_delete_and_copy_rows() {
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Char(' ')));
     assert_eq!(app.tab.grid.marked.len(), 2);
+    // An edit from the palette goes ahead, and to the rows.
+    app.focus = Focus::Editor;
+    app.run_command(crate::app::commands::Command::EditCell);
+    assert!(app.cell_edit.is_some() && app.focus == Focus::Results);
+    app.handle_key(key(KeyCode::Esc));
+    // A filter hiding the marked rows doesn't unmark them: they can still go.
+    app.tab.grid.filter.insert_str("nothing like this");
+    app.tab.grid.refresh_view();
+    assert!(app.tab.grid.view.is_empty());
+    assert_eq!(app.can(crate::app::commands::Command::DeleteRows), crate::app::commands::Can::Yes);
+    app.tab.grid.filter.clear();
+    app.tab.grid.refresh_view();
+    // `C` opens the formats; `C` again is Markdown.
+    app.handle_key(key(KeyCode::Char('C')));
+    assert!(app.take_clipboard().is_none() && app.popups.menu.is_some());
     app.handle_key(key(KeyCode::Char('C')));
     assert_eq!(
         app.take_clipboard().unwrap(),
