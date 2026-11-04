@@ -4,6 +4,31 @@ What changed in each release of Podėlis, newest first. Drafted from the
 commits by [git-cliff](https://git-cliff.org) (`cliff.toml`), then edited.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- Copying rows as TSV.
+- `E` in the results opens the export menu, which was mouse-only; the palette finds the panes' commands too (sort, filter, chart, delete…), each with its key.
+- F1's window scrolls, by keys or the wheel, says which lines are showing, and lists every command with a key.
+- Ctrl+K groups: `Ctrl+K s` the server, `Ctrl+K y` AI. A key in `config.toml` can be in a group (`"Ctrl+K s i"`). A letter not in the group runs nothing and shows it.
+
+### Changed
+
+- Menus redrawn: in groups with separators, one wording and one order of formats everywhere, Delete last and apart, one key per item. What doesn't apply is dimmed, not hidden, and says why when chosen. Copy, Export and Other results are menus of their own.
+- `C` opens the copy menu, Markdown selected: `C` again or `Enter` copies it.
+- `?` outside the editor shows every key, not Ctrl+K's menu.
+- Keys moved: `Ctrl+K s` to `s s` (sessions), `u` to `s i` (connection info), `h` to `s h` (heartbeat), `y` to `y y` (AI explain), `k` to `y k` (memory). `u`, `h` and `k` are free, and start a search.
+- Ctrl+K's menu shows its letters by group; the pane's own keys moved to `m`.
+- The editor's menu no longer lists the tabs and the open connections: `Ctrl+K g` and `Ctrl+K j`, or the palette.
+
+### Fixed
+
+- Long menus ran off small terminals, and the selection with them.
+- "Export every row" of a fully loaded result wrote only the rows a filter was showing; it writes them all, as they're sorted.
+- A pane's command chosen from the palette goes to that pane, so a filter takes what's typed.
+- Ctrl or Alt with a letter no longer runs that letter's command in the results and the navigator (Alt+E wrote a CSV file, an unbound Ctrl+A opened the add-row form).
+
 ## [0.8.0] — 2026-11-03
 
 ### Added

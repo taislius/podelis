@@ -182,7 +182,8 @@ tables) is in [manual-testing.md](manual-testing.md): data sets
 to test with, from generated to public servers with real data, and a
 checklist to go through before a release.
 
-UI rendering is covered by snapshot tests (`src/ui/snapshots/`). After an
+UI rendering is covered by snapshot tests (`src/ui/snapshots/`), and every
+menu's items and order by those of `src/ui/tests/menus.rs`. After an
 intended UI change, review and accept them with `cargo insta review` (or
 rerun with `INSTA_UPDATE=always` and check the diff).
 

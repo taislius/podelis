@@ -79,7 +79,7 @@ While editing or adding a connection:
 - **SSL mode:** `prefer` (the default) uses TLS when the server offers it.
   If the server offers TLS this client can't use (an old MySQL 5.x that
   speaks only TLS 1.0/1.1), it connects without encryption and warns: in
-  the status bar and MESSAGES, under `Ctrl+K u`, and in the `Ctrl+T` test.
+  the status bar and MESSAGES, under `Ctrl+K s i`, and in the `Ctrl+T` test.
   `require` and the `verify-*` modes never fall back; `disable` doesn't try.
 - **Passwd cmd:** optional. A command that prints the password, run each
   time the connection opens: `pass show db/prod`, `op read

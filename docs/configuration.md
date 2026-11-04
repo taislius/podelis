@@ -55,17 +55,17 @@ Ctrl+PageUp), `save_tab` (Ctrl+S), `rename_tab` (Ctrl+K t, F4), `library`
 (Ctrl+K l, F3), `commit` / `rollback` (F8 / Shift+F8, Ctrl+K c / r),
 `find` (Ctrl+F), `comment` (Ctrl+K -, Ctrl+/, Ctrl+7), `format` (Ctrl+K f,
 F9), `palette` (Ctrl+K), `explain_analyze` (Shift+F7, Ctrl+K a),
-`connection_info` (Ctrl+K u), `activity` (Ctrl+K s), `heartbeat`
-(Ctrl+K h), `insert_snippet` (Ctrl+K i, Ctrl+E), `menu` (Ctrl+K m,
+`connection_info` (Ctrl+K s i), `activity` (Ctrl+K s s), `heartbeat`
+(Ctrl+K s h), `insert_snippet` (Ctrl+K i, Ctrl+E), `menu` (Ctrl+K m,
 Shift+F10, F10), `zoom` (Ctrl+K z, F12), `zoom_statement` (Ctrl+K b,
 Shift+F12), `select_statement` (Ctrl+K v), `projects` (Ctrl+K p),
-`transaction_mode` (Ctrl+K x), `next_warning` (Ctrl+K w), `ask` (Ctrl+K q),
-`ai_explain` (Ctrl+K y), `memory` (Ctrl+K k), `tab_list` (Ctrl+K g), `connection_list` (Ctrl+K j),
+`transaction_mode` (Ctrl+K x), `next_warning` (Ctrl+K w), `ask` (Ctrl+K q, Ctrl+K y q),
+`ai_explain` (Ctrl+K y y), `memory` (Ctrl+K y k), `tab_list` (Ctrl+K g), `connection_list` (Ctrl+K j),
 `settings` (Ctrl+K ,), `save_statement` (none; in the editor's menu). To
 have AI explain on `F8`, move commit off it: `commit = "Ctrl+K c"`,
-`ai_explain = ["F8", "Ctrl+K y"]`. Keys are written like `F5`, `Ctrl+R`,
+`ai_explain = ["F8", "Ctrl+K y y"]`. Keys are written like `F5`, `Ctrl+R`,
 `Ctrl+Shift+PageUp`, `Ctrl+Space`; `Ctrl+K x` is a letter in the Ctrl+K
-menu. Unknown actions or keys are reported at startup, and the help screen
+menu, `Ctrl+K s i` a letter in its group `s` (a group goes no deeper, and has no `m` or `?`). Unknown actions or keys are reported at startup, and the help screen
 (`F1`) shows the keys in use.
 
 Colours follow the terminal: 24-bit where supported (iTerm2, kitty, WezTerm,

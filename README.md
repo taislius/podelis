@@ -47,7 +47,8 @@ same way tools like `lazygit` do.
   or the statement under the cursor, select it (`Ctrl+K v`) or **zoom it**
   alone into a taller pop-over (`Shift+F12`), find and replace, comment toggling,
   bracket matching, **SQL formatting**, **one menu for every action**
-  (Ctrl+K, then a letter — or type to search),
+  (Ctrl+K, then a letter — or `/` to search), a **menu in each pane** (`m`,
+  right-click), `?` for every key,
   optional **vim keys**, **rebindable keys** and **mouse** support
 - **Tabs and a query library:** several query tabs per project, each with
   its own results and **its own connection** (so one tab can be on staging
@@ -59,7 +60,7 @@ same way tools like `lazygit` do.
   `@2026-10`) — from one window (F3) that previews the selected query.
   `Ctrl+K j` lists the open connections, to go to or close one;
   `Ctrl+K g` lists every tab with its connection and what runs there
-- **Compare two connections** open in tabs (Ctrl+K, type “compare”):
+- **Compare two connections** open in tabs (Ctrl+K `/`, type “compare”):
   - the **schema**: tables, views, columns, indexes and foreign keys only
     on one side or different, with the SQL that makes the other side match
     (drops left commented out) — `e` opens it in a tab on that connection.
@@ -105,8 +106,8 @@ same way tools like `lazygit` do.
   can be given up on (`Esc` twice)
 - **Results:** type-aware columns, sideways scrolling, sort, filter, a
   full-value view (JSON pretty-printed), copying (Ctrl+C: a cell, rows, marked
-  rows as Markdown, CSV, JSON, `INSERT`s or an ASCII table), CSV, JSON, SQL
-  `INSERT`, ASCII-table (`+--+`) and **Parquet** export (`export ▾` above the
+  rows; `C` as CSV, TSV, JSON, Markdown, an ASCII table or `INSERT`s), CSV, JSON, SQL
+  `INSERT`, ASCII-table (`+--+`) and **Parquet** export (`E` or `export ▾` above the
   rows lists them all; Parquet from any engine, MongoDB's too, its columns
   typed: integers, decimals, dates and timestamps as Parquet's own, a column
   whose values don't all read so as text), **opening rows in an
@@ -152,7 +153,7 @@ same way tools like `lazygit` do.
   cancelled; revenue is net of refunds) goes in the project's memory
   (`podelis memory add …`) and is shown to the model with those tables. Rows never go to
   the model, and the schema leaves your machine only if you allow it.
-  `Ctrl+K y` has the model **explain** the statement under the cursor in
+  `Ctrl+K y y` has the model **explain** the statement under the cursor in
   plain words (and say what looks wrong in it), without running it
 - **For AI agents:** `podelis mcp` gives your coding agent the connections
   you share with it, in read-only transactions unless you allow writes, with
@@ -246,8 +247,8 @@ these work headless too, with no UI: in scripts, cron jobs and CI.
 | Data in | | `podelis app.db --import data.csv` ([`--import`](docs/command-line.md#load-a-file---import)) |
 | Passwords from your tools | A connection's password command (`op read …`, `pass show …`, `vault kv get …`) instead of a saved password ([Settings](docs/connections.md#settings)) | The same, for every saved connection `-e`, `--import` and `ask` open; or `$DATABASE_URL` |
 | Models' keys from your tools | | A model's `key_command` in `config.toml` ([AI models](docs/configuration.md#ai-models)) |
-| AI agents | Their calls, approvals and sandboxes in the agent activity (`Ctrl+K`, then type "agent") | `podelis mcp`: any MCP agent uses the connections you share, under the rules you set ([For AI agents](docs/agents.md)) |
-| Asking and memory | `Ctrl+K q`, `Ctrl+K k` | `podelis ask`, `podelis memory` ([`ask`](docs/command-line.md#ask-in-plain-language-ask), [`memory`](docs/command-line.md#what-your-team-knows-memory)) |
+| AI agents | Their calls, approvals and sandboxes in the agent activity (`Ctrl+K /`, then type "agent") | `podelis mcp`: any MCP agent uses the connections you share, under the rules you set ([For AI agents](docs/agents.md)) |
+| Asking and memory | `Ctrl+K q`, `Ctrl+K y k` | `podelis ask`, `podelis memory` ([`ask`](docs/command-line.md#ask-in-plain-language-ask), [`memory`](docs/command-line.md#what-your-team-knows-memory)) |
 | Telling what happened | | Exit codes for each kind of failure, so a script can tell a refused write from a lost server ([Exit codes](docs/command-line.md#exit-codes)); `podelis doctor` and `--test` check a setup ([On servers and in CI](docs/command-line.md#on-servers-and-in-ci)) |
 
 More databases through separate adapter programs are planned, not built.

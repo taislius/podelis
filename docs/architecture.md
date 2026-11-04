@@ -102,6 +102,27 @@ popups, `tabs.rs` which tab runs what, `query/` running and exports).
 A few pieces in `app/` are shared, so the same thing works the same way
 everywhere:
 
+- **Commands** (`commands.rs`): everything a key, a menu item or a palette
+  entry can do is a `Command`, an `Action` (`config/keys.rs`: what
+  `config.toml` can bind) or a pane's or a pick's. `App::can` is the one
+  answer to whether it applies now, and why not (`refused` says it as an error);
+  `App::run_command` is the one way to run it. `Command::label` is its words in
+  a menu, `Command::text` in the palette, longer where that's what's searched. `App::here` says what the focused pane shows, and each pane's
+  keys are tables of `(KeyCode, Command)`: its handler keeps only moving
+  about. Help (`ui/chrome.rs`) and the palette list from these, so a command
+  with a key can't be left out; a test checks. A new command is a variant, its
+  `label` and `run_command` arm (the compiler asks), and a line in a table or
+  a menu if it has a key or a place there.
+- **Menus** (`menu.rs`): each is data, groups of `Command`s; `show_menu` asks
+  each its label, key and whether it's dimmed. `ui/query.rs` draws them, and
+  notes which item each row holds (`hits.menu_rows`) for clicks, as separators
+  and scrolling mean rows aren't items.
+- **Formats** (`query/export.rs`): one `Format`, in the order every menu lists
+  them, and `Format::supports(Dest)` for what can go where (`Dest`: copying,
+  exporting those shown or every row, opening); those menus are generated.
+- **Ctrl+K** (`palette.rs`, `PaletteMode`): waiting for a letter (at the top or
+  in a group), or a list to search: commands, tabs or connections. The letters
+  are `KeyMap::leader_step`, one letter or a group's and one.
 - **Tabs** (`tabs.rs`): the active tab's state is `App::tab`, a `TabState`
   with the editor, the last run and a `ResultGrid` (`grid.rs`: the result
   sets, filter, sort, marks, selection and scroll). Switching tabs swaps
@@ -454,7 +475,7 @@ passing `ask.delta` notifications on as progress events; the SQL goes to
 the end of the tab's editor (`append_statement`, which ends a last
 statement left without `;`), and a refusal to share the schema becomes a
 question (`ConfirmAction::ShareSchema`: `y` once, `a` always). The memory
-window (`app/memory_view.rs`, `Ctrl+K k`) lists, adds, confirms and
+window (`app/memory_view.rs`, `Ctrl+K y k`) lists, adds, confirms and
 forgets facts through the same kind of gateway call.
 
 Agents too: `podelis mcp` (`mcp::run`) is a bridge. It connects (starting
@@ -477,7 +498,7 @@ tables at most, then asks for the answer without more calls
 said and the names still unknown; it never runs anything. `FACT:` lines
 at the end of the model's note (its assumptions) are taken out and kept
 as facts that aren't confirmed, `source = "model:<name>"`. With `explain`
-(the app's `Ctrl+K y`), `question` is SQL: the same context is built for
+(the app's `Ctrl+K y y`), `question` is SQL: the same context is built for
 it, the model is asked what it does instead, and its words come back
 whole as `said` (no SQL taken out or checked, no facts kept); the app
 shows them in a pop-over (`ask::show_explanation`).

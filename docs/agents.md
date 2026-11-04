@@ -72,7 +72,7 @@ that fails is rolled back alone and the rest stay; its reads, and its
 committed, production included. It's rolled back when the agent goes, or
 after ten idle minutes (its row locks would otherwise be held).
 
-In the agent activity (`Ctrl+K`, then type "agent") its calls say "in the sandbox", and in
+In the agent activity (`Ctrl+K /`, then type "agent") its calls say "in the sandbox", and in
 a session, `s` puts what it wrote (the writes that ran, in order) in a new
 tab as a script: read it, then run it yourself if you want it. MySQL
 commits schema changes at once, so there an agent's DDL is refused in a
@@ -174,7 +174,7 @@ The log is in `agents/<project>.jsonl` in Podėlis's folder (see
 [Configuration](configuration.md)), private to you like the history, and
 a statement that sets a password is left out of it.
 
-**Agent activity** (Ctrl+K, then type "agent") shows it, apart from your
+**Agent activity** (Ctrl+K `/`, then type "agent") shows it, apart from your
 own queries:
 
 - the **sessions**, most recently active first: when, the agent and its

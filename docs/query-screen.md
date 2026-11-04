@@ -7,9 +7,16 @@
 Most actions are behind one key: **`Ctrl+K`** (or `Space` in the schema
 pane and vim's Normal mode; Space twice with `leader_double_space`), then a
 letter — `Ctrl+K x r` switches to rollback-only. If you pause
-after `Ctrl+K`, a menu shows the letters and the focused pane's own keys
-(`?` outside the editor shows it at once). Type anything else (or `/`) to
-search every command by name. `F1` shows every key.
+after `Ctrl+K`, a menu shows the letters by group; what's not at hand in
+this pane is dimmed, and still works. `/` or `Enter` searches every command
+by name, the panes' too. `?` outside the editor (or `F1` anywhere) shows every
+key; `m` is the focused pane's menu.
+
+A letter can open a group: `Ctrl+K s` for the server, `Ctrl+K y` for AI, then
+another letter. The group's menu shows after the same pause, or with `?`;
+`Backspace` goes back to the letters, and any other letter shows what's in
+the group rather than doing something else. Twice the letter is what it did
+before groups: `Ctrl+K s s`, `Ctrl+K y y`.
 
 | `Ctrl+K`, then | Action |
 |---|---|
@@ -27,11 +34,11 @@ search every command by name. `F1` shows every key.
 | `g` | Every tab, with its connection and what runs there (see *Tabs and the query library*) |
 | `o` / `d` | Pick a connection for this tab (opens a new tab if this one is connected) / disconnect this tab (asks first, and says so when that rolls back a transaction or cancels the query running here) |
 | `p` | Projects and connections (or click the project's name in the top bar): see [Projects and connections](connections.md) |
-| `u` / `s` / `h` | Connection info / the server's sessions / connection heartbeat on or off |
+| `s`, then `s` / `i` / `h` | The server: its sessions / connection info / connection heartbeat on or off |
 | `q` | Ask in plain language: a model writes the SQL for your question (see *Asking in plain language* below) |
-| `y` | AI explain: a model says in plain words what the statement at the cursor (or the selection) does, in a pop-over; nothing runs and the editor isn't touched |
-| `k` | The project's memory: what models are told about your data. `a` adds a fact (`orders.status 3 = cancelled`), `c` confirms one a model suggested (orange), `d` forgets one |
-| `1`…`9` | Jump to a tab (the menu lists the open tabs by number; typing a tab's name finds it too) |
+| `y`, then `y` | AI explain: a model says in plain words what the statement at the cursor (or the selection) does, in a pop-over; nothing runs and the editor isn't touched |
+| `y`, then `k` | The project's memory: what models are told about your data. `a` adds a fact (`orders.status 3 = cancelled`), `c` confirms one a model suggested (orange), `d` forgets one |
+| `1`…`9` | Jump to a tab (the menu lists the open tabs by number; `/` then a tab's name finds it too) |
 | `?` | Every key |
 
 The menu shows when no letter follows `Ctrl+K` within half a second. Who
@@ -170,16 +177,17 @@ When focused:
 | `f` | Follow the foreign key in the selected cell: the row it points to, in a pop-over (one column per line), without leaving the result. It works from a join too, when the column is a foreign key in one of its tables. In the pop-over, `e` opens the lookup in a tab of its own and runs it, `y` copies the row |
 | `b` | Chart the selected column of the rows shown: count, sum, min, max and average, the trend as a sparkline, and a bar per row labelled by another column (the first 200) |
 | `\|` | Pipe the rows shown through a shell command (`grep -i vilnius`, `sort -t$'\t' -k3 -n`, `jq '.[].email'`, `mlr --itsv --opprint stats1 -a sum -f total`…) and show its output |
-| `o` | Open the rows (the marked ones, or those shown) in an app: a menu of formats — CSV, JSON, INSERT statements, TSV, a text table, an ASCII table (`+--+` borders) — each with what opens it. By default the system's app for the type (`open` on macOS, `xdg-open` on Linux: a spreadsheet for CSV, an editor for JSON or SQL), in a window of its own while Podėlis runs on; without a desktop to show one (over SSH, a Linux console) `$PAGER`, else `less -S`, in this terminal; `[viewers]` in `config.toml` sets another per format (`ascii` for the ASCII table, else `txt`'s), or one that runs in this terminal (VisiData) |
+| `o` | Open the rows (the marked ones, or those shown) in an app: a menu of formats — CSV, TSV, JSON, an ASCII table (`+--+` borders), a text table, INSERT statements — each with what opens it. By default the system's app for the type (`open` on macOS, `xdg-open` on Linux: a spreadsheet for CSV, an editor for JSON or SQL), in a window of its own while Podėlis runs on; without a desktop to show one (over SSH, a Linux console) `$PAGER`, else `less -S`, in this terminal; `[viewers]` in `config.toml` sets another per format (`ascii` for the ASCII table, else `txt`'s), or one that runs in this terminal (VisiData) |
 | `s` | Sort by the selected column: ascending → descending → off (numbers by value, then text, then NULLs) |
 | `/` | Filter rows (case-insensitive, any column); `Esc` clears |
 | `c` | Edit the cell: type the new value, `Enter` saves, `Ctrl+N` sets NULL, `Esc` cancels |
 | `a` | Add a row: a form of the table's columns (empty fields get their default; `NULL`; `=expr` for raw SQL) |
 | `Space` / `d` | Mark rows / delete the marked rows (or the current one); always asks first, `t` reviews it in a transaction |
-| `C` | Copy the marked rows (or all rows shown) as a Markdown table; as CSV, JSON, `INSERT` statements or an ASCII table (`+--+`) from the menu (`m`) or Ctrl+K ("Copy rows as…") |
-| `m` / right-click | Menu of everything you can do here, with each action's key |
+| `C` | Copy the marked rows (or all rows shown): a menu of the formats, CSV, TSV, JSON, a Markdown table, an ASCII table (`+--+`), `INSERT` statements. Markdown is selected: `C` again or `Enter` copies it |
+| `m` / right-click | Menu of what you can do here, in groups, each with its key; what doesn't apply is dimmed, and says why when chosen |
 | `y` / `Y` or `Ctrl+C` | Copy the selected cell / row (tab-separated); `Y` and `Ctrl+C` copy the marked rows, a line each, when rows are marked |
-| `e` / `J` / `i` | Export the rows shown as CSV / JSON / SQL `INSERT` statements to `podelis-export-<timestamp>.<ext>` (in the current directory, or `export_dir`); the menu (`m`) also has an ASCII table (`+--+` borders, `.txt`; long values cut at 120 columns). For every row of a big result, not just those loaded, use "Export all rows" in the menu (`m`) or Ctrl+K: it writes the rest straight to the file as it arrives, without loading it into the grid; `Esc` stops it |
+| `E` | Export: a menu of the formats, the rows shown or every row, CSV, JSON, an ASCII table, `INSERT` statements, Parquet (also `export ▾` above the results) |
+| `e` / `J` / `i` | Export the rows shown as CSV / JSON / SQL `INSERT` statements to `podelis-export-<timestamp>.<ext>` (in the current directory, or `export_dir`); the export menu (`E`) also has an ASCII table (`+--+` borders, `.txt`; long values cut at 120 columns) and Parquet. For every row of a big result, not just those loaded or a filter's, use "Export every row" in that menu or `Ctrl+K /`: it writes the rest straight to the file as it arrives, without loading it into the grid; `Esc` stops it |
 | `M` | Load 10× more rows (streamed results fetch the next pages; scripts are re-run with a bigger limit, read-only ones only); the first of the new rows is selected, so they're in sight (sorted or filtered, the first place one of them is). Pressed while a page is still coming, its rows follow that page |
 | `[` / `]`, `1` `2` `3` (or click a tab) | Switch between the RESULT, MESSAGES and QUERY PLAN tabs (`F7` opens the plan with the results focused; `1` goes back) |
 | `,` / `.` (or click `#2`) | Show the result of an earlier / later run: each query you run keeps its own (see *Earlier results* below) |
@@ -212,7 +220,7 @@ says `was lines 12–15 · edited since`.
 A plan that comes as a table (MySQL before 8.0.16 and MariaDB: the classic
 `EXPLAIN` columns) shows in QUERY PLAN as a grid like the result's, under its
 notes, and takes the same keys: moving, `s` sort, `/` filter, `x` / `X`,
-`y` / `Y` / `C` / `Ctrl+C` copy, `e` / `J` export, `|` and `o`. Editing, adding,
+`y` / `Y` / `C` / `Ctrl+C` copy, `E` / `e` / `J` export, `|` and `o`. Editing, adding,
 deleting, following a foreign key and loading more are for query results
 only.
 
@@ -257,7 +265,7 @@ window functions, `LATERAL`, `JSON_TABLE`, `INTERSECT`, MariaDB's `ANALYZE
 SELECT`; PostgreSQL's `MERGE`, `JSON_TABLE`, `ANY_VALUE`, `WITH TIES` and
 others.
 
-**AI explain.** `Ctrl+K y` sends the statement at the cursor (or the
+**AI explain.** `Ctrl+K y y` sends the statement at the cursor (or the
 selection) to a model with the tables it uses, as asking does; what it
 says the statement does, step by step, and what looks wrong in it (with
 the query it would write instead) shows in a pop-over. Nothing runs.
@@ -274,7 +282,7 @@ took. The model sees only the tables that matter for the question, never
 rows; its SQL is checked against the schema first, and names still not
 found are marked `-- CHECK:` above it. What the model had to assume
 (`-- assumed: orders.total means 0 for free orders`) is kept in the
-project's memory, not confirmed: `Ctrl+K k`, then `c` if it's right. Facts
+project's memory, not confirmed: `Ctrl+K y k`, then `c` if it's right. Facts
 in the memory (`podelis memory`) are shown to the model with the tables
 they're about. A model that isn't on this machine
 sees a project's schema only if you allow it: the first time, a question
@@ -307,16 +315,27 @@ project keeps its schemas to local ones, so `Ctrl+K q` would ask first
 (see [AI models](ai.md)).
 
 **Menus.** Right-click a pane, or press `m` in the results or schema
-(`Ctrl+K m` or `Shift+F10` anywhere), for a small menu of what you can do
-there, each item with its key — a quick way to learn the shortcuts. The
-status bar shows the key next to `^K keys`, and the results pane has
-`menu ▾` right of its tabs to click, with `export ▾` beside it while rows
-are shown: exporting the rows shown or every row as CSV, JSON or `INSERT`s,
-copying them, piping them or opening them (in an app, or a pager in the
-terminal without a desktop). The editor's menu
-starts with Copy and Cut (with text selected) and Paste; the results
-pane's, with messages or nothing run yet, offers its tabs and zoom (and
-in MESSAGES, copying them).
+(`Ctrl+K m`, `F10` or `Shift+F10` anywhere), for a menu of what you can do
+there, in groups, each item with its key — a quick way to learn the
+shortcuts. An item's key works while the menu is open. What doesn't apply
+stays in its place, dimmed, and says why when it's chosen (`Edit this cell` on
+a read-only connection, `Roll back` with no transaction); what deletes is last,
+apart. A menu too long for the terminal drops its separators, then scrolls
+(its title then says which item you're on). The status bar shows the key
+next to `^K keys`, and the results pane has `menu ▾` right of its tabs to
+click, with `export ▾` beside it while rows are shown.
+
+The results' menu leads to smaller ones: *Copy the rows as…* (`C`, Markdown selected, so `C` again or `Enter` copies it), *Export…*
+(`E`, `export ▾`: the rows shown, or every row), *Open in an app…* (`o`: each
+format with what opens it, an app or a pager in the terminal), and *Other
+results…*: a script's other result sets, the results kept from earlier runs,
+and pinning. Formats are always in the same order. The editor's menu starts
+with Copy, Cut and Paste, and ends with *All commands…* and closing the tab; the
+results pane's, with messages or nothing run yet, offers its tabs, copying
+the messages or the plan, and zoom. The panes' commands are in the palette
+too (`Ctrl+K /`), with the key and where it works, in longer words where a pane's menu
+can say less; choosing one there goes to that pane, so a filter takes what you
+type next. Over a menu or the keys (`?`), the wheel moves too.
 
 Cells can be edited, and rows added or deleted, when the result comes from
 a plain `SELECT` on one table (no joins, grouping or computed columns) that includes the table's
@@ -420,4 +439,4 @@ When focused:
 | `y` / `Ctrl+C` | Copy the selection's name as SQL writes it: a table with its schema (`public.orders`), a column, an index or a function |
 | `r` | Refresh (also happens automatically after DDL, `USE` and `SET`) |
 | `.` | Show or hide system tables (`pg_catalog` and `information_schema`; MySQL's `information_schema`, `performance_schema`, `mysql` and `sys`; SQLite's `sqlite_schema` and `sqlite_*`) in a SYSTEM section |
-| `Space` | The `Ctrl+K` command menu |
+| `Space` | Ctrl+K's menu of letters |
