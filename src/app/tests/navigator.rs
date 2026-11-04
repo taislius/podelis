@@ -85,7 +85,7 @@ async fn schema_snapshots_show_what_changed_since() {
     assert!(app.notes.status.starts_with("Saved a schema snapshot (1 tables)"), "{}", app.notes.status);
     assert_eq!(app.snapshots().len(), 1);
     app.open_palette(false);
-    let entry = app.palette_command_text(crate::app::palette::Command::CompareSnapshot(0));
+    let entry = app.palette_command_text(crate::app::commands::Command::CompareSnapshot(0));
     app.popups.palette = None;
     assert!(entry.starts_with("Compare the schema with the snapshot: "), "{entry}");
 
@@ -103,10 +103,10 @@ fn space_in_the_schema_opens_the_command_menu() {
     let (mut app, _dir) = test_app();
     app.screen = Screen::Query;
     app.handle_key(ctrl('k'));
-    assert!(app.popups.palette.as_ref().is_some_and(|p| !p.searching));
+    assert!(app.popups.palette.as_ref().is_some_and(|p| !p.searching()));
     // The same key again searches every command.
     app.handle_key(ctrl('k'));
-    assert!(app.popups.palette.as_ref().unwrap().searching);
+    assert!(app.popups.palette.as_ref().unwrap().searching());
     app.handle_key(key(KeyCode::Esc));
 
     app.connection.schema = Some(SchemaPanel::default());

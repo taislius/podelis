@@ -1,276 +1,136 @@
 //! Pop-up menus: right-click a pane, or press `m` (results, schema) or
 //! Shift+F10 / F10 (anywhere), to see what you can do there, each with its
-//! key. Choosing an item does exactly what its key does.
+//! key. Each menu is data: groups of commands. What doesn't apply stays in
+//! its place, dimmed, and says why when chosen; destructive items are last,
+//! apart.
 
+use super::commands::{self, Can, Command as C, Here};
 use super::*;
-use crate::config::keys::Action;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MenuAction {
-    Action(Action),
-    ResultsKey(KeyCode),
-    SchemaKey(KeyCode),
-    /// A palette command without a key of its own.
-    Command(super::palette::Command),
-    Clip(Clip),
-}
-
-/// The editor's clipboard items.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Clip {
-    Copy,
-    Cut,
-    Paste,
-}
+use crate::config::keys::Action as A;
 
 #[derive(Clone, Debug)]
 pub struct MenuItem {
-    pub label: &'static str,
+    pub label: String,
     /// The key that does the same, shown as a hint.
     pub keys: String,
-    action: MenuAction,
+    /// That key, when it's one a press in the menu takes.
+    key: Option<KeyCode>,
+    /// Doesn't apply now: drawn dimmed.
+    pub dimmed: bool,
+    pub command: C,
 }
 
 pub struct Menu {
     pub title: &'static str,
     pub items: Vec<MenuItem>,
+    /// The items a separator comes before.
+    gaps: Vec<usize>,
     pub selected: usize,
+    /// The first row drawn, when they don't all fit.
+    pub scroll: usize,
     /// Screen cell the menu opens at (top-left).
     pub at: (u16, u16),
 }
 
-fn results_item(label: &'static str, key: KeyCode, hint: &str) -> MenuItem {
-    MenuItem { label, keys: hint.to_string(), action: MenuAction::ResultsKey(key) }
+impl Menu {
+    /// Its rows, an item's index or a separator (`None`). With no room for
+    /// the separators, they go first.
+    pub fn rows(&self, room: usize) -> Vec<Option<usize>> {
+        let with_gaps = self.items.len() + self.gaps.len() <= room;
+        let mut rows = Vec::with_capacity(self.items.len() + self.gaps.len());
+        for i in 0..self.items.len() {
+            if with_gaps && self.gaps.contains(&i) {
+                rows.push(None);
+            }
+            rows.push(Some(i));
+        }
+        rows
+    }
 }
 
-fn schema_item(label: &'static str, key: KeyCode, hint: &str) -> MenuItem {
-    MenuItem { label, keys: hint.to_string(), action: MenuAction::SchemaKey(key) }
-}
+/// Over a grid of rows.
+const ROWS_MENU: &[&[C]] = &[
+    &[C::FullValue, C::RecordView, C::Vertical, C::Action(A::Zoom)],
+    &[C::Sort, C::FilterRows, C::Chart, C::Follow],
+    &[C::CopyCell, C::CopyRow, C::CopyMenu],
+    &[C::ExportMenu, C::OpenRows, C::PipeRows],
+    &[C::LoadMore, C::OtherResults],
+    &[C::EditCell, C::AddRow, C::MarkRow],
+    &[C::DeleteRows],
+];
+
+/// Over a plan's table: another menu, not the same one dimmed; it's only
+/// ever looked at.
+const PLAN_TABLE_MENU: &[&[C]] = &[
+    &[C::FullValue, C::RecordView, C::Vertical, C::Action(A::Zoom)],
+    &[C::Sort, C::FilterRows, C::Chart],
+    &[C::CopyCell, C::CopyRow, C::CopyMenu],
+    &[C::ExportMenu, C::OpenRows, C::PipeRows],
+];
+
+/// Messages, a plan's text, or nothing run yet: no rows to act on.
+const NO_ROWS_MENU: &[&[C]] = &[
+    &[C::ShowRows, C::ShowMessages, C::ShowPlan],
+    &[C::WholeMessage, C::CopyMessage, C::CopyMessages],
+    &[C::CopyPlanLines, C::CopyWholePlan],
+    &[C::OtherResults, C::Action(A::Zoom)],
+];
+
+const OTHER_RESULTS_MENU: &[&[C]] = &[&[C::NextSet, C::PrevSet], &[C::EarlierResult, C::LaterResult, C::Pin]];
+
+const NAVIGATOR_MENU: &[&[C]] = &[
+    &[C::Expand, C::Definition, C::Related],
+    &[C::SelectFrom, C::CopyName],
+    &[C::FilterNames, C::OrderNames, C::SystemTables, C::RefreshSchema, C::Action(A::Zoom)],
+    &[C::CompareSchema(None), C::SnapshotSchema],
+];
+
+const EDITOR_MENU: &[&[C]] = &[
+    &[C::ClipCopy, C::ClipCut, C::ClipPaste],
+    &[
+        C::Action(A::Run),
+        C::Action(A::RunStatement),
+        C::Action(A::Explain),
+        C::Action(A::ExplainAnalyze),
+        C::Action(A::AiExplain),
+    ],
+    &[C::Action(A::Commit), C::Action(A::Rollback), C::Action(A::TxMode)],
+    &[
+        C::Action(A::SelectStatement),
+        C::Action(A::ZoomStatement),
+        C::Action(A::Format),
+        C::Action(A::Comment),
+        C::Action(A::Find),
+        C::Action(A::NextWarning),
+    ],
+    &[C::Action(A::InsertSnippet), C::Action(A::SaveStatement), C::Action(A::SaveTab), C::Action(A::Library)],
+    &[C::Action(A::Zoom), C::AllCommands],
+    &[C::Action(A::CloseTab)],
+];
 
 impl App {
-    fn action_item(&self, label: &'static str, action: Action) -> MenuItem {
-        MenuItem { label, keys: self.keymap.label(action).to_string(), action: MenuAction::Action(action) }
-    }
-
-    /// The editor's menu: the clipboard, then actions with their keys.
-    fn editor_items(&self) -> Vec<MenuItem> {
-        // Copy and cut only with something selected.
-        [(Clip::Copy, t!("menu.copy"), "Ctrl+C"), (Clip::Cut, t!("menu.cut"), "Ctrl+X")]
-            .into_iter()
-            .filter(|_| self.tab.editor.selection().is_some())
-            .chain([(Clip::Paste, t!("menu.paste"), "Ctrl+V")])
-            .map(|(clip, label, keys)| MenuItem { label, keys: keys.to_string(), action: MenuAction::Clip(clip) })
-            .chain([
-                self.action_item(t!("menu.run"), Action::Run),
-                self.action_item(t!("menu.run_statement"), Action::RunStatement),
-                self.action_item(t!("menu.select_statement"), Action::SelectStatement),
-                self.action_item(
-                    if self.panes.statement_zoom { t!("menu.unzoom_statement") } else { t!("menu.zoom_statement") },
-                    Action::ZoomStatement,
-                ),
-                self.action_item(t!("menu.explain"), Action::Explain),
-                self.action_item(t!("menu.explain_analyze"), Action::ExplainAnalyze),
-                self.action_item(t!("menu.format"), Action::Format),
-                self.action_item(t!("menu.comment"), Action::Comment),
-                self.action_item(t!("menu.find"), Action::Find),
-                self.action_item(t!("menu.snippet"), Action::InsertSnippet),
-                self.action_item(t!("menu.save_statement"), Action::SaveStatement),
-                self.action_item(t!("menu.save"), Action::SaveTab),
-                self.action_item(t!("menu.library"), Action::Library),
-                self.action_item(t!("menu.tab_list"), Action::TabList),
-                self.action_item(t!("menu.connection_list"), Action::ConnectionList),
-                self.action_item(t!("menu.close_tab"), Action::CloseTab),
-                self.action_item(t!("menu.zoom"), Action::Zoom),
-                self.action_item(t!("menu.all_commands"), Action::Palette),
-            ])
-            .collect()
-    }
-
-    /// `export ▾` above the results: the rows shown to a file or the
-    /// clipboard, or every row of the result to a file.
-    pub(super) fn open_export_menu(&mut self, at: Option<(u16, u16)>) {
-        use super::palette::Command;
-        use KeyCode::Char;
-        let command = |label, command| MenuItem { label, keys: String::new(), action: MenuAction::Command(command) };
-        let mut items = vec![
-            results_item(t!("menu.export_csv"), Char('e'), "e"),
-            results_item(t!("menu.export_json"), Char('J'), "J"),
-            results_item(t!("menu.export_sql"), Char('i'), "i"),
-            command(t!("menu.export_ascii"), Command::ExportAscii),
-            command(t!("menu.export_parquet"), Command::ExportParquet),
-            command(t!("menu.export_all_csv_full"), Command::ExportAll(PagedFormat::Csv)),
-            command(t!("menu.export_all_json"), Command::ExportAll(PagedFormat::Json)),
-            command(t!("menu.export_all_sql"), Command::ExportAll(PagedFormat::Sql)),
-            command(t!("menu.export_all_parquet"), Command::ExportAll(PagedFormat::Parquet)),
-            results_item(t!("menu.copy_markdown"), Char('C'), "C"),
-            command(t!("menu.copy_csv"), Command::CopyRows(ExportFormat::Csv)),
-            command(t!("menu.copy_json"), Command::CopyRows(ExportFormat::Json)),
-            command(t!("menu.copy_sql"), Command::CopyRows(ExportFormat::Sql)),
-            command(t!("menu.copy_ascii"), Command::CopyRows(ExportFormat::Ascii)),
-            results_item(t!("menu.pipe"), Char('|'), "|"),
-            results_item(t!("menu.open_rows"), Char('o'), "o"),
-        ];
-        // A plan's table: only what its rows can go to.
-        if self.tab.plan_swapped {
-            items.retain(|i| !matches!(i.action, MenuAction::ResultsKey(Char('i')) | MenuAction::Command(_)));
+    /// Opens a menu of these groups, at `at` or next to the focused pane.
+    fn show_menu<G, I>(&mut self, title: &'static str, groups: G, at: Option<(u16, u16)>)
+    where
+        G: IntoIterator<Item = I>,
+        I: IntoIterator<Item = C>,
+    {
+        let here = self.here();
+        let mut items = Vec::new();
+        let mut gaps = Vec::new();
+        let editable = std::cell::OnceCell::new();
+        for group in groups {
+            if !items.is_empty() {
+                gaps.push(items.len());
+            }
+            items.extend(group.into_iter().map(|command| MenuItem {
+                label: command.label(self),
+                keys: command.key_here(self, here),
+                key: command.key_code_here(here).filter(|code| *code != KeyCode::Enter),
+                dimmed: matches!(self.can_with(command, &editable), Can::No { .. }),
+                command,
+            }));
         }
-        let pane = self.hits.result_rows;
-        let at = at.unwrap_or((pane.x + 2, pane.y + 1));
-        self.popups.completion = None;
-        self.popups.menu = Some(Menu { title: t!("menu.export_title"), items, selected: 0, at });
-    }
-
-    /// `o`: the formats to open the rows in, each with what opens it.
-    pub(super) fn open_viewer_menu(&mut self) {
-        use super::pipes::OpenFormat;
-        let items = OpenFormat::ALL
-            .into_iter()
-            .map(|format| {
-                let viewer = self.viewer_for(format);
-                let program = viewer.command().split_whitespace().next().unwrap_or_default();
-                let keys = match (program, viewer.in_terminal()) {
-                    ("open" | "xdg-open", false) => t!("menu.its_app").to_string(),
-                    (program, true) => t!("menu.here", program = program),
-                    (program, false) => program.to_string(),
-                };
-                let label = match format {
-                    OpenFormat::Csv => t!("menu.as_csv"),
-                    OpenFormat::Json => t!("menu.as_json"),
-                    OpenFormat::Sql => t!("menu.as_sql"),
-                    OpenFormat::Tsv => t!("menu.as_tsv"),
-                    OpenFormat::Text => t!("menu.as_text"),
-                    OpenFormat::Ascii => t!("menu.as_ascii"),
-                };
-                MenuItem { label, keys, action: MenuAction::Command(super::palette::Command::OpenRowsAs(format)) }
-            })
-            .collect();
-        let pane = self.hits.result_rows;
-        self.popups.completion = None;
-        self.popups.menu =
-            Some(Menu { title: t!("menu.open_title"), items, selected: 0, at: (pane.x + 2, pane.y + 1) });
-    }
-
-    /// The results kept from earlier runs: to switch between and pin.
-    fn run_items(&self) -> Vec<MenuItem> {
-        use KeyCode::Char;
-        let n = self.tab.runs.len();
-        let at = self.tab.run_at;
-        let pinned = self.tab.shown_run().is_some_and(|r| r.pinned);
-        [
-            (at > 0).then(|| results_item(t!("menu.earlier_result"), Char(','), ",")),
-            (at + 1 < n).then(|| results_item(t!("menu.later_result"), Char('.'), ".")),
-            (n > 0).then(|| results_item(if pinned { t!("menu.unpin") } else { t!("menu.pin") }, Char('p'), "p")),
-        ]
-        .into_iter()
-        .flatten()
-        .collect()
-    }
-
-    /// The menu over a grid of rows: a result's, or a plan's table.
-    fn grid_menu(&self) -> (&'static str, Vec<MenuItem>) {
-        use KeyCode::Char;
-        // A plan's table: what changes data or needs a query's table is left out.
-        let plan = self.tab.plan_swapped;
-        let for_plan = |item: &MenuItem| {
-            !plan
-                || !matches!(
-                    item.action,
-                    MenuAction::ResultsKey(Char('c' | 'a' | 'd' | 'f' | 'M' | 'i' | '>' | ',' | '.' | 'p'))
-                        | MenuAction::Command(_)
-                )
-        };
-        (
-            if plan { t!("results.plan") } else { t!("menu.results_title") },
-            vec![
-                results_item(t!("menu.full_value"), KeyCode::Enter, "↵"),
-                results_item(t!("menu.row_vertical"), Char('x'), "x"),
-                results_item(t!("menu.vertical"), Char('X'), "X"),
-                results_item(t!("menu.edit_cell"), Char('c'), "c"),
-                results_item(t!("menu.add_row"), Char('a'), "a"),
-                results_item(t!("menu.mark_row"), Char(' '), "Space"),
-                results_item(t!("menu.delete_rows"), Char('d'), "d"),
-                results_item(t!("menu.copy_cell"), Char('y'), "y"),
-                results_item(t!("menu.copy_row"), Char('Y'), "Y"),
-                results_item(t!("menu.copy_rows_markdown"), Char('C'), "C"),
-                MenuItem {
-                    label: t!("menu.copy_rows_csv"),
-                    keys: String::new(),
-                    action: MenuAction::Command(super::palette::Command::CopyRows(ExportFormat::Csv)),
-                },
-                results_item(t!("menu.follow"), Char('f'), "f"),
-                results_item(t!("menu.pipe_rows"), Char('|'), "|"),
-                results_item(t!("menu.open_rows_app"), Char('o'), "o"),
-                results_item(t!("menu.sort"), Char('s'), "s"),
-                results_item(t!("menu.chart"), Char('b'), "b"),
-                results_item(t!("menu.filter"), Char('/'), "/"),
-                results_item(t!("menu.export_as_csv"), Char('e'), "e"),
-                results_item(t!("menu.export_as_json"), Char('J'), "J"),
-                results_item(t!("menu.export_as_sql"), Char('i'), "i"),
-                MenuItem {
-                    label: t!("menu.export_all_csv"),
-                    keys: String::new(),
-                    action: MenuAction::Command(super::palette::Command::ExportAll(PagedFormat::Csv)),
-                },
-                results_item(t!("menu.load_more"), Char('M'), "M"),
-                results_item(t!("menu.zoom"), Char('z'), "z"),
-            ]
-            .into_iter()
-            // A script's other result sets.
-            .chain((self.tab.grid.result_sets.len() > 1).then(|| results_item(t!("menu.next_set"), Char('>'), ">")))
-            .chain(self.run_items())
-            .filter(for_plan)
-            .collect(),
-        )
-    }
-
-    /// The focused pane's menu, at `at` (a click) or next to the pane.
-    pub(super) fn open_menu(&mut self, at: Option<(u16, u16)>) {
-        let (title, items) = match self.focus {
-            Focus::Results
-                if self.grid_shown() && self.tab.grid.results.as_ref().is_some_and(|r| !r.columns.is_empty()) =>
-            {
-                self.grid_menu()
-            }
-            Focus::Schema if self.connection.schema.is_some() => {
-                use KeyCode::Char;
-                (
-                    t!("menu.navigator_title"),
-                    vec![
-                        schema_item(t!("menu.expand"), KeyCode::Enter, "↵"),
-                        schema_item(t!("menu.select_from"), Char('s'), "s"),
-                        schema_item(t!("menu.definition"), Char('d'), "d"),
-                        schema_item(t!("menu.related"), Char('f'), "f"),
-                        schema_item(t!("menu.copy_name"), Char('y'), "y"),
-                        schema_item(t!("menu.filter_name"), Char('/'), "/"),
-                        schema_item(t!("menu.order"), Char('o'), "o"),
-                        schema_item(t!("menu.refresh"), Char('r'), "r"),
-                        schema_item(t!("menu.system"), Char('.'), "."),
-                        schema_item(t!("menu.zoom"), Char('z'), "z"),
-                    ],
-                )
-            }
-            // Messages, a plan's text, or nothing run yet: no rows to act on.
-            Focus::Results => {
-                use KeyCode::Char;
-                let messages = self.tab.result_tab == ResultTab::Messages && !self.notes.log.is_empty();
-                (
-                    t!("menu.results_title"),
-                    [
-                        results_item(t!("menu.show_rows"), Char('1'), "1"),
-                        results_item(t!("menu.show_messages"), Char('2'), "2"),
-                        results_item(t!("menu.show_plan"), Char('3'), "3"),
-                    ]
-                    .into_iter()
-                    .chain(messages.then(|| results_item(t!("menu.whole_message"), KeyCode::Enter, "↵")))
-                    .chain(messages.then(|| results_item(t!("menu.copy_message"), Char('y'), "y")))
-                    .chain(messages.then(|| results_item(t!("menu.copy_messages"), Char('Y'), "Y")))
-                    .chain(self.run_items())
-                    .chain([self.action_item(t!("menu.zoom"), Action::Zoom)])
-                    .collect(),
-                )
-            }
-            _ => (t!("menu.editor_title"), self.editor_items()),
-        };
         let pane = match self.focus {
             Focus::Results => self.hits.result_rows,
             Focus::Schema => self.hits.schema_list,
@@ -278,12 +138,81 @@ impl App {
         };
         let at = at.unwrap_or((pane.x + 2, pane.y + 1));
         self.popups.completion = None;
-        self.popups.menu = Some(Menu { title, items, selected: 0, at });
+        self.popups.menu = Some(Menu { title, items, gaps, selected: 0, scroll: 0, at });
+    }
+
+    /// The focused pane's menu, at `at` (a click) or next to the pane.
+    pub(super) fn open_menu(&mut self, at: Option<(u16, u16)>) {
+        let (title, groups): (&'static str, &[&[C]]) = match self.here() {
+            Here::Rows => (t!("menu.results_title"), ROWS_MENU),
+            Here::PlanTable => (t!("results.plan"), PLAN_TABLE_MENU),
+            Here::Messages | Here::PlanText | Here::Empty => (t!("menu.results_title"), NO_ROWS_MENU),
+            Here::Navigator => (t!("menu.navigator_title"), NAVIGATOR_MENU),
+            Here::Editor => (t!("menu.editor_title"), EDITOR_MENU),
+        };
+        self.show_menu(title, groups.iter().map(|group| group.iter().copied()), at);
+    }
+
+    /// `E` and `export ▾`: the rows shown to a file, or every row of the
+    /// result.
+    pub(super) fn open_export_menu(&mut self, at: Option<(u16, u16)>) {
+        let groups = [Dest::ExportShown, Dest::ExportAll]
+            .map(|to| Format::for_dest(to).map(move |format| C::Rows { to, format }));
+        self.show_menu(t!("menu.export_title"), groups, at);
+    }
+
+    /// The formats the marked rows (or those shown) can go `to`: the
+    /// clipboard (`C`), or an app (`o`).
+    pub(super) fn open_rows_menu(&mut self, to: Dest) {
+        let title = if to == Dest::Copy { t!("menu.copy_title") } else { t!("menu.open_title") };
+        self.show_menu(title, [Format::for_dest(to).map(move |format| C::Rows { to, format })], None);
+        // `C` opened this one; `C` again, or `Enter`, is Markdown: what `C`
+        // has always copied.
+        let markdown = C::Rows { to: Dest::Copy, format: Format::Markdown };
+        if let Some(menu) = &mut self.popups.menu
+            && let Some(at) = menu.items.iter().position(|i| i.command == markdown)
+        {
+            menu.selected = at;
+            menu.items[at].key = Some(KeyCode::Char('C'));
+            menu.items[at].keys = "C".to_string();
+        }
+    }
+
+    /// A script's other result sets, and the results kept from earlier runs.
+    pub(super) fn open_other_results_menu(&mut self) {
+        let groups = OTHER_RESULTS_MENU.iter().map(|group| group.iter().copied());
+        self.show_menu(t!("menu.other_results_title"), groups, None);
+    }
+
+    /// `o`: the formats to open the rows in, each with what opens it.
+    pub(super) fn open_viewer_menu(&mut self) {
+        self.open_rows_menu(Dest::Open);
+        let shown: Vec<String> = Format::for_dest(Dest::Open)
+            .map(|format| {
+                let viewer = self.viewer_for(format);
+                let program = viewer.command().split_whitespace().next().unwrap_or_default();
+                match (program, viewer.in_terminal()) {
+                    ("open" | "xdg-open", false) => t!("menu.its_app").to_string(),
+                    (program, true) => t!("menu.here", program = program),
+                    (program, false) => program.to_string(),
+                }
+            })
+            .collect();
+        if let Some(menu) = &mut self.popups.menu {
+            for (item, keys) in menu.items.iter_mut().zip(shown) {
+                item.keys = keys;
+            }
+        }
     }
 
     pub(super) fn handle_menu_key(&mut self, key: KeyEvent) {
         let Some(menu) = &mut self.popups.menu else { return };
-        if let Some(i) = list::step(menu.selected, menu.items.len(), key, Nav::MENU) {
+        // An item's own key first: it does what the item says. (`m` closes;
+        // j and k move, unless an item has the key.)
+        let own = menu.items.iter().find(|i| i.key == Some(key.code)).filter(|_| commands::is_plain(key)).cloned();
+        if own.is_none()
+            && let Some(i) = list::step(menu.selected, menu.items.len(), key, Nav::MENU)
+        {
             menu.selected = i;
             return;
         }
@@ -293,39 +222,25 @@ impl App {
                 return;
             }
             KeyCode::Enter => menu.items.get(menu.selected).cloned(),
-            // An item's own key works too.
-            KeyCode::Char(c) => menu.items.iter().find(|i| i.keys == c.to_string()).cloned(),
-            _ => None,
+            _ => own,
         };
         let Some(item) = chosen else { return };
         self.popups.menu = None;
-        match item.action {
-            MenuAction::Action(a) => self.run_action(a),
-            MenuAction::Command(command) => self.run_command(command),
-            MenuAction::ResultsKey(code) => self.handle_results_key(KeyEvent::new(code, KeyModifiers::NONE)),
-            MenuAction::SchemaKey(code) => self.handle_schema_key(KeyEvent::new(code, KeyModifiers::NONE)),
-            MenuAction::Clip(Clip::Copy) => self.copy_focused(),
-            MenuAction::Clip(Clip::Cut) => self.cut_selection(),
-            MenuAction::Clip(Clip::Paste) => self.paste_clipboard(),
-        }
+        self.run_command(item.command);
     }
 
     /// Clicks on the menu: choose an item, or close it when clicking
-    /// outside. `rect` is where the UI drew it.
+    /// outside. The UI noted which item it drew on each row.
     pub(super) fn click_menu(&mut self, x: u16, y: u16) {
-        let Some(menu) = &self.popups.menu else { return };
         let r = self.hits.menu;
-        let inside = x >= r.x && x < r.x + r.width && y > r.y && y < r.y + r.height.saturating_sub(1);
-        if !inside {
+        if !(x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height) {
             self.popups.menu = None;
             return;
         }
-        let index = (y - r.y - 1) as usize;
-        if index < menu.items.len() {
-            if let Some(m) = &mut self.popups.menu {
-                m.selected = index;
-            }
-            self.handle_menu_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let Some(&(_, index)) = self.hits.menu_rows.iter().find(|(row, _)| *row == y) else { return };
+        if let Some(menu) = &mut self.popups.menu {
+            menu.selected = index;
         }
+        self.handle_menu_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     }
 }

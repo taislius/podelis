@@ -67,7 +67,7 @@ impl App {
         self.popups.ask_prompt = Some(LineInput::new(String::new()));
     }
 
-    /// `Ctrl+K y`: the statement at the cursor (or the selection) goes to
+    /// `Ctrl+K y y`: the statement at the cursor (or the selection) goes to
     /// a model, which says in plain words what it does (and what looks
     /// wrong in it); the answer shows in a pop-over, the editor untouched.
     pub(super) fn ai_explain(&mut self) {

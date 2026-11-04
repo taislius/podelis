@@ -1,0 +1,31 @@
+---
+source: src/ui/tests/menus.rs
+expression: items(&app)
+---
+RESULTS
+Show the full value  [↵]
+Show the row vertically  [x]
+All rows, one column a line (\G)  [X]
+Zoom this pane (and back)  [z]
+---
+Sort by this column  [s]
+Filter the rows  [/]
+Chart this column  [b]
+Follow the foreign key  [f]
+---
+Copy the cell  [y]
+Copy the row (or the marked rows)  [Y]
+Copy the rows as…  [C]
+---
+Export…  [E]
+Open in an app…  [o]
+Pipe through a command…  [|]
+---
+Load more rows  [M]
+Other results…  []  (dimmed)
+---
+Edit this cell  [c]  (dimmed)
+Add a row  [a]  (dimmed)
+Mark / unmark this row  [Space]
+---
+Delete the marked rows…  [d]  (dimmed)

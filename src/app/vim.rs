@@ -647,7 +647,7 @@ mod tests {
     fn space_in_normal_mode_opens_the_ctrl_k_menu() {
         let (mut app, _dir) = vim_app("select 1");
         keys(&mut app, " ");
-        assert!(app.popups.palette.as_ref().is_some_and(|p| !p.searching));
+        assert!(app.popups.palette.as_ref().is_some_and(|p| !p.searching()));
         keys(&mut app, "\u{1b}i ");
         assert!(app.popups.palette.is_none() && app.tab.editor.text() == " select 1", "Insert mode types it");
     }

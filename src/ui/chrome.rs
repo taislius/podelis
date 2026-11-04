@@ -281,7 +281,7 @@ fn key_hints(app: &App, width: u16) -> Vec<Span<'static>> {
                 ("s", t!("hint.sort")),
                 ("/", t!("hint.filter")),
                 ("c", t!("hint.edit")),
-                ("e", t!("hint.export")),
+                ("E", t!("hint.export")),
                 ("m", t!("hint.menu")),
                 ("[ ]", t!("hint.tabs")),
                 ("?", t!("hint.keys")),
@@ -337,122 +337,63 @@ fn key_hints(app: &App, width: u16) -> Vec<Span<'static>> {
     spans
 }
 
-/// The keys of the screen by section, as (keys, what they do).
-#[expect(clippy::too_many_lines, reason = "long only because it lists the keys")]
-pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String)>)> {
-    let k = |a: Action| app.keymap.label(a);
-    let undo_redo = format!("{} / {}", k(Action::Undo), k(Action::Redo));
-    let history = format!("{} / {}", k(Action::HistoryPrev), k(Action::HistoryNext));
-    let tabs = format!("{} / {}", k(Action::NewTab), k(Action::CloseTab));
-    let switch = format!("{} / {} · Ctrl+K 1…9", k(Action::PrevTab), k(Action::NextTab));
-    let complete = format!("Tab · {}", k(Action::Complete));
-    let tx_keys = format!("{} / {}", k(Action::Commit), k(Action::Rollback));
-    let comment_format = format!("{} · {}", k(Action::Comment), k(Action::Format));
-    let keys_menu = format!("{} · ? ({})", k(Action::Palette), t!("help.outside_editor"));
-    let menu_keys = format!("m · {}", t!("help.right_click"));
-    let sections: Vec<(&'static str, Vec<(&str, &str)>)> = match app.screen {
-        Screen::Query => vec![
-            (
-                t!("help.run"),
-                vec![
-                    (k(Action::Run), t!("help.run_all")),
-                    (k(Action::RunStatement), t!("help.run_statement")),
-                    (k(Action::Explain), t!("help.explain")),
-                    (k(Action::ExplainAnalyze), t!("help.explain_analyze")),
-                    (k(Action::TxMode), t!("help.tx_mode")),
-                    (&tx_keys, t!("help.commit")),
-                    ("Esc", t!("help.cancel")),
-                ],
-            ),
-            (
-                t!("pane.editor"),
-                vec![
-                    (&complete, t!("help.complete")),
-                    (&undo_redo, t!("help.undo")),
+/// The query screen's keys: from the commands and the panes' tables, so a
+/// command with a key can't be left out. By hand only what isn't a command.
+fn query_help(app: &App) -> Vec<(&'static str, Vec<(String, String)>)> {
+    use crate::app::commands::{ACTION_GROUPS, Command, Group, Here, pane_key_list};
+    let owned = |rows: &[(&str, &str)]| -> Vec<(String, String)> {
+        rows.iter().map(|(k, w)| ((*k).to_string(), (*w).to_string())).collect()
+    };
+    let mut out: Vec<(&'static str, Vec<(String, String)>)> = ACTION_GROUPS
+        .iter()
+        .map(|(group, actions)| {
+            let mut rows: Vec<(String, String)> = actions
+                .iter()
+                .map(|&a| (a, app.keymap.label(a)))
+                .filter(|(_, keys)| !keys.is_empty())
+                .map(|(a, keys)| {
+                    let what = if a == Action::Palette { t!("help.keys_menu") } else { a.describe() };
+                    (keys.to_string(), what.to_string())
+                })
+                .collect();
+            let by_hand: Vec<(&str, &str)> = match group {
+                Group::Run => vec![("Esc", t!("help.cancel"))],
+                Group::Editor => vec![
+                    ("Tab", t!("help.complete")),
                     (t!("help.key_select"), t!("help.select")),
                     ("Ctrl+C / Ctrl+X / Ctrl+V", t!("help.copy")),
-                    (&history, t!("help.history")),
-                    (k(Action::Find), t!("help.find")),
-                    (k(Action::SelectStatement), t!("help.select_statement")),
-                    (k(Action::ZoomStatement), t!("help.zoom_statement")),
-                    (k(Action::InsertSnippet), t!("help.snippet")),
-                    (k(Action::Menu), t!("help.menu")),
-                    (&comment_format, t!("help.comment")),
                     (t!("help.key_vim"), t!("help.vim")),
                     (t!("help.key_rebind"), t!("help.rebind")),
                 ],
-            ),
-            (
-                t!("pane.results"),
-                vec![
-                    ("↵ · v", t!("help.cell")),
-                    ("x · f", t!("help.row")),
-                    ("X · …\\G", t!("help.vertical")),
-                    ("| · o", t!("help.pipe")),
-                    ("s · /", t!("help.sort")),
-                    ("[ · ] · 1 2 3", t!("help.result_tabs")),
-                    ("< · >", t!("help.result_sets")),
-                    (", · . · p", t!("help.kept")),
-                    ("↑↓ · ↵ · y · Y", t!("help.messages")),
-                    ("c", t!("help.edit_cell")),
-                    ("a · Space · d", t!("help.rows")),
-                    ("C", t!("help.markdown")),
-                    (&menu_keys, t!("help.menu")),
-                    ("y · Y", t!("help.copy_cell")),
-                    ("e · J · i · M", t!("help.export")),
-                ],
-            ),
-            (
-                t!("navigator.title"),
-                vec![
-                    ("↵ · → / ←", t!("help.expand")),
-                    ("s", t!("help.select_table")),
-                    ("d", t!("help.definition")),
-                    ("/ · r", t!("help.filter")),
-                    ("o", t!("help.order")),
-                    ("PgUp · PgDn", t!("help.page")),
-                    (".", t!("help.system")),
-                    ("z · m", t!("help.zoom_menu")),
-                    ("Space", t!("help.command_menu")),
-                ],
-            ),
-            (
-                t!("help.tabs"),
-                vec![
-                    (&tabs, t!("help.new_tab")),
-                    (&switch, t!("help.switch_tab")),
-                    (k(Action::SaveTab), t!("help.save_tab")),
-                    (k(Action::RenameTab), t!("help.rename_tab")),
-                    (k(Action::Library), t!("help.library")),
-                ],
-            ),
-            (
-                t!("help.panes"),
-                vec![
-                    ("Tab / Shift+Tab", t!("help.next_pane")),
-                    (k(Action::ToggleSchema), t!("help.navigator")),
-                    (k(Action::Zoom), t!("help.zoom")),
-                ],
-            ),
-            (
-                t!("help.ai"),
-                vec![
-                    (k(Action::Ask), t!("help.ask")),
-                    (k(Action::AiExplain), t!("help.ai_explain")),
-                    (k(Action::Memory), t!("help.memory")),
-                ],
-            ),
-            (
-                t!("help.connection"),
-                vec![
-                    (&keys_menu, t!("help.keys_menu")),
-                    (k(Action::OpenConnection), t!("help.open_connection")),
-                    (k(Action::Disconnect), t!("help.disconnect")),
-                    (k(Action::ConnectionList), t!("help.connection_list")),
-                    (k(Action::Projects), t!("help.projects_screen")),
-                ],
-            ),
-        ],
+                Group::Tabs => vec![("Ctrl+K 1…9", t!("help.switch_tab"))],
+                Group::View => vec![("Tab / Shift+Tab", t!("help.next_pane"))],
+                Group::App => vec![("? · F1", t!("palette.help")), ("Ctrl+Q", t!("palette.quit"))],
+                _ => Vec::new(),
+            };
+            rows.extend(owned(&by_hand));
+            (group.title(), rows)
+        })
+        .collect();
+    let of = |here: Here, by_hand: &[(&str, &str)]| {
+        let mut rows: Vec<(String, String)> =
+            pane_key_list(here).into_iter().map(|(keys, c): (String, Command)| (keys, c.label(app))).collect();
+        rows.extend(owned(by_hand));
+        rows
+    };
+    out.push((t!("pane.results"), of(Here::Rows, &[("[ · ]", t!("help.result_tabs"))])));
+    out.push((t!("messages.title"), of(Here::Messages, &[])));
+    out.push((t!("results.plan"), of(Here::PlanText, &[])));
+    out.push((
+        t!("navigator.title"),
+        of(Here::Navigator, &[("→ / ←", t!("help.expand")), ("PgUp · PgDn", t!("help.page"))]),
+    ));
+    out
+}
+
+/// The keys of the screen by section, as (keys, what they do).
+pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String)>)> {
+    let sections: Vec<(&'static str, Vec<(&str, &str)>)> = match app.screen {
+        Screen::Query => return query_help(app),
         Screen::Projects | Screen::Connections | Screen::Connect => vec![
             (
                 t!("help.projects"),
@@ -495,28 +436,20 @@ pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String
         .collect()
 }
 
-/// The focused pane's section of the help.
-pub(super) fn pane_keys(app: &App) -> (&'static str, Vec<(String, String)>) {
-    let title = match app.focus {
-        Focus::Editor => t!("pane.editor"),
-        Focus::Results => t!("pane.results"),
-        Focus::Schema => t!("navigator.title"),
-    };
-    help_sections(app).into_iter().find(|(t, _)| *t == title).unwrap_or((title, Vec::new()))
-}
-
-pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
     let sections = help_sections(app);
     // Configured keys can be long: size the key column to the longest.
     let key_w = sections.iter().flat_map(|(_, keys)| keys).map(|(k, _)| k.chars().count()).max().unwrap_or(0).max(22);
+    // A long description ends in `…`, not at the border.
+    let what_w = usize::from(area.width).saturating_sub(key_w + 7);
     let mut lines = Vec::new();
     for (title, keys) in sections {
         lines.push(Line::from(Span::styled(title.to_uppercase(), bold(t.accent))));
         for (key, what) in keys {
             lines.push(Line::from(vec![
                 Span::styled(format!("  {key:<key_w$} "), bold(t.text)),
-                Span::styled(what, muted()),
+                Span::styled(truncate(&what, what_w), muted()),
             ]));
         }
         lines.push(Line::default());
@@ -525,8 +458,19 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect) {
     let height = fit(lines.len() as u16 + 2, 5, area.height);
     let width = lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4;
     let rect = centered_box(area, fit(width.max(64), 20, area.width), height);
+    // Longer than the screen: the arrows scroll it, as far as there's more.
+    let most = (lines.len() as u16 + 2).saturating_sub(height);
+    app.help_scroll = app.help_scroll.min(most);
     f.render_widget(Clear, rect);
-    f.render_widget(Paragraph::new(lines).block(popup(t!("help.title"), t.accent)), rect);
+    // With more than fits, the title says which lines these are.
+    let room = height.saturating_sub(2);
+    let title = if most > 0 {
+        let last = (app.help_scroll + room).min(lines.len() as u16);
+        format!("{} {}–{last}/{}", t!("help.title"), app.help_scroll + 1, lines.len())
+    } else {
+        t!("help.title").to_string()
+    };
+    f.render_widget(Paragraph::new(lines).scroll((app.help_scroll, 0)).block(popup(&title, t.accent)), rect);
 }
 
 /// The version in the badge. Tests draw a fixed one, so a release doesn't

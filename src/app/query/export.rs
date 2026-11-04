@@ -4,12 +4,8 @@ use super::super::*;
 
 impl App {
     /// `podelis-export-<timestamp>.<ext>` in `export_dir` (or the current folder).
-    pub(in crate::app) fn export_path(&self, format: ExportFormat) -> PathBuf {
-        self.export_path_ext(super::super::pipes::OpenFormat::from(format).ext())
-    }
-
-    /// The same, for a file of extension `ext` (`parquet`).
-    fn export_path_ext(&self, ext: &str) -> PathBuf {
+    pub(in crate::app) fn export_path(&self, format: Format) -> PathBuf {
+        let ext = format.ext();
         let dir = match self.settings.export_dir.as_deref() {
             Some(d) if d.starts_with("~/") => crate::config::settings::expand_home(d),
             Some(d) => PathBuf::from(d),
@@ -30,37 +26,38 @@ impl App {
         )
     }
 
-    /// Writes the rows as shown to a CSV or JSON file in the current folder.
-    pub(in crate::app) fn export(&mut self, format: ExportFormat) {
-        let path = self.export_path(format);
-        let table = self.insert_table();
-        let Some(results) = &self.tab.grid.results else { return };
-        let engine = self.engine();
-        let text = match format {
-            ExportFormat::Csv => crate::transfer::export::csv(results, &self.tab.grid.view),
-            ExportFormat::Json => crate::transfer::export::json(results, &self.tab.grid.view),
-            ExportFormat::Sql => crate::transfer::export::sql_inserts(results, &self.tab.grid.view, &table, engine),
-            ExportFormat::Ascii => crate::transfer::export::ascii_table(results, &self.tab.grid.view),
-        };
-        let written = std::fs::write(&path, text);
-        self.exported(&path, written);
+    /// Writes the rows as shown to a file in the current folder.
+    pub(in crate::app) fn export(&mut self, format: Format) {
+        let rows = self.tab.grid.view.clone();
+        let note = self.shown_note();
+        self.write_rows(format, &rows, note);
     }
 
-    /// Writes the rows as shown to a Parquet file, each column typed by its
+    /// Writes `rows` of the result to a file; `note` says how many they are.
+    fn write_rows(&mut self, format: Format, rows: &[usize], note: String) {
+        if format == Format::Parquet {
+            return self.export_parquet(rows, note);
+        }
+        let path = self.export_path(format);
+        let Some(text) = self.rows_text(format, rows) else { return };
+        let written = std::fs::write(&path, text);
+        self.export_said(&path, written.map_err(|e| e.to_string()), &note);
+    }
+
+    /// Writes `rows` to a Parquet file, each column typed by its
     /// engine's type (`transfer::parquet`), from any engine: on a blocking
     /// thread (every value is read, then encoded), the screen drawn meanwhile.
-    pub(in crate::app) fn export_parquet(&mut self) {
+    fn export_parquet(&mut self, rows: &[usize], note: String) {
         if self.export_task.is_some() {
             return self.set_status(t!("export.already_running").to_string(), true);
         }
-        let path = self.export_path_ext("parquet");
+        let path = self.export_path(Format::Parquet);
         let engine = self.engine();
-        let note = self.shown_note();
         let Some(results) = &self.tab.grid.results else { return };
         let shown = crate::db::QueryOutcome {
             columns: results.columns.clone(),
             column_types: results.column_types.clone(),
-            rows: self.tab.grid.view.iter().filter_map(|&i| results.rows.get(i).cloned()).collect(),
+            rows: rows.iter().filter_map(|&i| results.rows.get(i).cloned()).collect(),
             ..crate::db::QueryOutcome::default()
         };
         let send = self.sender();
@@ -102,12 +99,6 @@ impl App {
         format!(" ({said})")
     }
 
-    /// What an export of the rows shown says: where, and how many rows.
-    fn exported(&mut self, path: &std::path::Path, written: std::io::Result<()>) {
-        let note = self.shown_note();
-        self.export_said(path, written.map_err(|e| e.to_string()), &note);
-    }
-
     /// The status for an export of the rows shown that's done (`note`: how
     /// many of them).
     pub(in crate::app) fn export_said(&mut self, path: &std::path::Path, written: Result<(), String>, note: &str) {
@@ -136,7 +127,7 @@ impl App {
     /// Writes every row of the result to a file: those loaded, then the
     /// rest of the stream page by page, straight to the file rather than
     /// into the grid. Esc stops it.
-    pub(in crate::app) fn export_all(&mut self, paged: PagedFormat) {
+    pub(in crate::app) fn export_all(&mut self, format: Format) {
         const PAGE: usize = 10_000;
         if self.export_task.is_some() {
             return self.set_status(t!("export.already_running").to_string(), true);
@@ -146,26 +137,28 @@ impl App {
             if results.truncated() {
                 return self.set_status(t!("export.not_in_full").to_string(), true);
             }
-            return match paged.as_text() {
-                Some(format) => self.export(format),
-                None => self.export_parquet(),
-            };
+            // All of it is here: every row, whatever a filter is showing, in
+            // the order they're sorted.
+            let rows = compute_view(results, "", self.tab.grid.sort);
+            let note = format!(" ({})", tn!("export.rows", rows.len()));
+            return self.write_rows(format, &rows, note);
         }
         if self.tab.run.fetching_more {
             return self.set_status(t!("export.still_loading").to_string(), true);
         }
-        let Some(stream) = self.tab.run.stream.take() else { return };
         let engine = self.engine();
-        // The file, and how it's written: text (`Some`), or Parquet.
-        let (path, paged) = match paged {
-            PagedFormat::Csv => (self.export_path(ExportFormat::Csv), Some(crate::transfer::export::Paged::Csv)),
-            PagedFormat::Json => (self.export_path(ExportFormat::Json), Some(crate::transfer::export::Paged::Json)),
-            PagedFormat::Sql => (
-                self.export_path(ExportFormat::Sql),
-                Some(crate::transfer::export::Paged::Inserts { table: self.insert_table(), engine }),
-            ),
-            PagedFormat::Parquet => (self.export_path_ext("parquet"), None),
+        // How it's written: text (`Some`), or Parquet.
+        let paged = match format {
+            Format::Csv => Some(crate::transfer::export::Paged::Csv),
+            Format::Json => Some(crate::transfer::export::Paged::Json),
+            Format::Sql => Some(crate::transfer::export::Paged::Inserts { table: self.insert_table(), engine }),
+            Format::Parquet => None,
+            Format::Tsv | Format::Markdown | Format::Ascii | Format::Text => {
+                return self.set_status(t!("export.not_page_by_page", format = format.name()), true);
+            }
         };
+        let Some(stream) = self.tab.run.stream.take() else { return };
+        let path = self.export_path(format);
         let (columns, types, loaded) = (results.columns.clone(), results.column_types.clone(), results.rows.clone());
         let send = self.sender();
         let target = path.clone();
@@ -243,36 +236,113 @@ impl App {
     }
 }
 
-/// File formats for exporting results.
+/// Where rows go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExportFormat {
-    Csv,
-    Json,
-    /// `INSERT` statements.
-    Sql,
-    /// A table with `+--+` borders.
-    Ascii,
+pub enum Dest {
+    /// The marked rows (or those shown), to the clipboard.
+    Copy,
+    /// The rows shown, to a file.
+    ExportShown,
+    /// Every row of the result, not just those loaded, to a file.
+    ExportAll,
+    /// The marked rows (or those shown), in an app.
+    Open,
 }
 
-/// What every row of a result can be exported as, page by page as they
-/// arrive (an ASCII table can't: its widths need every row first).
+/// What rows can be written as: declared in the one order every menu lists
+/// them in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PagedFormat {
+pub enum Format {
     Csv,
+    Tsv,
     Json,
+    Markdown,
+    /// A table with `+--+` borders.
+    Ascii,
+    /// Aligned columns, as `-e` prints them.
+    Text,
+    /// `INSERT` statements.
     Sql,
-    /// Parquet's file (binary: a file only, never the clipboard).
+    /// Binary: a file only, never the clipboard.
     Parquet,
 }
 
-impl PagedFormat {
-    /// The text format it is, if it's one (not Parquet).
-    pub fn as_text(self) -> Option<ExportFormat> {
+impl Format {
+    pub const ALL: [Format; 8] = [
+        Format::Csv,
+        Format::Tsv,
+        Format::Json,
+        Format::Markdown,
+        Format::Ascii,
+        Format::Text,
+        Format::Sql,
+        Format::Parquet,
+    ];
+
+    /// Whether rows can go to `to` in this format. Every row goes page by
+    /// page as it arrives, which an ASCII table can't: its widths need every
+    /// row first.
+    pub fn supports(self, to: Dest) -> bool {
+        use Format::{Ascii, Csv, Json, Markdown, Parquet, Sql, Text, Tsv};
+        match to {
+            Dest::Copy => matches!(self, Csv | Tsv | Json | Markdown | Ascii | Sql),
+            Dest::ExportShown => matches!(self, Csv | Json | Ascii | Sql | Parquet),
+            Dest::ExportAll => matches!(self, Csv | Json | Sql | Parquet),
+            Dest::Open => matches!(self, Csv | Tsv | Json | Ascii | Text | Sql),
+        }
+    }
+
+    /// The formats rows can go to `to` in, in the one order.
+    pub fn for_dest(to: Dest) -> impl Iterator<Item = Format> {
+        Format::ALL.into_iter().filter(move |f| f.supports(to))
+    }
+
+    /// Its key in `[viewers]`.
+    pub fn key(self) -> &'static str {
         match self {
-            PagedFormat::Csv => Some(ExportFormat::Csv),
-            PagedFormat::Json => Some(ExportFormat::Json),
-            PagedFormat::Sql => Some(ExportFormat::Sql),
-            PagedFormat::Parquet => None,
+            Format::Ascii => "ascii",
+            other => other.ext(),
+        }
+    }
+
+    /// Its file's extension.
+    pub fn ext(self) -> &'static str {
+        match self {
+            Format::Csv => "csv",
+            Format::Tsv => "tsv",
+            Format::Json => "json",
+            Format::Markdown => "md",
+            Format::Sql => "sql",
+            Format::Text | Format::Ascii => "txt",
+            Format::Parquet => "parquet",
+        }
+    }
+
+    /// Its name, as a status says it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Format::Csv => "CSV",
+            Format::Tsv => "TSV",
+            Format::Json => "JSON",
+            Format::Markdown => "Markdown",
+            Format::Parquet => "Parquet",
+            Format::Sql => t!("pipes.format_sql"),
+            Format::Text => t!("pipes.format_text"),
+            Format::Ascii => t!("pipes.format_ascii"),
+        }
+    }
+
+    /// How a menu's "… as {format}" says it.
+    pub fn phrase(self) -> &'static str {
+        match self {
+            Format::Csv => "CSV",
+            Format::Tsv => "TSV",
+            Format::Json => "JSON",
+            Format::Parquet => "Parquet",
+            Format::Markdown => t!("menu.format_markdown"),
+            Format::Sql => t!("menu.format_sql"),
+            Format::Text => t!("menu.format_text"),
+            Format::Ascii => t!("menu.format_ascii"),
         }
     }
 }
@@ -303,17 +373,6 @@ impl<W: std::io::Write + Send> Sink<W> {
         match self {
             Sink::Text(out) => out.finish().map(drop),
             Sink::Parquet(out) => out.finish(stop).map(drop),
-        }
-    }
-}
-
-impl From<ExportFormat> for pipes::OpenFormat {
-    fn from(format: ExportFormat) -> Self {
-        match format {
-            ExportFormat::Csv => pipes::OpenFormat::Csv,
-            ExportFormat::Json => pipes::OpenFormat::Json,
-            ExportFormat::Sql => pipes::OpenFormat::Sql,
-            ExportFormat::Ascii => pipes::OpenFormat::Ascii,
         }
     }
 }

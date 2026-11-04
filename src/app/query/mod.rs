@@ -9,7 +9,7 @@ mod results_keys;
 mod run;
 mod schema_keys;
 
-pub use export::{ExportFormat, PagedFormat};
+pub use export::{Dest, Format};
 pub(super) use schema_keys::step_selectable;
 
 use super::*;
@@ -191,7 +191,9 @@ impl App {
             }
             Some(Overlay::Palette) => {
                 if let Some(palette) = &mut self.popups.palette {
-                    palette.searching = true;
+                    if !palette.searching() {
+                        palette.mode = palette::PaletteMode::Commands;
+                    }
                     palette.query.insert_str(text);
                     palette.selected = 0;
                 }
@@ -233,7 +235,7 @@ impl App {
             Overlay::PipePrompt => self.popups.pipe_prompt.as_ref()?.text(),
             Overlay::AskPrompt => self.popups.ask_prompt.as_ref()?.text(),
             Overlay::TabPrompt => self.popups.tab_prompt.as_ref()?.text.text(),
-            Overlay::Palette => self.popups.palette.as_ref().filter(|p| p.searching)?.query.text(),
+            Overlay::Palette => self.popups.palette.as_ref().filter(|p| p.searching())?.query.text(),
             Overlay::Library => self.popups.library_view.as_ref().filter(|v| !v.confirm_delete)?.query.text(),
             Overlay::Memory => self.popups.memory_view.as_ref()?.adding.as_ref()?.text(),
             _ => return None,
@@ -274,9 +276,7 @@ impl App {
                     return self.copy_text(text, t!("copy.selection"));
                 }
                 let row = ed.cursor().0;
-                let (start, end) = (ed.offset_of((row, 0)), ed.offset_of((row, ed.line_len(row))));
-                let line = ed.text()[start..end].to_string();
-                if !line.trim().is_empty() {
+                if let Some(line) = self.editor_line() {
                     return self.copy_text(line, &t!("copy.line", line = row + 1));
                 }
             }
@@ -287,14 +287,19 @@ impl App {
             Focus::Results if self.tab.result_tab == ResultTab::Plan && self.tab.plan.is_some() => {
                 return self.copy_plan(false);
             }
-            Focus::Schema => {
-                if let Some((name, what)) = self.schema_name() {
-                    return self.copy_text(name.clone(), &t!("copy.name", what = what, name = name));
-                }
-            }
+            Focus::Schema => return self.copy_schema_name(),
             Focus::Results => {}
         }
         self.set_status(t!("copy.nothing").to_string(), false);
+    }
+
+    /// The line the cursor is on, unless it's blank.
+    pub(in crate::app) fn editor_line(&self) -> Option<String> {
+        let ed = &self.tab.editor;
+        let row = ed.cursor().0;
+        let (start, end) = (ed.offset_of((row, 0)), ed.offset_of((row, ed.line_len(row))));
+        let line = ed.text()[start..end].to_string();
+        (!line.trim().is_empty()).then_some(line)
     }
 
     /// The navigator's selection as it's written in SQL (a table with its

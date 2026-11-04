@@ -151,9 +151,12 @@ fn right_click_opens_a_menu_at_the_pointer() {
     assert_eq!((app.focus, app.tab.grid.table_state.selected()), (Focus::Results, Some(1)));
     assert_eq!(app.popups.menu.as_ref().unwrap().title, "RESULTS");
     assert_snapshot!(render(&mut app, 100, 30));
-    // Clicking an item does it: "Copy the row" (the 9th).
+    // Clicking an item does it: "Copy the row".
     let menu = app.hits.menu;
-    app.handle_mouse(click(MouseEventKind::Down(MouseButton::Left), menu.x + 3, menu.y + 9));
+    let copy_row =
+        app.popups.menu.as_ref().unwrap().items.iter().position(|i| i.label.starts_with("Copy the row (")).unwrap();
+    let row = app.hits.menu_rows.iter().find(|(_, i)| *i == copy_row).unwrap().0;
+    app.handle_mouse(click(MouseEventKind::Down(MouseButton::Left), menu.x + 3, row));
     assert!(app.popups.menu.is_none());
     assert_eq!(app.take_clipboard().as_deref(), Some("2\tben@example.com\tline one line two"));
 }

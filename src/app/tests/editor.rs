@@ -250,10 +250,13 @@ fn command_palette_finds_and_runs_commands() {
     app.tab.editor.set_text("select a,b from t");
     // Ctrl+K waits for a letter; its menu shows only after a pause.
     app.handle_key(ctrl('k'));
-    assert!(app.popups.palette.as_ref().is_some_and(|p| !p.menu) && app.notes.status == "^K…");
+    assert!(app.popups.palette.as_ref().is_some_and(|p| !p.menu_shown()) && app.notes.status == "^K…");
     assert!(app.palette_menu_due().is_some_and(|due| due > Instant::now()));
     app.show_palette_menu();
-    assert!(app.popups.palette.as_ref().is_some_and(|p| p.menu) && app.palette_menu_due().is_none());
+    assert!(
+        app.popups.palette.as_ref().is_some_and(crate::app::palette::Palette::menu_shown)
+            && app.palette_menu_due().is_none()
+    );
     // `/` searches (a letter alone would run its Ctrl+K action).
     type_text(&mut app, "/form sql");
     let items = app.palette_items();
@@ -396,7 +399,7 @@ async fn menus_offer_what_each_pane_can_do() {
     app.handle_key(key(KeyCode::Char('m')));
     let menu = app.popups.menu.as_ref().expect("results menu");
     assert_eq!(menu.title, "RESULTS");
-    assert!(menu.items.iter().any(|i| i.label == "Copy rows as a Markdown table" && i.keys == "C"));
+    assert!(menu.items.iter().any(|i| i.label == "Copy the rows as…" && i.keys == "C"));
     // An item's key works inside the menu, doing what the key does.
     app.handle_key(key(KeyCode::Char('Y')));
     assert!(app.popups.menu.is_none());
@@ -405,15 +408,23 @@ async fn menus_offer_what_each_pane_can_do() {
     app.focus = Focus::Editor;
     app.handle_key(KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT));
     let menu = app.popups.menu.as_ref().unwrap();
-    let labels: Vec<_> = menu.items.iter().map(|i| (i.label, i.keys.as_str())).collect();
+    let labels: Vec<_> = menu.items.iter().map(|i| (i.label.as_str(), i.keys.as_str(), i.dimmed)).collect();
     assert_eq!(menu.title, "EDITOR");
-    assert_eq!(labels[..2], [("Paste", "Ctrl+V"), ("Run (the selection, or everything)", "F5 · Ctrl+R · Ctrl+Enter")]);
+    assert_eq!(
+        labels[..4],
+        [
+            ("Copy", "Ctrl+C", false),
+            ("Cut", "Ctrl+X", true),
+            ("Paste", "Ctrl+V", false),
+            ("Run (the selection, or everything)", "F5", false)
+        ]
+    );
     app.handle_key(key(KeyCode::Esc));
     assert!(app.popups.menu.is_none());
-    // With a selection, Copy and Cut come first; Copy copies it.
+    // With a selection, Copy and Cut apply; Copy copies it.
     app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
     app.handle_key(KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT));
-    let labels: Vec<_> = app.popups.menu.as_ref().unwrap().items.iter().map(|i| i.label).collect();
+    let labels: Vec<_> = app.popups.menu.as_ref().unwrap().items.iter().map(|i| i.label.as_str()).collect();
     assert_eq!(labels[..3], ["Copy", "Cut", "Paste"]);
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.take_clipboard(), Some(app.tab.editor.text()));
@@ -422,7 +433,7 @@ async fn menus_offer_what_each_pane_can_do() {
     app.handle_key(key(KeyCode::Char('2')));
     app.handle_key(key(KeyCode::Char('m')));
     let menu = app.popups.menu.as_ref().unwrap();
-    assert_eq!((menu.title, menu.items[0].label), ("RESULTS", "Show the rows"));
+    assert_eq!((menu.title, menu.items[0].label.as_str()), ("RESULTS", "Show the rows"));
 }
 
 #[cfg(feature = "sqlite")]
@@ -624,10 +635,10 @@ fn ctrl_k_can_wait_quietly_and_ctrl_shift_k_shows_the_menu_at_once() {
     assert_eq!(app.notes.status, "^K… (? shows the menu)");
     // `?` shows it, then `?` again every key.
     app.handle_key(key(KeyCode::Char('?')));
-    assert!(app.popups.palette.as_ref().is_some_and(|p| p.menu));
+    assert!(app.popups.palette.as_ref().is_some_and(crate::app::palette::Palette::menu_shown));
     app.handle_key(key(KeyCode::Char('?')));
     assert!(app.popups.palette.is_none() && app.help_visible);
     app.help_visible = false;
     app.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::CONTROL | KeyModifiers::SHIFT));
-    assert!(app.popups.palette.as_ref().is_some_and(|p| p.menu && !p.searching));
+    assert!(app.popups.palette.as_ref().is_some_and(|p| p.menu_shown() && !p.searching()));
 }

@@ -48,19 +48,6 @@ impl App {
             KeyCode::PageDown => (at + page).min(n - 1),
             KeyCode::Home | KeyCode::Char('g') => 0,
             KeyCode::End | KeyCode::Char('G') => n - 1,
-            KeyCode::Enter | KeyCode::Char('v') => {
-                self.open_message();
-                return true;
-            }
-            KeyCode::Char('y') => {
-                self.copy_message();
-                return true;
-            }
-            KeyCode::Char('Y') => {
-                let all: Vec<String> = self.notes.log.iter().map(|m| format!("{}  {}", m.time, m.text)).collect();
-                self.copy_text(all.join("\n"), &tn!("copy.messages", n));
-                return true;
-            }
             KeyCode::Esc if self.notes.selected.is_some() => {
                 self.notes.selected = None;
                 return true;
@@ -77,13 +64,20 @@ impl App {
         self.notes.selected.and_then(|i| self.notes.log.get(i)).or(self.notes.log.last())
     }
 
+    /// Every message, each with its time.
+    pub(super) fn copy_messages(&mut self) {
+        let all: Vec<String> = self.notes.log.iter().map(|m| format!("{}  {}", m.time, m.text)).collect();
+        let n = all.len();
+        self.copy_text(all.join("\n"), &tn!("copy.messages", n));
+    }
+
     pub(super) fn copy_message(&mut self) {
         let Some(m) = self.chosen_message() else { return };
         let text = m.text.clone();
         self.copy_text(text, t!("copy.message"));
     }
 
-    fn open_message(&mut self) {
+    pub(super) fn open_message(&mut self) {
         let Some(m) = self.chosen_message() else { return };
         let error = if m.is_error { format!(" · {}", t!("messages.error")) } else { String::new() };
         let title = format!("{} · {}{error}", t!("messages.title"), m.time);

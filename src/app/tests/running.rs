@@ -199,7 +199,7 @@ async fn watch_mode_marks_what_changed() {
     app.handle_key(key(KeyCode::Esc));
     assert!(app.watch.is_some(), "the filter went, not the watch");
     // The palette stops it from anywhere.
-    app.run_command(crate::app::palette::Command::Watch(0));
+    app.run_command(crate::app::commands::Command::Watch(0));
     assert!(app.watch.is_none());
 
     // It stays with its tab: another tab stops it, and a watch that finds

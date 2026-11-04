@@ -9,6 +9,7 @@
 //!
 //! A configured action replaces all of its default keys. `Ctrl+K x` is a
 //! leader key: Ctrl+K opens a menu of them, then `x` runs the action.
+//! `Ctrl+K s i` is one in a group: `s` opens the group, `i` runs it.
 
 use std::collections::HashMap;
 
@@ -153,7 +154,7 @@ impl Action {
     }
 
     /// About the editor's text (its statement, lines or cursor) or its tab:
-    /// the Ctrl+K menu lists them only while the editor has the keys.
+    /// the Ctrl+K menu dims them unless the editor has the keys.
     pub fn is_editor_action(self) -> bool {
         matches!(
             self,
@@ -213,8 +214,8 @@ const ACTIONS: &[(Action, &str, &[&str])] = &[
     (Action::Comment, "comment", &["Ctrl+K -", "Ctrl+/", "Ctrl+7"]),
     (Action::Format, "format", &["Ctrl+K f", "F9"]),
     (Action::Palette, "palette", &["Ctrl+K"]),
-    (Action::ConnectionInfo, "connection_info", &["Ctrl+K u"]),
-    (Action::Activity, "activity", &["Ctrl+K s"]),
+    (Action::ConnectionInfo, "connection_info", &["Ctrl+K s i"]),
+    (Action::Activity, "activity", &["Ctrl+K s s"]),
     (Action::ExplainAnalyze, "explain_analyze", &["Shift+F7", "Ctrl+K a"]),
     (Action::InsertSnippet, "insert_snippet", &["Ctrl+K i", "Ctrl+E"]),
     (Action::Menu, "menu", &["Ctrl+K m", "Shift+F10", "F10"]),
@@ -224,14 +225,14 @@ const ACTIONS: &[(Action, &str, &[&str])] = &[
     (Action::ConnectionList, "connection_list", &["Ctrl+K j"]),
     (Action::Settings, "settings", &["Ctrl+K ,"]),
     (Action::SelectStatement, "select_statement", &["Ctrl+K v"]),
-    (Action::Heartbeat, "heartbeat", &["Ctrl+K h"]),
+    (Action::Heartbeat, "heartbeat", &["Ctrl+K s h"]),
     (Action::Projects, "projects", &["Ctrl+K p"]),
     (Action::TxMode, "transaction_mode", &["Ctrl+K x"]),
     (Action::NextWarning, "next_warning", &["Ctrl+K w"]),
-    (Action::Ask, "ask", &["Ctrl+K q"]),
-    (Action::AiExplain, "ai_explain", &["Ctrl+K y"]),
+    (Action::Ask, "ask", &["Ctrl+K q", "Ctrl+K y q"]),
+    (Action::AiExplain, "ai_explain", &["Ctrl+K y y"]),
     (Action::SaveStatement, "save_statement", &[]),
-    (Action::Memory, "memory", &["Ctrl+K k"]),
+    (Action::Memory, "memory", &["Ctrl+K y k"]),
 ];
 
 /// One key or several, as written in config.toml.
@@ -244,11 +245,20 @@ pub enum KeySpec {
 
 type Binding = (KeyCode, KeyModifiers);
 
+/// What the letters typed so far after Ctrl+K mean.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeaderStep {
+    Run(Action),
+    /// A group: another letter comes.
+    Group,
+    Nothing,
+}
+
 #[derive(Clone, Debug)]
 pub struct KeyMap {
     bindings: Vec<(Binding, Action)>,
-    /// Letters after Ctrl+K.
-    leader: Vec<(char, Action)>,
+    /// Letters after Ctrl+K: one, or a group's and one.
+    leader: Vec<(Vec<char>, Action)>,
     labels: HashMap<Action, String>,
 }
 
@@ -291,9 +301,10 @@ impl KeyMap {
             for spec in specs {
                 if let Some(rest) = leader_spec(&spec) {
                     match rest {
-                        Ok(c) => {
-                            map.leader.push((c, action));
-                            labels.push(format!("{leader_key} {c}"));
+                        Ok(letters) => {
+                            let said: Vec<String> = letters.iter().map(char::to_string).collect();
+                            labels.push(format!("{leader_key} {}", said.join(" ")));
+                            map.leader.push((letters, action));
                         }
                         Err(e) => warnings.push(format!("[keys] {name}: {e}")),
                     }
@@ -316,21 +327,46 @@ impl KeyMap {
         };
         map.bindings.sort_by_key(|(_, action)| configured(action));
         map.leader.sort_by_key(|(_, action)| configured(action));
+        // A letter that runs something can't open a group as well: it runs.
+        for (letters, action) in &map.leader {
+            let shadowed = letters.len() == 1 && map.leader.iter().any(|(l, _)| l.len() > 1 && l[0] == letters[0]);
+            if shadowed {
+                let name = ACTIONS.iter().find(|(a, _, _)| a == action).map_or("", |(_, n, _)| *n);
+                warnings
+                    .push(format!("[keys] {name}: '{}' opens a group too; the group's keys won't work", letters[0]));
+            }
+        }
         (map, warnings)
     }
 
+    /// What `letters` after Ctrl+K mean. A letter that runs something wins
+    /// over a group of the same letter (`KeyMap::new` warns about those).
+    pub fn leader_step(&self, letters: &[char]) -> LeaderStep {
+        if let Some((_, action)) = self.leader.iter().find(|(l, _)| l == letters) {
+            return LeaderStep::Run(*action);
+        }
+        if self.leader.iter().any(|(l, _)| l.starts_with(letters)) {
+            return LeaderStep::Group;
+        }
+        LeaderStep::Nothing
+    }
+
     /// The action of `c` after Ctrl+K.
+    #[cfg(test)]
     pub fn leader(&self, c: char) -> Option<Action> {
-        self.leader.iter().find(|(k, _)| *k == c).map(|(_, a)| *a)
+        match self.leader_step(&[c]) {
+            LeaderStep::Run(action) => Some(action),
+            LeaderStep::Group | LeaderStep::Nothing => None,
+        }
     }
 
     /// The letters after Ctrl+K, in the order of the actions, each once.
-    pub fn leader_keys(&self) -> Vec<(char, Action)> {
-        let mut keys: Vec<(char, Action)> = Vec::new();
+    pub fn leader_keys(&self) -> Vec<(Vec<char>, Action)> {
+        let mut keys: Vec<(Vec<char>, Action)> = Vec::new();
         for action in Action::all() {
-            for &(c, a) in &self.leader {
-                if a == action && !keys.iter().any(|(k, _)| *k == c) {
-                    keys.push((c, a));
+            for (letters, a) in &self.leader {
+                if *a == action && !keys.iter().any(|(k, _)| k == letters) {
+                    keys.push((letters.clone(), *a));
                 }
             }
         }
@@ -347,9 +383,14 @@ impl KeyMap {
         self.labels.get(&action).map_or("", String::as_str)
     }
 
+    /// The first key for `action`, as it's written.
+    pub fn first_label(&self, action: Action) -> &str {
+        self.label(action).split(" · ").next().unwrap_or_default()
+    }
+
     /// The first key for `action`, short ("^P" for Ctrl+P).
     pub fn short_label(&self, action: Action) -> String {
-        let first = self.label(action).split(" · ").next().unwrap_or_default();
+        let first = self.first_label(action);
         first.strip_prefix("Ctrl+").map_or_else(|| first.to_string(), |rest| format!("^{rest}"))
     }
 }
@@ -365,15 +406,25 @@ fn normalize(code: KeyCode, mods: KeyModifiers) -> Binding {
 }
 
 /// For `Ctrl+K x` (or `Leader x`): the letter, or why it can't be one.
-fn leader_spec(spec: &str) -> Option<Result<char, String>> {
+fn leader_spec(spec: &str) -> Option<Result<Vec<char>, String>> {
     let (prefix, rest) = spec.trim().split_once(' ')?;
     if !prefix.eq_ignore_ascii_case("ctrl+k") && !prefix.eq_ignore_ascii_case("leader") {
         return None;
     }
-    let mut chars = rest.trim().chars();
-    Some(match (chars.next(), chars.next()) {
-        (Some(c), None) if !c.is_ascii_digit() && c != '?' && c != '/' => Ok(c),
-        _ => Err(format!("'{spec}': after Ctrl+K use one character (not a digit, ? or /)")),
+    let letter = |part: &str| {
+        let mut chars = part.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) if !c.is_ascii_digit() && c != '?' && c != '/' => Some(c),
+            _ => None,
+        }
+    };
+    let letters: Option<Vec<char>> = rest.split_whitespace().map(letter).collect();
+    // A group's `m` and `?` keep their meaning: its menu's, every key's.
+    Some(match letters {
+        Some(letters) if letters.len() == 1 || (letters.len() == 2 && letters[1] != 'm') => Ok(letters),
+        _ => Err(format!(
+            "'{spec}': after Ctrl+K use one character, or a group's and one (not a digit, ? or /; m in no group)"
+        )),
     })
 }
 
@@ -498,5 +549,45 @@ mod tests {
         let overrides = HashMap::from([("palette".to_string(), KeySpec::One("Ctrl+B".into()))]);
         let map = KeyMap::new(&overrides).0;
         assert_eq!(map.label(Action::Zoom), "Ctrl+B z · F12");
+    }
+
+    #[test]
+    fn a_letter_opens_a_group_and_the_next_runs_in_it() {
+        let map = KeyMap::default();
+        assert_eq!(map.leader_step(&['s']), LeaderStep::Group);
+        assert_eq!(map.leader_step(&['s', 's']), LeaderStep::Run(Action::Activity));
+        assert_eq!(map.leader_step(&['s', 'z']), LeaderStep::Nothing);
+        assert_eq!(map.leader_step(&['q']), LeaderStep::Run(Action::Ask));
+        assert_eq!(map.leader_step(&['y', 'q']), LeaderStep::Run(Action::Ask));
+        assert_eq!(map.leader_step(&['y', 'y']), LeaderStep::Run(Action::AiExplain));
+        assert_eq!(map.leader_step(&['y', 'k']), LeaderStep::Run(Action::Memory));
+        // The letters given up are free again: typing them searches.
+        for c in ['u', 'h', 'k'] {
+            assert_eq!(map.leader_step(&[c]), LeaderStep::Nothing);
+        }
+        assert_eq!(map.label(Action::ConnectionInfo), "Ctrl+K s i");
+
+        // A user's own: into a group of their own, or the old flat letter.
+        let overrides = HashMap::from([
+            ("format".to_string(), KeySpec::One("Ctrl+K w f".into())),
+            ("connection_info".to_string(), KeySpec::One("Ctrl+K u".into())),
+            ("next_warning".to_string(), KeySpec::One("Ctrl+K u".into())),
+        ]);
+        let (map, warnings) = KeyMap::new(&overrides);
+        assert_eq!(map.leader_step(&['w', 'f']), LeaderStep::Run(Action::Format));
+        assert!(matches!(map.leader_step(&['u']), LeaderStep::Run(_)));
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        // A letter that also opens a group runs, and says what it hides.
+        let overrides = HashMap::from([("zoom".to_string(), KeySpec::One("Ctrl+K s".into()))]);
+        let (map, warnings) = KeyMap::new(&overrides);
+        assert_eq!(map.leader_step(&['s']), LeaderStep::Run(Action::Zoom));
+        assert!(warnings.len() == 1 && warnings[0].contains("opens a group"), "{warnings:?}");
+
+        // No group's `m`, no deeper than one.
+        for spec in ["Ctrl+K s m", "Ctrl+K a b c", "Ctrl+K s ?"] {
+            let overrides = HashMap::from([("zoom".to_string(), KeySpec::One(spec.into()))]);
+            assert_eq!(KeyMap::new(&overrides).1.len(), 1, "{spec}");
+        }
     }
 }

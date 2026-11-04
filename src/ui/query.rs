@@ -16,6 +16,7 @@ pub(crate) fn schema_width(resized: Option<u16>, total: u16) -> u16 {
 }
 
 pub(super) fn draw_query(f: &mut Frame, app: &mut App, body: Rect) {
+    app.hits.navigator_too_narrow = body.width < SCHEMA_MIN_TOTAL_WIDTH;
     let show_schema = app.panes.schema_visible && body.width >= SCHEMA_MIN_TOTAL_WIDTH;
     app.panes.schema_shown = show_schema;
     if !show_schema && app.focus == Focus::Schema {
@@ -38,7 +39,11 @@ pub(super) fn draw_query(f: &mut Frame, app: &mut App, body: Rect) {
     // Zoomed: only the focused pane, using the whole body.
     let cursor = if app.panes.zoomed {
         // The top bar's project, drawn already, stays clickable.
-        app.hits = crate::app::Hits { project: app.hits.project, ..crate::app::Hits::default() };
+        app.hits = crate::app::Hits {
+            project: app.hits.project,
+            navigator_too_narrow: app.hits.navigator_too_narrow,
+            ..crate::app::Hits::default()
+        };
         match app.focus {
             Focus::Schema => {
                 app.hits.schema = Some(body);
@@ -107,39 +112,66 @@ pub(super) fn draw_query(f: &mut Frame, app: &mut App, body: Rect) {
     }
 }
 
-/// A pop-up menu: what can be done here, each with its key.
+/// A pop-up menu: what can be done here, each with its key; what doesn't
+/// apply dimmed.
 fn draw_menu(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
-    let Some(menu) = &app.popups.menu else { return };
+    let Some(menu) = &mut app.popups.menu else { return };
     let label_w = menu.items.iter().map(|i| i.label.chars().count()).max().unwrap_or(0);
     let keys_w = menu.items.iter().map(|i| i.keys.chars().count()).max().unwrap_or(0);
     let width = ((label_w + keys_w + 6) as u16).min(area.width);
-    let height = (menu.items.len() as u16 + 3).min(area.height);
+    let rows = menu.rows(usize::from(area.height.saturating_sub(2)));
+    let height = (rows.len() as u16 + 2).min(area.height);
     // Open at the pointer, kept on screen.
-    let x = menu.at.0.min(area.right().saturating_sub(width));
-    let y = menu.at.1.min(area.bottom().saturating_sub(height));
-    let rect = Rect { x, y, width, height };
-    let lines: Vec<Line> = menu
-        .items
+    let left = menu.at.0.min(area.right().saturating_sub(width));
+    let top = menu.at.1.min(area.bottom().saturating_sub(height));
+    let rect = Rect { x: left, y: top, width, height };
+    // Too long for the screen: the selection stays in sight.
+    let room = usize::from(height.saturating_sub(2)).max(1);
+    let at = rows.iter().position(|r| *r == Some(menu.selected)).unwrap_or(0);
+    if at < menu.scroll {
+        menu.scroll = at;
+    } else if at >= menu.scroll + room {
+        menu.scroll = at + 1 - room;
+    }
+    menu.scroll = menu.scroll.min(rows.len().saturating_sub(room));
+    let mut drawn = Vec::new();
+    let lines: Vec<Line> = rows
         .iter()
         .enumerate()
-        .map(|(i, item)| {
-            let style = if i == menu.selected { bold(t.text_bright).bg(t.active) } else { fg(t.text) };
+        .skip(menu.scroll)
+        .take(room)
+        .map(|(row, entry)| {
+            let Some(i) = *entry else {
+                return Line::from(Span::styled("─".repeat(usize::from(width.saturating_sub(2))), dim()));
+            };
+            drawn.push((rect.y + 1 + (row - menu.scroll) as u16, i));
+            let item = &menu.items[i];
+            let selected = i == menu.selected;
+            let style = match (selected, item.dimmed) {
+                (true, true) => muted().bg(t.active),
+                (true, false) => bold(t.text_bright).bg(t.active),
+                (false, true) => dim(),
+                (false, false) => fg(t.text),
+            };
             let pad = label_w.saturating_sub(item.label.chars().count()) + 2;
             Line::from(vec![
                 Span::styled(format!(" {}{}", item.label, " ".repeat(pad)), style),
-                Span::styled(
-                    format!("{:>keys_w$} ", item.keys),
-                    if i == menu.selected { muted().bg(t.active) } else { dim() },
-                ),
+                Span::styled(format!("{:>keys_w$} ", item.keys), if selected { muted().bg(t.active) } else { dim() }),
             ])
         })
         .collect();
-    let block = popup(menu.title, t.accent)
+    let title = if rows.len() > room {
+        format!("{} {}/{}", menu.title, menu.selected + 1, menu.items.len())
+    } else {
+        menu.title.to_string()
+    };
+    let block = popup(&title, t.accent)
         .title_bottom(Line::from(Span::styled(format!(" {} ", t!("popup.choose_close")), dim())).right_aligned());
     f.render_widget(Clear, rect);
     f.render_widget(Paragraph::new(lines).block(block), rect);
     app.hits.menu = rect;
+    app.hits.menu_rows = drawn;
 }
 
 /// The F3 window: search box, then saved queries (★) and history (↺).
@@ -421,7 +453,7 @@ fn draw_ask_prompt(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines).block(popup(&title, t.accent)), rect);
 }
 
-/// `Ctrl+K k`: the project's memory, a fact a line; a model's
+/// `Ctrl+K y k`: the project's memory, a fact a line; a model's
 /// suggestions, waiting to be confirmed, in orange.
 fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
@@ -510,67 +542,96 @@ fn two_columns(items: &[(String, String)], width: usize, key_style: Style) -> Ve
     items.chunks(2).map(|pair| Line::from(pair.iter().flat_map(cell).collect::<Vec<_>>())).collect()
 }
 
-/// Whether `items` fit in `two_columns` of `width` without cutting any.
-fn fits_in_columns(items: &[(String, String)], width: usize) -> bool {
-    let key_w = items.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0);
-    key_w <= width / 2 && items.iter().all(|(_, what)| what.chars().count() <= width.saturating_sub(key_w + 3))
+/// What a letter that opens a group says in Ctrl+K's menu.
+fn leader_group_name(letter: char) -> &'static str {
+    match letter {
+        's' => t!("menu.group_server"),
+        'y' => t!("menu.group_ai"),
+        _ => t!("menu.group_other"),
+    }
 }
 
-/// One key and what it does per line, across `width`.
-fn one_column(items: &[(String, String)], width: usize, key_style: Style) -> Vec<Line<'static>> {
-    let key_w = items.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0).min(width / 2);
-    let what_w = width.saturating_sub(key_w + 3);
-    items
-        .iter()
-        .map(|(key, what)| {
-            Line::from(vec![
-                Span::styled(format!(" {:<key_w$} ", truncate(key, key_w)), key_style),
-                Span::styled(truncate(what, what_w), fg(theme().text)),
-            ])
-        })
-        .collect()
-}
-
-/// Ctrl+K's menu: one-letter actions, then the focused pane's own keys.
+/// Ctrl+K's menu: its letters by group (those not at hand here dimmed; they
+/// still work), the open tabs by number.
 fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
+    use crate::app::commands::{ACTION_GROUPS, Group};
+    use crate::config::keys::Action;
     let t = theme();
     let width = fit(84, 30, area.width);
-    let col = (width.saturating_sub(2) / 2) as usize;
-    // Writes and transactions first, then the query, then the rest.
-    const ORDER: &str = "xcreaf-inzmlgtodpush,";
-    let mut keys = app.keymap.leader_keys();
-    // The editor's own (explain, format…) only from the editor; they still
-    // work elsewhere, they're just not what's at hand there.
-    keys.retain(|(_, a)| app.focus == Focus::Editor || !a.is_editor_action());
-    // The navigator doesn't write: no write modes there.
-    keys.retain(|(_, a)| app.focus != Focus::Schema || *a != crate::config::keys::Action::TxMode);
-    // Commit and roll back only with a transaction to end.
-    keys.retain(|(_, a)| {
-        app.connection.txn != TxnState::Idle
-            || !matches!(a, crate::config::keys::Action::Commit | crate::config::keys::Action::Rollback)
-    });
-    keys.sort_by_key(|(c, _)| ORDER.find(*c).unwrap_or(ORDER.len()));
-    let mut leader: Vec<(String, String)> =
-        keys.into_iter().map(|(c, a)| (c.to_string(), a.brief().to_string())).collect();
-    leader.push(("?".into(), t!("menu.all_keys").into()));
-    let (_, pane_keys) = chrome::pane_keys(app);
-    // The open tabs by number: Ctrl+K 2 goes to the second.
-    let tabs: Vec<(String, String)> = app
-        .tabs
+    let inner = usize::from(width.saturating_sub(2));
+    let col = inner / 2;
+    let dimmed = |a: Action| {
+        (app.focus != Focus::Editor && a.is_editor_action())
+            || (app.focus == Focus::Schema && a == Action::TxMode)
+            || matches!(app.can(crate::app::commands::Command::Action(a)), crate::app::commands::Can::No { .. })
+    };
+    let group_open = app.popups.palette.as_ref().and_then(crate::app::palette::Palette::group);
+    let letters = app.keymap.leader_keys();
+    // Its key, its few words, and whether it's dimmed.
+    type Item = (String, String, bool);
+    let mut groups_shown: Vec<char> = Vec::new();
+    let groups: Vec<(Group, Vec<Item>)> = ACTION_GROUPS
         .iter()
-        .enumerate()
-        .take(9)
-        .map(|(i, tab)| {
-            let dirty = if app.tab_dirty(i) { " ●" } else { "" };
-            let here = if i == app.active_tab { format!(" ({})", t!("menu.this_one")) } else { String::new() };
-            ((i + 1).to_string(), format!("{}{dirty}{here}", tab.name))
+        .map(|(group, actions)| {
+            let mut items: Vec<Item> = Vec::new();
+            for (keys, a) in actions.iter().flat_map(|&a| letters.iter().filter(move |(_, x)| *x == a)) {
+                match (group_open, keys.as_slice()) {
+                    (None, [c]) => items.push((c.to_string(), a.brief().to_string(), dimmed(*a))),
+                    // A group's letter once, where the first of it would be.
+                    // (Not one a letter of its own has taken over.)
+                    (None, [c, _])
+                        if !groups_shown.contains(c)
+                            && app.keymap.leader_step(&[*c]) == crate::config::keys::LeaderStep::Group =>
+                    {
+                        groups_shown.push(*c);
+                        items.push((c.to_string(), leader_group_name(*c).to_string(), false));
+                    }
+                    (Some(open), [c, second]) if open == *c => {
+                        items.push((second.to_string(), a.brief().to_string(), dimmed(*a)));
+                    }
+                    _ => {}
+                }
+            }
+            if *group == Group::App && group_open.is_none() {
+                items.push(("?".to_string(), t!("menu.all_keys").to_string(), false));
+            }
+            (*group, items)
         })
+        .filter(|(_, items)| !items.is_empty())
         .collect();
-
+    let title_w = groups.iter().map(|(g, _)| g.title().chars().count()).max().unwrap_or(0);
     let mut lines = vec![Line::from(Span::styled(format!(" {}", t!("menu.then_press")), bold(t.accent)))];
-    lines.extend(two_columns(&leader, col, bold(t.accent)));
+    for (group, items) in &groups {
+        let mut spans = vec![Span::styled(format!(" {:<title_w$}  ", group.title().to_uppercase()), bold(t.text))];
+        let mut used = title_w + 3;
+        for (key, brief, dim_it) in items {
+            let wide = key.chars().count() + brief.chars().count() + 3;
+            if used + wide > inner && used > title_w + 3 {
+                lines.push(Line::from(std::mem::take(&mut spans)));
+                spans.push(Span::raw(" ".repeat(title_w + 3)));
+                used = title_w + 3;
+            }
+            let (key_style, what_style) = if *dim_it { (dim(), dim()) } else { (bold(t.accent), fg(t.text)) };
+            spans.push(Span::styled(format!("{key} "), key_style));
+            spans.push(Span::styled(format!("{brief}  "), what_style));
+            used += wide;
+        }
+        lines.push(Line::from(spans));
+    }
     lines.push(Line::default());
-    if app.tabs.len() > 1 {
+    if app.tabs.len() > 1 && group_open.is_none() {
+        // The open tabs by number: Ctrl+K 2 goes to the second.
+        let tabs: Vec<(String, String)> = app
+            .tabs
+            .iter()
+            .enumerate()
+            .take(9)
+            .map(|(i, tab)| {
+                let dirty = if app.tab_dirty(i) { " ●" } else { "" };
+                let here = if i == app.active_tab { format!(" ({})", t!("menu.this_one")) } else { String::new() };
+                ((i + 1).to_string(), format!("{}{dirty}{here}", tab.name))
+            })
+            .collect();
         let more = app.tabs.len().saturating_sub(9);
         let title = if more > 0 {
             format!(" {} ({})", t!("menu.tabs"), t!("menu.more_tabs", more = more))
@@ -578,53 +639,30 @@ fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
             format!(" {}", t!("menu.tabs"))
         };
         // Its first key spelled out, as the menu's others are (none: no hint).
-        let close = app.keymap.label(crate::config::keys::Action::CloseTab).split(" · ").next().unwrap_or_default();
+        let close = app.keymap.first_label(Action::CloseTab);
         let hint =
             if close.is_empty() { String::new() } else { format!("  {}", t!("menu.close_this_tab", key = close)) };
         lines.push(Line::from(vec![Span::styled(title, bold(t.accent)), Span::styled(hint, dim())]));
         lines.extend(two_columns(&tabs, col, bold(t.accent)));
         lines.push(Line::default());
     }
-    // The letters above take the keys while this menu is open: these are
-    // for the pane itself.
-    lines.push(Line::from(vec![
-        Span::styled(
-            format!(
-                " {}",
-                match app.focus {
-                    Focus::Editor => t!("menu.in_editor"),
-                    Focus::Results => t!("menu.in_results"),
-                    Focus::Schema => t!("menu.in_navigator"),
-                }
-            ),
-            bold(t.accent),
-        ),
-        Span::styled(format!("  {}", t!("menu.close_then_press")), dim()),
-    ]));
-    // Two columns if nothing gets cut, else one, if it fits on the screen.
-    let rows_left = usize::from(area.height).saturating_sub(lines.len() + 6);
-    if fits_in_columns(&pane_keys, col) || pane_keys.len() > rows_left {
-        lines.extend(two_columns(&pane_keys, col, bold(t.text)));
-    } else {
-        lines.extend(one_column(&pane_keys, usize::from(width.saturating_sub(2)), bold(t.text)));
-    }
-    lines.push(Line::default());
-    lines.push(Line::from(Span::styled(format!(" {}", t!("menu.search")), dim())));
+    let help = if group_open.is_some() { t!("menu.group_help") } else { t!("menu.search") };
+    lines.push(Line::from(Span::styled(format!(" {help}"), dim())));
 
     let height = (lines.len() as u16 + 2).min(area.height);
     let rect = Rect { y: area.y + area.height.saturating_sub(height).min(2), ..centered_box(area, width, height) };
     f.render_widget(Clear, rect);
-    let title =
-        app.keymap.label(crate::config::keys::Action::Palette).split(" · ").next().unwrap_or_default().to_uppercase();
+    let leader = app.keymap.first_label(Action::Palette).to_uppercase();
+    let title = group_open.map_or(leader.clone(), |c| format!("{leader} {}", c.to_uppercase()));
     f.render_widget(Paragraph::new(lines).block(popup(&title, t.accent)), rect);
 }
 
 fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
     let Some(palette) = &app.popups.palette else { return };
-    if !palette.searching {
+    if !palette.searching() {
         // Until the menu is due, only the status bar says Ctrl+K is waiting.
-        if palette.menu {
+        if palette.menu_shown() {
             draw_which_key(f, app, area);
         }
         return;
@@ -632,7 +670,7 @@ fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
     let items = app.palette_items();
     let width = fit(76, 30, area.width);
     // The connections list says its keys under it (Ctrl+D closes).
-    let help = u16::from(palette.conns_only) * 2;
+    let help = u16::from(palette.conns_only()) * 2;
     let rows = (area.height.saturating_sub(6 + help) as usize).clamp(1, 14).min(items.len().max(1));
     // Two rows down from the top: no taller than what's left below that.
     let rect = Rect {
@@ -640,9 +678,9 @@ fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
         ..centered_box(area, width, (rows as u16 + 4 + help).min(area.height.saturating_sub(2)))
     };
     f.render_widget(Clear, rect);
-    let title = if palette.conns_only {
+    let title = if palette.conns_only() {
         t!("conn_list.title")
-    } else if palette.tabs_only {
+    } else if palette.tabs_only() {
         t!("tab_list.title")
     } else {
         t!("palette.title")

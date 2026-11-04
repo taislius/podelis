@@ -18,8 +18,6 @@ impl App {
                 self.tab.plan_selected = Some((from, at));
                 self.reveal_plan_line(at);
             }
-            KeyCode::Char('y') => self.copy_plan(false),
-            KeyCode::Char('Y') => self.copy_plan(true),
             KeyCode::Esc if self.tab.plan_selected.is_some() => self.tab.plan_selected = None,
             _ => return false,
         }

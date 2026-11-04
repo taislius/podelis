@@ -1,0 +1,18 @@
+---
+source: src/ui/tests/menus.rs
+expression: items(&app)
+---
+RESULTS
+Show the rows  [1]
+Show the messages  [2]
+Show the plan  [3]
+---
+Show the whole message  []  (dimmed)
+Copy the message  []  (dimmed)
+Copy every message  []  (dimmed)
+---
+Copy the selected lines of the plan  []  (dimmed)
+Copy the whole plan  []  (dimmed)
+---
+Other results…  []  (dimmed)
+Zoom this pane (and back)  [Ctrl+K z]

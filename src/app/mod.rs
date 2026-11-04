@@ -39,6 +39,7 @@ pub use vim::VimMode;
 mod activity;
 mod agents;
 pub mod ask;
+pub mod commands;
 mod compare;
 mod confirm;
 mod connections;
@@ -56,7 +57,7 @@ mod menu;
 mod messages;
 mod mouse;
 mod overlay;
-mod palette;
+pub mod palette;
 mod panes;
 mod params;
 mod pipes;
@@ -82,7 +83,7 @@ pub use confirm::{Confirm, ConfirmAction};
 pub use connections::{ConnectField, ConnectForm, fields_for};
 use events::{Background, DbEventKind};
 pub use events::{DbEvent, Ping};
-pub use query::{ExportFormat, PagedFormat, Run, RunPurpose};
+pub use query::{Dest, Format, Run, RunPurpose};
 pub use results::{CellEdit, CellView};
 pub use results::{NULL_TEXT, display_prefix, format_elapsed, visible_columns};
 use results::{column_widths, compute_view, one_line, pretty_value, widen_columns};
@@ -233,6 +234,8 @@ pub struct App {
     history: History,
     pub focus: Focus,
     pub help_visible: bool,
+    /// How far every key's window is scrolled.
+    pub help_scroll: u16,
     /// Reopening the session's connections (Esc or any key hides it).
     pub splash: Option<session::Splash>,
     connect_started: Option<Instant>,
@@ -324,6 +327,7 @@ impl App {
             keymap: crate::config::keys::KeyMap::default(),
             focus: Focus::Editor,
             help_visible: false,
+            help_scroll: 0,
             splash: None,
             connect_started: None,
             cell_edit: None,
@@ -709,8 +713,16 @@ impl App {
             return;
         }
         if self.help_visible {
-            if matches!(key.code, KeyCode::Esc | KeyCode::Char('?') | KeyCode::F(1)) {
-                self.help_visible = false;
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::F(1) => {
+                    self.help_visible = false;
+                    self.help_scroll = 0;
+                }
+                KeyCode::Down | KeyCode::Char('j') => self.help_scroll = self.help_scroll.saturating_add(1),
+                KeyCode::Up | KeyCode::Char('k') => self.help_scroll = self.help_scroll.saturating_sub(1),
+                KeyCode::PageDown => self.help_scroll = self.help_scroll.saturating_add(10),
+                KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(10),
+                _ => {}
             }
             return;
         }
@@ -718,14 +730,9 @@ impl App {
             self.help_visible = true;
             return;
         }
-        // `?` is Ctrl+K on the query screen (where Ctrl+K's menu shows the
-        // pane's keys too), and the keys elsewhere.
+        // `?` is every key, wherever it isn't a character being typed.
         if key.code == KeyCode::Char('?') && !self.typing() && !self.popup_open() {
-            if matches!(self.screen, Screen::Query) {
-                self.open_palette(true);
-            } else {
-                self.help_visible = true;
-            }
+            self.help_visible = true;
             return;
         }
         let ctrl_c = key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');

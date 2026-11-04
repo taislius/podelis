@@ -45,8 +45,6 @@ impl App {
     }
 
     pub(in crate::app) fn handle_schema_key(&mut self, key: KeyEvent) {
-        let engine = self.engine();
-        let dialect = engine.dialect();
         let Some(panel) = &mut self.connection.schema else { return };
         if panel.filter_editing {
             match panel.filter.handle(key) {
@@ -61,22 +59,15 @@ impl App {
             panel.selected = step_selectable(&panel.nodes(), 0, 1);
             return;
         }
-        match key.code {
-            KeyCode::Char('m') => return self.open_menu(None),
-            KeyCode::Char(' ') => return self.open_palette(false),
-            KeyCode::Char('z') => return self.toggle_zoom(),
-            KeyCode::Char('r') => return self.load_catalog(),
-            KeyCode::Char('.') => return self.toggle_system_tables(),
-            KeyCode::Char('/') => return panel.filter_editing = true,
-            KeyCode::Char('o') => return self.cycle_schema_sort(),
-            KeyCode::Char('y') => return self.copy_focused(),
-            KeyCode::Esc if !panel.filter.is_empty() => {
-                panel.filter.clear();
-                panel.selected = step_selectable(&panel.nodes(), 0, 1);
-                return;
-            }
-            _ => {}
+        if key.code == KeyCode::Esc && !panel.filter.is_empty() {
+            panel.filter.clear();
+            panel.selected = step_selectable(&panel.nodes(), 0, 1);
+            return;
         }
+        if let Some(command) = self.pane_command(key) {
+            return self.run_command(command);
+        }
+        let Some(panel) = &mut self.connection.schema else { return };
         let nodes = panel.nodes();
         let Some(&node) = nodes.get(panel.selected) else { return };
         match key.code {
@@ -90,29 +81,13 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => {
                 panel.selected = step_selectable(&nodes, panel.selected.saturating_sub(1), -1);
             }
-            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => match node {
+            KeyCode::Right | KeyCode::Char('l') => match node {
                 SchemaNode::Table(t) => {
-                    let table = &mut panel.tables[t];
-                    table.expanded = !table.expanded || key.code != KeyCode::Enter;
-                    if table.expanded {
-                        self.request_details(t);
-                    }
+                    panel.tables[t].expanded = true;
+                    self.request_details(t);
                 }
                 SchemaNode::Routine(r) => self.show_routine(r),
                 _ => {}
-            },
-            KeyCode::Char('f') => {
-                if let Some(t) = node.table() {
-                    self.show_related(t);
-                }
-            }
-            KeyCode::Char('d') => match node {
-                SchemaNode::Routine(r) => self.show_routine(r),
-                _ => {
-                    if let Some(t) = node.table() {
-                        self.show_table_definition(t);
-                    }
-                }
             },
             KeyCode::Left | KeyCode::Char('h') => {
                 if let Some(t) = node.table() {
@@ -120,21 +95,75 @@ impl App {
                     panel.selected = panel.nodes().iter().position(|n| *n == SchemaNode::Table(t)).unwrap_or(0);
                 }
             }
-            KeyCode::Char('s') => {
-                let Some(t) = node.table() else { return };
-                let info = &panel.tables[t].info;
-                let table = format!("{}.{}", engine.quote_ident(&info.schema), engine.quote_ident(&info.name));
-                // Without SQL, no rows statement to write (yet).
-                let Some(dialect) = dialect else { return };
-                let query = format!("{};", dialect.select_rows(&table, None, Some(100)));
-                // After everything, a blank line apart: never inside another
-                // statement. Then it runs, alone (as F6 would).
-                self.append_statement(&query);
-                if self.connection.database.is_some() {
-                    self.execute_current();
+            _ => {}
+        }
+    }
+
+    /// What's selected in the navigator.
+    pub(in crate::app) fn selected_node(&self) -> Option<SchemaNode> {
+        let panel = self.connection.schema.as_ref()?;
+        panel.nodes().get(panel.selected).copied()
+    }
+
+    /// `Enter`: a table opens or closes, a function shows.
+    pub(in crate::app) fn expand_selected(&mut self) {
+        match self.selected_node() {
+            Some(SchemaNode::Table(t)) => {
+                let Some(panel) = &mut self.connection.schema else { return };
+                let table = &mut panel.tables[t];
+                table.expanded = !table.expanded;
+                if table.expanded {
+                    self.request_details(t);
                 }
             }
+            Some(SchemaNode::Routine(r)) => self.show_routine(r),
             _ => {}
+        }
+    }
+
+    /// `d`: the definition of the table, view or function selected.
+    pub(in crate::app) fn show_selected_definition(&mut self) {
+        match self.selected_node() {
+            Some(SchemaNode::Routine(r)) => self.show_routine(r),
+            Some(node) => {
+                if let Some(t) = node.table() {
+                    self.show_table_definition(t);
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// `f`: the tables related to the one selected.
+    pub(in crate::app) fn show_selected_related(&mut self) {
+        if let Some(t) = self.selected_node().and_then(SchemaNode::table) {
+            self.show_related(t);
+        }
+    }
+
+    /// `s`: a `SELECT` from the table selected, added to the editor and run.
+    pub(in crate::app) fn select_from_selected(&mut self) {
+        let engine = self.engine();
+        let Some(t) = self.selected_node().and_then(SchemaNode::table) else { return };
+        let Some(panel) = &self.connection.schema else { return };
+        let info = &panel.tables[t].info;
+        let table = format!("{}.{}", engine.quote_ident(&info.schema), engine.quote_ident(&info.name));
+        // Without SQL, no rows statement to write (yet).
+        let Some(dialect) = engine.dialect() else { return };
+        let query = format!("{};", dialect.select_rows(&table, None, Some(100)));
+        // After everything, a blank line apart: never inside another
+        // statement. Then it runs, alone (as F6 would).
+        self.append_statement(&query);
+        if self.connection.database.is_some() {
+            self.execute_current();
+        }
+    }
+
+    /// `y`: the selected name, as it's written in SQL.
+    pub(in crate::app) fn copy_schema_name(&mut self) {
+        match self.schema_name() {
+            Some((name, what)) => self.copy_text(name.clone(), &t!("copy.name", what = what, name = name)),
+            None => self.set_status(t!("copy.nothing").to_string(), false),
         }
     }
 

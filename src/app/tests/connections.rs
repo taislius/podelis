@@ -618,6 +618,30 @@ async fn a_read_finishes_in_its_tab_while_one_on_another_connection_is_shown() {
 
 #[cfg(feature = "sqlite")]
 #[tokio::test]
+async fn comparing_from_the_menu_with_several_picks_from_the_list() {
+    use crate::app::commands::Command;
+    let (mut app, dir) = test_app();
+    let project = project_id(&app);
+    let names = ["one", "two", "three"];
+    for (i, name) in names.into_iter().enumerate() {
+        let profile = file_profile(name, &dir.path().join(format!("{name}.db")));
+        app.store.upsert(&project, None, profile.clone()).unwrap();
+        if i > 0 {
+            app.handle_key(ctrl('o'));
+        }
+        connect_profile(&mut app, &profile).await;
+    }
+    app.run_command(Command::CompareSchema(None));
+    let palette = app.popups.palette.as_ref().expect("a list to pick from");
+    assert!(palette.searching());
+    let texts: Vec<String> = app.palette_items().iter().map(|c| c.text(&app)).collect();
+    for name in ["one", "two"] {
+        assert!(texts.iter().any(|t| *t == format!("Compare the schema with {name}")), "{texts:?}");
+    }
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
 async fn compare_schemas_and_rows_with_another_tabs_connection() {
     let (mut app, dir) = test_app();
     let project = project_id(&app);
@@ -1101,7 +1125,7 @@ async fn open_connections_are_listed_gone_to_and_closed() {
     app.handle_key(ctrl('k'));
     app.handle_key(key(KeyCode::Char('j')));
     let items = app.palette_items();
-    assert!(app.popups.palette.as_ref().is_some_and(|p| p.conns_only));
+    assert!(app.popups.palette.as_ref().is_some_and(crate::app::palette::Palette::conns_only));
     assert_eq!(items.len(), 2);
     let entries: Vec<String> = items.iter().map(|c| app.palette_command_text(*c)).collect();
     assert!(

@@ -4,7 +4,6 @@
 
 use std::collections::BTreeSet;
 
-use super::pipes::OpenFormat;
 use super::*;
 
 /// The table behind the current result, as far as editing goes.
@@ -238,27 +237,23 @@ impl App {
         }
     }
 
-    /// `C`: copies the marked rows (or all rows shown) as a Markdown table.
+    /// The marked rows (or all rows shown) as a Markdown table.
     pub(super) fn copy_markdown(&mut self) {
-        let Some(results) = self.tab.grid.results.as_ref().filter(|r| !r.columns.is_empty()) else {
+        let Some((rows, text)) = self.rows_as(Format::Markdown) else {
             return self.set_status(t!("rows.none_to_copy").to_string(), true);
         };
-        let rows: Vec<usize> = if self.tab.grid.marked.is_empty() {
-            self.tab.grid.view.clone()
-        } else {
-            self.tab.grid.marked.iter().copied().collect()
-        };
-        let text = to_markdown(results, &rows);
-        let n = rows.len().min(MARKDOWN_MAX_ROWS);
-        let more = if rows.len() > MARKDOWN_MAX_ROWS { format!(" (first {MARKDOWN_MAX_ROWS})") } else { String::new() };
+        let n = rows.min(MARKDOWN_MAX_ROWS);
+        let more = if rows > MARKDOWN_MAX_ROWS { format!(" (first {MARKDOWN_MAX_ROWS})") } else { String::new() };
         self.copy_text(text, &tn!("rows.copied_markdown", n, more = more));
     }
 }
 
 impl App {
-    /// The marked rows, or else all those shown, as CSV, JSON or INSERTs.
-    pub(super) fn copy_rows_as(&mut self, format: ExportFormat) {
-        let format = OpenFormat::from(format);
+    /// The marked rows, or else all those shown, in `format`.
+    pub(super) fn copy_rows_as(&mut self, format: Format) {
+        if format == Format::Markdown {
+            return self.copy_markdown();
+        }
         let Some((rows, text)) = self.rows_as(format) else {
             return self.set_status(t!("rows.none_to_copy").to_string(), true);
         };
@@ -267,24 +262,32 @@ impl App {
 
     /// The rows to copy or open (the marked ones, else those shown), in
     /// `format`, and how many; `None` without a result.
-    pub(super) fn rows_as(&self, format: OpenFormat) -> Option<(usize, String)> {
-        let results = self.tab.grid.results.as_ref().filter(|r| !r.columns.is_empty())?;
+    pub(super) fn rows_as(&self, format: Format) -> Option<(usize, String)> {
+        self.tab.grid.results.as_ref().filter(|r| !r.columns.is_empty())?;
         let rows: Vec<usize> = if self.tab.grid.marked.is_empty() {
             self.tab.grid.view.clone()
         } else {
             self.tab.grid.marked.iter().copied().collect()
         };
-        let text = match format {
-            OpenFormat::Csv => crate::transfer::export::csv(results, &rows),
-            OpenFormat::Tsv => crate::transfer::export::tsv(results, &rows),
-            OpenFormat::Json => crate::transfer::export::json(results, &rows),
-            OpenFormat::Text => crate::transfer::export::render(results, &rows, crate::transfer::export::Format::Table),
-            OpenFormat::Ascii => crate::transfer::export::ascii_table(results, &rows),
-            OpenFormat::Sql => {
-                crate::transfer::export::sql_inserts(results, &rows, &self.insert_table(), self.engine())
-            }
-        };
+        let text = self.rows_text(format, &rows)?;
         Some((rows.len(), text))
+    }
+
+    /// `rows` of the result as text; `None` without a result, or for
+    /// Parquet, which isn't text.
+    pub(super) fn rows_text(&self, format: Format, rows: &[usize]) -> Option<String> {
+        use crate::transfer::export;
+        let results = self.tab.grid.results.as_ref()?;
+        Some(match format {
+            Format::Csv => export::csv(results, rows),
+            Format::Tsv => export::tsv(results, rows),
+            Format::Json => export::json(results, rows),
+            Format::Markdown => to_markdown(results, rows),
+            Format::Text => export::render(results, rows, export::Format::Table),
+            Format::Ascii => export::ascii_table(results, rows),
+            Format::Sql => export::sql_inserts(results, rows, &self.insert_table(), self.engine()),
+            Format::Parquet => return None,
+        })
     }
 }
 
