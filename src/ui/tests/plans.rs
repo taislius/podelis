@@ -55,7 +55,28 @@ fn a_tabular_plan_is_a_grid_with_its_notes() {
         statements: 1,
         ..QueryOutcome::default()
     });
+    // The row a note is about has its number.
+    let grid = &app.tab.grid.results.as_ref().unwrap();
+    assert_eq!(grid.columns[0], "◀");
+    assert_eq!((grid.rows[0][0].as_deref(), grid.rows[1][0].as_deref()), (Some("1"), Some("")));
     assert_snapshot!(render(&mut app, 100, 30));
+}
+
+#[test]
+fn a_tabular_plan_without_notes_has_no_column_for_them() {
+    let (mut app, _dir) = query_app();
+    let cells = |r: &[&str]| r.iter().map(|c| Some((*c).to_string())).collect::<Vec<_>>();
+    app.show_plan_for_tests(QueryOutcome {
+        columns: ["id", "table", "type", "rows"].map(String::from).to_vec(),
+        rows: vec![cells(&["1", "users", "eq_ref", "1"])],
+        total_rows: 1,
+        statements: 1,
+        ..QueryOutcome::default()
+    });
+    let grid = app.tab.grid.results.as_ref().unwrap();
+    assert!(app.tab.plan_swapped);
+    assert_eq!(grid.columns[0], "id");
+    assert_eq!(grid.rows[0].len(), 4);
 }
 
 #[test]

@@ -232,6 +232,11 @@ pub trait SqlDialect: Backend {
     /// The EXPLAIN statement for `stmt` (without its `;`), for a server
     /// of `version` (as `version_query` returned it).
     fn explain(&self, stmt: &str, version: &str) -> String;
+    /// The EXPLAIN statement for someone reading the plan (F7), where that's
+    /// another form than the one the app and agents read `explain`'s in.
+    fn explain_to_read(&self, stmt: &str, version: &str) -> String {
+        self.explain(stmt, version)
+    }
     /// EXPLAIN ANALYZE (which runs the statement), if the server has it.
     fn explain_analyze(&self, _stmt: &str, _version: &str) -> Option<String> {
         None
