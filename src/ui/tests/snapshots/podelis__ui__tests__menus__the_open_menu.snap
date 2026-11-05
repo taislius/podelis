@@ -5,6 +5,6 @@ expression: "labels.join(\"\\n\")"
 Open the rows as CSV
 Open the rows as TSV
 Open the rows as JSON
-Open the rows as an ASCII table (+--+)
+Open the rows as an ASCII table
 Open the rows as a text table
 Open the rows as INSERT statements

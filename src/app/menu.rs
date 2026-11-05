@@ -153,14 +153,6 @@ impl App {
         self.show_menu(title, groups.iter().map(|group| group.iter().copied()), at);
     }
 
-    /// `E` and `export ▾`: the rows shown to a file, or every row of the
-    /// result.
-    pub(super) fn open_export_menu(&mut self, at: Option<(u16, u16)>) {
-        let groups = [Dest::ExportShown, Dest::ExportAll]
-            .map(|to| Format::for_dest(to).map(move |format| C::Rows { to, format }));
-        self.show_menu(t!("menu.export_title"), groups, at);
-    }
-
     /// The formats the marked rows (or those shown) can go `to`: the
     /// clipboard (`C`), or an app (`o`).
     pub(super) fn open_rows_menu(&mut self, to: Dest) {

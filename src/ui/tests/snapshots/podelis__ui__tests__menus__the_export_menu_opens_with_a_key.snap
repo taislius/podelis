@@ -1,15 +1,28 @@
 ---
 source: src/ui/tests/menus.rs
-expression: items(&app)
+expression: "render(&mut app, 90, 24)"
 ---
-EXPORT
-Export the rows shown as CSV  [e]
-Export the rows shown as JSON  [J]
-Export the rows shown as an ASCII table (+--+)  []
-Export the rows shown as INSERT statements  [i]
-Export the rows shown as Parquet  []
----
-Export every row as CSV  []
-Export every row as JSON  []
-Export every row as INSERT statements  []
-Export every row as Parquet  []
+" >_  PODĖLIS v0.0.0   │  project  shop ▼                                                  "
+"┌ NAVIGATOR ────── 3 objects ┐┎ QUERY ──────┰────────────────────────────────────────────┐"
+"│ / filter by name…          │┃ SQL Query 1 ┃ +                  ▶ F5 Run   F6 Statement │"
+"│ ▼ (default database)       ││  1  select id, email, note                               │"
+"│ TABLES                   2 ││  2  from users                                           │"
+"│  ▶ orders           942.0k ││  3  where id < 4;                                        │"
+"│  ▼ users             24.8k ││                                                          │"
+"│      ◇ id       integer PK ││                                                          │"
+"│      ◇ email ┌ EXPORT DATA ─────────────────────────────────────────────┐uto-commit  ? │"
+"│      ◇ note  │ To         ● File   ○ Clipboard                          │──────────────┘"
+"│ VIEWS        │ Format     ‹ CSV ›                                       │──────────────┐"
+"│  ◇ active_use│ Rows       ● shown (3)   ○ every row                     │              │"
+"│              │ File name  podelis-export-….csv                          │              │"
+"│              │                                                          │              │"
+"│              │  Export   ↵ · ←→ change · ↑↓ move · Esc closes           │              │"
+"│              └──────────────────────────────────────────────────────────┘              │"
+"│                            ││ 03     3 cleo@example.com {"vip": true}                  │"
+"│                            ││                                                          │"
+"│                            ││                                                          │"
+"│                            ││                                                          │"
+"│                            ││                                                          │"
+"│                            ││ CELL 01:id  int4   NULL AS ∅   1–3 / 3  · 3 cols  · 4 ms │"
+"└────────────────────────────┘└──────────────────────────────────────────────────────────┘"
+" ● prod  db.internal:3306 · MySQL         ^K  keys   m  menu · right-click         AI off "

@@ -27,6 +27,8 @@ pub struct Hits {
     /// The `?` beside the modes: opens the picker, with what each one does.
     pub tx_help: Rect,
     pub tx_picker: Rect,
+    pub export_form: Rect,
+    pub export_form_spots: Vec<(Rect, super::export_form::ExportClick)>,
     /// The messages in the panes' footers: a click opens them all, whole.
     pub editor_note: Rect,
     pub results_note: Rect,

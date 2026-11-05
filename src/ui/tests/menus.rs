@@ -1,5 +1,7 @@
 //! Every menu's items and order: a change to a menu shows here.
 
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
 use super::*;
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -36,7 +38,137 @@ fn the_export_menu_opens_with_a_key() {
     let (mut app, _dir) = query_app();
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Char('E')));
-    assert_snapshot!(items(&app));
+    assert_snapshot!(render(&mut app, 90, 24));
+}
+
+/// What the export form is set to.
+fn export_choice(app: &App) -> crate::app::export_form::ExportChoice {
+    app.popups.export_form.as_ref().expect("the form").choice
+}
+
+#[test]
+fn the_export_form_offers_only_what_can_be_done() {
+    use crate::app::Format;
+    use crate::app::export_form::ExportTo;
+    let (mut app, _dir) = query_app();
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Char('E')));
+    let start = export_choice(&app);
+    assert_eq!((start.to, start.format, start.every), (ExportTo::File, Format::Csv, false));
+
+    // To a file there's a name; every format a file takes goes round.
+    let screen = render(&mut app, 100, 30);
+    assert!(screen.contains("podelis-export-….csv") && screen.contains("every row"), "{screen}");
+    app.handle_key(key(KeyCode::Down));
+    let mut seen = vec![];
+    for _ in 0..5 {
+        seen.push(export_choice(&app).format);
+        app.handle_key(key(KeyCode::Right));
+    }
+    assert_eq!(seen, [Format::Csv, Format::Json, Format::Ascii, Format::Sql, Format::Parquet]);
+    assert_eq!(export_choice(&app).format, Format::Csv, "and round");
+    app.handle_key(key(KeyCode::Left));
+    assert_eq!(export_choice(&app).format, Format::Parquet, "backwards too");
+
+    // Parquet can't be copied: to the clipboard, the nearest that can.
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(export_choice(&app).to, ExportTo::Clipboard);
+    assert_eq!(export_choice(&app).format, Format::Sql);
+    let screen = render(&mut app, 100, 30);
+    assert!(!screen.contains("podelis-export") && !screen.contains("every row"), "{screen}");
+    // Rows aren't a choice there: ↓↓ goes round past them.
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Down));
+    assert_eq!(app.popups.export_form.as_ref().unwrap().line, crate::app::export_form::ExportLine::To);
+
+    // An ASCII table can't be every row: it moves to one that can.
+    app.handle_key(key(KeyCode::Left));
+    app.handle_key(key(KeyCode::Down));
+    while export_choice(&app).format != Format::Ascii {
+        app.handle_key(key(KeyCode::Right));
+    }
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Right));
+    assert!(export_choice(&app).every);
+    assert_ne!(export_choice(&app).format, Format::Ascii);
+    assert!(export_choice(&app).format.supports(crate::app::Dest::ExportAll));
+
+    // Esc closes and keeps nothing.
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.popups.export_form.is_none());
+    app.handle_key(key(KeyCode::Char('E')));
+    assert_eq!(export_choice(&app), start);
+}
+
+#[test]
+fn the_export_form_runs_what_it_says_and_starts_there_next_time() {
+    let (mut app, dir) = query_app();
+    app.settings.export_dir = Some(dir.path().to_string_lossy().into_owned());
+    app.focus = Focus::Results;
+    let files = |dir: &std::path::Path| -> Vec<String> {
+        let names = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned());
+        names.filter(|n| n.starts_with("podelis-export")).collect()
+    };
+    // JSON, the rows shown.
+    app.handle_key(key(KeyCode::Char('E')));
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Right));
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.popups.export_form.is_none());
+    let written = files(dir.path());
+    assert!(written.len() == 1 && written[0].contains(".json"), "{written:?}");
+    std::fs::remove_file(dir.path().join(&written[0])).unwrap();
+    // The same again: E, Enter.
+    app.handle_key(key(KeyCode::Char('E')));
+    assert_eq!(export_choice(&app).format, crate::app::Format::Json);
+    app.handle_key(key(KeyCode::Enter));
+    assert!(files(dir.path())[0].contains(".json"));
+}
+
+#[test]
+fn the_export_form_by_mouse_and_a_plans_table_has_only_its_own_rows() {
+    use crate::app::export_form::{ExportClick, ExportTo};
+    let (mut app, dir) = query_app();
+    app.settings.export_dir = Some(dir.path().to_string_lossy().into_owned());
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Char('E')));
+    render(&mut app, 100, 30);
+    let click_on = |app: &mut App, what: ExportClick| {
+        let (r, _) = *app.hits.export_form_spots.iter().find(|(_, c)| *c == what).expect("a place to click");
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: r.x,
+            row: r.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        render(app, 100, 30);
+    };
+    click_on(&mut app, ExportClick::Every(true));
+    assert!(export_choice(&app).every);
+    click_on(&mut app, ExportClick::NextFormat);
+    assert_eq!(export_choice(&app).format, crate::app::Format::Json);
+    click_on(&mut app, ExportClick::To(ExportTo::Clipboard));
+    assert_eq!(export_choice(&app).to, ExportTo::Clipboard);
+    assert!(!export_choice(&app).every, "the clipboard has no every row");
+    click_on(&mut app, ExportClick::Run);
+    assert!(app.popups.export_form.is_none());
+    // A click outside closes it, without doing it.
+    app.handle_key(key(KeyCode::Char('E')));
+    render(&mut app, 100, 30);
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 0,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert!(app.popups.export_form.is_none());
+    assert!(
+        std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .all(|e| !e.file_name().to_string_lossy().starts_with("podelis-export"))
+    );
 }
 
 #[test]
@@ -167,7 +299,7 @@ fn every_format_is_worded_alike_and_in_the_one_order() {
             "Copy the rows as TSV",
             "Copy the rows as JSON",
             "Copy the rows as a Markdown table",
-            "Copy the rows as an ASCII table (+--+)",
+            "Copy the rows as an ASCII table",
             "Copy the rows as INSERT statements",
         ]
     );
@@ -393,10 +525,12 @@ fn ctrl_and_alt_arent_a_panes_plain_letter() {
     assert!(!app.panes.zoomed);
     // Shift is how a capital is typed.
     app.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT));
-    assert!(app.popups.menu.is_some());
-    // In a menu too: Alt+J isn't its `J`.
-    app.handle_key(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::ALT));
-    assert!(app.popups.menu.is_some());
+    assert!(app.popups.export_form.is_some());
+    app.handle_key(key(KeyCode::Esc));
+    // In a menu too: Alt+C isn't its `C`.
+    app.handle_key(key(KeyCode::Char('m')));
+    app.handle_key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::ALT));
+    assert_eq!(app.popups.menu.as_ref().map(|m| m.title), Some(t!("menu.results_title")));
 }
 
 #[test]
@@ -406,7 +540,7 @@ fn a_rows_menu_from_the_palette_is_the_results_with_their_keys() {
     app.focus = Focus::Editor;
     app.run_command_for_tests(Command::ExportMenu);
     assert_eq!(app.focus, Focus::Results);
-    assert!(app.popups.menu.as_ref().unwrap().items.iter().any(|i| i.keys == "J"));
+    assert!(app.popups.export_form.is_some());
 }
 
 #[test]
