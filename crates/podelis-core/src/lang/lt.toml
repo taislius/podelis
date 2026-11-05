@@ -1287,7 +1287,7 @@ keys = "? klavišai · q – išeiti"
 open_file = "atverti SQLite failą"
 open_url = "iškart atverti duomenų bazę"
 paste_url = "įklijuokite ryšio URL į formą"
-tagline = "Terminalo SQL klientas PostgreSQL, MySQL ir SQLite"
+tagline = "Terminalo duomenų bazių klientas"
 title = "Sveiki"
 
 [zoom]

@@ -1,7 +1,7 @@
 # Podėlis
 
-A terminal UI SQL client for PostgreSQL, MySQL and SQLite, built in Rust
-with [ratatui](https://ratatui.rs). Runs as a plain terminal app — works
+A terminal UI database client for PostgreSQL, MySQL and SQLite, with
+[DuckDB and MongoDB as opt-in builds](#install), built in Rust with [ratatui](https://ratatui.rs). Runs as a plain terminal app — works
 fine inside a regular terminal or inside a Neovim `:terminal` split, the
 same way tools like `lazygit` do.
 
@@ -21,7 +21,7 @@ same way tools like `lazygit` do.
 ## Features
 
 - **Engines:** PostgreSQL and MySQL over TCP (hostname, IPv4/IPv6), a Unix
-  socket, or an **SSH tunnel**; SQLite files; Supabase (TLS required, its
+  socket, or an **SSH tunnel**; SQLite files; DuckDB files and MongoDB, as opt-in builds; Supabase (TLS required, its
   own schemas kept aside, its transaction pooler pointed to session mode). Selectable SSL mode
 - **Projects:** group connections per project (e.g. `shop-backend` with its
   local/staging/prod databases). Each project has its own query history and
@@ -219,7 +219,7 @@ cells, plans, agents) is off on it for now.
 ```sh
 podelis                         # reopen the last session (or start on the projects)
 podelis -p shop-backend         # open a project directly (case-insensitive)
-podelis postgres://me@db/shop   # connect to a URL (also mysql://, sqlite:)
+podelis postgres://me@db/shop   # connect to a URL (also mysql://, sqlite:, duckdb:, mongodb://)
 podelis app.db                  # a SQLite file (a missing one is created only if you confirm)
 podelis -p shop prod            # a saved connection (password from the keychain)
 ```

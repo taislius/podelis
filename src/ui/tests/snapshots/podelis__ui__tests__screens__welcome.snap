@@ -11,7 +11,7 @@ expression: screen
 "   │                                                                                  │   "
 "   │                                >_  PODĖLIS v0.0.0                                │   "
 "   │                                                                                  │   "
-"   │              A terminal SQL client for PostgreSQL, MySQL and SQLite              │   "
+"   │                            A terminal database client                            │   "
 "   │                                                                                  │   "
 "   │  n  or  ↵                          create a project, then add its connections    │   "
 "   │                                    (paste a connection URL into the form)        │   "

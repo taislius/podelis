@@ -1257,7 +1257,7 @@ keys = "? keys · q quits"
 open_file = "open a SQLite file"
 open_url = "open a database right away"
 paste_url = "paste a connection URL into the form"
-tagline = "A terminal SQL client for PostgreSQL, MySQL and SQLite"
+tagline = "A terminal database client"
 title = "Welcome"
 
 [zoom]
