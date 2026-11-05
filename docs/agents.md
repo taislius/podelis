@@ -149,7 +149,7 @@ The agent gets these tools:
 | `describe_table` | One table's columns, keys, indexes, foreign keys and (for a view) definition |
 | `related_tables` | The tables a table points to and is pointed to by, through foreign keys, two steps each way: how to join |
 | `query` | Runs SQL; rows as JSON, 100 by default and at most 1000 |
-| `explain` | One statement's plan without running it, and what stands out (as F7 shows) |
+| `explain` | One statement's plan without running it, and what stands out (on MySQL the tree, where F7 shows the table) |
 
 Every query has the connection's timeout, or 30 seconds without one, and
 an answer is capped (long values are cut, with a note). Podėlis tells the

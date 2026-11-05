@@ -59,7 +59,7 @@ F9), `palette` (Ctrl+K), `explain_analyze` (Shift+F7, Ctrl+K a),
 (Ctrl+K s h), `insert_snippet` (Ctrl+K i, Ctrl+E), `menu` (Ctrl+K m,
 Shift+F10, F10), `zoom` (Ctrl+K z, F12), `zoom_statement` (Ctrl+K b,
 Shift+F12), `select_statement` (Ctrl+K v), `projects` (Ctrl+K p),
-`transaction_mode` (Ctrl+K x), `next_warning` (Ctrl+K w), `ask` (Ctrl+K q, Ctrl+K y q),
+`transaction_mode` (Ctrl+K x), `messages` (Ctrl+K Space), `next_warning` (Ctrl+K w), `ask` (Ctrl+K q, Ctrl+K y q),
 `ai_explain` (Ctrl+K y y), `memory` (Ctrl+K y k), `tab_list` (Ctrl+K g), `connection_list` (Ctrl+K j),
 `settings` (Ctrl+K ,), `save_statement` (none; in the editor's menu). To
 have AI explain on `F8`, move commit off it: `commit = "Ctrl+K c"`,
