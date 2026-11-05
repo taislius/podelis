@@ -232,6 +232,30 @@ async fn writes_can_be_reviewed_in_a_transaction() {
     assert_eq!(value(&mut app).await, "3");
 }
 
+#[cfg(feature = "mysql")]
+#[tokio::test]
+async fn f7_on_mysql_is_the_classic_table_whatever_explain_format_says() {
+    let Some((mut app, _dir)) = live_app(Engine::MySql, "podelis_read_plan").await else { return };
+    run_sql(&mut app, "create temporary table rp (x int); insert into rp values (1)").await;
+    let db = app.connection.database.clone().unwrap();
+    let version: Vec<u32> = db.version().split(|c: char| !c.is_ascii_digit()).take(3).flat_map(str::parse).collect();
+    if version >= vec![8, 0, 32] {
+        db.run("set session explain_format = tree", 1).await.expect("the setting exists from 8.0.32");
+    }
+    for statement in ["select x from rp where x = 1", "update rp set x = 2"] {
+        app.tab.editor.set_text(statement);
+        app.handle_key(key(KeyCode::F(7)));
+        assert!(app.popups.confirm.is_none(), "{statement}: only planned, nothing to ask");
+        finish(&mut app).await;
+        assert!(app.tab.plan_swapped, "{statement}: a grid / {}", app.notes.status);
+        let columns = &app.tab.grid.results.as_ref().unwrap().columns;
+        assert!(["possible_keys", "key_len"].iter().all(|c| columns.iter().any(|n| n == c)), "{columns:?}");
+    }
+    assert_eq!(app.connection.txn, TxnState::Idle);
+    run_sql(&mut app, "select x from rp").await;
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("1".to_string())]], "not run");
+}
+
 #[tokio::test]
 async fn explain_analyze_of_a_write_is_rolled_back() {
     for engine in Engine::BUILT {

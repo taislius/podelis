@@ -28,7 +28,7 @@ impl App {
     pub(in crate::app) fn explain_aside(&mut self, stmt: String, line: usize) {
         let Some(dialect) = self.sql_dialect() else { return };
         let version = self.connection.database.as_ref().map_or("", |db| db.version());
-        let explain = dialect.explain(&stmt, version);
+        let explain = dialect.explain_to_read(&stmt, version);
         // (A file never: see `run_aside`.)
         let aside = !self.engine().is_file_based()
             && self.connection.txn == TxnState::Idle
@@ -92,7 +92,7 @@ impl App {
     pub(in crate::app) fn explain_statement(&mut self, stmt: String, line: usize) {
         let Some(dialect) = self.sql_dialect() else { return };
         let version = self.connection.database.as_ref().map_or("", |db| db.version());
-        let explain = dialect.explain(&stmt, version);
+        let explain = dialect.explain_to_read(&stmt, version);
         self.tab.run.plan_request = Some((stmt, false, line));
         if self.ask_for_params(&explain, 0, true) {
             return;
@@ -188,18 +188,23 @@ impl App {
     }
 
     pub(in crate::app) fn show_plan(&mut self, outcome: QueryOutcome) {
+        let mut outcome = outcome;
         let plan = self
             .engine()
             .dialect()
             .and_then(|d| d.format_plan(&outcome.columns, &outcome.rows))
             .unwrap_or_else(|| crate::db::Plan { text: t!("plan.none").to_string(), notes: Vec::new() });
+        let table = outcome.columns.len() > 1 && self.engine().capabilities().plan_as_grid;
+        if table {
+            mark_noted_rows(&mut outcome, &plan);
+        }
         self.tab.plan = Some(plan);
         self.tab.plan_selected = None;
         self.tab.plan_source =
             self.tab.run.plan_request.take().map(|(sql, analyzed, line)| PlanSource::new(sql, analyzed, line));
         // A plan with columns (MySQL's classic EXPLAIN) is a grid too.
         self.unswap_plan_grid();
-        self.tab.plan_grid = (outcome.columns.len() > 1 && self.engine().capabilities().plan_as_grid).then(|| {
+        self.tab.plan_grid = table.then(|| {
             let mut grid = Box::<ResultGrid>::default();
             grid.show(outcome);
             grid.table_state.select(Some(0));
@@ -209,5 +214,24 @@ impl App {
         // Ready to scroll the plan; `1` goes back to the result.
         self.focus = Focus::Results;
         self.set_status(t!("plan.shown").to_string(), false);
+    }
+}
+
+/// A first column with the numbers of the notes about each row, as `◀ n`
+/// marks a step in a plan's text. (A table's text has a header and a rule
+/// above its rows.) None if there are no notes.
+fn mark_noted_rows(outcome: &mut QueryOutcome, plan: &crate::db::Plan) {
+    let notes = &plan.notes;
+    if notes.is_empty() {
+        return;
+    }
+    outcome.columns.insert(0, "◀".to_string());
+    if !outcome.column_types.is_empty() {
+        outcome.column_types.insert(0, "TEXT".to_string());
+    }
+    for (row, cells) in outcome.rows.iter_mut().enumerate() {
+        let marks: Vec<String> =
+            (1..=notes.len()).filter(|n| notes[n - 1].line == Some(row + 2)).map(|n| n.to_string()).collect();
+        cells.insert(0, Some(marks.join(",")));
     }
 }

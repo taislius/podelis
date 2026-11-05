@@ -273,6 +273,15 @@ impl SqlDialect for MySql {
             Server::MySql(_) => format!("EXPLAIN FORMAT=TREE {stmt}"),
         }
     }
+    /// The classic table: every index it could use, how much of a key it
+    /// uses, rows per table. Named only from 8.0.32, where `explain_format`
+    /// can make a bare EXPLAIN something else.
+    fn explain_to_read(&self, stmt: &str, version: &str) -> String {
+        match Server::of(version) {
+            Server::MySql(v) if v >= (8, 0, 32) => format!("EXPLAIN FORMAT=TRADITIONAL {stmt}"),
+            _ => format!("EXPLAIN {stmt}"),
+        }
+    }
     fn too_new(&self, sql: &str, version: &str) -> Option<crate::db::dialect::TooNew> {
         versions::too_new(sql, version)
     }
@@ -430,6 +439,26 @@ mod tests {
         let rows = vec![vec![Some("-> Table scan on t  (cost=0.35 rows=1)\n".to_string())]];
         let columns = ["EXPLAIN".to_string()];
         assert_eq!(MySql.format_plan(&columns, &rows).unwrap().text, "-> Table scan on t  (cost=0.35 rows=1)");
+    }
+
+    #[test]
+    fn only_mysql_reads_another_form_than_the_one_the_app_reads() {
+        for engine in Engine::BUILT.into_iter().filter(|e| *e != Engine::MySql) {
+            let Some(d) = engine.dialect() else { continue };
+            assert_eq!(d.explain_to_read("SELECT 1", "17.2"), d.explain("SELECT 1", "17.2"), "{engine:?}");
+        }
+    }
+
+    #[test]
+    fn a_person_reads_the_classic_table_and_the_app_the_tree() {
+        let read = |version| MySql.explain_to_read("SELECT 1", version);
+        for version in ["9.1.0", "8.4.3", "8.0.32", ""] {
+            assert_eq!(read(version), "EXPLAIN FORMAT=TRADITIONAL SELECT 1", "{version}");
+        }
+        for version in ["8.0.31", "5.7.44-log", "5.5.62", "10.11.6-MariaDB-0+deb12u1"] {
+            assert_eq!(read(version), "EXPLAIN SELECT 1", "{version}");
+        }
+        assert_eq!(MySql.explain("SELECT 1", "8.4.3"), "EXPLAIN FORMAT=TREE SELECT 1");
     }
 
     #[test]

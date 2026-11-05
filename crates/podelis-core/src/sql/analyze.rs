@@ -142,6 +142,8 @@ fn classify_words(words: &[String]) -> (Kind, Option<&'static str>) {
     match first {
         "SELECT" | "WITH" | "VALUES" | "TABLE" if modifies_data(words) => (Kind::Write, None),
         "SELECT" | "WITH" | "VALUES" | "TABLE" | "SHOW" | "DESCRIBE" | "DESC" => (Kind::Read, None),
+        // MySQL's F7: the parser has no FORMAT=TRADITIONAL, which never runs it.
+        "EXPLAIN" if second == "FORMAT" && words.get(2).is_some_and(|w| w == "TRADITIONAL") => (Kind::Read, None),
         "EXPLAIN" if has(words, "ANALYZE") && modifies_data(words) => (Kind::Write, None),
         "EXPLAIN" => (Kind::Read, None),
         // MariaDB's ANALYZE <statement> (EXPLAIN ANALYZE) runs it.
@@ -373,6 +375,15 @@ mod tests {
         assert_eq!(kinds("with d as (delete from t returning *) select * from d", PG)[0].0, Kind::Write);
         assert_eq!(kinds("explain analyze delete from t where id = 1", PG)[0].0, Kind::Write);
         assert_eq!(kinds("explain delete from t where id = 1", PG)[0].0, Kind::Read);
+    }
+
+    #[test]
+    fn a_traditional_explain_only_plans_and_what_follows_it_still_counts() {
+        let my = crate::db::Engine::MySql;
+        assert_eq!(kinds("explain format=traditional update t set a = 1", my)[0].0, Kind::Read);
+        assert_eq!(kinds("explain format=traditional select t.analyze from t for update", my)[0].0, Kind::Read);
+        let script = kinds("explain format=traditional select 1; delete from t", my);
+        assert_eq!((script[0].0, script[1].0), (Kind::Read, Kind::Write));
     }
 
     #[test]

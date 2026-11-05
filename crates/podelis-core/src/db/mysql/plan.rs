@@ -1,5 +1,5 @@
 //! MySQL's `EXPLAIN FORMAT=TREE` / `EXPLAIN ANALYZE` text, or the classic
-//! `EXPLAIN` table (older MySQL, MariaDB), with notes on what stands out:
+//! `EXPLAIN` table (F7, older MySQL, MariaDB), with notes on what stands out:
 //! the slowest (or costliest) step, full scans of big tables and row
 //! estimates far off the actual counts.
 
