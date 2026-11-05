@@ -812,7 +812,7 @@ impl App {
             C::CopyCell => self.copy_cell(),
             C::CopyRow => self.copy_row(),
             C::CopyMenu => self.open_rows_menu(Dest::Copy),
-            C::ExportMenu => self.open_export_menu(None),
+            C::ExportMenu => self.open_export_form(),
             C::OpenRows => self.open_in_viewer(),
             C::PipeRows => self.open_pipe_prompt(),
             C::LoadMore => self.load_more(),

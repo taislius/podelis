@@ -221,6 +221,7 @@ impl App {
                 | Overlay::Activity
                 | Overlay::Agents
                 | Overlay::TxPicker
+                | Overlay::ExportForm
                 | Overlay::Sandbox
                 | Overlay::Review,
             ) => {}
@@ -391,6 +392,7 @@ impl App {
             Some(Overlay::Activity) => self.handle_activity_key(key),
             Some(Overlay::Agents) => self.handle_agents_key(key),
             Some(Overlay::TxPicker) => self.handle_tx_picker_key(key),
+            Some(Overlay::ExportForm) => self.handle_export_form_key(key),
             Some(Overlay::Sandbox) => self.handle_sandbox_key(key),
             Some(Overlay::Review) => self.handle_review_key(key),
             Some(Overlay::ParamForm) => self.handle_param_key(key),

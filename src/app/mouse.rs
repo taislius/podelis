@@ -20,6 +20,16 @@ impl App {
         self.on_input(|app| app.mouse(ev));
     }
 
+    /// A click in front of the popups that take one. False if none is open.
+    fn click_small_popup(&mut self, x: u16, y: u16) -> bool {
+        match self.top_overlay() {
+            Some(super::overlay::Overlay::ExportForm) => self.export_form_click(x, y),
+            Some(super::overlay::Overlay::TxPicker) => self.tx_picker_click(x, y),
+            _ => return false,
+        }
+        true
+    }
+
     fn mouse(&mut self, ev: MouseEvent) {
         let (x, y) = (ev.column, ev.row);
         // Only a drag goes on scrolling (a lost button-up mustn't).
@@ -51,8 +61,8 @@ impl App {
         if self.popups.library_view.is_some() && self.top_overlay() == Some(super::overlay::Overlay::Library) {
             return self.library_mouse(ev);
         }
-        if click && self.top_overlay() == Some(super::overlay::Overlay::TxPicker) {
-            return self.tx_picker_click(x, y);
+        if click && self.click_small_popup(x, y) {
+            return;
         }
         // Over a popup only the wheel does something (scrolling it).
         if self.popup_open() {
@@ -364,7 +374,7 @@ impl App {
         {
             self.focus = Focus::Results;
             let at = Some((x0, y + 1));
-            if export { self.open_export_menu(at) } else { self.open_menu(at) }
+            if export { self.run_command(commands::Command::ExportMenu) } else { self.open_menu(at) }
         } else if y == hits.result_tabs_y
             && let Some(&(_, _, tab)) = hits.result_tabs.iter().find(|(x0, x1, _)| (*x0..*x1).contains(&x))
         {

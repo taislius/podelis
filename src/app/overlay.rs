@@ -27,6 +27,8 @@ pub struct Popups {
     pub cell_view: Option<CellView>,
     /// The activity monitor.
     pub activity: Option<activity::ActivityView>,
+    /// `E`: where the rows go, in what format, which of them.
+    pub export_form: Option<export_form::ExportForm>,
     /// Picking the write mode: the highlighted one.
     pub tx_picker: Option<TxMode>,
     /// The sandbox's window (`Ctrl+K x` while one is open).
@@ -61,6 +63,7 @@ pub enum Overlay {
     /// What AI agents did.
     Agents,
     TxPicker,
+    ExportForm,
     /// The sandbox's steps and how to end it.
     Sandbox,
     Review,
@@ -97,7 +100,7 @@ impl App {
     /// Each popup and whether it's open, front first. The text view sits
     /// in front of the activity monitor (a session's full query) and
     /// behind the rest.
-    fn overlay_states(&self) -> [(Overlay, bool); 19] {
+    fn overlay_states(&self) -> [(Overlay, bool); 20] {
         // The text view shows a session's query or an agent's call in front
         // of their windows.
         let over_list = self.popups.activity.is_some() || self.agents.view.is_some();
@@ -113,6 +116,7 @@ impl App {
             (Overlay::Activity, self.popups.activity.is_some()),
             (Overlay::Agents, self.agents.view.is_some()),
             (Overlay::TxPicker, self.popups.tx_picker.is_some()),
+            (Overlay::ExportForm, self.popups.export_form.is_some()),
             (Overlay::Sandbox, self.popups.sandbox_view.is_some()),
             (Overlay::Review, self.popups.review.is_some()),
             (Overlay::ParamForm, self.popups.param_form.is_some()),

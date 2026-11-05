@@ -95,6 +95,7 @@ pub(super) fn draw_query(f: &mut Frame, app: &mut App, body: Rect) {
             Overlay::ParamForm => draw_param_form(f, app, area),
             Overlay::Review => draw_review(f, app, area),
             Overlay::TxPicker => draw_tx_picker(f, app, area),
+            Overlay::ExportForm => draw_export_form(f, app, area),
             Overlay::Sandbox => draw_sandbox(f, app, area),
             Overlay::Activity => draw_activity(f, app, area),
             Overlay::Agents => super::agents::draw_agents(f, app, area),
@@ -754,6 +755,103 @@ fn draw_tx_picker(f: &mut Frame, app: &mut App, area: Rect) {
     app.hits.tx_picker = rect;
     f.render_widget(Clear, rect);
     f.render_widget(Paragraph::new(lines).block(popup(t!("tx_picker.title"), t.accent)), rect);
+}
+
+/// `E`: where the rows go, in what format, which of them.
+fn draw_export_form(f: &mut Frame, app: &mut App, area: Rect) {
+    use crate::app::export_form::{ExportClick as Click, ExportLine as Part, ExportTo as To};
+    let t = theme();
+    let Some(form) = &app.popups.export_form else { return };
+    let (choice, current) = (form.choice, form.line);
+    let width = fit(60, 30, area.width);
+    let room = usize::from(width.saturating_sub(13));
+    let shown = t!("export_form.shown", n = app.tab.grid.view.len());
+    // A line: its label, then pieces of text, some to click.
+    type Piece = (String, bool, Option<Click>);
+    let radio = |on: bool, label: String, click: Click| -> Piece {
+        (format!("{} {label}", if on { "●" } else { "○" }), on, Some(click))
+    };
+    let gap = || -> Piece { ("   ".to_string(), false, None) };
+    let mut lines: Vec<(&str, Option<Part>, Vec<Piece>)> = vec![
+        (
+            t!("export_form.to"),
+            Some(Part::To),
+            vec![
+                radio(choice.to == To::File, t!("export_form.file").to_string(), Click::To(To::File)),
+                gap(),
+                radio(choice.to == To::Clipboard, t!("export_form.clipboard").to_string(), Click::To(To::Clipboard)),
+            ],
+        ),
+        (
+            t!("export_form.format"),
+            Some(Part::Format),
+            vec![(format!("‹ {} ›", choice.format.name()), true, Some(Click::NextFormat))],
+        ),
+    ];
+    if choice.to == To::Clipboard {
+        let marked = app.tab.grid.marked.len();
+        let which = if marked > 0 { t!("export_form.marked", n = marked) } else { shown };
+        lines.push((t!("export_form.rows"), None, vec![(which, false, None)]));
+    } else {
+        if app.export_every_offered() {
+            lines.push((
+                t!("export_form.rows"),
+                Some(Part::Rows),
+                vec![
+                    radio(!choice.every, shown, Click::Every(false)),
+                    gap(),
+                    radio(choice.every, t!("export_form.every").to_string(), Click::Every(true)),
+                ],
+            ));
+        } else {
+            lines.push((t!("export_form.rows"), None, vec![(shown, false, None)]));
+        }
+        let path = truncate_start(&app.export_path_shown(choice.format), room);
+        lines.push((t!("export_form.file_name"), None, vec![(path, false, None)]));
+    }
+    let run = if choice.to == To::File { t!("export_form.run_file") } else { t!("export_form.run_clipboard") };
+    let height = lines.len() as u16 + 4;
+    let rect = centered_box(area, width, height);
+    let mut spots = Vec::new();
+    let mut drawn: Vec<Line> = Vec::new();
+    for (row, (label, part, pieces)) in lines.into_iter().enumerate() {
+        let here = part == Some(current);
+        let top = rect.y + 1 + row as u16;
+        let label_style = if here { bold(t.accent) } else { muted() };
+        let mut spans = vec![Span::styled(format!(" {label:<9}  "), label_style)];
+        let mut left = rect.x + 1 + spans[0].width() as u16;
+        for (text, on, click) in pieces {
+            let style = if on && here {
+                bold(t.text_bright).bg(t.active)
+            } else if on || click.is_none() {
+                fg(t.text)
+            } else {
+                muted()
+            };
+            let span = Span::styled(text, style);
+            let wide = span.width() as u16;
+            if let Some(click) = click {
+                spots.push((Rect { x: left, y: top, width: wide, height: 1 }, click));
+            }
+            left += wide;
+            spans.push(span);
+        }
+        drawn.push(Line::from(spans));
+    }
+    drawn.push(Line::default());
+    let run = format!(" {run} ");
+    let help = t!("export_form.help");
+    let run_w = Span::raw(run.as_str()).width() as u16;
+    spots.push((Rect { x: rect.x + 2, y: rect.y + 1 + drawn.len() as u16, width: run_w, height: 1 }, Click::Run));
+    drawn.push(Line::from(vec![
+        Span::raw(" "),
+        Span::styled(run, bold(t.text_bright).bg(t.active)),
+        Span::styled(format!("  {help}"), dim()),
+    ]));
+    app.hits.export_form = rect;
+    app.hits.export_form_spots = spots;
+    f.render_widget(Clear, rect);
+    f.render_widget(Paragraph::new(drawn).block(popup(t!("export_form.title"), t.accent)), rect);
 }
 
 /// The sandbox: its steps, what they changed per table, and how to end it.

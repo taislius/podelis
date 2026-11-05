@@ -6,12 +6,16 @@ impl App {
     /// `podelis-export-<timestamp>.<ext>` in `export_dir` (or the current folder).
     pub(in crate::app) fn export_path(&self, format: Format) -> PathBuf {
         let ext = format.ext();
-        let dir = match self.settings.export_dir.as_deref() {
+        self.export_dir().join(format!("podelis-export-{}.{ext}", chrono::Local::now().format("%Y%m%d-%H%M%S")))
+    }
+
+    /// `export_dir`, or the current folder.
+    pub(in crate::app) fn export_dir(&self) -> PathBuf {
+        match self.settings.export_dir.as_deref() {
             Some(d) if d.starts_with("~/") => crate::config::settings::expand_home(d),
             Some(d) => PathBuf::from(d),
             None => PathBuf::new(),
-        };
-        dir.join(format!("podelis-export-{}.{ext}", chrono::Local::now().format("%Y%m%d-%H%M%S")))
+        }
     }
 
     /// The table `INSERT` exports go into: the query's, when it reads just one.

@@ -45,6 +45,7 @@ mod confirm;
 mod connections;
 mod edit;
 mod events;
+pub mod export_form;
 mod find;
 mod follow;
 mod grid;
@@ -258,6 +259,8 @@ pub struct App {
     pub watch: Option<watch::Watch>,
     /// "Export all rows" in progress: what stops it, and the file it writes.
     export_task: Option<(tokio::sync::oneshot::Sender<()>, PathBuf)>,
+    /// What the export form was last run with, where it starts next time.
+    export_choice: export_form::ExportChoice,
     /// The last run id handed out ([`App::next_run_id`]).
     run_ids: u64,
     /// While a hidden tab's event is applied (`apply_in_tab`): that tab,
@@ -340,6 +343,7 @@ impl App {
             library: crate::config::library::Library::load_from(None),
             watch: None,
             export_task: None,
+            export_choice: export_form::ExportChoice::default(),
             run_ids: 0,
             hidden_tab: None,
             hits: Hits::default(),
