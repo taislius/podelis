@@ -325,7 +325,7 @@ pub const ACTION_GROUPS: &[(Group, &[Action])] = &[
             Action::NextTab,
         ],
     ),
-    (Group::View, &[Action::ToggleSchema, Action::Zoom]),
+    (Group::View, &[Action::ToggleSchema, Action::Zoom, Action::Messages]),
     (Group::App, &[Action::Menu, Action::Settings, Action::Palette]),
 ];
 

@@ -105,6 +105,7 @@ pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
     }
     // What a key here did, else the last run's outcome (or progress), until
     // the next key; the cell info comes back after it.
+    app.hits.results_note = Rect::default();
     let run = (app.notes.status_in_results && !app.notes.status.is_empty())
         .then_some((&app.notes.status, app.notes.status_is_error));
     if let Some((message, is_error)) = app.notes.results_note.as_ref().map(|(m, e)| (m, *e)).or(run)
@@ -115,9 +116,14 @@ pub(super) fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(Clear, footer);
         f.render_widget(Block::default().style(Style::default().bg(t.inset)), footer);
         f.render_widget(
-            Paragraph::new(Span::styled(format!(" {}", truncate(&one_line(message), footer.width as usize)), style)),
+            Paragraph::new(Span::styled(
+                format!(" {}", truncate_cols(&one_line(message), usize::from(footer.width.saturating_sub(1)))),
+                style,
+            )),
             footer,
         );
+        // Cut off or not, a click shows it whole.
+        app.hits.results_note = footer;
     }
 }
 

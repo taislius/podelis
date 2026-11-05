@@ -552,16 +552,13 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
     f.render_widget(Block::default().style(Style::default().bg(t.inset)), area);
     app.hits.tx_mode = Rect::default();
+    app.hits.tx_help = Rect::default();
+    app.hits.editor_note = Rect::default();
     app.hits.syntax_hint = Rect::default();
     if let Some(bar) = &app.find {
         return draw_find_bar(f, app, bar, area);
     }
-    let mut right = Line::from(tx_status(app, area.width));
-    // A message (until the next key) has the room before the write modes.
-    let note_w = app.notes.editor_note.as_deref().map_or(0, |n| Span::raw(one_line(n)).width() as u16 + 3);
-    if note_w > 0 && note_w + right.width() as u16 > area.width {
-        right = Line::default();
-    }
+    let right = Line::from(tx_status(app, area.width));
     let right_w = right.width() as u16;
     // Which statement F6 runs, when there's more than one and no selection.
     let position = statement_position(app)
@@ -577,10 +574,12 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
         ])
         .areas(area);
     f.render_widget(Paragraph::new(Span::styled(position, muted())), middle);
-    // The editor's own messages first: what was done here, or why not.
+    // The editor's own messages first: what was done here, or why not. In the
+    // room the write modes leave; a click or Ctrl+K Space shows them whole.
     let left = if let Some(note) = &app.notes.editor_note {
         let style = if app.notes.editor_note_is_error { bold(t.error) } else { fg(t.text) };
-        Line::from(Span::styled(format!(" {}", truncate(&one_line(note), l.width as usize)), style))
+        let room = usize::from(l.width.saturating_sub(1));
+        Line::from(Span::styled(format!(" {}", truncate_cols(&one_line(note), room)), style))
     } else if let Some(hint) = &app.tab.syntax_hint {
         let (label, color, rule) = match hint.source {
             HintSource::Server => (t!("hint.server"), t.error, ""),
@@ -614,13 +613,24 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
     };
     f.render_widget(Paragraph::new(left), l);
     f.render_widget(Paragraph::new(right).alignment(Alignment::Right), r);
+    if app.notes.editor_note.is_some() {
+        app.hits.editor_note = l;
+    }
     // Clicking a hint goes to where it points.
     if app.notes.editor_note.is_none() && app.tab.syntax_hint.as_ref().is_some_and(|h| h.offset.is_some()) {
         app.hits.syntax_hint = l;
     }
-    // Clicking the write modes cycles them.
+    // Clicking the write modes cycles them; the `?` at their end explains them.
     if app.connection.txn == TxnState::Idle {
         app.hits.tx_mode = r;
+        if app.connection.mode != ConnectionMode::ReadOnly && r.width >= TX_HELP_WIDTH {
+            let [modes, help] = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Min(0), Constraint::Length(TX_HELP_WIDTH)])
+                .areas(r);
+            app.hits.tx_mode = modes;
+            app.hits.tx_help = help;
+        }
     }
 }
 
@@ -649,6 +659,9 @@ fn statement_position(app: &App) -> Option<(usize, usize)> {
         cached.statements.position(app.tab.editor.cursor_offset())
     })
 }
+
+/// The `?` after the modes and the room around it, to click.
+const TX_HELP_WIDTH: u16 = 3;
 
 /// The transaction modes to pick from, or, while a transaction is open,
 /// what to do about it. (The status bar shows the
@@ -688,6 +701,7 @@ fn tx_status(app: &App, width: u16) -> Vec<Span<'static>> {
                     spans.push(Span::styled(format!("  {} ", mode.short()), dim()));
                 }
             }
+            spans.push(Span::styled(" ?", muted()));
             spans
         }
     };

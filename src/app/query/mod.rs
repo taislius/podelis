@@ -467,6 +467,7 @@ impl App {
             Action::SelectStatement => self.select_statement(),
             Action::Heartbeat => self.toggle_heartbeat(),
             Action::TxMode => self.open_tx_picker(),
+            Action::Messages => self.open_messages(),
             Action::Projects => self.open_manager(Screen::Projects),
             Action::Commit => self.end_transaction(TxEnd::Commit),
             Action::Rollback => self.end_transaction(TxEnd::Rollback),

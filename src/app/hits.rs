@@ -24,6 +24,12 @@ pub struct Hits {
     pub editor_text: Rect,
     /// The write modes in the editor's footer.
     pub tx_mode: Rect,
+    /// The `?` beside the modes: opens the picker, with what each one does.
+    pub tx_help: Rect,
+    pub tx_picker: Rect,
+    /// The messages in the panes' footers: a click opens them all, whole.
+    pub editor_note: Rect,
+    pub results_note: Rect,
     /// The line above a plan saying what it's for (a click goes there).
     pub plan_source: Rect,
     /// The same above a result, and its kept results' numbers: x ranges
