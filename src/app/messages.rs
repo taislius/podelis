@@ -85,6 +85,26 @@ impl App {
         self.popups.cell_view = Some(view);
     }
 
+    /// What a pane's footer says now.
+    fn footer_message(&self) -> Option<&str> {
+        let run = (self.notes.status_in_results && !self.notes.status.is_empty()).then_some(self.notes.status.as_str());
+        self.notes.editor_note.as_deref().or(self.notes.results_note.as_ref().map(|(m, _)| m.as_str())).or(run)
+    }
+
+    /// Every message whole, the newest first: a footer's may be cut off.
+    /// What a footer says now comes first if the list hasn't got it (a run's
+    /// progress, say).
+    pub(super) fn open_messages(&mut self) {
+        let logged = |text: &str| self.notes.log.iter().any(|m| m.text == text);
+        let shown = self.footer_message().filter(|m| !logged(m)).map(str::to_string);
+        let all: Vec<String> =
+            shown.into_iter().chain(self.notes.log.iter().rev().map(|m| format!("{}  {}", m.time, m.text))).collect();
+        let text = if all.is_empty() { t!("results.no_messages").to_string() } else { all.join("\n\n") };
+        let title = t!("results.messages").to_string();
+        self.popups.cell_view =
+            Some(CellView { copies_text: Some(t!("messages.copied")), ..CellView::new(title, text) });
+    }
+
     /// A click on MESSAGES line `y`: selects its message; twice opens it.
     pub(super) fn click_message(&mut self, y: u16, double: bool) {
         let i = self.hits.messages_offset + usize::from(y - self.hits.messages.y);

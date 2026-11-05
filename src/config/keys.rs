@@ -51,6 +51,7 @@ pub enum Action {
     Heartbeat,
     Projects,
     TxMode,
+    Messages,
     NextWarning,
     Ask,
     Memory,
@@ -100,6 +101,7 @@ impl Action {
             Action::Heartbeat => t!("action.heartbeat"),
             Action::Projects => t!("action.projects"),
             Action::TxMode => t!("action.tx_mode"),
+            Action::Messages => t!("action.messages"),
             Action::NextWarning => t!("action.next_warning"),
             Action::Ask => t!("action.ask"),
             Action::Memory => t!("action.memory"),
@@ -135,6 +137,7 @@ impl Action {
             Action::Heartbeat => t!("action_brief.heartbeat"),
             Action::Projects => t!("action_brief.projects"),
             Action::TxMode => t!("action_brief.tx_mode"),
+            Action::Messages => t!("action_brief.messages"),
             Action::NextWarning => t!("action_brief.next_warning"),
             Action::Ask => t!("action_brief.ask"),
             Action::Memory => t!("action_brief.memory"),
@@ -228,6 +231,7 @@ const ACTIONS: &[(Action, &str, &[&str])] = &[
     (Action::Heartbeat, "heartbeat", &["Ctrl+K s h"]),
     (Action::Projects, "projects", &["Ctrl+K p"]),
     (Action::TxMode, "transaction_mode", &["Ctrl+K x"]),
+    (Action::Messages, "messages", &["Ctrl+K Space"]),
     (Action::NextWarning, "next_warning", &["Ctrl+K w"]),
     (Action::Ask, "ask", &["Ctrl+K q", "Ctrl+K y q"]),
     (Action::AiExplain, "ai_explain", &["Ctrl+K y y"]),
@@ -412,6 +416,9 @@ fn leader_spec(spec: &str) -> Option<Result<Vec<char>, String>> {
         return None;
     }
     let letter = |part: &str| {
+        if part.eq_ignore_ascii_case("space") {
+            return Some(' ');
+        }
         let mut chars = part.chars();
         match (chars.next(), chars.next()) {
             (Some(c), None) if !c.is_ascii_digit() && c != '?' && c != '/' => Some(c),
@@ -532,6 +539,11 @@ mod tests {
     fn leader_keys_and_their_overrides() {
         let map = KeyMap::default();
         assert_eq!(map.leader('x'), Some(Action::TxMode));
+        assert_eq!(map.leader(' '), Some(Action::Messages));
+        for spec in ["Ctrl+K Space", "ctrl+k space", "Leader SPACE"] {
+            assert_eq!(leader_spec(spec), Some(Ok(vec![' '])), "{spec}");
+        }
+        assert_eq!(leader_spec("Ctrl+K y space"), Some(Ok(vec!['y', ' '])));
         assert_eq!(map.label(Action::Zoom), "Ctrl+K z · F12");
         assert_eq!(map.short_label(Action::Zoom), "^K z");
         assert_eq!(map.short_label(Action::Commit), "F8");

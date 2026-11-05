@@ -576,6 +576,7 @@ fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
             let mut items: Vec<Item> = Vec::new();
             for (keys, a) in actions.iter().flat_map(|&a| letters.iter().filter(move |(_, x)| *x == a)) {
                 match (group_open, keys.as_slice()) {
+                    (None, [' ']) => items.push(("Space".to_string(), a.brief().to_string(), dimmed(*a))),
                     (None, [c]) => items.push((c.to_string(), a.brief().to_string(), dimmed(*a))),
                     // A group's letter once, where the first of it would be.
                     // (Not one a letter of its own has taken over.)
@@ -731,7 +732,7 @@ fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Ctrl+K x: auto-commit, manual commit or rollback-only.
-fn draw_tx_picker(f: &mut Frame, app: &App, area: Rect) {
+fn draw_tx_picker(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
     let Some(highlighted) = app.popups.tx_picker else { return };
     let mut lines: Vec<Line> = TxMode::ALL
@@ -750,6 +751,7 @@ fn draw_tx_picker(f: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from(Span::styled(format!(" {}", t!("tx_picker.help")), dim())));
     let width = fit(lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 2, 30, area.width);
     let rect = centered_box(area, width, lines.len() as u16 + 2);
+    app.hits.tx_picker = rect;
     f.render_widget(Clear, rect);
     f.render_widget(Paragraph::new(lines).block(popup(t!("tx_picker.title"), t.accent)), rect);
 }

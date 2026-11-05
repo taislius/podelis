@@ -260,6 +260,171 @@ fn run_buttons_sit_right_of_the_tabs_and_click() {
 }
 
 #[test]
+fn the_write_modes_change_quietly_and_their_question_mark_explains_them() {
+    let click = |app: &mut App, x: u16, y: u16| {
+        app.handle_mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+        render(app, 120, 30)
+    };
+    use crate::app::TxMode;
+    let (mut app, _dir) = query_app();
+    app.focus = Focus::Editor;
+    render(&mut app, 120, 30);
+
+    // A click changes the mode and says nothing; the modes stay where they are.
+    let (modes, help) = (app.hits.tx_mode, app.hits.tx_help);
+    let height = app.panes.editor_height;
+    app.notes.status.clear();
+    let screen = click(&mut app, modes.x + 1, modes.y);
+    assert_eq!(app.connection.tx_mode, TxMode::Manual);
+    assert!(app.notes.editor_note.is_none() && app.notes.status.is_empty(), "{screen}");
+    assert_eq!((app.hits.tx_mode.y, app.panes.editor_height), (modes.y, height));
+
+    // The ? opens every mode's explanation, keeping the mode.
+    let screen = click(&mut app, help.x + 1, help.y);
+    assert_eq!(app.popups.tx_picker, Some(TxMode::Manual));
+    assert_eq!(app.connection.tx_mode, TxMode::Manual);
+    for mode in TxMode::ALL {
+        assert!(screen.contains(mode.explain()), "{}: {screen}", mode.label());
+    }
+    // A click outside closes it, keeping the mode.
+    click(&mut app, 0, 0);
+    assert!(app.popups.tx_picker.is_none());
+    assert_eq!(app.connection.tx_mode, TxMode::Manual);
+    // A click on a row picks that mode; on its border, nothing happens.
+    click(&mut app, help.x + 1, help.y);
+    let picker = app.hits.tx_picker;
+    click(&mut app, picker.x + 2, picker.y);
+    assert!(app.popups.tx_picker.is_some(), "the border");
+    click(&mut app, picker.x + 2, picker.y + 3);
+    assert!(app.popups.tx_picker.is_none());
+    assert_eq!(app.connection.tx_mode, TxMode::RollbackOnly);
+
+    // Read-only has no modes to explain.
+    app.connection.mode = ConnectionMode::ReadOnly;
+    render(&mut app, 120, 30);
+    assert_eq!(app.hits.tx_help.width, 0);
+}
+
+#[test]
+fn a_long_message_is_cut_beside_the_write_modes_and_opens_whole() {
+    let click = |app: &mut App, r: ratatui::layout::Rect| {
+        app.handle_mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: r.x + 1,
+            row: r.y,
+            modifiers: KeyModifiers::NONE,
+        });
+    };
+    let long = format!("Refused because {} the end", "this is a very long reason ".repeat(12));
+    let (mut app, _dir) = query_app();
+    app.notes.log.clear();
+    app.notes.status.clear();
+    app.focus = Focus::Editor;
+    app.notes.editor_note = Some(long.clone());
+    let screen = render(&mut app, 120, 30);
+    let row = screen.lines().find(|l| l.contains("Transaction:")).unwrap_or_else(|| panic!("{screen}"));
+    assert!(row.contains("Refused because") && row.contains('…') && row.contains('?'), "{row}");
+    assert!(app.hits.tx_mode.width > 0 && !row.contains("the end"), "{row}");
+
+    // A click opens it whole.
+    let note = app.hits.editor_note;
+    click(&mut app, note);
+    assert!(app.popups.cell_view.as_ref().is_some_and(|v| v.text.contains(&long)));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.popups.cell_view.is_none());
+
+    // Ctrl+K Space: the list, the newest first, each once.
+    let said = |text: &str| crate::app::Message { time: "10:00:00".into(), text: text.into(), is_error: false };
+    app.notes.log = vec![said("older"), said("newer")];
+    app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    let text = app.popups.cell_view.as_ref().map(|v| v.text.clone()).unwrap_or_default();
+    assert_eq!(text, "10:00:00  newer\n\n10:00:00  older");
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    // A logged message on show isn't listed twice.
+    app.notes.editor_note = Some("newer".into());
+    render(&mut app, 120, 30);
+    let note = app.hits.editor_note;
+    click(&mut app, note);
+    assert_eq!(app.popups.cell_view.as_ref().map(|v| v.text.matches("newer").count()), Some(1));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    // In the results' footer too, first, though it isn't in the list.
+    app.focus = Focus::Results;
+    app.notes.results_note = Some((long.clone(), true));
+    let screen = render(&mut app, 120, 30);
+    assert!(screen.contains("Refused because") && screen.contains('…'), "{screen}");
+    let note = app.hits.results_note;
+    click(&mut app, note);
+    assert!(app.popups.cell_view.as_ref().is_some_and(|v| v.text.starts_with(&long)));
+}
+
+#[test]
+fn where_no_message_shows_there_is_nothing_to_click_and_the_popup_says_so() {
+    let (mut app, _dir) = query_app();
+    app.focus = Focus::Editor;
+    app.notes.log.clear();
+    app.notes.editor_note = None;
+    app.notes.results_note = None;
+    app.notes.status.clear();
+    render(&mut app, 120, 30);
+    assert_eq!((app.hits.editor_note.width, app.hits.results_note.width), (0, 0));
+    // Nothing said yet: the key still answers.
+    app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    let view = app.popups.cell_view.as_ref().expect("the messages");
+    assert_eq!((view.title.as_str(), view.text.as_str()), (t!("results.messages"), t!("results.no_messages")));
+}
+
+#[test]
+fn space_typed_in_the_editor_is_a_space_with_a_message_showing() {
+    let (mut app, _dir) = query_app();
+    app.focus = Focus::Editor;
+    app.tab.editor.set_text("");
+    app.notes.editor_note = Some("Something".into());
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    assert!(app.popups.cell_view.is_none());
+    assert_eq!(app.tab.editor.text(), " ");
+}
+
+#[test]
+fn picking_a_mode_by_key_is_quiet_too_and_what_stops_a_change_still_says_why() {
+    use crate::app::TxMode;
+    let (mut app, _dir) = query_app();
+    app.focus = Focus::Editor;
+    app.notes.status.clear();
+    for key in [
+        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+    ] {
+        app.handle_key(key);
+    }
+    assert_eq!(app.connection.tx_mode, TxMode::RollbackOnly);
+    assert!(app.notes.editor_note.is_none() && app.notes.status.is_empty());
+
+    // Read-only: a click on the mode changes nothing, and says why.
+    app.connection.mode = ConnectionMode::ReadOnly;
+    render(&mut app, 120, 30);
+    let modes = app.hits.tx_mode;
+    app.handle_mouse(crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        column: modes.x + 1,
+        row: modes.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(app.connection.tx_mode, TxMode::RollbackOnly);
+    assert_eq!(app.notes.editor_note.as_deref(), Some(t!("review.read_only")));
+    assert!(app.notes.editor_note_is_error);
+}
+
+#[test]
 fn ctrl_k_lists_the_tabs_and_finds_them_by_name() {
     let (mut app, _dir) = query_app();
     app.focus = Focus::Results;

@@ -51,6 +51,9 @@ impl App {
         if self.popups.library_view.is_some() && self.top_overlay() == Some(super::overlay::Overlay::Library) {
             return self.library_mouse(ev);
         }
+        if click && self.top_overlay() == Some(super::overlay::Overlay::TxPicker) {
+            return self.tx_picker_click(x, y);
+        }
         // Over a popup only the wheel does something (scrolling it).
         if self.popup_open() {
             if let Some(view) = &mut self.popups.cell_view {
@@ -273,6 +276,12 @@ impl App {
         // The line above a plan: to its statement in the editor.
         if inside(hits.plan_source, x, y) {
             return self.go_to_plan_statement();
+        }
+        if inside(hits.editor_note, x, y) || inside(hits.results_note, x, y) {
+            return self.open_messages();
+        }
+        if inside(hits.tx_help, x, y) {
+            return self.open_tx_picker();
         }
         if inside(hits.tx_mode, x, y) {
             return self.cycle_tx_mode();

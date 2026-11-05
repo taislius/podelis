@@ -9,7 +9,7 @@ expression: screen
 "│ ▼ (default database)       ││  1  select id, email, note                               │"
 "│ TABLES                   2 ││  2  from users                                           │"
 "│  ▶ orders           942.0k ││  3  where id < 4;                                        │"
-"│  ▼ use┌ TRANSACTION MODE ──────────────────────────────────────────────────────┐ommit  │"
+"│  ▼ use┌ TRANSACTION MODE ──────────────────────────────────────────────────────┐mit  ? │"
 "│      ◇│ a  ● auto-commit    each statement is committed as it runs             │───────┘"
 "│      ◇│ m    manual commit  changes wait for COMMIT or ROLLBACK                │───────┐"
 "│      ◇│ r    rollback-only  statements run, then are always rolled back        │       │"

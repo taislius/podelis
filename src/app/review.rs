@@ -131,7 +131,7 @@ impl App {
     /// rollback-only.
     pub(super) fn cycle_tx_mode(&mut self) {
         if self.tx_mode_changeable() {
-            self.set_tx_mode(self.connection.tx_mode.next());
+            self.connection.tx_mode = self.connection.tx_mode.next();
         }
     }
 
@@ -153,22 +153,18 @@ impl App {
             _ => return,
         };
         self.popups.tx_picker = None;
-        self.set_tx_mode(chosen);
+        self.connection.tx_mode = chosen;
     }
 
-    fn set_tx_mode(&mut self, mode: TxMode) {
-        self.connection.tx_mode = mode;
-        let msg = match self.connection.tx_mode {
-            TxMode::AutoCommit => t!("review.set_autocommit").to_string(),
-            TxMode::Manual => t!(
-                "review.set_manual",
-                commit = self.keymap.label(Action::Commit),
-                rollback = self.keymap.label(Action::Rollback)
-            ),
-            TxMode::RollbackOnly => t!("review.set_rollback_only").to_string(),
-            TxMode::Sandbox => t!("review.set_sandbox").to_string(),
-        };
-        self.set_status(msg, false);
+    /// A click in the picker picks the mode on its row; outside, it closes.
+    pub(super) fn tx_picker_click(&mut self, x: u16, y: u16) {
+        let rect = self.hits.tx_picker;
+        if !mouse::inside(rect, x, y) {
+            self.popups.tx_picker = None;
+        } else if let Some(mode) = TxMode::ALL.get(usize::from(y.saturating_sub(rect.y + 1))).filter(|_| y > rect.y) {
+            self.popups.tx_picker = None;
+            self.connection.tx_mode = *mode;
+        }
     }
 
     pub(super) fn open_review(&mut self, rows_affected: u64) {

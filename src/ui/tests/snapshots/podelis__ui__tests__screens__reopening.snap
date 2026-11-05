@@ -11,7 +11,7 @@ expression: screen
 "│  ▶ orders           942.0k ││  3  where id < 4;                                        │"
 "│  ▼ users             24.8k ││                                                          │"
 "│      ◇ id       integer┌──────────────────────────────────────┐                        │"
-"│      ◇ email          t│                                      │nsaction:  auto-commit  │"
+"│      ◇ email          t│                                      │action:  auto-commit  ? │"
 "│      ◇ note           t│          >_  PODĖLIS v0.0.0          │────────────────────────┘"
 "│ VIEWS                  │                                      │────────────────────────┐"
 "│  ◇ active_users       v│            reopening shop            │PLAN │                  │"
