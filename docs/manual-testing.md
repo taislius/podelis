@@ -481,7 +481,7 @@ Run the basics (connect, run, scroll, a popup, the mouse, copying with
   you are. A click takes the row it's on, scrolled or not.
 - [ ] "Export every row" of a loaded result with a filter on writes every row.
 - [ ] `C` opens the copy menu (`C` again or `Enter`: Markdown; pasting TSV into a
-  spreadsheet gives columns); `E` opens the export menu. Palette: `Ctrl+K /`,
+  spreadsheet gives columns); `E` opens the export form: to a file or the clipboard, its format and rows, starting from the last choice. Palette: `Ctrl+K /`,
   "filter" from the editor, then type: it goes in the filter, not the SQL.
 - [ ] `?` outside the editor, and `F1` anywhere, show every key; `↑↓`,
   `PgUp`/`PgDn` scroll it. In the editor `?` is just a character.
@@ -490,7 +490,7 @@ Run the basics (connect, run, scroll, a popup, the mouse, copying with
   (`Ctrl+K s c` with a transaction open) runs nothing and shows the group;
   `Backspace` goes back, `Esc` closes. A key file with `zoom = "Ctrl+K s"`
   warns at startup that the group's keys won't work.
-- [ ] `export ▾` and `menu ▾` right of the results' tabs open their menus
+- [ ] `export ▾` opens the export form and `menu ▾` its menu, right of the results' tabs,
   under them; the status bar shows `m  menu · right-click` (`^K m` in the
   editor), not while a filter is being typed.
 - [ ] Navigator: `/`, type a few letters, then click a table and press

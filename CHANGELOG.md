@@ -22,6 +22,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Ctrl+K's menu shows its letters by group; the pane's own keys moved to `m`.
 - The editor's menu no longer lists the tabs and the open connections: `Ctrl+K g` and `Ctrl+K j`, or the palette.
 - `F7` on MySQL 8.0.16+ shows the classic `EXPLAIN` table as a grid, as older servers do, with `possible_keys` and `key_len`, whatever `explain_format` says; a `◀` column gives each note's number on its row. Without the tree there's no costliest-step note. `EXPLAIN ANALYZE` (`Shift+F7`, where the server runs it), the full-scan warning and agents keep the tree.
+- `E` and `export ▾` open a form instead of a list of every format twice: to a file or the clipboard, the format, and to a file the rows shown or every row. It offers only what can be done and starts from the last choice, so the same again is `E`, `Enter`.
 - A long message in a pane's footer is cut off with `…`, never hiding the transaction modes; clicking it or `Ctrl+K Space` shows every message whole.
 - Changing the transaction mode no longer shows a message: the footer shows the mode, and a `?` after the modes opens all four with what each does. In that list a click picks a mode, and a click outside closes it.
 

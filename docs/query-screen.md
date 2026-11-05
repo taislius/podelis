@@ -187,8 +187,8 @@ When focused:
 | `C` | Copy the marked rows (or all rows shown): a menu of the formats, CSV, TSV, JSON, a Markdown table, an ASCII table (`+--+`), `INSERT` statements. Markdown is selected: `C` again or `Enter` copies it |
 | `m` / right-click | Menu of what you can do here, in groups, each with its key; what doesn't apply is dimmed, and says why when chosen |
 | `y` / `Y` or `Ctrl+C` | Copy the selected cell / row (tab-separated); `Y` and `Ctrl+C` copy the marked rows, a line each, when rows are marked |
-| `E` | Export: a menu of the formats, the rows shown or every row, CSV, JSON, an ASCII table, `INSERT` statements, Parquet (also `export ▾` above the results) |
-| `e` / `J` / `i` | Export the rows shown as CSV / JSON / SQL `INSERT` statements to `podelis-export-<timestamp>.<ext>` (in the current directory, or `export_dir`); the export menu (`E`) also has an ASCII table (`+--+` borders, `.txt`; long values cut at 120 columns) and Parquet. For every row of a big result, not just those loaded or a filter's, use "Export every row" in that menu or `Ctrl+K /`: it writes the rest straight to the file as it arrives, without loading it into the grid; `Esc` stops it |
+| `E` | Export (also `export ▾` above the results): a form with where the rows go (a file or the clipboard), the format and, to a file, the rows shown or every row. It offers only what can be done, and starts from the last choice, so the same again is `E`, `Enter`. `←`/`→` or a click changes a line, `↑`/`↓` moves, `Enter` runs it |
+| `e` / `J` / `i` | Export the rows shown as CSV / JSON / SQL `INSERT` statements to `podelis-export-<timestamp>.<ext>` (in the current directory, or `export_dir`); the form (`E`) also has an ASCII table (`+--+` borders, `.txt`; long values cut at 120 columns) and Parquet. For every row of a big result, not just those loaded or a filter's, use "Export every row" in that menu or `Ctrl+K /`: it writes the rest straight to the file as it arrives, without loading it into the grid; `Esc` stops it |
 | `M` | Load 10× more rows (streamed results fetch the next pages; scripts are re-run with a bigger limit, read-only ones only); the first of the new rows is selected, so they're in sight (sorted or filtered, the first place one of them is). Pressed while a page is still coming, its rows follow that page |
 | `[` / `]`, `1` `2` `3` (or click a tab) | Switch between the RESULT, MESSAGES and QUERY PLAN tabs (`F7` opens the plan with the results focused; `1` goes back) |
 | `,` / `.` (or click `#2`) | Show the result of an earlier / later run: each query you run keeps its own (see *Earlier results* below) |
@@ -327,7 +327,7 @@ next to `^K keys`, and the results pane has `menu ▾` right of its tabs to
 click, with `export ▾` beside it while rows are shown.
 
 The results' menu leads to smaller ones: *Copy the rows as…* (`C`, Markdown selected, so `C` again or `Enter` copies it), *Export…*
-(`E`, `export ▾`: the rows shown, or every row), *Open in an app…* (`o`: each
+(`E`, `export ▾`: a form, to a file or the clipboard), *Open in an app…* (`o`: each
 format with what opens it, an app or a pager in the terminal), and *Other
 results…*: a script's other result sets, the results kept from earlier runs,
 and pinning. Formats are always in the same order. The editor's menu starts
