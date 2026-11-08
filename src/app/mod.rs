@@ -17,8 +17,9 @@ use crate::db::{
     TableDetails, TableInfo, TxEnd, TxnState,
 };
 use crate::editor::{Pos, TextEditor};
+use crate::language::statements::{Kind, StatementInfo, TxnOp};
 use crate::sql;
-use crate::sql::analyze::{self, HintSource, Kind, StatementInfo, SyntaxHint, TxnOp};
+use crate::sql::analyze::{self, HintSource, SyntaxHint};
 use crate::sql::complete::{self, Candidate, TableRef};
 use crate::sql::params::Filled;
 use crate::sql::parse::{ParsedScript, parse};

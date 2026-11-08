@@ -6,9 +6,9 @@
 
 use std::ops::Range;
 
-use crate::db::QueryLanguage;
-use crate::sql::analyze::Kind;
-use crate::sql::{Token, TokenKind};
+use crate::language::QueryLanguage;
+use crate::language::statements::Kind;
+use crate::language::{Token, TokenKind};
 
 pub struct Mongo;
 
@@ -36,7 +36,7 @@ const SCHEMA_COMMANDS: &[&str] =
     &["collMod", "create", "createIndexes", "drop", "dropDatabase", "dropIndexes", "renameCollection"];
 
 /// The words coloured as keywords: `db`, its helpers and the methods, upper
-/// case and sorted (`sql::is_keyword` searches them).
+/// case and sorted (`crate::language::is_keyword` searches them).
 const KEYWORDS: &[&str] = &[
     "AGGREGATE", "BULKWRITE", "COUNT", "COUNTDOCUMENTS", "CREATECOLLECTION", "CREATEINDEX", "CREATEINDEXES", "DB",
     "DELETEMANY", "DELETEONE", "DISTINCT", "DROP", "DROPINDEX", "DROPINDEXES", "ESTIMATEDDOCUMENTCOUNT", "EXPLAIN",

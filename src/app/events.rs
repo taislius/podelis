@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::config::keys::Action;
+use crate::language::statements;
 
 impl App {
     pub fn handle_db_event(&mut self, event: DbEvent) {
@@ -714,7 +715,7 @@ impl LocalCheck {
 async fn server_syntax_hint(db: &Database, text: &str, engine: Engine) -> ServerCheck {
     const MAX_STATEMENTS: usize = 50;
     let parsed = parse(text, engine);
-    let creates_objects = analyze::analyze(&parsed).iter().any(|i| i.kind == Kind::Ddl);
+    let creates_objects = statements::analyze(&parsed).iter().any(|i| i.kind == Kind::Ddl);
     for stmt in parsed.statements.iter().take(MAX_STATEMENTS) {
         let (base, stmt) = (stmt.offset, stmt.text);
         let Ok(outcome) = db.check_statement(stmt).await else { return ServerCheck::Busy };
@@ -749,8 +750,8 @@ fn version_note(engine: Engine, version: &str, text: &str, at: Option<usize>, mi
         return None;
     }
     let range = match at {
-        Some(offset) => sql::statement_range(text, offset, engine)?,
-        None => match sql::statement_ranges(text, engine).as_slice() {
+        Some(offset) => crate::language::statement_range(text, offset, engine)?,
+        None => match crate::language::statement_ranges(text, engine).as_slice() {
             [only] => only.clone(),
             _ => return None,
         },

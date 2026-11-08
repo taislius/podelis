@@ -184,7 +184,7 @@ impl App {
             .editor
             .selection_offsets()
             .map(|(a, b)| a..b)
-            .or_else(|| crate::sql::statement_range(&text, self.tab.editor.cursor_offset(), self.engine()));
+            .or_else(|| crate::language::statement_range(&text, self.tab.editor.cursor_offset(), self.engine()));
         let Some(std::ops::Range { start, end }) = range else {
             return self.set_status(t!("editor.no_statement_here").to_string(), true);
         };

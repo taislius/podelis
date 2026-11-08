@@ -216,7 +216,7 @@ impl App {
         let limits = self.export_limits();
         let engine = self.engine();
         let sql = self.tab.last_sql.as_ref().map(|(sql, _)| sql.clone()).unwrap_or_default();
-        let one = crate::sql::split_statements(&sql, engine).len() == 1;
+        let one = crate::language::split_statements(&sql, engine).len() == 1;
         let explain = engine.dialect().map(|d| (d, d.explain(sql.trim().trim_end_matches(';'), self.version_of_db())));
         let plan = explain.filter(|(_, explain)| {
             one && (limits.ask_every > 0 || limits.max > 0)

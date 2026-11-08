@@ -7,6 +7,7 @@ use proptest::prelude::*;
 use proptest::test_runner::FileFailurePersistence;
 
 use podelis_core::db::{ColumnInfo, Engine, ErrorPos};
+use podelis_core::language::statements;
 use podelis_core::sql::complete::{self, TableRef};
 use podelis_core::sql::{self, analyze};
 
@@ -60,9 +61,9 @@ proptest! {
     #[test]
     fn formatting_changes_only_spacing(text in sqlish(), engine in engine()) {
         if let Some(out) = sql::format(&text, engine) {
-            let words = |s: &str| sql::tokenize(s, engine)
+            let words = |s: &str| podelis_core::language::tokenize(s, engine)
                 .into_iter()
-                .filter(|t| t.kind != sql::TokenKind::Whitespace)
+                .filter(|t| t.kind != podelis_core::language::TokenKind::Whitespace)
                 .map(|t| s[t.range].trim_end().to_string())
                 .collect::<Vec<_>>();
             prop_assert_eq!(words(&text), words(&out));
@@ -94,7 +95,7 @@ proptest! {
 
     #[test]
     fn tokens_cover_the_text_exactly(text in sqlish(), engine in engine()) {
-        let tokens = sql::tokenize(&text, engine);
+        let tokens = podelis_core::language::tokenize(&text, engine);
         let mut pos = 0;
         for t in &tokens {
             prop_assert_eq!(t.range.start, pos);
@@ -107,23 +108,23 @@ proptest! {
 
     #[test]
     fn statements_are_slices_of_the_text(text in sqlish(), engine in engine(), at in 0usize..400) {
-        for stmt in sql::split_statements(&text, engine) {
+        for stmt in podelis_core::language::split_statements(&text, engine) {
             prop_assert!(!stmt.trim().is_empty());
             prop_assert!(text.contains(stmt));
         }
         let offset = at.min(text.len());
         if text.is_char_boundary(offset)
-            && let Some(stmt) = sql::statement_at(&text, offset, engine)
+            && let Some(stmt) = podelis_core::language::statement_at(&text, offset, engine)
         {
             prop_assert!(text.contains(stmt));
         }
-        let (a, b) = sql::statement_bounds(&text, offset, engine);
+        let (a, b) = podelis_core::language::statement_bounds(&text, offset, engine);
         prop_assert!(a <= b && b <= text.len());
     }
 
     #[test]
     fn highlighting_keeps_every_character(text in sqlish(), engine in engine()) {
-        let lines = sql::highlight_lines(&text, engine);
+        let lines = podelis_core::language::highlight_lines(&text, engine);
         let rebuilt: Vec<String> = lines.iter().map(|l| l.iter().map(|(s, _)| *s).collect()).collect();
         prop_assert_eq!(rebuilt.join("\n"), text);
     }
@@ -131,7 +132,7 @@ proptest! {
     #[test]
     fn analysis_never_panics(text in sqlish(), engine in engine()) {
         let parsed = sql::parse::parse(&text, engine);
-        let _ = analyze::analyze(&parsed);
+        let _ = statements::analyze(&parsed);
         let _ = analyze::edit_source(&parsed);
         if let Some(hint) = analyze::syntax_hint(&parsed) {
             prop_assert!(hint.offset.is_none_or(|o| o <= text.len()));

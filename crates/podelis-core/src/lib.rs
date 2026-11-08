@@ -1,6 +1,6 @@
 //! Podėlis's lower layers: the databases (`db`, ports and adapters, one
 //! folder per engine), SQL text and its analysis without a connection
-//! (`sql`), and the words it says (`lang`, with `t!` and `tn!`). Nothing
+//! (`sql`), and the words it says (`i18n`, with `t!` and `tn!`). Nothing
 //! here knows of the app, the gateway or the command line.
 
 // Built with fewer database engines than all of them (Cargo features), code
@@ -19,8 +19,9 @@
 )]
 
 #[macro_use]
-pub mod lang;
+pub mod i18n;
 pub mod db;
+pub mod language;
 pub mod sql;
 
 /// Snapshot tests keep their `.snap` files in the crate's

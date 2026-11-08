@@ -1,4 +1,5 @@
 use super::*;
+use crate::language::statements;
 
 #[test]
 fn delete_requires_confirmation() {
@@ -171,7 +172,7 @@ async fn null_refused_on_not_null_column_and_production_confirms() {
 async fn heavy_reads_on_production_ask_first() {
     let (mut app, _dir) = connected_app(ConnectionMode::Production).await;
     app.settings.guard_rows = 1000;
-    let infos = analyze::analyze(&parse("select 7", Engine::Sqlite));
+    let infos = statements::analyze(&parse("select 7", Engine::Sqlite));
     app.guarded("select 7".into(), 0, infos.clone(), None, &[("orders".into(), 52_000_000.0)]);
     let confirm = app.popups.confirm.as_ref().unwrap();
     assert_eq!(confirm.details, ["orders: about 52.0M rows, read in full"]);

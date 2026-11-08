@@ -1,4 +1,4 @@
-//! The words the code says against `lang/en.toml` (in `podelis-core`):
+//! The words the code says against `i18n/en.toml` (in `podelis-core`):
 //! every `t!`/`tn!` key in the workspace's crates is there, and nothing there is
 //! unused. Here, in the app's crate, because it reads every crate's code.
 
@@ -16,7 +16,7 @@ fn used_keys() -> Vec<String> {
             let path = entry.path();
             if path.is_dir() {
                 // Not the words' own module: its comments show examples.
-                if !path.ends_with("lang") {
+                if !path.ends_with("i18n") {
                     stack.push(path);
                 }
             } else if path.extension().is_some_and(|e| e == "rs") {
@@ -49,9 +49,9 @@ fn used_keys() -> Vec<String> {
 
 #[test]
 fn every_key_the_code_uses_is_in_english() {
-    let en: std::collections::HashSet<&str> = crate::lang::english_keys().into_iter().collect();
+    let en: std::collections::HashSet<&str> = crate::i18n::english_keys().into_iter().collect();
     let missing: Vec<String> = used_keys().into_iter().filter(|k| !en.contains(k.as_str())).collect();
-    assert!(missing.is_empty(), "not in lang/en.toml: {missing:?}");
+    assert!(missing.is_empty(), "not in i18n/en.toml: {missing:?}");
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn english_has_no_words_the_code_doesnt_use() {
     let used: std::collections::HashSet<String> = used_keys().into_iter().collect();
     let counted = |k: &str| k.rsplit_once('.').is_some_and(|(stem, _)| used.contains(&format!("{stem}.other")));
     let mut unused: Vec<&str> =
-        crate::lang::english_keys().into_iter().filter(|k| !used.contains(*k) && !counted(k)).collect();
+        crate::i18n::english_keys().into_iter().filter(|k| !used.contains(*k) && !counted(k)).collect();
     unused.sort_unstable();
-    assert!(unused.is_empty(), "in lang/en.toml but not used: {unused:?}");
+    assert!(unused.is_empty(), "in i18n/en.toml but not used: {unused:?}");
 }

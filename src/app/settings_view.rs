@@ -205,10 +205,10 @@ impl App {
         let s = &self.settings;
         match field {
             Field::Language if s.language.eq_ignore_ascii_case("auto") => {
-                let now = crate::lang::LANGUAGES.iter().find(|(c, _, _)| *c == crate::lang::code());
+                let now = crate::i18n::LANGUAGES.iter().find(|(c, _, _)| *c == crate::i18n::code());
                 format!("{} ({})", t!("settings.auto"), now.map_or("English", |(_, name, _)| *name))
             }
-            Field::Language => crate::lang::LANGUAGES
+            Field::Language => crate::i18n::LANGUAGES
                 .iter()
                 .find(|(c, _, _)| c.eq_ignore_ascii_case(&s.language))
                 .map_or_else(|| s.language.clone(), |(_, name, _)| (*name).to_string()),
@@ -320,11 +320,11 @@ impl App {
             Field::Language => {
                 // auto, then each language, round.
                 let mut codes: Vec<&str> = vec!["auto"];
-                codes.extend(crate::lang::LANGUAGES.iter().map(|(c, _, _)| *c));
+                codes.extend(crate::i18n::LANGUAGES.iter().map(|(c, _, _)| *c));
                 let at = codes.iter().position(|c| c.eq_ignore_ascii_case(&s.language)).unwrap_or(0);
                 let n = codes.len();
                 s.language = codes[if forward { (at + 1) % n } else { (at + n - 1) % n }].to_string();
-                crate::lang::choose(&s.language, crate::lang::system().as_deref());
+                crate::i18n::choose(&s.language, crate::i18n::system().as_deref());
                 s.language.as_str().into()
             }
             Field::Theme => {

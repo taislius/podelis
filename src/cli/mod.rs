@@ -4,13 +4,14 @@
 //! Runs before (or instead of) the TUI, so printing is fine here.
 
 pub(crate) mod doctor;
+use crate::language::statements;
 use std::io::{IsTerminal as _, Read as _, Write as _};
 
 use crate::config::draft::{ConnectionDraft, Target, classify};
 use crate::config::store::{self, ConnectionStore};
 use crate::db::{ConnectionMode, Database, QueryOutcome};
 use crate::gateway::command::GatewayCommand;
-use crate::sql::analyze::{self, Kind};
+use crate::language::statements::Kind;
 use crate::transfer::export::{self, Format};
 
 pub const USAGE: &str = "\
@@ -403,7 +404,7 @@ async fn execute_inner(args: &Args, store: &ConnectionStore) -> Result<(), Failu
     };
     let form = resolve(args, store)?;
     let engine = form.engine;
-    let infos = analyze::analyze(&crate::sql::parse::parse(&sql, engine));
+    let infos = statements::analyze(&crate::sql::parse::parse(&sql, engine));
     if let Some(write) = infos.iter().find(|i| i.modifies())
         && form.mode == ConnectionMode::ReadOnly
     {
@@ -416,7 +417,7 @@ async fn execute_inner(args: &Args, store: &ConnectionStore) -> Result<(), Failu
         if let Some(risky) = infos.iter().find(|i| i.risk.is_some()) {
             return Err(Failure::refused(format!("“{}” looks destructive; add --yes to run it", risky.summary)));
         }
-        if form.mode == ConnectionMode::Production && infos.iter().any(analyze::StatementInfo::modifies) {
+        if form.mode == ConnectionMode::Production && infos.iter().any(statements::StatementInfo::modifies) {
             return Err(Failure::refused("production connection: add --yes to change data"));
         }
     }

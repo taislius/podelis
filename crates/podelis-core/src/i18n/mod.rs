@@ -125,7 +125,7 @@ pub fn counted(key: &str, n: u64, values: &[(&str, String)]) -> String {
     let words = words();
     let form = format!("{key}.{}", plural(code, n));
     let text = words.get(form.as_str()).or_else(|| words.get(format!("{key}.other").as_str())).copied();
-    debug_assert!(text.is_some(), "no `{key}.other` in lang/en.toml");
+    debug_assert!(text.is_some(), "no `{key}.other` in i18n/en.toml");
     let mut values = values.to_vec();
     values.push(("n", n.to_string()));
     put_in(text.unwrap_or(key), &values)
@@ -167,7 +167,7 @@ pub fn text(key: &str) -> &'static str {
     if let Some(text) = words().get(key) {
         return text;
     }
-    debug_assert!(false, "no words for `{key}` in lang/en.toml");
+    debug_assert!(false, "no words for `{key}` in i18n/en.toml");
     // The key itself, made `'static` once per key (it may be drawn every
     // frame).
     static MISSING: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
@@ -190,10 +190,10 @@ pub fn fill(key: &str, values: &[(&str, String)]) -> String {
 #[macro_export]
 macro_rules! t {
     ($key:literal) => {
-        $crate::lang::text($key)
+        $crate::i18n::text($key)
     };
     ($key:literal, $($name:ident = $value:expr),+ $(,)?) => {
-        $crate::lang::fill($key, &[$((stringify!($name), $value.to_string())),+])
+        $crate::i18n::fill($key, &[$((stringify!($name), $value.to_string())),+])
     };
 }
 
@@ -203,10 +203,10 @@ macro_rules! t {
 #[macro_export]
 macro_rules! tn {
     ($key:literal, $n:expr) => {
-        $crate::lang::counted($key, u64::try_from($n).unwrap_or(u64::MAX), &[])
+        $crate::i18n::counted($key, u64::try_from($n).unwrap_or(u64::MAX), &[])
     };
     ($key:literal, $n:expr, $($name:ident = $value:expr),+ $(,)?) => {
-        $crate::lang::counted($key, u64::try_from($n).unwrap_or(u64::MAX), &[$((stringify!($name), $value.to_string())),+])
+        $crate::i18n::counted($key, u64::try_from($n).unwrap_or(u64::MAX), &[$((stringify!($name), $value.to_string())),+])
     };
 }
 

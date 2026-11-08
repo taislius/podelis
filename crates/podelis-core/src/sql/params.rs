@@ -6,7 +6,7 @@
 use std::ops::Range;
 
 use crate::db::{Engine, sql_literal};
-use crate::sql::{self, TokenKind};
+use crate::language::TokenKind;
 
 /// One parameter and every place it appears.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,7 +21,7 @@ pub struct Param {
 /// inside strings, quoted names and comments don't count, nor do `::type`
 /// casts.
 pub fn find(text: &str, engine: Engine) -> Vec<Param> {
-    let tokens = sql::tokenize(text, engine);
+    let tokens = crate::language::tokenize(text, engine);
     let b = text.as_bytes();
     let mut params: Vec<Param> = Vec::new();
     let mut add = |name: String, range: Range<usize>| match params.iter_mut().find(|p| p.name == name) {

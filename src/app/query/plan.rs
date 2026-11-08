@@ -2,6 +2,7 @@
 //! session is busy, the plan grid, going to a plan's statement.
 
 use super::super::*;
+use crate::language::statements;
 
 impl App {
     /// Shows the plan for the selection or the statement at the cursor,
@@ -97,7 +98,7 @@ impl App {
         if self.ask_for_params(&explain, 0, true) {
             return;
         }
-        let infos = analyze::analyze(&parse(&explain, self.engine()));
+        let infos = statements::analyze(&parse(&explain, self.engine()));
         self.run_now(explain, 0, infos, RunPurpose::Explain, None);
     }
 
@@ -181,7 +182,7 @@ impl App {
             let lead = selected.len() - selected.trim_start().len();
             (a + lead, selected.trim().trim_end_matches(';').trim())
         } else {
-            let s = sql::statement_at(&text, self.tab.editor.cursor_offset(), self.engine())?;
+            let s = crate::language::statement_at(&text, self.tab.editor.cursor_offset(), self.engine())?;
             (s.as_ptr() as usize - text.as_ptr() as usize, s)
         };
         Some((stmt.to_string(), text[..start].matches('\n').count()))

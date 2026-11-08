@@ -5,6 +5,7 @@
 use super::*;
 use crate::config::keys::Action;
 pub use crate::db::TxMode;
+use crate::language::statements;
 use crate::sql::params::Filled;
 
 /// A dry run, rolled back when it ends.
@@ -30,7 +31,7 @@ impl App {
         let Some(dialect) = self.sql_dialect() else { return };
         let begin = format!("{};\n", dialect.begin(false));
         let wrapped = Filled::prefixed(filled, &original, &begin);
-        let infos = analyze::analyze(&parse(&wrapped.sql, self.engine()));
+        let infos = statements::analyze(&parse(&wrapped.sql, self.engine()));
         if self.connection.tx_mode == TxMode::RollbackOnly {
             self.tab.run.extra.dry_run = Some(DryRun::Running);
         } else {
@@ -207,7 +208,7 @@ impl App {
         }
         let Some(dialect) = self.sql_dialect() else { return };
         let command = dialect.end(how);
-        let infos = analyze::analyze(&parse(command, self.engine()));
+        let infos = statements::analyze(&parse(command, self.engine()));
         self.run_now(command.to_string(), 0, infos, RunPurpose::TxControl(how), None);
     }
 

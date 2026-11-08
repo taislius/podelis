@@ -1,7 +1,7 @@
 //! Which of Podėlis's modules may use which: the layers in
 //! `docs/architecture.md`, checked in the source so a new import that
 //! points the wrong way fails here instead of being found later. Between
-//! crates Cargo checks it (`podelis-core`: `db`, `sql`, `lang` can't name
+//! crates Cargo checks it (`podelis-core`: `db`, `sql`, `language`, `i18n` can't name
 //! the app); inside the app's crate one module can reach any other, so
 //! this does. `crate::db` and `crate::sql` are the core's, re-exported.
 //!
@@ -40,7 +40,7 @@ const ALL: &[&str] =
 
 /// Inside `podelis-core` (Cargo sees only its edge to the app): the words
 /// are below SQL and the databases, which may use each other.
-const CORE_RULES: &[(&str, &[&str])] = &[("lang", &["sql", "db"])];
+const CORE_RULES: &[(&str, &[&str])] = &[("i18n", &["sql", "db", "language"])];
 
 #[test]
 fn modules_use_only_the_layers_below_them() {

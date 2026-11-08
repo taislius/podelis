@@ -1,87 +1,23 @@
-//! What a script will do before it is sent: which statements read, write
-//! or change the schema, and which look dangerous. Uses `sqlparser` when it
-//! understands the statement and falls back to keywords when it doesn't
-//! (its grammar doesn't cover every dialect feature).
+//! SQL's analysis: what each statement does (read, write, schema change,
+//! and what looks dangerous), the table a result's rows come from, syntax
+//! hints and error ranges. Uses `sqlparser` when it understands the
+//! statement and falls back to SQL's keywords when it doesn't (its grammar
+//! doesn't cover every dialect feature). Any language's entry point is
+//! `crate::language::statements::analyze`.
 
 use sqlparser::ast::{
     AlterTableOperation, Expr, GroupByExpr, ObjectNamePart, SelectItem, SetExpr, Statement, TableFactor,
 };
 
 use crate::db::{Engine, ErrorPos};
+use crate::language::TokenKind;
+use crate::language::statements::{Kind, TxnOp};
 use crate::sql::parse::{ParsedScript, ParsedStatement, line_col_offset};
-use crate::sql::{self, TokenKind};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TxnOp {
-    Begin,
-    Commit,
-    Rollback,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
-    /// Only reads data (SELECT, SHOW, EXPLAIN without ANALYZE...).
-    Read,
-    /// Modifies rows.
-    Write,
-    /// Changes the schema (CREATE, ALTER, DROP...). MySQL commits implicitly.
-    Ddl,
-    Transaction(TxnOp),
-    /// Session settings and the like (SET, USE).
-    Session,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StatementInfo {
-    /// The statement, abbreviated for messages.
-    pub summary: String,
-    pub kind: Kind,
-    /// Why this statement deserves a confirmation, e.g. "DELETE without WHERE".
-    pub risk: Option<&'static str>,
-}
-
-impl StatementInfo {
-    pub fn modifies(&self) -> bool {
-        matches!(self.kind, Kind::Write | Kind::Ddl)
-    }
-}
-
-pub fn analyze(script: &ParsedScript) -> Vec<StatementInfo> {
-    // A language other than SQL says what its statements do.
-    if let crate::db::Language::Other(language) = script.engine.backend().language() {
-        return script
-            .statements
-            .iter()
-            .map(|stmt| {
-                let (kind, risk) = language.classify(stmt.text);
-                StatementInfo { summary: summarize(stmt.text), kind, risk }
-            })
-            .collect();
-    }
-    script
-        .statements
-        .iter()
-        .map(|stmt| {
-            let words = words(stmt.text, script.engine);
-            let (kind, risk) = match stmt.single() {
-                Some(ast) => {
-                    let (kind, risk) = classify_ast(ast, &words);
-                    // Rules that look inside the statement (an EXPLAIN that
-                    // doesn't run it needs no confirmation).
-                    let modifies = matches!(kind, Kind::Write | Kind::Ddl);
-                    (kind, risk.or_else(|| crate::sql::lint::risk(stmt, script.engine).filter(|_| modifies)))
-                }
-                None => classify_words(&words),
-            };
-            StatementInfo { summary: summarize(stmt.text), kind, risk }
-        })
-        .collect()
-}
 
 /// Uppercased keywords/identifiers of a statement, skipping strings,
 /// comments and quoted identifiers.
 fn words(stmt: &str, engine: Engine) -> Vec<String> {
-    sql::tokenize(stmt, engine)
+    crate::language::tokenize(stmt, engine)
         .into_iter()
         .filter(|t| t.kind == TokenKind::Word)
         .map(|t| stmt[t.range].to_ascii_uppercase())
@@ -94,6 +30,22 @@ fn has(words: &[String], w: &str) -> bool {
 
 fn modifies_data(words: &[String]) -> bool {
     ["INSERT", "UPDATE", "DELETE", "MERGE"].iter().any(|w| has(words, w))
+}
+
+/// What one SQL statement does, and why it needs a confirmation if it
+/// does: by its syntax tree where `sqlparser` read it, else by its words.
+pub(crate) fn classify(stmt: &ParsedStatement, engine: Engine) -> (Kind, Option<&'static str>) {
+    let words = words(stmt.text, engine);
+    match stmt.single() {
+        Some(ast) => {
+            let (kind, risk) = classify_ast(ast, &words);
+            // Rules that look inside the statement (an EXPLAIN that
+            // doesn't run it needs no confirmation).
+            let modifies = matches!(kind, Kind::Write | Kind::Ddl);
+            (kind, risk.or_else(|| crate::sql::lint::risk(stmt, engine).filter(|_| modifies)))
+        }
+        None => classify_words(&words),
+    }
 }
 
 #[expect(clippy::match_same_arms, reason = "one arm per kind of statement reads better than merged patterns")]
@@ -167,11 +119,6 @@ fn classify_words(words: &[String]) -> (Kind, Option<&'static str>) {
         // anything unrecognised: assume it writes.
         _ => (Kind::Write, None),
     }
-}
-
-fn summarize(stmt: &str) -> String {
-    let flat = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
-    if flat.chars().count() > 60 { format!("{}…", flat.chars().take(59).collect::<String>()) } else { flat }
 }
 
 /// Where a result set's rows come from, when they map 1:1 onto one table's
@@ -273,7 +220,7 @@ pub fn syntax_hint(script: &ParsedScript) -> Option<SyntaxHint> {
 /// for a line number, or the first whole-word match of a token.
 pub fn error_range(sent: &str, position: &ErrorPos) -> Option<(usize, usize)> {
     let word_len = |rest: &str| {
-        let word = rest.find(|c: char| !super::is_word_char(c)).unwrap_or(rest.len());
+        let word = rest.find(|c: char| !crate::language::is_word_char(c)).unwrap_or(rest.len());
         if word > 0 { word } else { rest.chars().next().map_or(0, char::len_utf8) }
     };
     match position {
@@ -289,8 +236,8 @@ pub fn error_range(sent: &str, position: &ErrorPos) -> Option<(usize, usize)> {
             let lower = sent.to_lowercase();
             let needle = token.to_lowercase();
             let boundary = |i: usize| {
-                !lower[..i].chars().next_back().is_some_and(super::is_word_char)
-                    && !lower[i + needle.len()..].chars().next().is_some_and(super::is_word_char)
+                !lower[..i].chars().next_back().is_some_and(crate::language::is_word_char)
+                    && !lower[i + needle.len()..].chars().next().is_some_and(crate::language::is_word_char)
             };
             // Lowercasing can change byte lengths for non-ASCII text; then
             // only offsets that exist in both are safe.
@@ -321,6 +268,7 @@ pub fn error_range(sent: &str, position: &ErrorPos) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::language::statements::analyze;
     use crate::sql::parse::parse;
 
     const PG: Engine = Engine::Postgres;

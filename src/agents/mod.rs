@@ -12,7 +12,7 @@ pub use approvals::*;
 pub use log::*;
 
 use crate::db::{AgentAccess, ConnectionMode, Engine};
-use crate::sql::analyze::Kind;
+use crate::language::statements::Kind;
 
 /// What happens to an agent's SQL. It always runs in a transaction of
 /// Podėlis's own, which the agent can't end (it may not send BEGIN,
@@ -102,7 +102,7 @@ pub fn verdict(access: AgentAccess, mode: ConnectionMode, sql: &str, engine: Eng
 /// Whether `sql` can be planned for an agent: one statement (so nothing can
 /// ride along after it), of a kind it may run.
 pub fn explainable(sql: &str, engine: Engine) -> Result<(), String> {
-    if crate::sql::split_statements(sql, engine).len() != 1 {
+    if crate::language::split_statements(sql, engine).len() != 1 {
         return Err("`explain` plans one statement at a time".to_string());
     }
     allowed(sql, engine).map(drop)
@@ -114,7 +114,7 @@ pub fn explainable(sql: &str, engine: Engine) -> Result<(), String> {
 /// none uses anything that reaches past the data, and none changes the session or its
 /// transaction (not SET, BEGIN, COMMIT, USE, CALL, DO, COPY, LOCK, GRANT…:
 /// they change the session, end Podėlis's transaction, or reach outside).
-fn allowed(sql: &str, engine: Engine) -> Result<Vec<crate::sql::analyze::StatementInfo>, String> {
+fn allowed(sql: &str, engine: Engine) -> Result<Vec<crate::language::statements::StatementInfo>, String> {
     // Podėlis's safety for agents is SQL's (its transactions and plans).
     if engine.dialect().is_none() {
         return Err(format!("agents need SQL here for now, which {} doesn't have", engine.label()));
@@ -125,8 +125,8 @@ fn allowed(sql: &str, engine: Engine) -> Result<Vec<crate::sql::analyze::Stateme
     // as the server gets it: a statement's comments around it aren't in
     // what `split_statements` gives back.
     if engine == Engine::MySql
-        && let Some(t) = crate::sql::tokenize(sql, engine).into_iter().find(|t| {
-            t.kind == crate::sql::TokenKind::Comment && {
+        && let Some(t) = crate::language::tokenize(sql, engine).into_iter().find(|t| {
+            t.kind == crate::language::TokenKind::Comment && {
                 let c = &sql[t.range.clone()];
                 c.starts_with("/*!") || c.starts_with("/*M!") || c.starts_with("/*m!")
             }
@@ -145,15 +145,15 @@ fn allowed(sql: &str, engine: Engine) -> Result<Vec<crate::sql::analyze::Stateme
              write a quote inside a string doubled ('') instead"
             .to_string());
     }
-    let statements = crate::sql::split_statements(sql, engine);
+    let statements = crate::language::split_statements(sql, engine);
     if statements.is_empty() {
         return Err("there's no SQL to run".to_string());
     }
     for statement in &statements {
-        let tokens = crate::sql::tokenize(statement, engine);
+        let tokens = crate::language::tokenize(statement, engine);
         let words: Vec<String> = tokens
             .into_iter()
-            .filter(|t| t.kind == crate::sql::TokenKind::Word)
+            .filter(|t| t.kind == crate::language::TokenKind::Word)
             .map(|t| statement[t.range].to_ascii_lowercase())
             .collect();
         let first = words.first().map_or("", String::as_str);
@@ -165,7 +165,7 @@ fn allowed(sql: &str, engine: Engine) -> Result<Vec<crate::sql::analyze::Stateme
             return Err(format!("“{}” uses {}, which {does}: agents can't", one_line(statement), word.to_uppercase()));
         }
     }
-    let infos = crate::sql::analyze::analyze(&crate::sql::parse::parse(sql, engine));
+    let infos = crate::language::statements::analyze(&crate::sql::parse::parse(sql, engine));
     if let Some(other) = infos.iter().find(|i| matches!(i.kind, Kind::Transaction(_) | Kind::Session)) {
         return Err(format!(
             "“{}”: agents can't change the session or its transaction; Podėlis runs each call in a transaction of its own",

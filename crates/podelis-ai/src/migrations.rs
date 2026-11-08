@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::db::Engine;
-use crate::sql::{self, TokenKind};
+use podelis_core::language::TokenKind;
 
 /// A fact learned, before it's stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,7 +225,7 @@ fn alter_changes(words: &[&str], upper: &[&str]) -> Vec<(String, String)> {
 /// joined), its words (names and keywords, quoted names with their
 /// quotes), and its string literals' text.
 fn statements(text: &str, engine: Engine) -> Vec<(Option<String>, Vec<String>, Vec<String>)> {
-    let tokens = sql::tokenize(text, engine);
+    let tokens = podelis_core::language::tokenize(text, engine);
     let mut out = Vec::new();
     let mut comment: Vec<String> = Vec::new();
     let mut words: Vec<String> = Vec::new();

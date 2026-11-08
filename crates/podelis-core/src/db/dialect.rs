@@ -334,8 +334,8 @@ impl Engine {
     /// where what's SQL's (edits, exports, plans…) is off.
     pub fn dialect(self) -> Option<&'static dyn SqlDialect> {
         match self.backend().language() {
-            super::Language::Sql(dialect) => Some(dialect),
-            super::Language::Other(_) => None,
+            crate::language::Language::Sql(dialect) => Some(dialect),
+            crate::language::Language::Other(_) => None,
         }
     }
 }
@@ -374,8 +374,8 @@ pub struct TooNew {
 /// `sql`'s code as lowercase words and punctuation, without spaces,
 /// comments or what's in strings: what [`SqlDialect::too_new`] looks through.
 pub fn code_words(sql: &str, engine: crate::db::Engine) -> Vec<String> {
-    use crate::sql::TokenKind;
-    crate::sql::tokenize(sql, engine)
+    use crate::language::TokenKind;
+    crate::language::tokenize(sql, engine)
         .into_iter()
         .filter(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Comment | TokenKind::String))
         .map(|t| sql[t.range].to_ascii_lowercase())

@@ -3,6 +3,7 @@
 //! and the note in the status bar when agents were refused, failed or
 //! changed data since the user last looked.
 
+use crate::language::statements;
 use std::time::{Duration, Instant};
 
 use super::*;
@@ -423,7 +424,7 @@ impl App {
             .filter(|q| &q.entry.session == session && q.entry.connection == connection)
             .filter(|q| q.entry.sandbox == Some(number) && q.entry.tool == "query")
             .filter(|q| q.entry.error.is_none() && q.entry.refused.is_none())
-            .filter(|q| analyze::analyze(&parse(&q.entry.sql, q.engine)).iter().any(StatementInfo::modifies))
+            .filter(|q| statements::analyze(&parse(&q.entry.sql, q.engine)).iter().any(StatementInfo::modifies))
             .collect();
         let first = calls.first()?;
         let who = first.entry.name.clone().unwrap_or_else(|| first.entry.agent.clone());

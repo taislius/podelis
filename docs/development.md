@@ -44,7 +44,7 @@ built `podelis` from outside (its path is in `CARGO_BIN_EXE_podelis`), like
 a user or a script would: `-e`, `--format`, exit codes, `--help`
 (`tests/cli.rs`).
 
-**Translations.** The app's words are in `crates/podelis-core/src/lang/`, a TOML file per
+**Translations.** The app's words are in `crates/podelis-core/src/i18n/`, a TOML file per
 language (`en.toml`, `lt.toml`), built into the program. Code says
 `t!("section.key")` (a `&'static str`) or `t!("section.key", name =
 value)` for `{name}` in the text; a counted word is `tn!("section.key", n)`

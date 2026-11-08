@@ -521,13 +521,14 @@ impl App {
     /// under the pointer first), from its first word to its end.
     pub(in crate::app) fn select_statement(&mut self) {
         let text = self.tab.editor.text();
-        let Some(range) = sql::statement_range(&text, self.tab.editor.cursor_offset(), self.engine()) else {
+        let Some(range) = crate::language::statement_range(&text, self.tab.editor.cursor_offset(), self.engine())
+        else {
             return self.set_status(t!("editor.no_statement_here").into(), true);
         };
         self.focus = Focus::Editor;
         self.popups.completion = None;
         self.tab.editor.select_offsets(range.start, range.end);
-        let which = sql::Statements::of(&text, self.engine()).position(range.start);
+        let which = crate::language::Statements::of(&text, self.engine()).position(range.start);
         let said = which.map_or_else(String::new, |(n, of)| format!(" ({})", t!("editor.n_of", n = n, of = of)));
         self.set_status(t!("editor.selected_statement", said = said), false);
     }

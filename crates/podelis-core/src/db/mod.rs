@@ -9,8 +9,6 @@ use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, mpsc, oneshot};
 
-use crate::sql;
-
 // The engines (`Engine`, `Engine::ALL`, `Pool`, `Session`, their modules
 // and `on_engine!` / `on_driver!` / `on_pool!` / `on_session!`), found by
 // build.rs.
@@ -39,7 +37,7 @@ mod types;
 mod via_sqlx;
 
 pub use activity::Activity;
-pub use backend::{Backend, Capabilities, ContainerLogin, ContainerSecret, Language, QueryLanguage};
+pub use backend::{Backend, Capabilities, ContainerLogin, ContainerSecret};
 pub use details::{Comment, ForeignKey, IndexInfo, Link, RoutineInfo, TableDetails};
 pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint};
 #[cfg(any(test, feature = "test-support"))]

@@ -426,8 +426,8 @@ impl App {
 /// has none (before a comment after it: one added after a `--` comment
 /// would be part of it).
 fn ended(sql: &str, engine: crate::db::Engine) -> String {
-    use crate::sql::TokenKind;
-    let tokens = crate::sql::tokenize(sql, engine);
+    use crate::language::TokenKind;
+    let tokens = crate::language::tokenize(sql, engine);
     match tokens.iter().rev().find(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Comment)) {
         Some(t) if t.kind != TokenKind::Semicolon => format!("{};{}", &sql[..t.range.end], &sql[t.range.end..]),
         _ => sql.to_string(),
