@@ -13,14 +13,19 @@ AI crate it names as `podelis_ai::…`.
 ```
 crates/podelis-core/
   build.rs               finds the engines (see "Databases")
-  src/lib.rs             the crate: `db`, `sql`, `lang` (`t!`, `tn!`)
+  src/lib.rs             the crate: `db`, `language`, `sql`, `i18n` (`t!`, `tn!`)
   src/db/                talking to databases (below)
-  src/sql/               SQL text, never a connection: the lexer and
-                         statement splitter (mod.rs), analysis (analyze),
+  src/language/          what every query language shares, whichever an
+                         engine speaks: tokens, statements, colouring,
+                         keywords, and what statements do (statements:
+                         `analyze`); each entry point asks the engine's
+                         language (`Language`: SQL, or a `QueryLanguage`)
+  src/sql/               SQL text, never a connection: its lexer and
+                         statements (mod.rs), SQL's analysis (analyze),
                          completion, parameters, and the syntax tree:
                          parsing once (parse), scopes, lint rules (see "SQL
                          checks"); engine rules come from db
-  src/lang/              the words, a TOML file per language
+  src/i18n/              the words, a TOML file per language
 src/
   main.rs                startup and the event loop
   cli/                   without the UI: -e / --test / --import (mod.rs),
@@ -269,9 +274,11 @@ Three concerns are kept apart:
   are its own, what agents may send, the cheapest query that answers, the
   version's query — and its **language** (`Backend::language`): SQL, which
   its dialect fills in, or one of its own (`QueryLanguage`: its statements,
-  tokens, what each does, its words). The `sql` module's entry points
-  (`split_statements`, `tokenize`, highlighting, `parse`, `analyze`) ask
-  it, so their callers needn't know which language it is.
+  tokens, what each does, its words). The `language` module's entry points
+  (`split_statements`, `tokenize`, highlighting, keywords,
+  `statements::analyze`) ask it, so their callers needn't know which
+  language it is; `sql::parse` gives a language without SQL its statements
+  unparsed.
 - **`engine.dialect()` is an `Option`**: `None` for an engine whose
   language isn't SQL (MongoDB). What's SQL's says so and stops there —
   edits in the grid, the row forms, follow, review, sandboxes, plans,
