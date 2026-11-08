@@ -634,7 +634,7 @@ fn cut(text: &str) -> String {
 }
 
 /// The context for `question` once memory's been read: what `ask` builds,
-/// and what the retrieval eval (`context/eval.rs`) measures.
+/// and what the retrieval eval (`context_eval.rs`) measures.
 pub fn for_question(schema: &Schema, question: &str, memory: &crate::memory::ForQuestion) -> Context {
     let built = build(schema, &format!("{question}{}", memory.words()));
     let tables: Vec<String> = built.tables.iter().map(|t| t.name.clone()).collect();
@@ -643,6 +643,8 @@ pub fn for_question(schema: &Schema, question: &str, memory: &crate::memory::For
 }
 
 #[cfg(test)]
+#[path = "context_eval.rs"]
 mod eval;
 #[cfg(test)]
+#[path = "context_tests.rs"]
 mod tests;

@@ -285,4 +285,5 @@ fn statements(text: &str, engine: Engine) -> Vec<(Option<String>, Vec<String>, V
 }
 
 #[cfg(test)]
+#[path = "migrations_tests.rs"]
 mod tests;

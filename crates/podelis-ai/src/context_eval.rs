@@ -1,5 +1,5 @@
 //! How good the context builder is, as a number: for each question of a
-//! gold set (`eval/questions.txt`), the tables the right SQL needs, and
+//! gold set (`testdata/context-eval/questions.txt`), the tables the right SQL needs, and
 //! whether the context chose them.
 //!
 //! - **Recall:** the gold tables in the context, out of all gold tables.
@@ -8,7 +8,7 @@
 //!   chose. Extra tables cost tokens and can mislead.
 //! - **Characters:** what the context costs.
 //!
-//! The schemas are snapshots (`eval/<database>.json`: tables, columns,
+//! The schemas are snapshots (`testdata/context-eval/<database>.json`: tables, columns,
 //! keys and comments, never rows), so the test runs without a server.
 //! `dump_schemas` makes them again from live databases.
 //!
@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use super::Schema;
 
 fn folder() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/context/eval")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/context-eval")
 }
 
 /// A snapshot (written by the app's `eval_snapshots::dump_schemas`).
