@@ -23,7 +23,6 @@ use crate::sql::analyze::{self, HintSource, SyntaxHint};
 use crate::sql::complete::{self, Candidate, TableRef};
 use crate::sql::params::Filled;
 use crate::sql::parse::{ParsedScript, parse};
-pub use agents::{AgentQuery, Agents, short_dir, short_time};
 pub use find::FindBar;
 pub use grid::ResultGrid;
 pub use hits::Hits;
@@ -32,13 +31,13 @@ use list::Nav;
 pub use overlay::Overlay;
 pub use params::ParamForm;
 pub use sandbox::Sandbox;
-pub use tabs::{LibraryItem, LibraryView, TabMeta, TabPrompt, TabPromptKind};
 pub use tabs::{PlanSource, TabState};
+pub use tabs::{TabMeta, TabPrompt, TabPromptKind};
 use vim::Vim;
 pub use vim::VimMode;
+pub use windows::agents::{AgentQuery, Agents, short_dir, short_time};
+pub use windows::library::{LibraryItem, LibraryView};
 
-mod activity;
-mod agents;
 pub mod ask;
 pub mod commands;
 mod compare;
@@ -54,7 +53,6 @@ mod hits;
 mod info;
 mod input;
 mod list;
-pub mod memory_view;
 mod menu;
 mod messages;
 mod mouse;
@@ -73,12 +71,12 @@ mod runs;
 mod sandbox;
 mod schema;
 mod session;
-pub mod settings_view;
 mod tabs;
 #[cfg(test)]
 mod tests;
 mod vim;
 mod watch;
+pub mod windows;
 
 use crate::config::draft::{ConnectionDraft, looks_like_url};
 pub use confirm::{Confirm, ConfirmAction};
@@ -86,13 +84,14 @@ pub use connections::{ConnectField, ConnectForm, fields_for};
 use events::{Background, DbEventKind};
 pub use events::{DbEvent, Ping};
 pub use query_screen::{Dest, Format, Run, RunPurpose};
-pub use results::{CellEdit, CellView};
+pub use results::CellEdit;
 pub use results::{NULL_TEXT, display_prefix, format_elapsed, visible_columns};
 use results::{column_widths, compute_view, one_line, pretty_value, widen_columns};
 pub use review::TxMode;
 pub use schema::{SchemaNode, SchemaPanel, SchemaSection, SchemaSort, SchemaTable};
 #[cfg(test)]
 pub use session::Splash;
+pub use windows::cell::CellView;
 
 /// What has the keys. Projects, Connections and Connect are the three
 /// panes of one screen for managing projects and connections.

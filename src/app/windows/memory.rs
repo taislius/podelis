@@ -5,8 +5,8 @@
 
 use serde_json::{Value, json};
 
-use super::ask::AskFailure;
-use super::*;
+use crate::app::ask::AskFailure;
+use crate::app::*;
 use crate::gateway::client::{CallError, connect_or_start, spawn_gateway};
 
 /// The memory window.
@@ -38,7 +38,7 @@ pub enum GatewayPurpose {
 
 impl App {
     /// `Ctrl+K y k`: the project's memory.
-    pub(super) fn open_memory(&mut self) {
+    pub(in crate::app) fn open_memory(&mut self) {
         let Some(project_id) = self.current_project.clone() else {
             return self.set_status(t!("memory.need_project").into(), true);
         };
@@ -75,7 +75,7 @@ impl App {
         });
     }
 
-    pub(super) fn gateway_done(&mut self, purpose: GatewayPurpose, result: Result<Value, AskFailure>) {
+    pub(in crate::app) fn gateway_done(&mut self, purpose: GatewayPurpose, result: Result<Value, AskFailure>) {
         let project = match &purpose {
             GatewayPurpose::MemoryList(p) | GatewayPurpose::MemoryChanged(_, p, _) => p.clone(),
         };
@@ -108,7 +108,7 @@ impl App {
         }
     }
 
-    pub(super) fn handle_memory_key(&mut self, key: KeyEvent) {
+    pub(in crate::app) fn handle_memory_key(&mut self, key: KeyEvent) {
         let Some(view) = &mut self.popups.memory_view else { return };
         if let Some(input) = &mut view.adding {
             match input.handle(key) {

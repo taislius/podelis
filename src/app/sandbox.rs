@@ -63,15 +63,6 @@ pub(super) enum Then {
     ForReal(String),
 }
 
-/// The sandbox window (`Ctrl+K x` while one is open).
-#[derive(Debug, Default)]
-pub struct SandboxView {
-    pub scroll: u16,
-    /// What it holds: the locks the session has (asked when the window
-    /// opens), or why that can't be seen.
-    pub locks: Option<String>,
-}
-
 impl Sandbox {
     /// Per table: the rows the steps changed there, and whether its schema
     /// changed, in the order first written.
@@ -275,38 +266,6 @@ impl App {
         }
     }
 
-    /// Ctrl+K x while a sandbox is open: its window, and (asked of the
-    /// server meanwhile) the locks it holds.
-    pub(super) fn open_sandbox_view(&mut self) {
-        self.popups.sandbox_view = Some(SandboxView::default());
-        let engine = self.engine();
-        if engine.is_file_based() {
-            let copied = self.connection.sandbox.as_ref().is_some_and(|s| s.copy.is_some());
-            let locks = if copied { t!("sandbox.on_a_copy") } else { t!("sandbox.file_lock") };
-            return self.sandbox_locks(locks.to_string());
-        }
-        let (Some(db), Some(query)) =
-            (self.connection.database.clone(), engine.dialect().and_then(crate::db::SqlDialect::locks_held_query))
-        else {
-            return;
-        };
-        // (Not while a query runs on the session: the window says nothing.)
-        if self.conn_busy() {
-            return;
-        }
-        let send = self.sender();
-        tokio::spawn(async move {
-            let said = match db.run_once(query, 1).await {
-                Ok(o) => {
-                    let n = o.rows.first().and_then(|r| r.first().cloned().flatten()).unwrap_or_default();
-                    tn!("sandbox.locks", n.parse::<u64>().unwrap_or(0))
-                }
-                Err(e) => t!("sandbox.locks_unseen", e = crate::db::error_message(&e)),
-            };
-            send(Background::SandboxLocks(said).into());
-        });
-    }
-
     /// What the sandbox holds, for its window.
     pub(super) fn sandbox_locks(&mut self, said: String) {
         if let Some(view) = &mut self.popups.sandbox_view {
@@ -332,34 +291,8 @@ impl App {
         self.notification = Some(said);
     }
 
-    pub(super) fn handle_sandbox_key(&mut self, key: KeyEvent) {
-        let Some(view) = &mut self.popups.sandbox_view else { return };
-        match key.code {
-            KeyCode::Esc => self.popups.sandbox_view = None,
-            KeyCode::Down | KeyCode::Char('j') => view.scroll = view.scroll.saturating_add(1),
-            KeyCode::Up | KeyCode::Char('k') => view.scroll = view.scroll.saturating_sub(1),
-            KeyCode::Char('u') => {
-                self.popups.sandbox_view = None;
-                self.undo_sandbox_step();
-            }
-            KeyCode::Char('d') => {
-                self.popups.sandbox_view = None;
-                self.end_transaction(TxEnd::Rollback);
-            }
-            KeyCode::Char('s') => {
-                self.popups.sandbox_view = None;
-                self.keep_sandbox_as_script();
-            }
-            KeyCode::Char('r') => {
-                self.popups.sandbox_view = None;
-                self.run_sandbox_for_real();
-            }
-            _ => {}
-        }
-    }
-
     /// `u`: the last step undone.
-    fn undo_sandbox_step(&mut self) {
+    pub(in crate::app) fn undo_sandbox_step(&mut self) {
         let n = self.connection.sandbox.as_ref().map_or(0, |s| s.steps.len());
         if self.tab.run.executing || n == 0 {
             return self.set_status(t!("sandbox.nothing_to_undo").to_string(), true);
@@ -368,7 +301,7 @@ impl App {
     }
 
     /// `s`: the steps as a script in a new tab, then the sandbox discarded.
-    fn keep_sandbox_as_script(&mut self) {
+    pub(in crate::app) fn keep_sandbox_as_script(&mut self) {
         let Some(sandbox) = &self.connection.sandbox else { return };
         self.sandbox_then = Some(Then::Tab(sandbox.script(&self.connection.form.short_name())));
         self.end_transaction(TxEnd::Rollback);
@@ -376,7 +309,7 @@ impl App {
 
     /// `r`: rolled back, then the script runs again in manual commit (the
     /// guards ask what they ask; a commit is asked for at the end).
-    fn run_sandbox_for_real(&mut self) {
+    pub(in crate::app) fn run_sandbox_for_real(&mut self) {
         let Some(sandbox) = &self.connection.sandbox else { return };
         self.sandbox_then = Some(Then::ForReal(sandbox.script(&self.connection.form.short_name())));
         self.end_transaction(TxEnd::Rollback);

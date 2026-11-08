@@ -6,12 +6,12 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use super::*;
 
-const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+pub(in crate::app) const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const WHEEL_LINES: usize = 3;
 /// How often a drag held past the editor's edge scrolls it on.
 const DRAG_REPEAT: Duration = Duration::from_millis(60);
 
-pub(super) fn inside(r: Rect, x: u16, y: u16) -> bool {
+pub(in crate::app) fn inside(r: Rect, x: u16, y: u16) -> bool {
     x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
 }
 
@@ -140,39 +140,6 @@ impl App {
             MouseEventKind::ScrollLeft => self.wheel_across(x, y, -1),
             MouseEventKind::ScrollDown => self.wheel(x, y, true),
             MouseEventKind::ScrollUp => self.wheel(x, y, false),
-            _ => {}
-        }
-    }
-
-    fn library_mouse(&mut self, ev: MouseEvent) {
-        let (x, y) = (ev.column, ev.row);
-        let (list, first) = self.hits.library_list;
-        // (Counted only for what moves or picks: not on every mouse move.)
-        let moves = matches!(ev.kind, MouseEventKind::ScrollDown | MouseEventKind::ScrollUp | MouseEventKind::Down(_));
-        let count = if moves { self.library_items().len() } else { 0 };
-        let Some(view) = &mut self.popups.library_view else { return };
-        // A delete asked about is for the row it was asked on.
-        if matches!(ev.kind, MouseEventKind::ScrollDown | MouseEventKind::ScrollUp) {
-            view.confirm_delete = false;
-        }
-        match ev.kind {
-            MouseEventKind::ScrollDown => view.selected = (view.selected + 1).min(count.saturating_sub(1)),
-            MouseEventKind::ScrollUp => view.selected = view.selected.saturating_sub(1),
-            MouseEventKind::Down(MouseButton::Left) if inside(list, x, y) => {
-                let row = first + usize::from(y - list.y);
-                if row >= count {
-                    return;
-                }
-                let double =
-                    self.panes.last_click.is_some_and(|(t, cx, cy)| t.elapsed() < DOUBLE_CLICK && cx == x && cy == y)
-                        && view.selected == row;
-                view.selected = row;
-                view.confirm_delete = false;
-                self.panes.last_click = Some((Instant::now(), x, y));
-                if double {
-                    self.handle_library_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-                }
-            }
             _ => {}
         }
     }

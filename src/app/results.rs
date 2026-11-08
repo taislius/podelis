@@ -177,49 +177,6 @@ pub struct CellEdit {
     pub text: LineInput,
 }
 
-pub struct CellView {
-    pub title: String,
-    pub text: String,
-    pub scroll: u16,
-    /// Showing the selected row as `column  value` lines (`x`): ←/→ move
-    /// to the previous/next row.
-    pub record: bool,
-    /// SQL that comes with the text (a schema comparison's), and the
-    /// connection it's for: `y` copies it, `e` opens it in a tab there.
-    pub sql: Option<(String, u64)>,
-    /// How far it scrolls, as last drawn (the text wraps to the popup).
-    pub max_scroll: u16,
-    /// A definition opened from the navigator (`d`): ←/→ show the previous
-    /// or next table's, view's or function's.
-    pub browse: bool,
-    /// `y` copies the text itself (a message), saying this.
-    pub copies_text: Option<&'static str>,
-    /// A row a foreign key points to (`f`): `e` opens its lookup (the
-    /// tab's name, the SQL) in a tab of its own.
-    pub follow: Option<(String, String)>,
-}
-
-impl CellView {
-    pub fn new(title: String, text: String) -> Self {
-        CellView {
-            title,
-            text,
-            scroll: 0,
-            record: false,
-            sql: None,
-            max_scroll: u16::MAX,
-            browse: false,
-            copies_text: None,
-            follow: None,
-        }
-    }
-
-    /// A navigator definition (`d`), browsable with ←/→.
-    pub fn definition(title: String, text: String) -> Self {
-        CellView { browse: true, ..CellView::new(title, text) }
-    }
-}
-
 impl App {
     #[cfg(test)]
     pub fn set_status_for_tests(&mut self, status: &str) {

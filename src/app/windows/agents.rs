@@ -6,8 +6,8 @@
 use crate::language::statements;
 use std::time::{Duration, Instant};
 
-use super::*;
 use crate::agents::Alerts;
+use crate::app::*;
 
 /// A query an AI agent ran through `podelis mcp`, and what's worth a look
 /// about it (refused, failed, a dry run, rows changed, a lint warning).
@@ -24,7 +24,7 @@ pub struct AgentQuery {
 }
 
 impl AgentQuery {
-    pub(super) fn new(entry: crate::agents::Entry, engine: crate::db::Engine) -> Self {
+    pub(in crate::app) fn new(entry: crate::agents::Entry, engine: crate::db::Engine) -> Self {
         let flag = if let Some(why) = &entry.refused {
             Some(t!("agent_log.refused", why = why))
         } else if let Some(e) = &entry.error {
@@ -112,18 +112,18 @@ pub struct Agents {
     /// library opens.
     pub log: Vec<AgentQuery>,
     /// The agent log file as it was read (path, modified, size).
-    pub(super) log_stamp: Option<(PathBuf, std::time::SystemTime, u64)>,
+    pub(in crate::app) log_stamp: Option<(PathBuf, std::time::SystemTime, u64)>,
     /// The log by agent session, the most recently active first.
     pub sessions: Vec<crate::agents::Session>,
     /// What agents did that's worth a look since the window was last open.
     pub alerts: crate::agents::Alerts,
     /// When the log was last checked for alerts (every `ALERT_CHECK`).
-    pub(super) checked: Option<Instant>,
+    pub(in crate::app) checked: Option<Instant>,
     /// When the user last looked at what agents did, as last read.
-    pub(super) seen: Option<String>,
+    pub(in crate::app) seen: Option<String>,
     /// When an agent's write was put to the user: keys in its first moment
     /// were meant for something else.
-    pub(super) asked: Option<Instant>,
+    pub(in crate::app) asked: Option<Instant>,
     /// The agent activity window.
     pub view: Option<AgentsView>,
 }
@@ -176,7 +176,7 @@ impl App {
 
     /// Every second: an agent's write waiting for the user's answer is
     /// asked about (once nothing else is).
-    pub(super) fn approvals_tick(&mut self) {
+    pub(in crate::app) fn approvals_tick(&mut self) {
         if self.popups.confirm.is_some() {
             return;
         }
@@ -200,7 +200,7 @@ impl App {
         });
     }
 
-    pub(super) fn answer_agent(&mut self, request: &crate::agents::Request, approve: bool) {
+    pub(in crate::app) fn answer_agent(&mut self, request: &crate::agents::Request, approve: bool) {
         let Some(dir) = self.pending_dir() else { return };
         if crate::agents::answer(&dir, &request.id, approve) {
             let said = if approve {
@@ -217,7 +217,7 @@ impl App {
     /// Every couple of seconds: what agents did since the user last looked.
     /// Not while the window is open: it shows what was there when it
     /// opened, and the rows it points at stay put.
-    pub(super) fn agents_tick(&mut self) {
+    pub(in crate::app) fn agents_tick(&mut self) {
         if self.agents.view.is_some() || self.agents.checked.is_some_and(|at| at.elapsed() < ALERT_CHECK) {
             return;
         }
@@ -235,7 +235,7 @@ impl App {
     }
 
     /// Forgets the agent log and window of the project being left.
-    pub(super) fn reset_agents(&mut self) {
+    pub(in crate::app) fn reset_agents(&mut self) {
         self.agents.log.clear();
         self.agents.log_stamp = None;
         self.agents.sessions.clear();

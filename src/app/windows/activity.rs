@@ -1,7 +1,7 @@
 //! The activity monitor: sessions on the server and what they run, with
 //! cancel and kill. Refreshes every couple of seconds while open.
 
-use super::*;
+use crate::app::*;
 use crate::db::Activity;
 use crate::language::statements;
 
@@ -19,7 +19,7 @@ pub struct ActivityView {
 }
 
 impl App {
-    pub(super) fn open_activity(&mut self) {
+    pub(in crate::app) fn open_activity(&mut self) {
         if self.connection.database.is_none() {
             return self.set_status(t!("info.not_connected").to_string(), true);
         }
@@ -51,13 +51,13 @@ impl App {
     }
 
     /// Called every second: refreshes the open activity view.
-    pub(super) fn activity_tick(&mut self) {
+    pub(in crate::app) fn activity_tick(&mut self) {
         if self.popups.activity.as_ref().is_some_and(|v| v.refreshed.is_none_or(|t| t.elapsed() >= REFRESH)) {
             self.refresh_activity();
         }
     }
 
-    pub(super) fn activity_loaded(&mut self, result: Result<Vec<Activity>, String>) {
+    pub(in crate::app) fn activity_loaded(&mut self, result: Result<Vec<Activity>, String>) {
         let Some(view) = &mut self.popups.activity else { return };
         view.loading = false;
         view.refreshed = Some(Instant::now());
@@ -76,7 +76,7 @@ impl App {
         }
     }
 
-    pub(super) fn handle_activity_key(&mut self, key: KeyEvent) {
+    pub(in crate::app) fn handle_activity_key(&mut self, key: KeyEvent) {
         let Some(view) = &mut self.popups.activity else { return };
         if let Some((id, kill)) = view.confirm.take() {
             if matches!(key.code, KeyCode::Char('y' | 'Y')) {
@@ -124,7 +124,7 @@ impl App {
         });
     }
 
-    pub(super) fn session_stopped(&mut self, result: Result<String, String>) {
+    pub(in crate::app) fn session_stopped(&mut self, result: Result<String, String>) {
         match result {
             Ok(msg) => {
                 self.log(msg.clone(), false);
@@ -141,7 +141,7 @@ impl App {
     /// Shift+F7: runs the statement under EXPLAIN ANALYZE, showing actual
     /// times and rows. Writes run in a transaction (or savepoint) that's
     /// rolled back, after a confirmation.
-    pub(super) fn explain_analyze_current(&mut self) {
+    pub(in crate::app) fn explain_analyze_current(&mut self) {
         if self.tab.run.executing || self.connection.database.is_none() {
             return;
         }

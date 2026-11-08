@@ -566,7 +566,7 @@ fn the_popup_in_front_takes_the_keys() {
     app.screen = Screen::Query;
     assert_eq!(app.top_overlay(), None);
     // A session's full query opens over the activity monitor.
-    app.popups.activity = Some(activity::ActivityView::default());
+    app.popups.activity = Some(windows::activity::ActivityView::default());
     app.popups.cell_view = Some(CellView::new("Query".into(), "select 1".into()));
     assert_eq!(app.overlays(), [Overlay::CellView, Overlay::Activity]);
     app.handle_key(key(KeyCode::Esc));
