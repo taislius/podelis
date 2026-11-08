@@ -32,7 +32,9 @@ src/
                          and doctor
   app/                   state and behaviour (no drawing): screens, tabs, keys,
                          editing, the query screen (query_screen/: its keys, each
-                         pane's, running queries, plans, exports), the navigator…
+                         pane's, running queries, plans, exports), the windows over it
+                         (windows/: memory, settings, activity, agents,
+                         the sandbox's steps, the library, a cell's value), the navigator…
   ui/                    drawing with ratatui; reads the app's state
   agents/                what agents may run (mod.rs), their log and
                          approvals, and the MCP server (`podelis mcp`)
