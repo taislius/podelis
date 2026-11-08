@@ -29,7 +29,7 @@ mod chrome;
 mod connect;
 mod editor;
 mod manager;
-mod query;
+mod query_screen;
 mod results;
 mod schema;
 mod settings;
@@ -46,16 +46,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     chrome::draw_app_bar(f, app, bar);
     match app.screen {
         Screen::Projects | Screen::Connections | Screen::Connect => manager::draw_manager(f, app, body),
-        Screen::Query => query::draw_query(f, app, body),
+        Screen::Query => query_screen::draw_query(f, app, body),
     }
     chrome::draw_status_bar(f, app, status);
     // Leaving the project with a transaction open asks first.
     if !matches!(app.screen, Screen::Query) && app.popups.confirm.is_some() {
-        query::draw_confirm(f, app, area);
+        query_screen::draw_confirm(f, app, area);
     }
     // The text view also shows over other screens (the connection test).
     if !matches!(app.screen, Screen::Query) && app.popups.cell_view.is_some() {
-        query::draw_cell_view(f, app, area);
+        query_screen::draw_cell_view(f, app, area);
     }
     if app.splash.as_ref().is_some_and(|s| s.shown) {
         chrome::draw_splash(f, app, area);

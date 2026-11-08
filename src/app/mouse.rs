@@ -480,9 +480,9 @@ impl App {
             let mut at = panel.selected;
             for _ in 0..WHEEL_LINES {
                 at = if down {
-                    query::step_selectable(&nodes, at + 1, 1)
+                    query_screen::step_selectable(&nodes, at + 1, 1)
                 } else {
-                    query::step_selectable(&nodes, at.saturating_sub(1), -1)
+                    query_screen::step_selectable(&nodes, at.saturating_sub(1), -1)
                 };
             }
             panel.selected = at;
