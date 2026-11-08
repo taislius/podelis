@@ -15,6 +15,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Running a query while another runs on the same session says why it can't: one query at a time per session, which tab runs it, and how to stop it.
 - Menus redrawn: in groups with separators, one wording and one order of formats everywhere, Delete last and apart, one key per item. What doesn't apply is dimmed, not hidden, and says why when chosen. Copy, Export and Other results are menus of their own.
 - `C` opens the copy menu, Markdown selected: `C` again or `Enter` copies it.
 - `?` outside the editor shows every key, not Ctrl+K's menu.
