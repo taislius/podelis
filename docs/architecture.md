@@ -552,7 +552,7 @@ around it has a name:
   asked.
 - **No column values.**
 
-**How good it is, measured:** `crates/podelis-ai/src/context/eval.rs` runs 26
+**How good it is, measured:** `crates/podelis-ai/src/context_eval.rs` runs 26
 questions over schema snapshots of Pagila, Sakila and Chinook, each with
 the tables its SQL needs, and fails when recall (those tables chosen) or
 precision (chosen tables used) drops under its floor. On 2026-11-01:
