@@ -76,8 +76,8 @@ impl Backend for Sqlite {
         let token = &message[start..start + message[start..].find('"')?];
         Some(super::ErrorPos::Token(token.to_string()))
     }
-    fn language(&self) -> crate::db::Language {
-        crate::db::Language::Sql(&DIALECT)
+    fn language(&self) -> crate::language::Language {
+        crate::language::Language::Sql(&DIALECT)
     }
     fn label(&self) -> &'static str {
         "SQLite"

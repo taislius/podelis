@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use crate::db::{ColumnInfo, Engine};
-use crate::sql::{self, TokenKind};
+use crate::language::TokenKind;
 
 /// A table as completion sees it.
 pub struct TableRef<'a> {
@@ -52,7 +52,7 @@ pub fn complete(text: &str, cursor: usize, engine: Engine, tables: &[TableRef]) 
 
     // The statement around the cursor, so FROM clauses of other statements
     // don't leak in.
-    let (stmt_start, stmt_end) = sql::statement_bounds(text, cursor, engine);
+    let (stmt_start, stmt_end) = crate::language::statement_bounds(text, cursor, engine);
     let statement = &text[stmt_start..stmt_end];
     let toks = sig_tokens(statement, engine);
 
@@ -141,7 +141,7 @@ pub fn complete(text: &str, cursor: usize, engine: Engine, tables: &[TableRef]) 
     }
     if !prefix.is_empty() {
         let lower = prefix.chars().all(|c| !c.is_ascii_uppercase());
-        out.extend(sql::keywords(engine).filter(|k| matches_prefix(k, prefix)).map(|k| {
+        out.extend(crate::language::keywords(engine).filter(|k| matches_prefix(k, prefix)).map(|k| {
             let word = if lower { k.to_ascii_lowercase() } else { k.to_string() };
             Candidate { label: word.clone(), insert: word, kind: CandKind::Keyword, detail: String::new() }
         }));
@@ -227,7 +227,7 @@ fn qualifier_before(text: &str, start: usize) -> Option<String> {
 /// Whether the cursor is where a table name goes: right after FROM, JOIN,
 /// INTO, UPDATE, TABLE or DESCRIBE, or after a comma in a FROM list.
 fn expects_table(before: &str, engine: Engine) -> bool {
-    let significant: Vec<String> = sql::tokenize(before, engine)
+    let significant: Vec<String> = crate::language::tokenize(before, engine)
         .into_iter()
         .filter(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Comment))
         .map(|t| before[t.range].to_ascii_uppercase())
@@ -275,7 +275,7 @@ impl Tok {
 }
 
 fn sig_tokens(statement: &str, engine: Engine) -> Vec<Tok> {
-    sql::tokenize(statement, engine)
+    crate::language::tokenize(statement, engine)
         .into_iter()
         .filter(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Comment))
         .map(|t| {
@@ -288,7 +288,7 @@ fn sig_tokens(statement: &str, engine: Engine) -> Vec<Tok> {
             } else {
                 raw.to_string()
             };
-            let keyword = t.kind == TokenKind::Word && sql::is_keyword(&text, engine);
+            let keyword = t.kind == TokenKind::Word && crate::language::is_keyword(&text, engine);
             Tok { kind: t.kind, text, range: t.range, keyword }
         })
         .collect()

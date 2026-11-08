@@ -23,7 +23,7 @@ pub async fn drop_linked_tables(db: &Database, parent: &str, child: &str) {
 /// A fixture's statements, one by one, with its `{parent}` and `{child}`.
 async fn run_fixture(db: &Database, sql: &str, parent: &str, child: &str) {
     let sql = sql.replace("{parent}", parent).replace("{child}", child);
-    for statement in crate::sql::split_statements(&sql, db.engine()) {
+    for statement in crate::language::split_statements(&sql, db.engine()) {
         db.run(statement, 1).await.unwrap_or_else(|e| panic!("{statement}: {e:#}"));
     }
 }

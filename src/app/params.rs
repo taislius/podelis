@@ -1,6 +1,7 @@
 //! Asking for query parameter values before a run.
 
 use super::*;
+use crate::language::statements;
 use crate::sql::params::{self, Param};
 
 /// The popup that asks for parameter values.
@@ -55,7 +56,7 @@ impl App {
         }
         let filled = params::fill(&form.sql, &form.params, &form.values, self.engine());
         if form.explain {
-            let infos = analyze::analyze(&parse(&filled.sql, self.engine()));
+            let infos = statements::analyze(&parse(&filled.sql, self.engine()));
             self.run_now(filled.sql.clone(), form.offset, infos, RunPurpose::Explain, Some(filled));
         } else {
             self.check_and_run(filled.sql.clone(), form.offset, RunPurpose::Query, Some(filled));

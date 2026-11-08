@@ -681,7 +681,7 @@ impl TextEditor {
     }
 }
 
-pub use crate::sql::is_word_char;
+pub use crate::language::is_word_char;
 
 fn char_to_byte_idx(s: &str, char_idx: usize) -> usize {
     s.char_indices().nth(char_idx).map_or(s.len(), |(b, _)| b)

@@ -106,7 +106,7 @@ impl PlanSource {
         let engine = self.engine?;
         let parts = self.parts.get_or_init(|| {
             // Where each is in the script, not a search (a repeat would fool it).
-            crate::sql::statement_ranges(&self.sql, engine)
+            crate::language::statement_ranges(&self.sql, engine)
                 .into_iter()
                 .map(|range| {
                     let line = self.line + self.sql[..range.start].matches('\n').count();
@@ -557,7 +557,7 @@ impl App {
             return Some(selected.trim().to_string());
         }
         let text = self.tab.editor.text();
-        let range = sql::statement_range(&text, self.tab.editor.cursor_offset(), self.engine())?;
+        let range = crate::language::statement_range(&text, self.tab.editor.cursor_offset(), self.engine())?;
         Some(text[range].trim().to_string())
     }
 
@@ -800,7 +800,7 @@ pub(super) fn default_tab_name(n: usize) -> String {
 /// tab made before the language changed): nothing to keep when it's saved
 /// under a name of its own.
 fn is_default_tab_name(name: &str) -> bool {
-    crate::lang::in_every_language("tabs.default_name").into_iter().any(|template| {
+    crate::i18n::in_every_language("tabs.default_name").into_iter().any(|template| {
         let (before, after) = template.split_once("{n}").unwrap_or((template, ""));
         name.strip_prefix(before)
             .and_then(|rest| rest.strip_suffix(after))

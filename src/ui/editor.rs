@@ -157,7 +157,7 @@ fn statement_rows(app: &App) -> Option<(usize, usize)> {
         (r0, r1)
     } else {
         let text = ed.text();
-        let range = crate::sql::statement_range(&text, ed.cursor_offset(), app.engine());
+        let range = crate::language::statement_range(&text, ed.cursor_offset(), app.engine());
         range.map_or((cursor, cursor), |r| (ed.pos_of_offset(r.start).0, ed.pos_of_offset(r.end).0))
     };
     Some((first.min(cursor), last.max(cursor)))
@@ -306,7 +306,7 @@ fn rehighlight(old: Option<Highlighted>, text: &str, end: usize, engine: Engine)
     let from = starts.get(restart).map_or(0, |&(offset, _)| offset);
     let part = &text[from..end];
     let base = part.as_ptr() as usize;
-    let (new_lines, clean) = sql::highlight_lines_and_starts(part, engine);
+    let (new_lines, clean) = crate::language::highlight_lines_and_starts(part, engine);
     // Line starts of the re-highlighted part, as offsets into `text`.
     let mut offset = from;
     let new_starts: Vec<(usize, bool)> = part
@@ -639,7 +639,7 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
 struct CachedStatements {
     engine: Engine,
     text: String,
-    statements: sql::Statements,
+    statements: crate::language::Statements,
 }
 
 thread_local! {
@@ -652,7 +652,7 @@ fn statement_position(app: &App) -> Option<(usize, usize)> {
     let engine = app.engine();
     STATEMENTS.with_borrow_mut(|cache| {
         if !cache.as_ref().is_some_and(|c| c.engine == engine && c.text == text) {
-            let statements = sql::Statements::of(&text, engine);
+            let statements = crate::language::Statements::of(&text, engine);
             *cache = Some(CachedStatements { engine, text, statements });
         }
         let cached = cache.as_ref()?;

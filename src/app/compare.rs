@@ -2,6 +2,7 @@
 //! or the rows the statement at the cursor returns on each.
 
 use super::*;
+use crate::language::statements;
 use crate::transfer::diff::{self, Side, TableShape};
 
 /// The other side of a comparison, as it was when it started.
@@ -223,7 +224,7 @@ impl App {
         let Some(sql) = self.statement_or_selection() else {
             return self.set_status(t!("compare.no_statement").to_string(), true);
         };
-        let infos = analyze::analyze(&parse(&sql, self.engine()));
+        let infos = statements::analyze(&parse(&sql, self.engine()));
         if infos.is_empty() || infos.iter().any(|i| i.kind != Kind::Read) {
             return self.set_status(t!("compare.reads_only").into(), true);
         }

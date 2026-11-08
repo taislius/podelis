@@ -778,8 +778,9 @@ async fn unrollable(db: &Database) -> Option<String> {
 /// none (MySQL commits schema changes at once, and can't roll back tables
 /// that aren't `InnoDB`). A write that fails in its dry run isn't asked about.
 async fn dry_run_note(db: &Database, profile: &ConnectionProfile, sql: &str) -> Result<String, String> {
-    let infos = crate::sql::analyze::analyze(&crate::sql::parse::parse(sql, db.engine()));
-    if db.engine().capabilities().ddl_commits && infos.iter().any(|i| i.kind == crate::sql::analyze::Kind::Ddl) {
+    let infos = crate::language::statements::analyze(&crate::sql::parse::parse(sql, db.engine()));
+    if db.engine().capabilities().ddl_commits && infos.iter().any(|i| i.kind == crate::language::statements::Kind::Ddl)
+    {
         return Ok(format!("no dry run: {} commits schema changes at once", db.engine().label()));
     }
     if let Some(why) = unrollable(db).await {

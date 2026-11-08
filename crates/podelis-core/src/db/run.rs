@@ -218,13 +218,13 @@ impl Database {
         // A driver may give no column names when a query returns no rows, so
         // prepare the statement to recover them (e.g. an empty SELECT): the
         // last one, and earlier reads, which get their own result sets.
-        let parts = sql::split_statements(sql, self.0.engine);
+        let parts = crate::language::split_statements(sql, self.0.engine);
         if parts.len() == statements {
             for (i, result) in results.iter_mut().enumerate() {
                 let read = || {
-                    crate::sql::analyze::analyze(&crate::sql::parse::parse(parts[i], self.0.engine))
+                    crate::language::statements::analyze(&crate::sql::parse::parse(parts[i], self.0.engine))
                         .iter()
-                        .all(|s| s.kind == crate::sql::analyze::Kind::Read)
+                        .all(|s| s.kind == crate::language::statements::Kind::Read)
                 };
                 if result.columns.is_none() && (i + 1 == statements || read()) {
                     result.columns = session.describe_columns(parts[i]).await;
@@ -387,9 +387,9 @@ impl Database {
 
     /// Whether `sql` only reads (safe to run again after a reconnect).
     fn reads_only(&self, sql: &str) -> bool {
-        crate::sql::analyze::analyze(&crate::sql::parse::parse(sql, self.0.engine))
+        crate::language::statements::analyze(&crate::sql::parse::parse(sql, self.0.engine))
             .iter()
-            .all(|i| i.kind == crate::sql::analyze::Kind::Read)
+            .all(|i| i.kind == crate::language::statements::Kind::Read)
     }
 
     /// Cancels whatever the session connection is running: the server is

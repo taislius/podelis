@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::db::Activity;
+use crate::language::statements;
 
 const REFRESH: Duration = Duration::from_secs(2);
 
@@ -159,8 +160,8 @@ impl App {
         };
         // Tracking uses the EXPLAIN alone, so the wrapper doesn't look
         // like the user's own transaction ending.
-        let infos = analyze::analyze(&parse(&explain, engine));
-        let writes = analyze::analyze(&parse(&stmt, engine)).iter().any(StatementInfo::modifies);
+        let infos = statements::analyze(&parse(&explain, engine));
+        let writes = statements::analyze(&parse(&stmt, engine)).iter().any(StatementInfo::modifies);
         self.tab.run.plan_request = Some((stmt.clone(), true, line));
         if !writes {
             return self.run_now(explain, 0, infos, RunPurpose::Explain, None);

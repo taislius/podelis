@@ -18,7 +18,7 @@ mod versions;
 
 use super::backend::{Backend, Capabilities};
 use super::dialect::{SqlDialect, LexerRules, Placeholders, Plan, hex_digits};
-use crate::sql::TokenKind;
+use crate::language::TokenKind;
 
 pub struct MySql;
 
@@ -86,8 +86,8 @@ impl Backend for MySql {
     fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
         &agent_constraints::AGENT_CONSTRAINTS
     }
-    fn language(&self) -> crate::db::Language {
-        crate::db::Language::Sql(&DIALECT)
+    fn language(&self) -> crate::language::Language {
+        crate::language::Language::Sql(&DIALECT)
     }
     fn password_files_note(&self) -> &'static str {
         " (or ~/.my.cnf)"
@@ -365,7 +365,7 @@ impl Server {
 /// Of one table, and INSERT or REPLACE, it shows the plan without running
 /// them ("not executable by iterator executor").
 fn runs_under_explain_analyze(stmt: &str) -> bool {
-    let tokens: Vec<(TokenKind, String)> = crate::sql::tokenize(stmt, crate::db::Engine::MySql)
+    let tokens: Vec<(TokenKind, String)> = crate::language::tokenize(stmt, crate::db::Engine::MySql)
         .into_iter()
         .filter(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Comment))
         .map(|t| (t.kind, stmt[t.range].to_ascii_lowercase()))

@@ -54,8 +54,8 @@ impl Backend for MongoDb {
     fn auth_failed(&self, message: &str) -> bool {
         message.contains("scram failure") || message.contains("(authenticationfailed)")
     }
-    fn language(&self) -> crate::db::Language {
-        crate::db::Language::Other(&language::Mongo)
+    fn language(&self) -> crate::language::Language {
+        crate::language::Language::Other(&language::Mongo)
     }
     /// `buildInfo`'s first field is the version.
     fn version_query(&self) -> &'static str {
@@ -142,12 +142,12 @@ mod tests {
     #[test]
     fn its_statements_through_the_shared_entry_points() {
         let text = "db.a.find({x: 1})\ndb.b.deleteMany({})";
-        assert_eq!(crate::sql::split_statements(text, Engine::MongoDb), ["db.a.find({x: 1})", "db.b.deleteMany({})"]);
-        let infos = crate::sql::analyze::analyze(&crate::sql::parse::parse(text, Engine::MongoDb));
+        assert_eq!(crate::language::split_statements(text, Engine::MongoDb), ["db.a.find({x: 1})", "db.b.deleteMany({})"]);
+        let infos = crate::language::statements::analyze(&crate::sql::parse::parse(text, Engine::MongoDb));
         let kinds: Vec<_> = infos.iter().map(|i| (i.kind, i.risk)).collect();
-        use crate::sql::analyze::Kind;
+        use crate::language::statements::Kind;
         assert_eq!(kinds, [(Kind::Read, None), (Kind::Write, Some("deleteMany with an empty filter"))]);
-        assert!(crate::sql::is_keyword("find", Engine::MongoDb) && !crate::sql::is_keyword("select", Engine::MongoDb));
+        assert!(crate::language::is_keyword("find", Engine::MongoDb) && !crate::language::is_keyword("select", Engine::MongoDb));
     }
 
     /// Its type names are its own: a `date` is a moment, so it compares

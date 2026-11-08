@@ -15,7 +15,8 @@ use ::mongodb::bson::{Bson, Document, doc};
 use super::args::{document, values};
 use super::language::{self, Call};
 use crate::db::errors::{ErrorFacts, ServerError};
-use crate::db::{Engine, FetchedRow, QueryLanguage as _, Rows, StatementResult};
+use crate::db::{Engine, FetchedRow, Rows, StatementResult};
+use crate::language::QueryLanguage as _;
 
 /// The client (its own pool of connections) and the database a connection
 /// is on.
@@ -121,7 +122,7 @@ fn read_call(statement: &str) -> Result<(Call<'_>, Vec<Bson>)> {
 
 /// An error unless `statement` only reads, on a read-only connection.
 fn check_reads(c: &MongoConnection, statement: &str) -> Result<()> {
-    if c.read_only && language::Mongo.classify(statement).0 != crate::sql::analyze::Kind::Read {
+    if c.read_only && language::Mongo.classify(statement).0 != crate::language::statements::Kind::Read {
         bail!("this connection is read-only: only reads run on it");
     }
     Ok(())
@@ -390,7 +391,7 @@ pub(super) fn table(docs: &[Document]) -> Table {
 pub(in crate::db) async fn run(c: &mut MongoConnection, sql: &str, limit: usize) -> Result<Vec<StatementResult>> {
     c.interrupt.clear();
     let mut results = Vec::new();
-    for statement in crate::sql::split_statements(sql, Engine::MongoDb) {
+    for statement in crate::language::split_statements(sql, Engine::MongoDb) {
         let mut result = StatementResult::default();
         let (docs, all) = match execute(c, statement).await? {
             Outcome::Documents(docs) => {

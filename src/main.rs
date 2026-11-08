@@ -24,14 +24,14 @@ mod config;
 mod editor;
 mod gateway;
 #[cfg(test)]
-mod lang_keys;
+mod i18n_keys;
 mod related;
 mod system;
 mod transfer;
 mod ui;
 
 // The lower layers, under the names the code has always used.
-use podelis_core::{db, lang, sql};
+use podelis_core::{db, i18n, language, sql};
 
 use std::io::{Write as _, stdout};
 use std::sync::Arc;
@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
     }
     let (settings, settings_warning) = config::settings::Settings::load(&config::store::config_dir());
     config::theme::set_theme(settings.theme);
-    lang::choose(&settings.language, lang::system().as_deref());
+    i18n::choose(&settings.language, i18n::system().as_deref());
     let (keymap, key_warnings) = config::keys::KeyMap::new(&settings.keys);
     let warnings: Vec<String> = store_warning.into_iter().chain(settings_warning).chain(key_warnings).collect();
     let warning = (!warnings.is_empty()).then(|| warnings.join("\n"));

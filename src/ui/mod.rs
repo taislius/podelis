@@ -17,7 +17,7 @@ use crate::app::{
 use crate::config::store::ConnectionProfile;
 use crate::config::theme::theme;
 use crate::db::{ConnectionMode, TxnState};
-use crate::sql::{self, Highlight};
+use crate::language::Highlight;
 
 /// Narrowest the schema navigator gets.
 const SCHEMA_WIDTH: u16 = 30;

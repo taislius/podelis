@@ -63,9 +63,9 @@ pub struct DuckConnection {
 /// read-only connection. Not `SET`: many of DuckDB's settings are the
 /// instance's, which other connections share.
 fn check_reads(c: &DuckConnection, sql: &str) -> Result<()> {
-    use crate::sql::analyze::Kind;
+    use crate::language::statements::Kind;
     let only_reads = || {
-        crate::sql::analyze::analyze(&crate::sql::parse::parse(sql, Engine::DuckDb))
+        crate::language::statements::analyze(&crate::sql::parse::parse(sql, Engine::DuckDb))
             .iter()
             .all(|s| matches!(s.kind, Kind::Read | Kind::Transaction(_)))
     };
@@ -114,9 +114,9 @@ pub(in crate::db) fn detach(c: DuckConnection) {
 
 /// Whether `statement` only reads.
 fn reads(statement: &str) -> bool {
-    crate::sql::analyze::analyze(&crate::sql::parse::parse(statement, Engine::DuckDb))
+    crate::language::statements::analyze(&crate::sql::parse::parse(statement, Engine::DuckDb))
         .iter()
-        .all(|s| s.kind == crate::sql::analyze::Kind::Read)
+        .all(|s| s.kind == crate::language::statements::Kind::Read)
 }
 
 /// Runs `;`-separated statements, one by one: each one's result, with at
@@ -125,7 +125,7 @@ fn reads(statement: &str) -> bool {
 pub(in crate::db) async fn run(c: &mut DuckConnection, sql: &str, limit: usize) -> Result<Vec<StatementResult>> {
     check_reads(c, sql)?;
     let statements: Vec<String> =
-        crate::sql::split_statements(sql, Engine::DuckDb).into_iter().map(str::to_string).collect();
+        crate::language::split_statements(sql, Engine::DuckDb).into_iter().map(str::to_string).collect();
     blocking(c, move |conn| {
         let mut results = Vec::new();
         for statement in statements {

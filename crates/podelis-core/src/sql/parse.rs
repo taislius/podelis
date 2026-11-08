@@ -9,7 +9,6 @@ use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::Span;
 
 use crate::db::Engine;
-use crate::sql;
 
 pub struct ParsedScript<'a> {
     pub engine: Engine,
@@ -30,10 +29,10 @@ pub struct ParsedStatement<'a> {
 pub fn parse(script: &str, engine: Engine) -> ParsedScript<'_> {
     // A language other than SQL: its statements, with no SQL tree.
     let dialect = match engine.backend().language() {
-        crate::db::Language::Sql(dialect) => Some(dialect.parser()),
-        crate::db::Language::Other(_) => None,
+        crate::language::Language::Sql(dialect) => Some(dialect.parser()),
+        crate::language::Language::Other(_) => None,
     };
-    let statements = sql::split_statements(script, engine)
+    let statements = crate::language::split_statements(script, engine)
         .into_iter()
         .map(|text| ParsedStatement {
             text,

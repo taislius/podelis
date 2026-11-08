@@ -13,20 +13,20 @@ fuzz_target!(|data: &[u8]| {
     for engine in Engine::ALL {
         // Tokens cover the text exactly.
         let mut pos = 0;
-        for t in sql::tokenize(text, engine) {
+        for t in crate::language::tokenize(text, engine) {
             assert_eq!(t.range.start, pos);
             assert!(t.range.end > t.range.start && text.is_char_boundary(t.range.end));
             pos = t.range.end;
         }
         assert_eq!(pos, text.len());
         // Statements are slices of the text.
-        for stmt in sql::split_statements(text, engine) {
+        for stmt in crate::language::split_statements(text, engine) {
             assert!(text.contains(stmt));
         }
-        let (a, b) = sql::statement_bounds(text, text.len() / 2, engine);
+        let (a, b) = crate::language::statement_bounds(text, text.len() / 2, engine);
         assert!(a <= b && b <= text.len());
         // Highlighting keeps every character.
-        let lines = sql::highlight_lines(text, engine);
+        let lines = crate::language::highlight_lines(text, engine);
         let rebuilt: Vec<String> = lines.iter().map(|l| l.iter().map(|(s, _)| *s).collect()).collect();
         assert_eq!(rebuilt.join("\n"), text);
         // Analysis and lints point inside the text.
@@ -39,9 +39,9 @@ fuzz_target!(|data: &[u8]| {
         // Formatting changes nothing but spacing.
         if let Some(out) = sql::format(text, engine) {
             let words = |s: &str| {
-                sql::tokenize(s, engine)
+                crate::language::tokenize(s, engine)
                     .into_iter()
-                    .filter(|t| t.kind != sql::TokenKind::Whitespace)
+                    .filter(|t| t.kind != crate::language::TokenKind::Whitespace)
                     .map(|t| s[t.range].trim_end().to_string())
                     .collect::<Vec<_>>()
             };

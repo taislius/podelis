@@ -2,6 +2,7 @@
 //! itself, more rows, cancelling and disconnecting.
 
 use super::super::*;
+use crate::language::statements;
 
 /// A run after this long without one first checks the server answers.
 const CHECK_AFTER_IDLE: Duration = Duration::from_secs(60);
@@ -25,7 +26,7 @@ impl App {
             return self.execute_all();
         }
         let text = self.tab.editor.text();
-        match sql::statement_at(&text, self.tab.editor.cursor_offset(), self.engine()) {
+        match crate::language::statement_at(&text, self.tab.editor.cursor_offset(), self.engine()) {
             Some(stmt) => {
                 let offset = stmt.as_ptr() as usize - text.as_ptr() as usize;
                 self.execute(stmt.to_string(), offset);
@@ -79,7 +80,7 @@ impl App {
         purpose: RunPurpose,
         filled: Option<Filled>,
     ) {
-        let infos = analyze::analyze(&parse(&sql, self.engine()));
+        let infos = statements::analyze(&parse(&sql, self.engine()));
         let writes: Vec<&StatementInfo> = infos.iter().filter(|i| i.modifies()).collect();
         if self.connection.mode == ConnectionMode::ReadOnly
             && let Some(first) = writes.first()

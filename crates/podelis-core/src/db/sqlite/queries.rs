@@ -217,8 +217,8 @@ pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Opti
 /// A LIMIT, and nothing that needs every row before it: no WHERE, ORDER
 /// BY, GROUP BY, HAVING, DISTINCT, JOIN or second table.
 fn stopped_by_limit(statement: &str) -> bool {
-    use crate::sql::TokenKind;
-    let tokens = crate::sql::tokenize(statement, crate::db::Engine::Sqlite);
+    use crate::language::TokenKind;
+    let tokens = crate::language::tokenize(statement, crate::db::Engine::Sqlite);
     let words: Vec<String> = tokens
         .iter()
         .filter(|t| t.kind == TokenKind::Word)

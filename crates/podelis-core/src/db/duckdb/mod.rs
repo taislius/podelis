@@ -92,8 +92,8 @@ impl Backend for DuckDb {
     fn agent_constraints(&self) -> &'static crate::db::agent_constraints::AgentConstraints {
         &agent_constraints::AGENT_CONSTRAINTS
     }
-    fn language(&self) -> crate::db::Language {
-        crate::db::Language::Sql(&DIALECT)
+    fn language(&self) -> crate::language::Language {
+        crate::language::Language::Sql(&DIALECT)
     }
     fn label(&self) -> &'static str {
         "DuckDB"

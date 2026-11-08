@@ -2,6 +2,7 @@
 //! rows as a Markdown table (`C`). Like cell edits, these work on results of
 //! a plain single-table SELECT and go through the usual safety checks.
 
+use crate::language::statements;
 use std::collections::BTreeSet;
 
 use super::*;
@@ -204,7 +205,7 @@ impl App {
         if conditions.len() > 5 {
             details.push(t!("rows.and_more", n = conditions.len() - 5));
         }
-        let infos = analyze::analyze(&parse(&sql, self.engine()));
+        let infos = statements::analyze(&parse(&sql, self.engine()));
         let offer_transaction = self.connection.txn == TxnState::Idle;
         self.popups.confirm = Some(Confirm {
             message: tn!("rows.delete_from", rows.len(), table = table.name),

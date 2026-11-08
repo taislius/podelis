@@ -38,7 +38,7 @@ scope_of() {
             ;;
         crates/podelis-core/src/db/*) echo db:: agents:: ;;
         crates/podelis-core/src/sql/*) echo sql:: app::tests::editor app::tests::running app::tests::results ;;
-        crates/podelis-core/src/lang/*) echo all ;;
+        crates/podelis-core/src/i18n/*) echo all ;;
         crates/podelis-core/*) echo all ;;
         crates/podelis-ai/*) echo package:podelis-ai ;;
         src/agents/*) echo agents:: ;;

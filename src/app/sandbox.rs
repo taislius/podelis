@@ -8,7 +8,8 @@
 //! guards, and asks to commit at the end).
 
 use super::*;
-use crate::sql::TokenKind;
+use crate::language::TokenKind;
+use crate::language::statements;
 use crate::sql::params::Filled;
 
 /// A sandbox open on a connection.
@@ -104,7 +105,7 @@ impl Sandbox {
 /// The tables `sql` writes (INSERT INTO, UPDATE, DELETE FROM, MERGE INTO,
 /// CREATE / ALTER / DROP TABLE, TRUNCATE), as written.
 fn written_tables(sql: &str, engine: crate::db::Engine) -> Vec<String> {
-    let tokens: Vec<(TokenKind, &str)> = crate::sql::tokenize(sql, engine)
+    let tokens: Vec<(TokenKind, &str)> = crate::language::tokenize(sql, engine)
         .into_iter()
         .filter(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Comment))
         .map(|t| (t.kind, &sql[t.range]))
@@ -165,10 +166,10 @@ impl App {
         let savepoint = dialect.savepoint(&format!("podelis_{number}"));
         let wrapped = Filled::prefixed(filled, &original, &format!("{begin}{savepoint};\n"));
         let engine = self.engine();
-        let infos = analyze::analyze(&parse(&wrapped.sql, engine));
+        let infos = statements::analyze(&parse(&wrapped.sql, engine));
         let step = Step {
             tables: written_tables(&original, engine),
-            ddl: analyze::analyze(&parse(&original, engine)).iter().any(|i| i.kind == Kind::Ddl),
+            ddl: statements::analyze(&parse(&original, engine)).iter().any(|i| i.kind == Kind::Ddl),
             sql: original,
             rows: 0,
         };
@@ -257,7 +258,7 @@ impl App {
     fn sandbox_back_to(&mut self, number: usize, undo: bool) {
         let Some(dialect) = self.sql_dialect() else { return };
         let sql = dialect.rollback_to_savepoint(&format!("podelis_{number}"));
-        let infos = analyze::analyze(&parse(&sql, self.engine()));
+        let infos = statements::analyze(&parse(&sql, self.engine()));
         self.run_now(sql, 0, infos, RunPurpose::SandboxBack { number, undo }, None);
     }
 
