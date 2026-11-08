@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::settings_view::Field;
+use crate::app::windows::settings::Field;
 
 #[test]
 fn settings_change_in_place_and_are_saved_keeping_the_file() {

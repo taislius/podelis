@@ -3,7 +3,7 @@
 
 use super::results::wrap_words;
 use super::*;
-use crate::app::settings_view::{Field, Kind};
+use crate::app::windows::settings::{Field, Kind};
 
 pub(super) fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();

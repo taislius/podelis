@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn memory_changes_name_the_fact() {
-    use crate::app::memory_view::GatewayPurpose;
+    use crate::app::windows::memory::GatewayPurpose;
     let (mut app, _dir) = test_app();
     let project = project_id(&app);
     app.current_project = Some(project.clone());
@@ -346,12 +346,12 @@ async fn esc_while_asking_does_its_own_job_first() {
 fn a_late_memory_answer_for_another_project_is_dropped() {
     let (mut app, _dir) = test_app();
     let shown = app.current_project.clone().unwrap();
-    app.popups.memory_view = Some(crate::app::memory_view::MemoryView { project_id: shown, ..Default::default() });
+    app.popups.memory_view = Some(crate::app::windows::memory::MemoryView { project_id: shown, ..Default::default() });
     let facts = serde_json::json!({ "facts": [{ "id": 1, "subject": "x" }] });
-    let other = crate::app::memory_view::GatewayPurpose::MemoryList("another-project".into());
+    let other = crate::app::windows::memory::GatewayPurpose::MemoryList("another-project".into());
     app.gateway_done(other, Ok(facts.clone()));
     assert!(app.popups.memory_view.as_ref().unwrap().facts.is_empty());
-    let mine = crate::app::memory_view::GatewayPurpose::MemoryList(app.current_project.clone().unwrap());
+    let mine = crate::app::windows::memory::GatewayPurpose::MemoryList(app.current_project.clone().unwrap());
     app.gateway_done(mine, Ok(facts));
     assert_eq!(app.popups.memory_view.as_ref().unwrap().facts.len(), 1);
 }

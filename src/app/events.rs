@@ -893,7 +893,7 @@ pub(super) enum Background {
     /// Ask `n`'s answer: the SQL and what the model said, or why not.
     AskDone(u64, Box<Result<serde_json::Value, ask::AskFailure>>),
     /// A gateway call's answer (the memory window's).
-    GatewayDone(memory_view::GatewayPurpose, Box<Result<serde_json::Value, ask::AskFailure>>),
+    GatewayDone(windows::memory::GatewayPurpose, Box<Result<serde_json::Value, ask::AskFailure>>),
 }
 
 impl From<Background> for DbEventKind {

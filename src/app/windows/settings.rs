@@ -2,9 +2,9 @@
 //! each changed in place and saved at once, the rest of the file kept as
 //! it was. Key bindings, viewers and models stay in the file.
 
-use super::input::{InputResult, LineInput};
-use super::list::{self, Nav};
-use super::*;
+use crate::app::input::{InputResult, LineInput};
+use crate::app::list::{self, Nav};
+use crate::app::*;
 use crate::config::settings::{EditorMode, Hints, ThemeName, save_value};
 
 /// A setting the screen shows, in its order.
@@ -196,7 +196,7 @@ fn number_or_off(n: u64) -> String {
 
 impl App {
     /// Ctrl+K ,: the settings, the first selected.
-    pub(super) fn open_settings(&mut self) {
+    pub(in crate::app) fn open_settings(&mut self) {
         self.popups.settings_view = Some(SettingsView { selected: 0, editing: None, said: None });
     }
 
@@ -248,7 +248,7 @@ impl App {
         }
     }
 
-    pub(super) fn handle_settings_key(&mut self, key: KeyEvent) {
+    pub(in crate::app) fn handle_settings_key(&mut self, key: KeyEvent) {
         let Some(selected) = self.popups.settings_view.as_ref().map(|v| v.selected) else { return };
         let field = Field::ALL[selected.min(Field::ALL.len() - 1)];
         let typed = match field {
@@ -290,7 +290,7 @@ impl App {
     }
 
     /// Pasted text goes into the value being typed.
-    pub(super) fn paste_setting(&mut self, text: &str) {
+    pub(in crate::app) fn paste_setting(&mut self, text: &str) {
         if let Some(input) = self.popups.settings_view.as_mut().and_then(|v| v.editing.as_mut()) {
             input.insert_str(text);
         }

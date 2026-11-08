@@ -18,7 +18,7 @@ pub struct Popups {
     /// `App::ask`).
     pub ask_prompt: Option<LineInput>,
     /// `Ctrl+K y k`: the project's memory.
-    pub memory_view: Option<memory_view::MemoryView>,
+    pub memory_view: Option<windows::memory::MemoryView>,
     /// The add-row form (`a`).
     pub row_form: Option<rows::RowForm>,
     /// The command palette (Ctrl+K).
@@ -26,13 +26,13 @@ pub struct Popups {
     /// Full-value popup for the selected cell.
     pub cell_view: Option<CellView>,
     /// The activity monitor.
-    pub activity: Option<activity::ActivityView>,
+    pub activity: Option<windows::activity::ActivityView>,
     /// `E`: where the rows go, in what format, which of them.
     pub export_form: Option<export_form::ExportForm>,
     /// Picking the write mode: the highlighted one.
     pub tx_picker: Option<TxMode>,
     /// The sandbox's window (`Ctrl+K x` while one is open).
-    pub sandbox_view: Option<sandbox::SandboxView>,
+    pub sandbox_view: Option<windows::sandbox::SandboxView>,
     /// Asking to commit or roll back writes run in a transaction.
     pub review: Option<review::Review>,
     pub param_form: Option<ParamForm>,
@@ -41,7 +41,7 @@ pub struct Popups {
     /// The F3 library/search window.
     pub library_view: Option<LibraryView>,
     /// The settings screen (Ctrl+K ,).
-    pub settings_view: Option<settings_view::SettingsView>,
+    pub settings_view: Option<windows::settings::SettingsView>,
     pub completion: Option<Completion>,
 }
 

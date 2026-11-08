@@ -106,7 +106,7 @@ fn asking_in_plain_language_and_sharing_a_schema() {
 fn the_memory_window_marks_what_waits_for_the_user() {
     let (mut app, _dir) = query_app();
     let fact = |id: i64, subject: &str, value: &str, confirmed: bool, source: &str| serde_json::json!({ "id": id, "subject": subject, "relation": "means", "value": value, "confirmed": confirmed, "source": source });
-    app.popups.memory_view = Some(crate::app::memory_view::MemoryView {
+    app.popups.memory_view = Some(crate::app::windows::memory::MemoryView {
         facts: vec![
             fact(1, "orders.status", "3 = cancelled", true, "user"),
             fact(2, "orders.total", "VAT included", false, "model:claude"),
