@@ -27,6 +27,9 @@ pub enum Field {
     LongQuery,
     QueryTimeout,
     GuardRows,
+    ExportMinFree,
+    ExportAsk,
+    ExportMax,
     GatewayIdle,
     ExportDir,
 }
@@ -45,7 +48,7 @@ pub enum Kind {
 }
 
 impl Field {
-    pub const ALL: [Field; 19] = [
+    pub const ALL: [Field; 22] = [
         Field::Language,
         Field::Theme,
         Field::EditorMode,
@@ -63,6 +66,9 @@ impl Field {
         Field::LongQuery,
         Field::QueryTimeout,
         Field::GuardRows,
+        Field::ExportMinFree,
+        Field::ExportAsk,
+        Field::ExportMax,
         Field::GatewayIdle,
         Field::ExportDir,
     ];
@@ -87,6 +93,9 @@ impl Field {
             Field::Keepalive => "keepalive",
             Field::NotifyAfter => "notify_after",
             Field::GuardRows => "guard_rows",
+            Field::ExportMinFree => "export_min_free_gb",
+            Field::ExportAsk => "export_ask_gb",
+            Field::ExportMax => "export_max_gb",
             Field::GatewayIdle => "gateway_idle",
             Field::ExportDir => "export_dir",
         }
@@ -101,6 +110,9 @@ impl Field {
             | Field::LongQuery
             | Field::QueryTimeout
             | Field::GuardRows
+            | Field::ExportMinFree
+            | Field::ExportAsk
+            | Field::ExportMax
             | Field::GatewayIdle => Kind::Number,
             Field::ExportDir => Kind::Text,
             _ => Kind::Toggle,
@@ -127,6 +139,9 @@ impl Field {
             Field::Keepalive => t!("settings.keepalive"),
             Field::NotifyAfter => t!("settings.notify_after"),
             Field::GuardRows => t!("settings.guard_rows"),
+            Field::ExportMinFree => t!("settings.export_min_free"),
+            Field::ExportAsk => t!("settings.export_ask"),
+            Field::ExportMax => t!("settings.export_max"),
             Field::GatewayIdle => t!("settings.gateway_idle"),
             Field::ExportDir => t!("settings.export_dir"),
         }
@@ -152,6 +167,9 @@ impl Field {
             Field::Keepalive => t!("settings.keepalive_about"),
             Field::NotifyAfter => t!("settings.notify_after_about"),
             Field::GuardRows => t!("settings.guard_rows_about"),
+            Field::ExportMinFree => t!("settings.export_min_free_about"),
+            Field::ExportAsk => t!("settings.export_ask_about"),
+            Field::ExportMax => t!("settings.export_max_about"),
             Field::GatewayIdle => t!("settings.gateway_idle_about"),
             Field::ExportDir => t!("settings.export_dir_about"),
         }
@@ -222,6 +240,9 @@ impl App {
             Field::Keepalive => number_or_off(s.keepalive),
             Field::NotifyAfter => number_or_off(s.notify_after),
             Field::GuardRows => number_or_off(s.guard_rows),
+            Field::ExportMinFree => number_or_off(s.export_min_free_gb),
+            Field::ExportAsk => number_or_off(s.export_ask_gb),
+            Field::ExportMax => number_or_off(s.export_max_gb),
             Field::GatewayIdle => number_or_off(s.gateway_idle),
             Field::ExportDir => s.export_dir.clone().unwrap_or_else(|| t!("settings.current_dir").to_string()),
         }
@@ -284,6 +305,9 @@ impl App {
             Field::LongQuery => s.long_query,
             Field::QueryTimeout => s.query_timeout,
             Field::GuardRows => s.guard_rows,
+            Field::ExportMinFree => s.export_min_free_gb,
+            Field::ExportAsk => s.export_ask_gb,
+            Field::ExportMax => s.export_max_gb,
             Field::GatewayIdle => s.gateway_idle,
             _ => 0,
         }
@@ -353,6 +377,9 @@ impl App {
                 Field::LongQuery => s.long_query = n,
                 Field::QueryTimeout => s.query_timeout = n,
                 Field::GuardRows => s.guard_rows = n,
+                Field::ExportMinFree => s.export_min_free_gb = n,
+                Field::ExportAsk => s.export_ask_gb = n,
+                Field::ExportMax => s.export_max_gb = n,
                 Field::GatewayIdle => s.gateway_idle = n,
                 _ => return,
             }

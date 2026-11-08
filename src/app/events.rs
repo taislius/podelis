@@ -43,12 +43,17 @@ impl App {
         match event {
             Background::Restored { project_id, form, result } => self.apply_restored(&project_id, *form, result),
             Background::ContainersFound(request, result) => self.containers_found(request, result),
-            Background::ExportProgress(rows) => self.export_progress(rows),
+            Background::ExportProgress { rows, size, free } => self.export_progress(rows, size, free),
+            Background::ExportEstimated { request, format, rows, row_bytes } => {
+                self.export_estimated(request, format, rows, row_bytes);
+            }
+            Background::ExportAsk { rows, size, free } => self.export_ask(rows, size, free),
             Background::ExportDone(path, result) => self.export_done(&path, result),
             Background::ExportShownDone(path, result, note) => {
                 // One stopped meanwhile: its word comes after it went.
-                if self.export_task.as_ref().is_some_and(|(_, p)| *p == path) {
+                if self.export_task.as_ref().is_some_and(|run| run.path == path) {
                     self.export_task = None;
+                    self.clear_export_note();
                     self.export_said(&path, result, &note);
                 }
             }
@@ -83,20 +88,27 @@ impl App {
         }
     }
 
-    fn export_progress(&mut self, rows: u64) {
+    fn export_progress(&mut self, rows: u64, size: u64, free: Option<u64>) {
         if self.export_task.is_some() {
+            self.clear_export_note();
             #[expect(clippy::cast_precision_loss, reason = "display only, one decimal")]
             let rows = crate::db::human_rows(rows as f64);
-            self.set_status(t!("run.exporting", rows = rows), false);
+            let human = crate::db::human_bytes;
+            let size = match free {
+                Some(free) => t!("export.size_free", size = human(size), free = human(free)),
+                None => t!("export.size_free_unknown", size = human(size)),
+            };
+            self.set_status(t!("run.exporting", rows = rows, size = size), false);
         }
     }
 
     fn export_done(&mut self, path: &std::path::Path, result: Result<u64, String>) {
         // A stopped export's last word arrives after it was removed.
-        if self.export_task.as_ref().is_none_or(|(_, p)| p != path) {
+        if self.export_task.as_ref().is_none_or(|run| run.path != path) {
             return;
         }
         self.export_task = None;
+        self.clear_export_note();
         match result {
             Ok(rows) => {
                 let shown = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -485,6 +497,7 @@ impl App {
     /// Called every second while a query runs: enforces the connection's
     /// timeout and notices background tasks that panicked.
     pub fn tick_running(&mut self) {
+        self.offer_export_question();
         self.watch_tick();
         self.keepalive_tick();
         self.activity_tick();
@@ -852,8 +865,14 @@ pub(super) enum DbEventKind {
 /// their own number), an export, a question to the gateway, the sandbox's
 /// locks. None is dropped for a newer generation.
 pub(super) enum Background {
-    /// Rows written so far by "export all rows".
-    ExportProgress(u64),
+    /// Rows written so far by "export all rows", its size on disk, and
+    /// what's free there.
+    ExportProgress { rows: u64, size: u64, free: Option<u64> },
+    /// About how big "export all rows" would be, if that can be told: the
+    /// request it answers, its rows by the plan, and bytes a row.
+    ExportEstimated { request: u64, format: Format, rows: Option<f64>, row_bytes: f64 },
+    /// "Export all rows" reached a size to ask about, and waits.
+    ExportAsk { rows: u64, size: u64, free: Option<u64> },
     /// "Export all rows" finished: the file, and how many rows (or why not).
     ExportDone(PathBuf, Result<u64, String>),
     /// An export of the rows shown, written off the UI thread (Parquet):

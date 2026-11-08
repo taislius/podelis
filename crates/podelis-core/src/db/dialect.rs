@@ -49,6 +49,20 @@ pub fn human_rows(n: f64) -> String {
     }
 }
 
+/// `1.2 GB`, `340.0 MB`: in units of 1024, as the navigator's sizes and
+/// the export settings' gigabytes are.
+pub fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "kB", "MB", "GB", "TB"];
+    #[expect(clippy::cast_precision_loss, reason = "display only, one decimal")]
+    let mut size = n as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 { format!("{n} B") } else { format!("{size:.1} {}", UNITS[unit]) }
+}
+
 /// Whether `estimated` and `actual` rows are far enough apart to matter.
 pub fn misestimated(estimated: f64, actual: f64) -> bool {
     let (lo, hi) = if estimated < actual { (estimated, actual) } else { (actual, estimated) };
@@ -243,6 +257,16 @@ pub trait SqlDialect: Backend {
     }
     /// The result an EXPLAIN returned, as a readable tree with notes.
     fn format_plan(&self, columns: &[String], rows: &[Vec<Option<String>>]) -> Option<Plan>;
+    /// The rows a plan (as `explain` gives it) expects its statement to
+    /// return, where it says.
+    fn plan_rows(&self, _columns: &[String], _rows: &[Vec<Option<String>>]) -> Option<f64> {
+        None
+    }
+    /// Whether `plan_rows` can say, for a server of `version`: else the
+    /// plan isn't worth asking for.
+    fn plans_rows(&self, _version: &str) -> bool {
+        false
+    }
     /// The tables a plan (as `explain` gives it) reads in full, with the
     /// rows it expects to read where it says. A scan a `LIMIT` stops early
     /// (nothing in between that needs every row) doesn't count.

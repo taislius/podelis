@@ -44,7 +44,7 @@ pub use details::{Comment, ForeignKey, IndexInfo, Link, RoutineInfo, TableDetail
 pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint};
 #[cfg(any(test, feature = "test-support"))]
 pub use dialect::PlanNote;
-pub use dialect::{LexerRules, Plan, SqlDialect, TxEnd, human_rows};
+pub use dialect::{LexerRules, Plan, SqlDialect, TxEnd, human_bytes, human_rows};
 pub use errors::{
     CheckOutcome, ErrorPos, error_message, error_position, is_broken, is_reconnected, is_unreachable, missing_feature,
     sql_literal, value_literal,
@@ -166,6 +166,9 @@ type PageRequest = (usize, oneshot::Sender<Result<Page, String>>);
 #[derive(Clone)]
 pub struct RowStream {
     tx: mpsc::Sender<PageRequest>,
+    /// The connection itself broke, rather than the server saying no: an
+    /// error's text no longer tells.
+    broken: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for RowStream {
@@ -175,6 +178,11 @@ impl std::fmt::Debug for RowStream {
 }
 
 impl RowStream {
+    /// Whether the last page's error was the connection breaking.
+    pub fn broke(&self) -> bool {
+        self.broken.load(Ordering::SeqCst)
+    }
+
     pub async fn next_page(&self, rows: usize) -> Result<Page, String> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx.send((rows, reply_tx)).await.map_err(|_| "the query was closed".to_string())?;

@@ -85,6 +85,8 @@ impl App {
     pub fn wants_ticks(&self) -> bool {
         !self.running_tabs().is_empty()
             || self.popups.activity.is_some()
+            // An export paused behind another question: its own comes after.
+            || self.export_task.as_ref().is_some_and(|run| run.paused.is_some())
             // An open sandbox's age, said once it's long.
             || self.connection.sandbox.is_some()
             || (self.settings.keepalive > 0 && self.connection.database.is_some())

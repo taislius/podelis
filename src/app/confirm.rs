@@ -19,6 +19,11 @@ pub enum ConfirmAction {
         purpose: RunPurpose,
         filled: Option<Filled>,
     },
+    /// An export that may be big: start it; it asks next after this size.
+    /// Of these rows: a run's id, as they may have changed by the answer.
+    ExportAll(Format, u64, u64),
+    /// An export that grew to a size to ask about: go on (else it stops).
+    KeepExporting,
     Disconnect,
     /// Close an open connection (`Ctrl+K j`, `Ctrl+D`): every tab on it
     /// is disconnected.
@@ -62,6 +67,16 @@ impl App {
         }
         let yes =
             matches!(key.code, KeyCode::Char('y' | 'Y')) || (quit_key && matches!(confirm.action, ConfirmAction::Quit));
+        // An export's size is asked about by itself, maybe while typing, and
+        // no would throw its file away: only y, or n / Esc, and not at once.
+        if matches!(confirm.action, ConfirmAction::KeepExporting | ConfirmAction::ExportAll(..)) {
+            let settled = self.export_asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
+            let answers = yes || matches!(key.code, KeyCode::Char('n' | 'N') | KeyCode::Esc);
+            if !(settled && answers) {
+                self.popups.confirm = Some(confirm);
+                return;
+            }
+        }
         if let ConfirmAction::AgentWrite(request) = &confirm.action {
             // Only y, or n / Esc, answer; and not in the first moment
             // (a key being typed as it appeared).
@@ -104,6 +119,9 @@ impl App {
             }
         }
         if !yes {
+            if matches!(confirm.action, ConfirmAction::KeepExporting) {
+                return self.stop_export();
+            }
             self.tab.run.queued_plan = None;
             self.set_status("Cancelled".to_string(), false);
             return;
@@ -115,6 +133,14 @@ impl App {
             ConfirmAction::RunHeavy { sql, offset, infos, filled } => {
                 self.run_writes(sql, offset, infos, RunPurpose::Query, filled);
             }
+            ConfirmAction::ExportAll(format, agreed, run) => {
+                if run == self.tab.run.id {
+                    self.start_export_all(format, agreed);
+                } else {
+                    self.set_status(t!("export.other_tab").to_string(), true);
+                }
+            }
+            ConfirmAction::KeepExporting => self.keep_exporting(),
             ConfirmAction::Disconnect => self.disconnect(),
             ConfirmAction::CloseConnection(id) => self.close_connection(id),
             ConfirmAction::Quit => self.should_quit = true,

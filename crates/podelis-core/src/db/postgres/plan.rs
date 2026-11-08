@@ -47,6 +47,12 @@ pub(super) fn full_scans(json: &str) -> Vec<Scan> {
     out
 }
 
+/// The rows the whole statement is expected to return: its top step's.
+pub(super) fn top_rows(json: &str) -> Option<f64> {
+    let value: Value = serde_json::from_str(json).ok()?;
+    value.get(0)?.get("Plan")?.get("Plan Rows")?.as_f64()
+}
+
 pub(super) fn format(json: &str) -> Option<Plan> {
     let value: Value = serde_json::from_str(json).ok()?;
     let root = value.get(0)?;
@@ -232,6 +238,15 @@ impl Tree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_a_statement_returns_is_its_top_steps_rows() {
+        let group = r#"[{"Plan": {"Node Type": "Aggregate", "Plan Rows": 12,
+            "Plans": [{"Node Type": "Seq Scan", "Relation Name": "huge", "Plan Rows": 1000000000}]}}]"#;
+        assert_eq!(top_rows(group), Some(12.0), "not what it reads");
+        assert_eq!(top_rows("[]"), None);
+        assert_eq!(top_rows("not json"), None);
+    }
 
     #[test]
     fn postgres_json_plan_as_tree() {

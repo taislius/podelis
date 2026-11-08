@@ -44,6 +44,10 @@ parquet.workspace = true
 arrow-array.workspace = true
 arrow-schema.workspace = true
 
+# Free space on a disk, for exports (already here through crossterm).
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", default-features = false, features = ["fs", "std"] }
+
 [features]
 # The database engines built in (each a `crates/podelis-core/src/db/<engine>/`
 # folder): build fewer with `--no-default-features --features postgres`, say.

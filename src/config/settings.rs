@@ -70,6 +70,15 @@ pub struct Settings {
     /// Where exports are written; the current directory when unset. A
     /// leading `~/` means the home directory.
     pub export_dir: Option<String>,
+    /// Exports stop rather than leave fewer gigabytes than this free on the
+    /// disk; 0 turns it off.
+    pub export_min_free_gb: u64,
+    /// An export about to be, or grown to, this many gigabytes (and each
+    /// further multiple) asks whether to go on; 0 turns it off.
+    pub export_ask_gb: u64,
+    /// The largest export file, in gigabytes: stopped there, without
+    /// asking; 0 is no limit.
+    pub export_max_gb: u64,
     /// Reopen the last project's tabs and connections on startup.
     pub restore_session: bool,
     /// Clicks and the wheel work in the app (the terminal's own text
@@ -124,6 +133,9 @@ impl Default for Settings {
             editor_mode: EditorMode::Standard,
             hints: Hints::Minimal,
             export_dir: None,
+            export_min_free_gb: 5,
+            export_ask_gb: 1,
+            export_max_gb: 0,
             restore_session: true,
             mouse: true,
             viewer: None,
@@ -295,6 +307,14 @@ fn toml_problem(e: &toml::de::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exports_keep_5_gb_free_and_ask_at_1_gb_by_default_each_settable() {
+        let s = Settings::default();
+        assert_eq!((s.export_min_free_gb, s.export_ask_gb, s.export_max_gb), (5, 1, 0));
+        let s: Settings = toml::from_str("export_min_free_gb = 0\nexport_ask_gb = 20\nexport_max_gb = 100\n").unwrap();
+        assert_eq!((s.export_min_free_gb, s.export_ask_gb, s.export_max_gb), (0, 20, 100));
+    }
 
     #[test]
     fn what_opens_rows_by_default_and_without_a_desktop() {

@@ -25,6 +25,7 @@ async fn serve_stream(
     page: usize,
     first_tx: oneshot::Sender<Result<FirstPage>>,
     mut req_rx: mpsc::Receiver<PageRequest>,
+    broken: Arc<AtomicBool>,
     db: Database,
 ) {
     let mut columns = None;
@@ -50,6 +51,7 @@ async fn serve_stream(
                 }
             }
             Err(e) => {
+                broken.store(errors::is_broken(&e), Ordering::SeqCst);
                 let _ = reply.send(Err(format!("{e:#}")));
                 return;
             }
@@ -122,6 +124,8 @@ impl Database {
         let start = Instant::now();
         let (first_tx, first_rx) = oneshot::channel();
         let (req_tx, req_rx) = mpsc::channel(4);
+        let broken = Arc::new(AtomicBool::new(false));
+        let broke = Arc::clone(&broken);
         let session = Arc::clone(&self.0.session);
         let db = self.clone();
         let sql_owned = sql.to_string();
@@ -131,7 +135,7 @@ impl Database {
             on_session!(
                 &mut *guard,
                 |c| {
-                    serve_stream(engine::driver::fetch(c, sql_owned), page, first_tx, req_rx, db).await;
+                    serve_stream(engine::driver::fetch(c, sql_owned), page, first_tx, req_rx, broke, db).await;
                 },
                 closed => {
                     let _ = first_tx.send(Err(anyhow::anyhow!("disconnected")));
@@ -165,7 +169,7 @@ impl Database {
             earlier: Vec::new(),
             statement: 1,
         };
-        Ok((outcome, (!done).then_some(RowStream { tx: req_tx })))
+        Ok((outcome, (!done).then_some(RowStream { tx: req_tx, broken })))
     }
 
     pub async fn run(&self, sql: &str, row_limit: usize) -> Result<QueryOutcome> {
