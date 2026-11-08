@@ -391,7 +391,7 @@ not_updated = "No row was updated: it may have been changed or deleted"
 saved = "Saved · updated 1 row"
 updated = "Updated 1 row"
 updated_many = "Updated {n} rows (expected 1)"
-wait_for_query = "A query is running: the edit stays open until it's done"
+wait_for_query = "One query at a time per session, and one is running: the edit stays open until it's done"
 
 [editor]
 explain = "Explain"
@@ -479,7 +479,7 @@ not_in_schema = "{table} isn't in the schema"
 row = "row {n}"
 several_tables = "{column} is a foreign key in {tables}: select from one of them"
 value_null = "the value is NULL"
-wait_for_query = "A query is running: follow the key once it's done"
+wait_for_query = "One query at a time per session, and one is running: follow the key once it's done"
 
 [form]
 agents = "AI agents"
@@ -1010,7 +1010,7 @@ not_editable = "only results of a plain SELECT from one table (no joins or group
 read_only = "this connection is read-only"
 schema_loading = "the schema hasn't loaded yet"
 table_not_found = "table {table} not found in the schema"
-wait_for_query = "A query is running: the row stays here until it's done"
+wait_for_query = "One query at a time per session, and one is running: the row stays here until it's done"
 
 [rows.copied_as]
 one = "Copied {n} row as {format}"
@@ -1080,17 +1080,18 @@ reconnected = "the connection had dropped: reconnected (session settings were re
 result_set = "Result set {n}/{of}{from}: {rows}"
 rolled_back = "rolled back (rollback-only)"
 rows_loaded = "{n} rows loaded"
-running = "A query is running: {then}"
+running = "One query at a time per session, and one is running here: {then}"
 running_label = "running…"
 showing_first = "Showing first {shown} of {total} rows in {time}"
 ssh_encrypts = "the SSH tunnel still encrypts"
 still_open = "the transaction is still open: {rollback} rolls back"
 still_reconnecting = "Still reconnecting to {names}…"
-tab_running = "Tab “{tab}”{on} is running a query: {go}{then}"
+tab_running = "One query at a time per session: tab “{tab}”{on} is running one: {go}{then}"
 timed_out = "Timed out after {s} s (the connection's limit)"
 timed_out_early = "Timed out after {s} s (the connection's limit), stopped early: {status}"
 tls_failed = "{warning}. TLS failed: {why}"
 type_password = "{err} · type the password and press Enter (Ctrl+S saves it)"
+wait_or_esc = "wait for it, or Esc cancels it"
 wait_or_esc_there = "wait for it, or Esc there stops it"
 zoom_left_still_running = "Out of the zoom; the query still runs (Esc again cancels it)"
 

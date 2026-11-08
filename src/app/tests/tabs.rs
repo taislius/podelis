@@ -73,7 +73,10 @@ async fn tabs_on_different_connections_run_at_once_and_esc_stops_only_its_own() 
     assert!(!app.tab.run.executing, "not started on a busy session");
     app.focus = Focus::Editor;
     app.handle_key(key(KeyCode::Esc));
-    assert_eq!(said(&app), "Tab “Query 1” on alpha is running a query: Alt+1 goes to it, Esc there stops it");
+    assert_eq!(
+        said(&app),
+        "One query at a time per session: tab “Query 1” on alpha is running one: Alt+1 goes to it, Esc there stops it"
+    );
     // (Once it's under way: a cancel before the run starts is cleared by it.)
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     // In its own tab, Esc stops it on its own connection.
@@ -101,7 +104,8 @@ async fn runs_show_their_tab_at_once_and_f7_waits_for_a_running_query() {
     assert!(app.tab.run.executing && app.tab.result_tab == ResultTab::Rows);
     // While it runs, F5 says why it does nothing, and F7 waits for it.
     app.handle_key(key(KeyCode::F(5)));
-    assert!(app.notes.editor_note_is_error && said(&app).starts_with("A query is running"), "{}", said(&app));
+    assert_eq!(said(&app), "One query at a time per session, and one is running here: wait for it, or Esc cancels it");
+    assert!(app.notes.editor_note_is_error);
     app.tab.editor.set_text("select id from t where id = 1");
     app.handle_key(key(KeyCode::F(7)));
     assert!(said(&app).starts_with("The plan follows"), "{}", said(&app));
@@ -149,7 +153,9 @@ async fn other_tabs_can_be_used_while_a_read_runs() {
     app.new_tab(None, "select 2", None);
     assert_eq!(app.active_tab, 1);
     assert!(
-        app.notes.status.starts_with("Tab “Query 1” on :memory: is running a query: Alt+1 goes to it"),
+        app.notes
+            .status
+            .starts_with("One query at a time per session: tab “Query 1” on :memory: is running one: Alt+1 goes to it"),
         "{}",
         app.notes.status
     );
