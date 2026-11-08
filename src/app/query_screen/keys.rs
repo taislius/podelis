@@ -1,18 +1,10 @@
-//! The query screen's keys: what each pane does with them, the panes'
-//! sizes and zoom, focus, copy and paste. Each pane's own keys, running
-//! queries, plans and exports are in the files beside this one.
+//! The query screen's own keys, before each pane's: what goes to which
+//! pane (or the popup in front), the panes' sizes and zoom, focus, copy
+//! and paste. The app's own (F1, `?`, Ctrl+Q, a question's answer) come
+//! first, in `App::handle_key`.
 
-mod editor_keys;
-pub(in crate::app) mod export;
-mod plan;
-mod results_keys;
-mod run;
-mod schema_keys;
-
-pub use export::{Dest, Format};
-pub(super) use schema_keys::step_selectable;
-
-use super::*;
+use super::super::*;
+use super::navigator_keys::step_selectable;
 use crate::config::keys::Action;
 
 impl App {
@@ -542,107 +534,4 @@ impl App {
         let n = order.len();
         self.focus = order[if forward { (idx + 1) % n } else { (idx + n - 1) % n }];
     }
-}
-
-impl Run {
-    /// A new stream of rows, or none: an `M` waiting for the old one's
-    /// page is forgotten with it.
-    pub(in crate::app) fn set_stream(&mut self, stream: Option<RowStream>) {
-        self.stream = stream;
-        self.more_wanted = false;
-    }
-}
-
-/// The query running, one at a time across the tabs: whose it is, on
-/// which connection, since when, and what it's for.
-#[derive(Default)]
-pub struct Run {
-    /// A query (or check, or comparison) is running.
-    pub executing: bool,
-    /// Which run the events in flight are for.
-    pub(in crate::app) id: u64,
-    /// When the running query (or check, or comparison) started.
-    pub(in crate::app) since: Option<Instant>,
-    /// A write, a check or a comparison: every tab stays where it is until
-    /// it ends. (A read leaves the others free, and runs on in its tab.)
-    pub(in crate::app) holds_tabs: bool,
-    /// The connection the running query runs on: cancelled there, whichever
-    /// tab (and connection) is shown meanwhile.
-    pub(in crate::app) db: Option<Database>,
-    /// Purpose of the next run, and of the one in flight.
-    pub(in crate::app) purpose: RunPurpose,
-    /// Timeout and review state of the running query.
-    pub(in crate::app) extra: RunExtra,
-    /// Its cancel was asked for and hasn't come back yet.
-    pub cancelling: bool,
-    /// Cancelling the running query failed: Esc again stops waiting.
-    pub cancel_failed: bool,
-    /// Further rows of the current (streamed) result, fetched on demand.
-    pub stream: Option<RowStream>,
-    /// More rows of the stream are on their way.
-    pub fetching_more: bool,
-    /// `M` was pressed while they were: its rows are fetched once they've
-    /// come (for this stream only; [`Run::set_stream`] forgets it).
-    pub(in crate::app) more_wanted: bool,
-    /// What the statements of the running query do (for transaction tracking).
-    pub(in crate::app) infos: Vec<StatementInfo>,
-    /// Parameter substitutions in the last run, for mapping error positions.
-    pub(in crate::app) filled: Option<Filled>,
-    /// The SQL running: a failure says if it uses what the server is too
-    /// old for.
-    pub(in crate::app) sql: String,
-    /// The failure that came is a syntax error or an unknown function
-    /// (`db::missing_feature`), for `on_query_failed`.
-    pub(in crate::app) missing_feature: bool,
-    /// The running connect or query task, aborted on cancel/disconnect.
-    pub(in crate::app) task: Option<JoinHandle<()>>,
-    /// The statement of the EXPLAIN on its way, and whether it's ANALYZE.
-    /// And the editor line it starts on.
-    pub(in crate::app) plan_request: Option<(String, bool, usize)>,
-    /// F7 while a query ran: the statement to plan (and its line) next.
-    pub(in crate::app) queued_plan: Option<(String, usize)>,
-}
-
-/// Extra state of the running query.
-#[derive(Default)]
-pub(in crate::app) struct RunExtra {
-    /// When it hits the connection's timeout, and the timeout.
-    pub(in crate::app) deadline: Option<(Instant, Duration)>,
-    /// It was cancelled by the timeout.
-    pub(in crate::app) timed_out: Option<Duration>,
-    /// It was started by `run_in_transaction`.
-    pub(in crate::app) reviewing: bool,
-    /// It is a dry run, rolled back when it ends.
-    pub(in crate::app) dry_run: Option<review::DryRun>,
-    /// It's a sandbox step: added to the sandbox when it ends well.
-    pub(in crate::app) sandbox_step: Option<sandbox::PendingStep>,
-    /// Said before the next result's status (what an edit just did).
-    pub(in crate::app) status_prefix: Option<String>,
-    /// When it started, to announce a long run's end.
-    pub(in crate::app) started: Option<Instant>,
-    /// It ended a statement with `\G`: show the result one column per line.
-    pub(in crate::app) vertical: bool,
-    /// It ran past `long_query`, and the status bar said how to cancel it.
-    pub(in crate::app) offered_cancel: bool,
-}
-
-/// What a run's result is for.
-#[derive(Default)]
-pub enum RunPurpose {
-    /// Show the result set.
-    #[default]
-    Query,
-    /// Show the query plan in the QUERY PLAN tab.
-    Explain,
-    /// An UPDATE saving one edited cell; on success the cell is updated in
-    /// place instead of replacing the results.
-    CellEdit { row: usize, col: usize, value: Option<String> },
-    /// COMMIT or ROLLBACK of a reviewed transaction: keeps the results.
-    TxControl(TxEnd),
-    /// An INSERT or DELETE from the result grid ("Added"/"Deleted"); the
-    /// query runs again afterwards.
-    RowChange(&'static str),
-    /// Back to before sandbox step `number`: it failed, or (`undo`) the
-    /// user undid it.
-    SandboxBack { number: usize, undo: bool },
 }

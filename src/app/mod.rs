@@ -65,7 +65,7 @@ mod params;
 mod pipes;
 mod plan_lines;
 mod projects;
-mod query;
+mod query_screen;
 mod results;
 mod review;
 mod rows;
@@ -85,7 +85,7 @@ pub use confirm::{Confirm, ConfirmAction};
 pub use connections::{ConnectField, ConnectForm, fields_for};
 use events::{Background, DbEventKind};
 pub use events::{DbEvent, Ping};
-pub use query::{Dest, Format, Run, RunPurpose};
+pub use query_screen::{Dest, Format, Run, RunPurpose};
 pub use results::{CellEdit, CellView};
 pub use results::{NULL_TEXT, display_prefix, format_elapsed, visible_columns};
 use results::{column_widths, compute_view, one_line, pretty_value, widen_columns};
@@ -259,12 +259,12 @@ pub struct App {
     /// Watch mode: the last query run again every few seconds.
     pub watch: Option<watch::Watch>,
     /// "Export all rows" in progress: what stops it, and the file it writes.
-    export_task: Option<query::export::ExportRun>,
+    export_task: Option<query_screen::export::ExportRun>,
     /// Limits small enough to reach in a test (the settings are in GB).
     #[cfg(test)]
     export_limits_for_tests: Option<crate::transfer::limits::ExportLimits>,
     /// How big a coming export would be is being worked out.
-    export_estimating: Option<query::export::EstimateRequest>,
+    export_estimating: Option<query_screen::export::EstimateRequest>,
     /// When a question about an export's size came up by itself.
     export_asked: Option<Instant>,
     /// What the export form was last run with, where it starts next time.

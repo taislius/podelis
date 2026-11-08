@@ -452,7 +452,7 @@ async fn no_export_starts_without_the_room_to_keep_free() {
 #[tokio::test]
 async fn a_question_says_when_the_free_space_isnt_known() {
     let (mut app, _dir) = big_export(5, 1, 0).await;
-    app.export_task = Some(crate::app::query::export::ExportRun::for_tests());
+    app.export_task = Some(crate::app::query_screen::export::ExportRun::for_tests());
     app.export_ask(10, 2000, None);
     let details = app.popups.confirm.as_ref().expect("the question").details.join(" / ");
     assert!(details.contains("can't be read"), "{details}");
@@ -488,7 +488,7 @@ fn answer(app: &mut App, letter: char) {
 #[cfg(feature = "sqlite")]
 fn estimated(app: &mut App, rows: Option<f64>) {
     let run = app.tab.run.id;
-    app.export_estimating = Some(crate::app::query::export::EstimateRequest { id: 7, run });
+    app.export_estimating = Some(crate::app::query_screen::export::EstimateRequest { id: 7, run });
     app.export_estimated(7, Format::Csv, rows, 100.0);
 }
 
@@ -534,7 +534,7 @@ async fn an_export_the_plan_says_is_big_asks_before_it_starts() {
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn an_estimates_answer_only_counts_for_what_it_was_asked_about() {
-    use crate::app::query::export::EstimateRequest;
+    use crate::app::query_screen::export::EstimateRequest;
     let (mut app, dir) = big_export(0, 1, 0).await;
     let this_run = app.tab.run.id;
     let nothing_happened = |app: &App| {
@@ -613,7 +613,7 @@ async fn the_last_page_is_neither_asked_about_nor_thrown_away() {
 async fn keep_going_doesnt_count_whats_written_twice() {
     const GB: u64 = 1_000_000_000;
     let (mut app, _dir) = big_export(5 * GB, GB, 0).await;
-    app.export_task = Some(crate::app::query::export::ExportRun::for_tests());
+    app.export_task = Some(crate::app::query_screen::export::ExportRun::for_tests());
     // 1 GB written, 500 MB to go before the floor.
     app.export_ask(10, GB, Some(5 * GB + 500_000_000));
     let details = app.popups.confirm.as_ref().expect("the question").details.join(" / ");

@@ -476,7 +476,7 @@ impl App {
                     })
                     .collect();
                 panel.error = None;
-                panel.selected = query::step_selectable(&panel.nodes(), panel.selected, 1);
+                panel.selected = query_screen::step_selectable(&panel.nodes(), panel.selected, 1);
                 self.restore_expanded_tables();
                 let Some(panel) = &mut self.connection.schema else { return };
                 // Details were dropped with the old list: reload the open ones.
