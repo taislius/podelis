@@ -224,4 +224,5 @@ pub fn split_answer(answer: &str) -> (Option<String>, String) {
 }
 
 #[cfg(test)]
+#[path = "names_tests.rs"]
 mod tests;

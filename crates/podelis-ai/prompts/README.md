@@ -19,5 +19,5 @@ filled in (the schema's text) stays as it is.
 
 **A change here changes what models do.** The snapshot tests
 (`src/snapshots/`) show it in review; measure it before keeping it: the
-context's eval (`src/context/eval.rs`) and real questions to a model
+context's eval (`src/context_eval.rs`) and real questions to a model
 (`podelis ask`, and the AI test project's `ask-tests.sh`).

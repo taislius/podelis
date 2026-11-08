@@ -1,10 +1,10 @@
 //! The schema snapshots the context's eval (`podelis-ai`'s
-//! `context/eval.rs`) runs on, made from live databases: here, in the
+//! `context_eval.rs`) runs on, made from live databases: here, in the
 //! app's crate, because it opens them by URL as the app does.
 
 use podelis_ai::context::Schema;
 
-/// Writes `crates/podelis-ai/src/context/eval/<name>.json` for each `name=address` in
+/// Writes `crates/podelis-ai/testdata/context-eval/<name>.json` for each `name=address` in
 /// `PODELIS_EVAL_DUMP` (space-separated; a URL or a SQLite file):
 ///
 /// ```sh
@@ -16,7 +16,7 @@ use podelis_ai::context::Schema;
 #[ignore = "needs the databases; makes the snapshots"]
 async fn dump_schemas() {
     let spec = std::env::var("PODELIS_EVAL_DUMP").expect("PODELIS_EVAL_DUMP");
-    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/podelis-ai/src/context/eval");
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/podelis-ai/testdata/context-eval");
     for pair in spec.split_whitespace() {
         let (name, address) = pair.split_once('=').expect("name=address");
         let form =

@@ -451,4 +451,5 @@ pub fn export(project: &str, facts: &[Fact]) -> String {
 }
 
 #[cfg(test)]
+#[path = "memory_tests.rs"]
 mod tests;
