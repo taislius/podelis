@@ -162,6 +162,7 @@ mod tests {
     /// What models are sent, whole: a change to a prompt shows here.
     #[test]
     fn what_models_are_sent() {
+        let _snapshots = crate::snapshots_in_testdata();
         insta::assert_snapshot!("ask", ask("PostgreSQL", "<the context>"));
         insta::assert_snapshot!("explain", explain("MySQL", "<the context>"));
         insta::assert_snapshot!("explain_question", explain_question("SELECT 1"));
