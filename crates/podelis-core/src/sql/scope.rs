@@ -205,11 +205,13 @@ mod tests {
 
     #[test]
     fn joins_and_schemas() {
+        let _snapshots = crate::snapshots_in_testdata();
         assert_snapshot!(outline("select * from public.orders o join customers c on o.cid = c.id, items where true"));
     }
 
     #[test]
     fn subqueries_are_children() {
+        let _snapshots = crate::snapshots_in_testdata();
         assert_snapshot!(outline(
             "select * from (select id from a) x where x.id in (select a_id from b where exists (select 1 from c))"
         ));
@@ -217,6 +219,7 @@ mod tests {
 
     #[test]
     fn ctes_are_visible_inside_and_not_outside() {
+        let _snapshots = crate::snapshots_in_testdata();
         assert_snapshot!(outline(
             "with p as (select 1 as n), q as (select * from p) select * from q, (with r as (select 2) select * from r) s; \
              select * from p"
@@ -225,6 +228,7 @@ mod tests {
 
     #[test]
     fn set_operations_and_other_statements() {
+        let _snapshots = crate::snapshots_in_testdata();
         assert_snapshot!(outline(
             "select a from t union select b from u; \
              insert into t select * from u; \

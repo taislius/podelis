@@ -15,3 +15,12 @@ pub mod migrations;
 pub mod models;
 pub mod names;
 pub mod prompts;
+
+/// Snapshot tests keep their `.snap` files in the crate's
+/// `testdata/snapshots/`, not beside the code: hold this while asserting.
+#[cfg(test)]
+pub(crate) fn snapshots_in_testdata() -> insta::internals::SettingsBindDropGuard {
+    let mut settings = insta::Settings::clone_current();
+    settings.set_snapshot_path(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/snapshots"));
+    settings.bind_to_scope()
+}
