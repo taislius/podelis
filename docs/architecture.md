@@ -31,7 +31,8 @@ src/
   cli/                   without the UI: -e / --test / --import (mod.rs),
                          and doctor
   app/                   state and behaviour (no drawing): screens, tabs, keys,
-                         editing, running queries (query/), the navigator…
+                         editing, the query screen (query_screen/: its keys, each
+                         pane's, running queries, plans, exports), the navigator…
   ui/                    drawing with ratatui; reads the app's state
   agents/                what agents may run (mod.rs), their log and
                          approvals, and the MCP server (`podelis mcp`)
@@ -119,7 +120,7 @@ everywhere:
   `label` and `run_command` arm (the compiler asks), and a line in a table or
   a menu if it has a key or a place there.
 - **Menus** (`menu.rs`): each is data, groups of `Command`s; `show_menu` asks
-  each its label, key and whether it's dimmed. `ui/query.rs` draws them, and
+  each its label, key and whether it's dimmed. `ui/query_screen.rs` draws them, and
   notes which item each row holds (`hits.menu_rows`) for clicks, as separators
   and scrolling mean rows aren't items.
 - **Formats** (`query/export.rs`): one `Format`, in the order every menu lists
