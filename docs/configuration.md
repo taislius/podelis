@@ -27,6 +27,9 @@ long_query = 600            # a query running this many seconds says, once, how 
 query_timeout = 0           # cancel any query after this many seconds, on connections without a Timeout of their own (0: off)
 notify_after = 10           # a query running this many seconds rings and notifies when done (0: off); a hidden tab's too, with the terminal in front
 guard_rows = 1000000        # on production, a read of a whole table this big asks first, agents' is refused (0: off)
+export_min_free_gb = 5      # an export of every row stops and removes its file rather than leave less than this free (0: off; GB = 1024³ bytes)
+export_ask_gb = 1           # an export expected to reach this asks first, and asks again at each multiple (0: off)
+export_max_gb = 0           # the largest export file: stopped there without asking (0: no limit)
 gateway_idle = 30           # minutes the gateway waits with no client before it stops (0: keeps running)
 
 [viewers]                   # what opens result rows (`o`), by format; default: the system's app for the type (no desktop: $PAGER, else less -S)
