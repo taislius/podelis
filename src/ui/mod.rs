@@ -204,16 +204,8 @@ pub(super) fn truncate_start(s: &str, max: usize) -> String {
 }
 
 /// A size in bytes, e.g. `12.4 MB` (powers of 1024, as `du -h`).
-#[expect(clippy::cast_precision_loss, reason = "display only, one decimal")]
 pub(super) fn human_bytes(n: i64) -> String {
-    const UNITS: [&str; 5] = ["B", "kB", "MB", "GB", "TB"];
-    let mut size = n as f64;
-    let mut unit = 0;
-    while size >= 1024.0 && unit < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 { format!("{n} B") } else { format!("{size:.1} {}", UNITS[unit]) }
+    crate::db::human_bytes(u64::try_from(n).unwrap_or(0))
 }
 
 /// Compact counts like the design's `24.8k` / `1.1m`.

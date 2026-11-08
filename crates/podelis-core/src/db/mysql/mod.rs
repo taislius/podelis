@@ -303,6 +303,19 @@ impl SqlDialect for MySql {
         }
         Some(plan::analyze(rows.first()?.first()?.clone()?.trim_end().to_string()))
     }
+    /// Where `explain` gives the tree (MySQL 8.0.16+): the classic table
+    /// doesn't say what a statement returns.
+    fn plans_rows(&self, version: &str) -> bool {
+        matches!(Server::of(version), Server::MySql(v) if v >= (8, 0, 16))
+    }
+    /// The tree's top step's. (The classic table has a row
+    /// per table read, which says nothing of what comes out of a join.)
+    fn plan_rows(&self, columns: &[String], rows: &[Vec<Option<String>>]) -> Option<f64> {
+        if columns.len() > 1 {
+            return None;
+        }
+        plan::top_rows(rows.first()?.first()?.as_deref()?)
+    }
     fn full_scans(&self, columns: &[String], rows: &[Vec<Option<String>>]) -> Vec<crate::db::dialect::Scan> {
         if columns.len() > 1 {
             return plan::table_full_scans(columns, rows);
@@ -447,6 +460,13 @@ mod tests {
             let Some(d) = engine.dialect() else { continue };
             assert_eq!(d.explain_to_read("SELECT 1", "17.2"), d.explain("SELECT 1", "17.2"), "{engine:?}");
         }
+    }
+
+    #[test]
+    fn only_the_tree_says_what_a_statement_returns() {
+        assert!(MySql.plans_rows("8.4.3") && MySql.plans_rows("8.0.16") && MySql.plans_rows(""));
+        assert!(!MySql.plans_rows("8.0.15") && !MySql.plans_rows("5.7.44-log"));
+        assert!(!MySql.plans_rows("10.11.6-MariaDB-0+deb12u1"));
     }
 
     #[test]

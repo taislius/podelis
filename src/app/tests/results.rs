@@ -314,6 +314,661 @@ async fn export_parquet_shown_and_all_rows() {
     assert_eq!(rows_in(&parquet_files()[0]), 2500);
 }
 
+/// An export streaming 25000 rows, ready to start, with these limits.
+#[cfg(feature = "sqlite")]
+async fn big_export(min_free: u64, ask_every: u64, max: u64) -> (App, tempfile::TempDir) {
+    let (mut app, dir) = connected_app(ConnectionMode::Normal).await;
+    app.settings.row_limit = 10;
+    app.settings.export_dir = Some(dir.path().to_string_lossy().into_owned());
+    app.export_limits_for_tests = Some(crate::transfer::limits::ExportLimits { min_free, ask_every, max });
+    run_sql(
+        &mut app,
+        "WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 25000) SELECT n FROM s",
+    )
+    .await;
+    app.focus = Focus::Results;
+    (app, dir)
+}
+
+#[cfg(feature = "sqlite")]
+fn export_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let entries = std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok().map(|e| e.path()));
+    entries.filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("podelis-export"))).collect()
+}
+
+/// Handles events until the unfinished file is gone (it's the last thing a
+/// stopped export does).
+#[cfg(feature = "sqlite")]
+async fn until_removed(app: &mut App, dir: &std::path::Path) {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !export_files(dir).is_empty() {
+            let event = app.poll_db_event().await.unwrap();
+            app.handle_db_event(event);
+        }
+    })
+    .await
+    .expect("the file removed");
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn an_export_asks_at_its_size_and_no_stops_it_and_removes_its_file() {
+    let (mut app, dir) = big_export(0, 1, 0).await;
+    app.export_all(Format::Csv);
+    while app.popups.confirm.is_none() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    let confirm = app.popups.confirm.as_ref().unwrap();
+    assert!(matches!(confirm.action, ConfirmAction::KeepExporting));
+    assert!(confirm.message.contains("has reached"), "{}", confirm.message);
+    assert!(app.export_task.is_some(), "it waits");
+    // It came by itself: keys being typed don't answer, nor at once a y.
+    for stray in [KeyCode::Char('s'), KeyCode::Enter, KeyCode::Down, KeyCode::Char('y')] {
+        app.handle_key(key(stray));
+        assert!(app.popups.confirm.is_some() && app.export_task.is_some(), "{stray:?}");
+    }
+    app.export_asked = None;
+    for stray in [KeyCode::Char('s'), KeyCode::Enter, KeyCode::Down] {
+        app.handle_key(key(stray));
+        assert!(app.popups.confirm.is_some() && app.export_task.is_some(), "{stray:?}, later");
+    }
+    answer(&mut app, 'n');
+    assert!(app.export_task.is_none() && app.popups.confirm.is_none());
+    assert!(said(&app).contains("stopped"), "{}", said(&app));
+    until_removed(&mut app, dir.path()).await;
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn an_export_goes_on_when_told_to_and_says_its_size() {
+    let (mut app, dir) = big_export(0, 1, 0).await;
+    app.export_all(Format::Csv);
+    let mut asked = 0;
+    let mut sized = false;
+    while app.export_task.is_some() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+        sized = sized || app.notes.status.contains(" kB") || said(&app).contains(" kB");
+        if app.popups.confirm.is_some() {
+            asked += 1;
+            answer(&mut app, 'y');
+        }
+    }
+    assert!(asked >= 1);
+    assert!(sized, "the progress says how big it is");
+    assert!(said(&app).contains("Exported all 25000 rows"), "{}", said(&app));
+    let text = std::fs::read_to_string(&export_files(dir.path())[0]).unwrap();
+    assert_eq!(text.lines().count(), 25001);
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn an_export_stops_at_the_largest_file_without_asking() {
+    let (mut app, dir) = big_export(0, 0, 1).await;
+    app.export_all(Format::Csv);
+    while app.export_task.is_some() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+        assert!(app.popups.confirm.is_none());
+    }
+    assert!(said_error(&app) && said(&app).contains("largest allowed"), "{}", said(&app));
+    assert!(export_files(dir.path()).is_empty(), "nothing left behind");
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn parquet_stops_at_its_size_too_counting_its_scratch_file() {
+    let (mut app, dir) = big_export(0, 0, 1).await;
+    app.export_all(Format::Parquet);
+    while app.export_task.is_some() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    assert!(said(&app).contains("largest allowed"), "{}", said(&app));
+    until_removed(&mut app, dir.path()).await;
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn no_export_starts_without_the_room_to_keep_free() {
+    let (mut app, dir) = big_export(u64::MAX, 0, 0).await;
+    for run in [
+        crate::app::commands::Command::Rows { to: Dest::ExportAll, format: Format::Csv },
+        crate::app::commands::Command::Rows { to: Dest::ExportAll, format: Format::Parquet },
+    ] {
+        app.run_command(run);
+        assert!(app.export_task.is_none(), "{run:?}");
+        assert!(said_error(&app) && said(&app).contains("kept free"), "{}", said(&app));
+        assert!(export_files(dir.path()).is_empty(), "{run:?}");
+    }
+    // The clipboard takes no room on the disk.
+    app.run_command(crate::app::commands::Command::Rows { to: Dest::Copy, format: Format::Csv });
+    assert!(!said_error(&app), "{}", said(&app));
+}
+
+/// Free space can't always be read: a question says the check isn't made.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_question_says_when_the_free_space_isnt_known() {
+    let (mut app, _dir) = big_export(5, 1, 0).await;
+    app.export_task = Some(crate::app::query::export::ExportRun::for_tests());
+    app.export_ask(10, 2000, None);
+    let details = app.popups.confirm.as_ref().expect("the question").details.join(" / ");
+    assert!(details.contains("can't be read"), "{details}");
+    assert!(!details.contains("It stops if the disk"), "it can't promise that: {details}");
+    app.popups.confirm = None;
+    app.export_ask(10, 2000, Some(50_000_000_000));
+    let details = app.popups.confirm.as_ref().expect("the question").details.join(" / ");
+    assert!(details.contains("46.6 GB free") && !details.contains("can't be read"), "{details}");
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn off_nothing_is_asked_or_stopped() {
+    let (mut app, dir) = big_export(0, 0, 0).await;
+    app.export_all(Format::Csv);
+    while app.export_task.is_some() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+        assert!(app.popups.confirm.is_none());
+    }
+    assert!(said(&app).contains("Exported all 25000 rows"), "{}", said(&app));
+    assert_eq!(export_files(dir.path()).len(), 1);
+}
+
+/// A question about an export's size, answered after a moment.
+#[cfg(feature = "sqlite")]
+fn answer(app: &mut App, letter: char) {
+    app.export_asked = None;
+    app.handle_key(key(KeyCode::Char(letter)));
+}
+
+/// The plan's answer to a request of the rows now shown.
+#[cfg(feature = "sqlite")]
+fn estimated(app: &mut App, rows: Option<f64>) {
+    let run = app.tab.run.id;
+    app.export_estimating = Some(crate::app::query::export::EstimateRequest { id: 7, run });
+    app.export_estimated(7, Format::Csv, rows, 100.0);
+}
+
+const COUNT_25000: &str =
+    "WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 25000) SELECT n FROM s";
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn an_export_the_plan_says_is_big_asks_before_it_starts() {
+    // Asks at 1 kB: this export reaches that, but not the size agreed to.
+    let (mut app, dir) = big_export(0, 1000, 0).await;
+    // Big: it asks, saying about how big and what's free; no: nothing starts.
+    estimated(&mut app, Some(50_000_000.0));
+    let confirm = app.popups.confirm.as_ref().expect("the question");
+    assert!(confirm.message.contains("about 4.7 GB") && confirm.message.contains("by the plan"), "{}", confirm.message);
+    assert!(confirm.details.iter().any(|d| d.contains("free")), "{:?}", confirm.details);
+    answer(&mut app, 'n');
+    assert!(app.export_task.is_none() && export_files(dir.path()).is_empty());
+
+    // Yes: it starts, and doesn't ask again before the size agreed to.
+    estimated(&mut app, Some(50_000_000.0));
+    answer(&mut app, 'y');
+    assert!(app.export_task.is_some());
+    while app.export_task.is_some() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+        assert!(app.popups.confirm.is_none());
+    }
+    assert!(said(&app).contains("Exported all"), "{}", said(&app));
+    std::fs::remove_file(&export_files(dir.path())[0]).unwrap();
+
+    // Small, or the plan doesn't say: it just starts.
+    for rows in [Some(1.0), None] {
+        run_sql(&mut app, COUNT_25000).await;
+        estimated(&mut app, rows);
+        assert!(app.popups.confirm.is_none(), "{rows:?}");
+        assert!(app.export_task.is_some(), "{rows:?}");
+        app.stop_export();
+        until_removed(&mut app, dir.path()).await;
+    }
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn an_estimates_answer_only_counts_for_what_it_was_asked_about() {
+    use crate::app::query::export::EstimateRequest;
+    let (mut app, dir) = big_export(0, 1, 0).await;
+    let this_run = app.tab.run.id;
+    let nothing_happened = |app: &App| {
+        assert!(app.export_task.is_none() && app.popups.confirm.is_none(), "{}", said(app));
+        assert!(export_files(dir.path()).is_empty());
+    };
+    // An older request's answer, or one stopped with Esc, starts nothing.
+    app.export_estimating = Some(EstimateRequest { id: 8, run: this_run });
+    app.export_estimated(7, Format::Csv, Some(1.0), 1.0);
+    nothing_happened(&app);
+    assert!(app.export_estimating.is_some(), "still waiting for its own");
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.export_estimating.is_none());
+    assert!(said(&app).contains("not started") && !said(&app).contains("file"), "{}", said(&app));
+    app.export_estimated(8, Format::Csv, Some(1.0), 1.0);
+    nothing_happened(&app);
+
+    // Another run's rows by now (another query, or another tab): not those.
+    app.export_estimating = Some(EstimateRequest { id: 9, run: this_run + 1 });
+    app.export_estimated(9, Format::Csv, Some(1.0), 1.0);
+    nothing_happened(&app);
+    assert!(app.notes.status_is_error && app.notes.status.contains("aren't the ones shown"), "{}", app.notes.status);
+
+    // Another question is open: it stays, and a y there can't start this.
+    app.popups.confirm = Some(Confirm {
+        message: "Run this write?".into(),
+        details: vec![],
+        danger: true,
+        action: ConfirmAction::Quit,
+        offer_transaction: false,
+    });
+    estimated(&mut app, Some(1e9));
+    assert_eq!(app.popups.confirm.as_ref().map(|c| c.message.as_str()), Some("Run this write?"));
+    assert!(app.notes.status_is_error && app.notes.status.contains("question"), "{}", app.notes.status);
+    app.popups.confirm = None;
+
+    // A page on its way would go to the grid, not the file.
+    app.tab.run.fetching_more = true;
+    app.start_export_all(Format::Csv, 0);
+    nothing_happened(&app);
+    assert!(app.notes.status_is_error, "{}", app.notes.status);
+    app.tab.run.fetching_more = false;
+
+    // The stream gone meanwhile: it says so.
+    app.close_stream();
+    app.notes.status.clear();
+    app.start_export_all(Format::Csv, 0);
+    nothing_happened(&app);
+    assert!(app.notes.status.contains("aren't the ones shown"), "{}", app.notes.status);
+}
+
+/// All of it is written by the last page: it's kept, not asked about.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn the_last_page_is_neither_asked_about_nor_thrown_away() {
+    // One page: everything's there at the first check.
+    let (mut app, dir) = connected_app(ConnectionMode::Normal).await;
+    app.settings.row_limit = 10;
+    app.settings.export_dir = Some(dir.path().to_string_lossy().into_owned());
+    run_sql(&mut app, "WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 2500) SELECT n FROM s")
+        .await;
+    app.focus = Focus::Results;
+    app.export_limits_for_tests = Some(crate::transfer::limits::ExportLimits { min_free: 0, ask_every: 1, max: 1 });
+    app.export_all(Format::Csv);
+    while app.export_task.is_some() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+        assert!(app.popups.confirm.is_none());
+    }
+    assert!(said(&app).contains("Exported all 2500 rows"), "{}", said(&app));
+    assert_eq!(export_files(dir.path()).len(), 1);
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn keep_going_doesnt_count_whats_written_twice() {
+    const GB: u64 = 1_000_000_000;
+    let (mut app, _dir) = big_export(5 * GB, GB, 0).await;
+    app.export_task = Some(crate::app::query::export::ExportRun::for_tests());
+    // 1 GB written, 500 MB to go before the floor.
+    app.export_ask(10, GB, Some(5 * GB + 500_000_000));
+    let details = app.popups.confirm.as_ref().expect("the question").details.join(" / ");
+    assert!(!details.contains("won't fit"), "{details}");
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_shown_parquet_export_is_held_to_about_its_size() {
+    let (mut app, dir) = big_export(0, 0, 1).await;
+    app.run_command(crate::app::commands::Command::Rows { to: Dest::ExportShown, format: Format::Parquet });
+    assert!(app.export_task.is_none() && export_files(dir.path()).is_empty());
+    assert!(said_error(&app) && said(&app).contains("largest allowed"), "{}", said(&app));
+}
+
+/// What a key started is said on in the status bar: not left in the footer.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn the_footers_note_goes_when_the_export_says_more() {
+    let (mut app, _dir) = big_export(0, 0, 0).await;
+    app.notes.editor_note = Some(t!("export.exporting").to_string());
+    app.notes.results_note = Some((t!("export.estimating").to_string(), false));
+    app.clear_export_note();
+    assert!(app.notes.editor_note.is_none() && app.notes.results_note.is_none());
+    app.notes.editor_note = Some("Something else".to_string());
+    app.clear_export_note();
+    assert!(app.notes.editor_note.is_some());
+}
+
+/// On a server, with the rows still coming: the plan is made beside them,
+/// and says how many a whole table has; a filter's rows it doesn't say.
+#[tokio::test]
+async fn a_servers_plan_warns_before_a_big_export() {
+    for engine in Engine::BUILT.into_iter().filter(|e| !e.is_file_based() && e.dialect().is_some()) {
+        let Some((mut app, dir)) = live_app(engine, "podelis_big_export").await else { continue };
+        app.settings.row_limit = 10;
+        app.settings.export_dir = Some(dir.path().to_string_lossy().into_owned());
+        app.export_limits_for_tests =
+            Some(crate::transfer::limits::ExportLimits { min_free: 0, ask_every: 1000, max: 0 });
+        let values: Vec<String> = (1..=2000).map(|n| format!("({n}, 'row number {n}')")).collect();
+        let db = app.connection.database.clone().unwrap();
+        let analyze = crate::db::tests::test_sql(engine).analyze.replace("{table}", "big_export");
+        for setup in [
+            "drop table if exists big_export".to_string(),
+            "create table big_export (id int primary key, note varchar(40))".to_string(),
+            format!("insert into big_export values {}", values.join(",")),
+            analyze,
+        ] {
+            db.run(&setup, 1).await.unwrap_or_else(|e| panic!("{engine:?}: {setup}: {e}"));
+        }
+
+        run_sql(&mut app, "select * from big_export").await;
+        app.focus = Focus::Results;
+        app.export_all(Format::Csv);
+        assert!(app.export_estimating.is_some(), "{engine:?}: {}", said(&app));
+        assert!(app.export_task.is_none(), "{engine:?}: nothing's written yet");
+        while app.export_estimating.is_some() {
+            let event = app.poll_db_event().await.unwrap();
+            app.handle_db_event(event);
+        }
+        let confirm = app.popups.confirm.as_ref().unwrap_or_else(|| panic!("{engine:?}: {}", said(&app)));
+        assert!(confirm.message.contains("by the plan") && confirm.message.contains("2.0k"), "{}", confirm.message);
+        assert!(matches!(confirm.action, ConfirmAction::ExportAll(Format::Csv, ..)));
+        // Yes: every row, in full, the stream having waited.
+        app.export_asked = None;
+        app.handle_key(key(KeyCode::Char('y')));
+        while app.export_task.is_some() {
+            let event = app.poll_db_event().await.unwrap();
+            app.handle_db_event(event);
+            // Grown past what was said (the first rows are the shortest): asked again.
+            if app.popups.confirm.is_some() {
+                app.export_asked = None;
+                app.handle_key(key(KeyCode::Char('y')));
+            }
+        }
+        assert!(said(&app).contains("Exported all 2000 rows"), "{engine:?}: {}", said(&app));
+        db.run("drop table big_export", 1).await.unwrap();
+    }
+}
+
+/// Left waiting at "keep going?", nothing reads the rows. PostgreSQL waits;
+/// MySQL drops the query after `net_write_timeout` (here a second): what's
+/// written is kept, named as what it is.
+#[tokio::test]
+async fn a_long_wait_at_keep_going_loses_no_rows_already_written() {
+    for engine in Engine::BUILT.into_iter().filter(|e| !e.is_file_based() && e.dialect().is_some()) {
+        let Some((mut app, dir)) = live_app(engine, "podelis_export_wait").await else { continue };
+        app.settings.row_limit = 10;
+        app.settings.export_dir = Some(dir.path().to_string_lossy().into_owned());
+        app.export_limits_for_tests = Some(crate::transfer::limits::ExportLimits { min_free: 0, ask_every: 1, max: 0 });
+        let db = app.connection.database.clone().unwrap();
+        db.run("drop table if exists export_wait", 1).await.unwrap();
+        db.run("create table export_wait (id int primary key, note text)", 1).await.unwrap();
+        // More than the sockets' buffers hold, so the server has to wait.
+        let pad = "x".repeat(2000);
+        for chunk in 0..30 {
+            let values: Vec<String> = (0..1000).map(|n| format!("({}, '{pad}')", chunk * 1000 + n)).collect();
+            db.run(&format!("insert into export_wait values {}", values.join(",")), 1).await.unwrap();
+        }
+        if engine == Engine::MySql {
+            db.run("set session net_write_timeout = 1", 1).await.unwrap();
+        }
+        run_sql(&mut app, "select * from export_wait").await;
+        app.focus = Focus::Results;
+        app.start_export_all(Format::Csv, 0);
+        let wait = Duration::from_secs(90);
+        while app.popups.confirm.is_none() && app.export_task.is_some() {
+            let event = tokio::time::timeout(wait, app.poll_db_event()).await.expect("to the question").unwrap();
+            app.handle_db_event(event);
+        }
+        let details = app.popups.confirm.as_ref().expect("the question").details.join(" / ");
+        assert!(details.contains("net_write_timeout"), "{details}");
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        while app.export_task.is_some() {
+            if app.popups.confirm.is_some() {
+                app.export_asked = None;
+                app.handle_key(key(KeyCode::Char('y')));
+            }
+            let event = tokio::time::timeout(wait, app.poll_db_event()).await.expect("not left hanging").unwrap();
+            app.handle_db_event(event);
+        }
+        let files: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("podelis-export")))
+            .collect();
+        assert_eq!(files.len(), 1, "{engine:?}: {files:?} / {}", said(&app));
+        let name = files[0].file_name().unwrap().to_string_lossy().into_owned();
+        let lines = std::fs::read_to_string(&files[0]).unwrap().lines().count();
+        if engine == Engine::MySql {
+            assert!(name.contains(".partial.csv"), "{name}");
+            assert!(said_error(&app) && said(&app).contains("lost while this export waited"), "{}", said(&app));
+            assert!(said(&app).contains("kept, incomplete"), "{}", said(&app));
+            assert!((1_001..30_001).contains(&lines), "a page or more of rows, not all: {lines}");
+        } else {
+            assert!(!name.contains("partial"), "{name}");
+            assert_eq!(lines, 30_001);
+        }
+        app.close_stream();
+    }
+}
+
+/// A running export's question can't be lost to another: it waits, says so,
+/// and asks again; stopped, its question goes.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn an_exports_question_survives_another_and_goes_with_it() {
+    let (mut app, dir) = big_export(0, 1, 0).await;
+    app.export_all(Format::Csv);
+    while app.popups.confirm.is_none() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    let other = |message: &str| Confirm {
+        message: message.into(),
+        details: vec![],
+        danger: false,
+        action: ConfirmAction::Quit,
+        offer_transaction: false,
+    };
+    // Something else takes the place of the question (a menu's Disconnect).
+    app.popups.confirm = Some(other("Disconnect?"));
+    app.tick_running();
+    assert_eq!(app.popups.confirm.as_ref().map(|c| c.message.as_str()), Some("Disconnect?"), "that one stays");
+    assert!(app.notes.status.contains("paused"), "{}", app.notes.status);
+    assert!(app.export_task.as_ref().is_some_and(|run| run.paused.is_some()));
+    // Answered: the export's comes back, and it never went on meanwhile.
+    app.popups.confirm = None;
+    app.tick_running();
+    assert!(matches!(app.popups.confirm.as_ref().map(|c| &c.action), Some(ConfirmAction::KeepExporting)));
+    // Stopped by another way (a new run does it): nothing left to answer.
+    app.stop_export();
+    assert!(app.popups.confirm.is_none() && app.export_task.is_none());
+    app.tick_running();
+    assert!(app.popups.confirm.is_none(), "not asked again");
+    until_removed(&mut app, dir.path()).await;
+}
+
+/// Its question comes back as soon as the other is answered, with no tick
+/// needed (nothing else may be keeping one going).
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn an_exports_question_comes_back_when_the_other_is_answered() {
+    let (mut app, dir) = big_export(0, 1, 0).await;
+    app.export_all(Format::Csv);
+    while app.popups.confirm.is_none() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    app.popups.confirm = Some(Confirm {
+        message: "Close this tab?".into(),
+        details: vec![],
+        danger: false,
+        action: ConfirmAction::CloseTab,
+        offer_transaction: false,
+    });
+    assert!(app.wants_ticks(), "paused: the main loop keeps checking");
+    app.handle_key(key(KeyCode::Char('n')));
+    assert!(
+        matches!(app.popups.confirm.as_ref().map(|c| &c.action), Some(ConfirmAction::KeepExporting)),
+        "at once, without a tick"
+    );
+    app.stop_export();
+    until_removed(&mut app, dir.path()).await;
+}
+
+/// The disk's floor is for exports of every row: a few rows shown are
+/// written on a disk with less free, so long as they fit.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_few_rows_shown_are_written_below_the_floor() {
+    let (mut app, dir) = big_export(u64::MAX - 1, 0, 0).await;
+    app.run_command(crate::app::commands::Command::Rows { to: Dest::ExportShown, format: Format::Csv });
+    assert!(!said_error(&app), "{}", said(&app));
+    assert_eq!(export_files(dir.path()).len(), 1);
+    app.run_command(crate::app::commands::Command::Rows { to: Dest::ExportAll, format: Format::Csv });
+    assert!(said_error(&app) && said(&app).contains("kept free"), "every row still keeps it: {}", said(&app));
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_size_question_is_about_the_rows_it_was_asked_of() {
+    let (mut app, dir) = big_export(0, 1, 0).await;
+    estimated(&mut app, Some(1e9));
+    let details = app.popups.confirm.as_ref().expect("the question").details.join(" / ");
+    assert!(details.contains("net_write_timeout"), "it can cost the query too: {details}");
+    // Watch mode ran it again meanwhile.
+    app.tab.run.id += 1;
+    answer(&mut app, 'y');
+    assert!(app.export_task.is_none() && export_files(dir.path()).is_empty());
+    assert!(app.notes.status_is_error || said_error(&app), "{}", said(&app));
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_rows_size_is_measured_in_the_format_its_going_to() {
+    let (app, _dir) = big_export(0, 0, 0).await;
+    let csv = app.export_row_bytes(Format::Csv);
+    let json = app.export_row_bytes(Format::Json);
+    let sql = app.export_row_bytes(Format::Sql);
+    assert!(csv > 0.0 && json > csv && sql > json, "{csv} {json} {sql}");
+    assert!(app.export_row_bytes(Format::Parquet) > 0.0);
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_shown_parquet_export_leaves_no_note_behind() {
+    let (mut app, _dir) = big_export(0, 0, 0).await;
+    app.run_command(crate::app::commands::Command::Rows { to: Dest::ExportShown, format: Format::Parquet });
+    app.notes.results_note = Some((t!("export.exporting").to_string(), false));
+    while app.export_task.is_some() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    assert!(app.notes.results_note.is_none());
+    assert!(said(&app).contains("Exported"), "{}", said(&app));
+}
+
+/// After an answer, what the server says later is what's said, and the file
+/// agreed to stays; a connection killed during the wait is said as that.
+#[tokio::test]
+async fn what_ends_an_agreed_export_is_said_and_its_file_stays() {
+    if !Engine::BUILT.contains(&Engine::Postgres) {
+        return;
+    }
+    let wait = Duration::from_secs(60);
+    let files = |dir: &std::path::Path| -> Vec<std::path::PathBuf> {
+        let all = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path());
+        all.filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("podelis-export"))).collect()
+    };
+    for killed in [false, true] {
+        let Some((mut app, dir)) = live_app(Engine::Postgres, "podelis_export_ended").await else { return };
+        app.settings.row_limit = 10;
+        app.settings.export_dir = Some(dir.path().to_string_lossy().into_owned());
+        app.export_limits_for_tests = Some(crate::transfer::limits::ExportLimits { min_free: 0, ask_every: 1, max: 0 });
+        // Fails at row 25000, past the first answers; a page is 10000 rows.
+        let sql = if killed {
+            "select n, repeat('x', 2000) from generate_series(1, 200000) n"
+        } else {
+            "select 1 / (25000 - n) from generate_series(1, 200000) n"
+        };
+        run_sql(&mut app, sql).await;
+        app.focus = Focus::Results;
+        app.start_export_all(Format::Csv, 0);
+        let mut pauses = 0;
+        while app.export_task.is_some() {
+            if app.popups.confirm.is_some() {
+                pauses += 1;
+                if killed && pauses == 1 {
+                    let db = app.connection.database.clone().unwrap();
+                    db.run_aside(
+                        "select pg_terminate_backend(pid) from pg_stat_activity \
+                         where query like '%repeat(''x'', 2000) from generate_series%' and pid <> pg_backend_pid()",
+                        1,
+                    )
+                    .await
+                    .unwrap();
+                }
+                app.export_asked = None;
+                app.handle_key(key(KeyCode::Char('y')));
+            }
+            let event = tokio::time::timeout(wait, app.poll_db_event()).await.expect("not left hanging").unwrap();
+            app.handle_db_event(event);
+        }
+        let found = files(dir.path());
+        assert_eq!(found.len(), 1, "{found:?} / {}", said(&app));
+        assert!(found[0].to_string_lossy().contains(".partial.csv"), "{found:?}");
+        if killed {
+            assert!(said(&app).contains("lost while this export waited"), "{}", said(&app));
+        } else {
+            assert!(said(&app).contains("division by zero"), "the server's own words: {}", said(&app));
+            assert!(!said(&app).contains("waited"), "{}", said(&app));
+        }
+        assert!(said(&app).contains("kept, incomplete"), "{}", said(&app));
+    }
+}
+
+/// A real one, for the hand: `cargo test real_gigabyte -- --ignored`, with
+/// the room for it. Writes 1.3 GB and removes it.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+#[ignore = "writes more than a gigabyte"]
+async fn a_real_gigabyte_export_asks_and_finishes() {
+    let (mut app, dir) = connected_app(ConnectionMode::Normal).await;
+    app.settings.row_limit = 10;
+    app.settings.export_dir = Some(dir.path().to_string_lossy().into_owned());
+    // The settings as they ship.
+    assert_eq!((app.settings.export_min_free_gb, app.settings.export_ask_gb), (5, 1));
+    run_sql(
+        &mut app,
+        "WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 1300000) \
+         SELECT n, printf('%0990d', n) FROM s",
+    )
+    .await;
+    app.focus = Focus::Results;
+    app.export_all(Format::Csv);
+    let (mut asked, mut size_at_question) = (0, String::new());
+    while app.export_task.is_some() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+        if let Some(confirm) = &app.popups.confirm {
+            asked += 1;
+            size_at_question.clone_from(&confirm.message);
+            answer(&mut app, 'y');
+        }
+    }
+    let path = &export_files(dir.path())[0];
+    let bytes = std::fs::metadata(path).unwrap().len();
+    assert!(said(&app).contains("Exported all 1300000 rows"), "{}", said(&app));
+    assert_eq!(asked, 1, "{size_at_question}");
+    assert!(size_at_question.contains("1.0 GB"), "{size_at_question}");
+    assert!(bytes > 1_200_000_000, "{bytes}");
+}
+
 /// A result all here: "every row" is every row, whatever a filter shows, in
 /// Parquet as in the text formats.
 #[cfg(feature = "sqlite")]

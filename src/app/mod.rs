@@ -258,7 +258,14 @@ pub struct App {
     /// Watch mode: the last query run again every few seconds.
     pub watch: Option<watch::Watch>,
     /// "Export all rows" in progress: what stops it, and the file it writes.
-    export_task: Option<(tokio::sync::oneshot::Sender<()>, PathBuf)>,
+    export_task: Option<query::export::ExportRun>,
+    /// Limits small enough to reach in a test (the settings are in GB).
+    #[cfg(test)]
+    export_limits_for_tests: Option<crate::transfer::limits::ExportLimits>,
+    /// How big a coming export would be is being worked out.
+    export_estimating: Option<query::export::EstimateRequest>,
+    /// When a question about an export's size came up by itself.
+    export_asked: Option<Instant>,
     /// What the export form was last run with, where it starts next time.
     export_choice: export_form::ExportChoice,
     /// The last run id handed out ([`App::next_run_id`]).
@@ -343,6 +350,10 @@ impl App {
             library: crate::config::library::Library::load_from(None),
             watch: None,
             export_task: None,
+            #[cfg(test)]
+            export_limits_for_tests: None,
+            export_estimating: None,
+            export_asked: None,
             export_choice: export_form::ExportChoice::default(),
             run_ids: 0,
             hidden_tab: None,
@@ -744,7 +755,8 @@ impl App {
         let ctrl_q = key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q');
         if let Some(confirm) = self.popups.confirm.take() {
             self.answer_confirm(confirm, key, ctrl_c || ctrl_q);
-            // A sharing question waiting behind it comes next.
+            // An export's question, or a sharing one, waiting behind it comes next.
+            self.offer_export_question();
             return self.share_tick();
         }
         if ctrl_q {

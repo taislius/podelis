@@ -3,7 +3,7 @@
 //! queries, plans and exports are in the files beside this one.
 
 mod editor_keys;
-mod export;
+pub(in crate::app) mod export;
 mod plan;
 mod results_keys;
 mod run;
@@ -82,6 +82,7 @@ impl App {
         }
         match key.code {
             KeyCode::Esc if self.export_task.is_some() => return self.stop_export(),
+            KeyCode::Esc if self.export_estimating.is_some() => return self.stop_estimating(),
             // Esc leaves the zoom first (before cancelling a query), after a
             // results filter (which it clears first) and outside vim mode in
             // the editor (where it's vim's).

@@ -3,5 +3,6 @@
 pub(crate) mod diff;
 pub(crate) mod export;
 pub(crate) mod import;
+pub(crate) mod limits;
 pub(crate) mod parquet;
 pub(crate) mod snapshots;

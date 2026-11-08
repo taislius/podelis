@@ -48,6 +48,13 @@ fn parse(line: usize, text: &str) -> Option<Step> {
     })
 }
 
+/// The rows a tree expects the statement to return: its top step's, or
+/// nothing. A step further down says what that step reads: under a limit, a
+/// grouping or a union, not what comes out.
+pub(super) fn top_rows(text: &str) -> Option<f64> {
+    text.lines().enumerate().find_map(|(i, l)| parse(i, l))?.rows
+}
+
 /// The tables a tree plan reads in full, with the rows it expects.
 /// A scan a `Limit` above stops early (nothing in between that needs every
 /// row, or filters them) doesn't count.
@@ -216,6 +223,17 @@ mod tests {
             ]
         );
         assert_eq!(plan.text, text);
+    }
+
+    #[test]
+    fn what_a_statement_returns_is_the_trees_first_rows() {
+        let group = "-> Group aggregate: count(0)  (cost=9 rows=12)\n    -> Table scan on huge  (cost=9 rows=1000000)";
+        assert_eq!(top_rows(group), Some(12.0), "not what it reads");
+        let limit = "-> Limit: 10 row(s)\n    -> Sort: t.x\n        -> Table scan on t  (cost=9 rows=50000000)";
+        assert_eq!(top_rows(limit), None, "not the 50M below it");
+        assert_eq!(top_rows("-> Append\n    -> Table scan on a  (cost=1 rows=7)"), None, "a union's first part");
+        assert_eq!(top_rows("-> Rows fetched before execution"), None);
+        assert_eq!(top_rows(""), None);
     }
 
     #[test]

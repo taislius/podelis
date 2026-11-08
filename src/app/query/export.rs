@@ -1,6 +1,8 @@
 //! Exporting results: to a file, or all rows of a query.
 
 use super::super::*;
+use crate::db::human_bytes;
+use crate::transfer::limits::{self, Check, ExportLimits};
 
 impl App {
     /// `podelis-export-<timestamp>.<ext>` in `export_dir` (or the current folder).
@@ -30,20 +32,69 @@ impl App {
         )
     }
 
+    fn export_limits(&self) -> ExportLimits {
+        #[cfg(test)]
+        if let Some(limits) = self.export_limits_for_tests {
+            return limits;
+        }
+        let s = &self.settings;
+        ExportLimits::from_gb(s.export_min_free_gb, s.export_ask_gb, s.export_max_gb)
+    }
+
+    /// Free space where exports go, without holding the screen for a
+    /// mount that doesn't answer.
+    fn export_free(&self) -> Option<u64> {
+        limits::free_space_within(&self.export_dir(), Duration::from_millis(300))
+    }
+
+    /// Whether `size` bytes can be written where exports go; if not, says
+    /// why. `every`: of every row, which keeps the disk's floor; the rows
+    /// shown only have to fit.
+    fn export_fits(&mut self, size: u64, every: bool) -> bool {
+        let limits = self.export_limits();
+        let free = self.export_free();
+        let check = if every { limits.fits(size, free) } else { limits.fits_file(size, free) };
+        let why = match check {
+            Check::TooBig => t!("export.too_big_now", size = human_bytes(size)),
+            Check::DiskLow if every => {
+                t!("export.wont_fit", free = human_bytes(free.unwrap_or(0)), keep = human_bytes(limits.min_free))
+            }
+            Check::DiskLow => t!("export.no_room", size = human_bytes(size), free = human_bytes(free.unwrap_or(0))),
+            Check::Go | Check::Ask => return true,
+        };
+        self.set_status(why, true);
+        false
+    }
+
     /// Writes the rows as shown to a file in the current folder.
     pub(in crate::app) fn export(&mut self, format: Format) {
         let rows = self.tab.grid.view.clone();
         let note = self.shown_note();
-        self.write_rows(format, &rows, note);
+        self.write_rows(format, &rows, note, false);
     }
 
     /// Writes `rows` of the result to a file; `note` says how many they are.
-    fn write_rows(&mut self, format: Format, rows: &[usize], note: String) {
+    fn write_rows(&mut self, format: Format, rows: &[usize], note: String, every: bool) {
         if format == Format::Parquet {
-            return self.export_parquet(rows, note);
+            // Its own size isn't known until it's written: about that of its values.
+            let row_bytes = self.tab.grid.results.as_ref().map_or(0.0, |r| limits::average_row_bytes(&r.rows));
+            #[expect(
+                clippy::cast_precision_loss,
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "an estimate"
+            )]
+            let about = (rows.len() as f64 * row_bytes) as u64;
+            if self.export_fits(about, every) {
+                self.export_parquet(rows, note);
+            }
+            return;
         }
         let path = self.export_path(format);
         let Some(text) = self.rows_text(format, rows) else { return };
+        if !self.export_fits(text.len() as u64, every) {
+            return;
+        }
         let written = std::fs::write(&path, text);
         self.export_said(&path, written.map_err(|e| e.to_string()), &note);
     }
@@ -81,7 +132,7 @@ impl App {
         // Its stop isn't heard (it's quick: the rows already loaded); kept so
         // one export runs at a time.
         let (stop, _) = tokio::sync::oneshot::channel();
-        self.export_task = Some((stop, path));
+        self.export_task = Some(ExportRun { stop, path, resume: None, paused: None });
         self.set_status(t!("export.exporting").to_string(), false);
     }
 
@@ -132,8 +183,7 @@ impl App {
     /// rest of the stream page by page, straight to the file rather than
     /// into the grid. Esc stops it.
     pub(in crate::app) fn export_all(&mut self, format: Format) {
-        const PAGE: usize = 10_000;
-        if self.export_task.is_some() {
+        if self.export_task.is_some() || self.export_estimating.is_some() {
             return self.set_status(t!("export.already_running").to_string(), true);
         }
         let Some(results) = &self.tab.grid.results else { return };
@@ -145,11 +195,174 @@ impl App {
             // the order they're sorted.
             let rows = compute_view(results, "", self.tab.grid.sort);
             let note = format!(" ({})", tn!("export.rows", rows.len()));
-            return self.write_rows(format, &rows, note);
+            return self.write_rows(format, &rows, note, true);
         }
         if self.tab.run.fetching_more {
             return self.set_status(t!("export.still_loading").to_string(), true);
         }
+        if !format.supports(Dest::ExportAll) {
+            return self.set_status(t!("export.not_page_by_page", format = format.name()), true);
+        }
+        if self.export_fits(0, true) {
+            self.estimate_export(format);
+        }
+    }
+
+    /// The statement behind the rows, when a plan can be made of it beside
+    /// them: asks that plan how many rows it returns, then goes on. Where
+    /// it doesn't say, only the size it reaches asks.
+    fn estimate_export(&mut self, format: Format) {
+        const WAIT: Duration = Duration::from_secs(3);
+        let limits = self.export_limits();
+        let engine = self.engine();
+        let sql = self.tab.last_sql.as_ref().map(|(sql, _)| sql.clone()).unwrap_or_default();
+        let one = crate::sql::split_statements(&sql, engine).len() == 1;
+        let explain = engine.dialect().map(|d| (d, d.explain(sql.trim().trim_end_matches(';'), self.version_of_db())));
+        let plan = explain.filter(|(_, explain)| {
+            one && (limits.ask_every > 0 || limits.max > 0)
+                && engine.dialect().is_some_and(|d| d.plans_rows(self.version_of_db()))
+                && !engine.is_file_based()
+                && self.connection.txn == TxnState::Idle
+                && crate::sql::params::find(explain, engine).is_empty()
+        });
+        let (Some((dialect, explain)), Some(db)) = (plan, self.connection.database.clone()) else {
+            return self.start_export_all(format, 0);
+        };
+        let row_bytes = self.export_row_bytes(format);
+        let send = self.sender();
+        // Answers only this request, about these rows: what else may have
+        // happened by then is checked when it comes.
+        let request = self.next_run_id();
+        self.export_estimating = Some(EstimateRequest { id: request, run: self.tab.run.id });
+        self.set_status(t!("export.estimating").to_string(), false);
+        tokio::spawn(async move {
+            let plan = tokio::time::timeout(WAIT, db.run_aside(&explain, 10_000)).await;
+            let rows =
+                plan.ok().and_then(Result::ok).flatten().and_then(|plan| dialect.plan_rows(&plan.columns, &plan.rows));
+            send(Background::ExportEstimated { request, format, rows, row_bytes }.into());
+        });
+    }
+
+    /// About how many bytes a row takes in `format`: those loaded, written
+    /// that way. (Parquet's can't be told before it's written: their values'.)
+    pub(in crate::app) fn export_row_bytes(&self, format: Format) -> f64 {
+        let Some(results) = &self.tab.grid.results else { return 0.0 };
+        let sample: Vec<usize> = (0..results.rows.len().min(1000)).collect();
+        match self.rows_text(format, &sample) {
+            #[expect(clippy::cast_precision_loss, reason = "an estimate")]
+            Some(text) if !sample.is_empty() => text.len() as f64 / sample.len() as f64,
+            _ => limits::average_row_bytes(&results.rows),
+        }
+    }
+
+    fn version_of_db(&self) -> &str {
+        self.connection.database.as_ref().map_or("", |db| db.version())
+    }
+
+    /// Esc while the size is worked out: no export.
+    pub(in crate::app) fn stop_estimating(&mut self) {
+        self.export_estimating = None;
+        self.set_status(t!("export.not_started").to_string(), false);
+    }
+
+    /// What the plan said: an export big enough asks first.
+    pub(in crate::app) fn export_estimated(&mut self, request: u64, format: Format, rows: Option<f64>, row_bytes: f64) {
+        // One stopped, and asked again since: the answer of an old one.
+        let Some(asked) = self.export_estimating.filter(|asked| asked.id == request) else { return };
+        self.export_estimating = None;
+        self.clear_export_note();
+        // The run ids are unique across tabs: the same rows, here, still open.
+        if asked.run != self.tab.run.id || self.tab.run.stream.is_none() {
+            return self.set_status(t!("export.other_tab").to_string(), true);
+        }
+        // Another question is waiting: y there mustn't answer this.
+        if self.popups.confirm.is_some() {
+            return self.set_status(t!("export.other_question").to_string(), true);
+        }
+        let limits = self.export_limits();
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "an estimate, saturating")]
+        let size = rows.map_or(0, |rows| (rows * row_bytes) as u64);
+        let big = limits.ask_every > 0 && size >= limits.ask_every;
+        let over = limits.max > 0 && size >= limits.max;
+        let free = self.export_free();
+        if !big && !over {
+            return self.start_export_all(format, 0);
+        }
+        let shown_rows = crate::db::human_rows(rows.unwrap_or(0.0));
+        let message = t!("export.ask_about", size = human_bytes(size), rows = shown_rows);
+        let mut details = export_ask_details(&limits, size, free);
+        details.push(t!("export.ask_waiting").to_string());
+        // Agreed to about this much: it asks next after that.
+        let action = ConfirmAction::ExportAll(format, size, self.tab.run.id);
+        self.export_asked = Some(Instant::now());
+        self.popups.confirm = Some(Confirm { message, details, danger: false, action, offer_transaction: false });
+    }
+
+    /// The export reached a size to ask about. It waits for the answer
+    /// whatever else comes up.
+    pub(in crate::app) fn export_ask(&mut self, rows: u64, size: u64, free: Option<u64>) {
+        if let Some(run) = &mut self.export_task {
+            run.paused = Some(ExportPause { rows, size, free });
+            self.offer_export_question();
+        }
+    }
+
+    /// Asks "keep going?", now or as soon as no other question is open: the
+    /// export waits until it's answered, so it mustn't be lost to another.
+    pub(in crate::app) fn offer_export_question(&mut self) {
+        let Some(pause) = self.export_task.as_ref().and_then(|run| run.paused) else { return };
+        if let Some(open) = &self.popups.confirm {
+            if !matches!(open.action, ConfirmAction::KeepExporting) {
+                self.set_status(t!("export.paused", size = human_bytes(pause.size)), false);
+            }
+            return;
+        }
+        #[expect(clippy::cast_precision_loss, reason = "display only")]
+        let shown_rows = crate::db::human_rows(pause.rows as f64);
+        let message = t!("export.ask_reached", size = human_bytes(pause.size), rows = shown_rows);
+        // What's written is off what's free already: nothing more to subtract.
+        let mut details = export_ask_details(&self.export_limits(), 0, pause.free);
+        details.push(t!("export.ask_waiting").to_string());
+        let action = ConfirmAction::KeepExporting;
+        self.export_asked = Some(Instant::now());
+        self.popups.confirm = Some(Confirm { message, details, danger: false, action, offer_transaction: false });
+    }
+
+    /// A key started the export, so the footer says it's on its way until
+    /// the next key; what comes next is said without one, and goes on.
+    pub(in crate::app) fn clear_export_note(&mut self) {
+        let ours = [t!("export.exporting"), t!("export.estimating")];
+        if self.notes.results_note.as_ref().is_some_and(|(note, _)| ours.contains(&note.as_str())) {
+            self.notes.results_note = None;
+        }
+        if self.notes.editor_note.as_deref().is_some_and(|note| ours.contains(&note)) {
+            self.notes.editor_note = None;
+        }
+    }
+
+    pub(in crate::app) fn keep_exporting(&mut self) {
+        if let Some(run) = &mut self.export_task {
+            run.paused = None;
+            if let Some(resume) = &run.resume {
+                resume.notify_one();
+            }
+        }
+    }
+
+    /// Writes every row, page by page. `agreed`: the size already agreed to.
+    pub(in crate::app) fn start_export_all(&mut self, format: Format, agreed: u64) {
+        if self.export_task.is_some() {
+            return self.set_status(t!("export.already_running").to_string(), true);
+        }
+        // Asked again, as time has passed: a page on its way would go to the
+        // grid and not the file, and the stream may have gone.
+        if self.tab.run.fetching_more {
+            return self.set_status(t!("export.still_loading").to_string(), true);
+        }
+        if self.tab.run.stream.is_none() {
+            return self.set_status(t!("export.other_tab").to_string(), true);
+        }
+        let Some(results) = &self.tab.grid.results else { return };
         let engine = self.engine();
         // How it's written: text (`Some`), or Parquet.
         let paged = match format {
@@ -166,78 +379,320 @@ impl App {
         let (columns, types, loaded) = (results.columns.clone(), results.column_types.clone(), results.rows.clone());
         let send = self.sender();
         let target = path.clone();
-        let (stop, mut stopped) = tokio::sync::oneshot::channel::<()>();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let resume = std::sync::Arc::new(tokio::sync::Notify::new());
+        let watch =
+            ExportWatch::new(self.export_limits(), self.export_dir(), &target, agreed, std::sync::Arc::clone(&resume));
+        let page = limits::page_rows(limits::average_row_bytes(&loaded));
+        let job = ExportJob { target: target.clone(), paged, columns, types, engine, loaded, stream, page };
         tokio::spawn(async move {
-            let written = async {
-                let file = std::io::BufWriter::new(std::fs::File::create(&target)?);
-                let out = match paged {
-                    Some(paged) => Sink::Text(crate::transfer::export::PagedWriter::new(file, paged, &columns, &types)),
-                    None => Sink::Parquet(Box::new(crate::transfer::parquet::Pages::new(
-                        file,
-                        &columns,
-                        &types,
-                        engine,
-                        target.with_extension("parquet.rows"),
-                    )?)),
-                };
-                // Encoding (Parquet's above all) is work for a blocking
-                // thread, not for the runtime's workers.
-                let mut out = tokio::task::spawn_blocking(move || {
-                    let mut out = out;
-                    out.page(loaded).map(|()| out)
-                })
-                .await??;
-                loop {
-                    let page = tokio::select! {
-                        page = stream.next_page(PAGE) => page.map_err(|e| anyhow::anyhow!(e))?,
-                        _ = &mut stopped => anyhow::bail!("stopped"),
-                    };
-                    let done = page.done;
-                    out = tokio::task::spawn_blocking(move || {
-                        let mut out = out;
-                        out.page(page.rows).map(|()| out)
-                    })
-                    .await??;
-                    send(Background::ExportProgress(out.rows()).into());
-                    if done {
-                        break;
-                    }
-                }
-                let rows = out.rows();
-                // Parquet's file is written here, all of it: a stop ends it
-                // between row groups.
-                let halt = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                let flag = std::sync::Arc::clone(&halt);
-                let mut finishing = tokio::task::spawn_blocking(move || out.finish(&flag));
-                tokio::select! {
-                    done = &mut finishing => done??,
-                    _ = &mut stopped => {
-                        halt.store(true, std::sync::atomic::Ordering::SeqCst);
-                        let _ = finishing.await;
-                        anyhow::bail!("stopped");
-                    }
-                }
-                anyhow::Ok(rows)
-            }
-            .await;
-            // The stream goes with this task, which cancels the query; an
-            // unfinished file isn't left behind.
-            drop(stream);
-            if written.is_err() {
+            // A file with rows agreed to stays, whatever goes wrong after.
+            let mut keep = false;
+            let written = write_every_row(job, watch, &send, stopped, &mut keep).await;
+            if written.is_err() && !keep {
                 let _ = std::fs::remove_file(&target);
             }
             send(Background::ExportDone(target, written.map_err(|e| format!("{e:#}"))).into());
         });
-        self.export_task = Some((stop, path));
+        self.export_task = Some(ExportRun { stop, path, resume: Some(resume), paused: None });
         self.set_status(t!("export.exporting").to_string(), false);
     }
 
     /// Stops a running export; it removes its unfinished file.
     pub(in crate::app) fn stop_export(&mut self) {
-        let Some((stop, _)) = self.export_task.take() else { return };
-        let _ = stop.send(());
+        // Its question, if it's on the screen, is about nothing now.
+        if self.popups.confirm.as_ref().is_some_and(|c| matches!(c.action, ConfirmAction::KeepExporting)) {
+            self.popups.confirm = None;
+        }
+        let Some(run) = self.export_task.take() else { return };
+        let _ = run.stop.send(());
         self.set_status(t!("export.stopped").to_string(), false);
     }
+}
+
+/// A size being worked out: the request's number, and the run whose rows
+/// are to be exported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EstimateRequest {
+    pub id: u64,
+    pub run: u64,
+}
+
+/// An export being written, with all that's about it: what stops it, its
+/// file, what wakes it from a question, and that question.
+pub struct ExportRun {
+    stop: tokio::sync::oneshot::Sender<()>,
+    pub path: PathBuf,
+    resume: Option<std::sync::Arc<tokio::sync::Notify>>,
+    pub paused: Option<ExportPause>,
+}
+
+#[cfg(test)]
+impl ExportRun {
+    pub fn for_tests() -> Self {
+        ExportRun { stop: tokio::sync::oneshot::channel().0, path: PathBuf::from("x"), resume: None, paused: None }
+    }
+}
+
+/// How far an export got when it stopped to ask.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExportPause {
+    pub rows: u64,
+    pub size: u64,
+    pub free: Option<u64>,
+}
+
+/// Parquet's rows on their way to its file, beside it.
+fn scratch_path(target: &std::path::Path) -> PathBuf {
+    target.with_extension("parquet.rows")
+}
+
+/// What an export writing page by page holds itself to.
+struct ExportWatch {
+    limits: ExportLimits,
+    dir: PathBuf,
+    target: PathBuf,
+    scratch: PathBuf,
+    next_ask: u64,
+    resume: std::sync::Arc<tokio::sync::Notify>,
+    /// It has stopped reading the rows to wait for an answer: what's
+    /// written by then was agreed to.
+    waited: bool,
+    /// And no page has come since, so an error now may be the wait's.
+    just_waited: bool,
+}
+
+impl ExportWatch {
+    fn new(
+        limits: ExportLimits,
+        dir: PathBuf,
+        target: &std::path::Path,
+        agreed: u64,
+        resume: std::sync::Arc<tokio::sync::Notify>,
+    ) -> Self {
+        let scratch = scratch_path(target);
+        ExportWatch {
+            limits,
+            dir,
+            target: target.to_path_buf(),
+            scratch,
+            next_ask: limits.next_ask(agreed),
+            resume,
+            waited: agreed > 0,
+            just_waited: agreed > 0,
+        }
+    }
+
+    /// Says how far it's got, and stops it or waits for an answer if it
+    /// has to. Not after the `last` page: all of it is written by then.
+    async fn after_page(
+        &mut self,
+        rows: u64,
+        last: bool,
+        send: &impl Fn(DbEventKind),
+        stopped: &mut tokio::sync::oneshot::Receiver<()>,
+    ) -> anyhow::Result<()> {
+        let (size, free) = self.measure().await;
+        send(Background::ExportProgress { rows, size, free }.into());
+        if last {
+            return Ok(());
+        }
+        match self.limits.check(size, free, self.next_ask) {
+            Check::Go => {}
+            Check::TooBig => anyhow::bail!(t!("export.too_big", size = human_bytes(size))),
+            Check::DiskLow => anyhow::bail!(disk_low(free, self.limits.min_free)),
+            Check::Ask => {
+                send(Background::ExportAsk { rows, size, free }.into());
+                tokio::select! {
+                    () = self.resume.notified() => {}
+                    _ = stopped => anyhow::bail!("stopped"),
+                }
+                self.next_ask = self.limits.next_ask(size);
+                self.waited = true;
+                self.just_waited = true;
+            }
+        }
+        Ok(())
+    }
+
+    /// Free space now, read off the runtime's threads (a slow mount).
+    async fn free_now(&self) -> Option<u64> {
+        let dir = self.dir.clone();
+        tokio::task::spawn_blocking(move || limits::free_space(&dir)).await.ok().flatten()
+    }
+
+    /// The file's size so far and the free space, read off the runtime's threads.
+    async fn measure(&self) -> (u64, Option<u64>) {
+        let (dir, target, scratch) = (self.dir.clone(), self.target.clone(), self.scratch.clone());
+        let read = move || (limits::written(&target, &scratch), limits::free_space(&dir));
+        tokio::task::spawn_blocking(read).await.unwrap_or((0, None))
+    }
+}
+
+/// What an export of every row writes, and where.
+struct ExportJob {
+    target: PathBuf,
+    paged: Option<crate::transfer::export::Paged>,
+    columns: Vec<String>,
+    types: Vec<String>,
+    engine: Engine,
+    loaded: Vec<Vec<Option<String>>>,
+    stream: RowStream,
+    /// Rows a page.
+    page: usize,
+}
+
+/// Writes the rows loaded and those still to come. On an error the file is
+/// removed, unless `keep` says it holds what was agreed to. The stream goes
+/// with this, which cancels the query.
+async fn write_every_row(
+    job: ExportJob,
+    mut watch: ExportWatch,
+    send: &impl Fn(DbEventKind),
+    mut stopped: tokio::sync::oneshot::Receiver<()>,
+    keep: &mut bool,
+) -> anyhow::Result<u64> {
+    let ExportJob { target, paged, columns, types, engine, loaded, stream, page: page_rows } = job;
+    let parquet = paged.is_none();
+    let out = open_sink(&target, paged, &columns, &types, engine)?;
+    // Encoding (Parquet's above all) is work for a blocking
+    // thread, not for the runtime's workers.
+    let mut out = tokio::task::spawn_blocking(move || {
+        let mut out = out;
+        out.page(loaded).map(|()| out)
+    })
+    .await??;
+    // Why it ended before the last row, with its file to keep.
+    let mut cut_short = None;
+    loop {
+        let page = tokio::select! {
+            page = stream.next_page(page_rows) => page,
+            _ = &mut stopped => anyhow::bail!("stopped"),
+        };
+        let page = match page {
+            Ok(page) => page,
+            Err(e) if watch.waited => {
+                tracing::warn!("export: cut short: {e}");
+                // The connection broken straight after a wait: most likely the
+                // wait's doing. Anything else is what the server said.
+                let lost = watch.just_waited && stream.broke();
+                cut_short = Some(if lost { t!("export.lost_waiting").to_string() } else { one_line(&e) });
+                break;
+            }
+            Err(e) => anyhow::bail!(e),
+        };
+        watch.just_waited = false;
+        let done = page.done;
+        out = tokio::task::spawn_blocking(move || {
+            let mut out = out;
+            out.page(page.rows).map(|()| out)
+        })
+        .await??;
+        watch.after_page(out.rows(), done, send, &mut stopped).await?;
+        if done {
+            break;
+        }
+    }
+    drop(stream);
+    let rows = out.rows();
+    // Text is all on disk by now; Parquet's file is written here, all of it,
+    // watched as the pages were, and a stop ends it between row groups.
+    let halt = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = std::sync::Arc::clone(&halt);
+    let mut finishing = tokio::task::spawn_blocking(move || out.finish(&flag));
+    let mut every_second = tokio::time::interval(Duration::from_secs(1));
+    let finished: anyhow::Result<()> = loop {
+        tokio::select! {
+            done = &mut finishing => break done.map_err(anyhow::Error::from).and_then(|r| r.map_err(Into::into)),
+            _ = &mut stopped => {
+                halt.store(true, std::sync::atomic::Ordering::SeqCst);
+                let _ = finishing.await;
+                anyhow::bail!("stopped");
+            }
+            _ = every_second.tick(), if parquet => {
+                let free = watch.free_now().await;
+                if !watch.limits.has_room(0, free) {
+                    halt.store(true, std::sync::atomic::Ordering::SeqCst);
+                    let _ = finishing.await;
+                    anyhow::bail!(disk_low(free, watch.limits.min_free));
+                }
+            }
+        }
+    };
+    match (finished, cut_short) {
+        (Ok(()), None) => Ok(rows),
+        // Kept only once it's whole as far as it goes, and named as a part.
+        (Ok(()), Some(why)) => {
+            *keep = true;
+            Err(keep_partial(&target, rows, &why))
+        }
+        // Text cut short, its last write failing too: what's there stays.
+        (Err(e), Some(why)) if !parquet => {
+            *keep = true;
+            Err(keep_partial(&target, rows, &format!("{why}; {e:#}")))
+        }
+        (Err(e), _) => Err(e),
+    }
+}
+
+/// The file every row goes to: text page by page (`Some`), or Parquet.
+fn open_sink(
+    target: &std::path::Path,
+    paged: Option<crate::transfer::export::Paged>,
+    columns: &[String],
+    types: &[String],
+    engine: Engine,
+) -> anyhow::Result<Sink<std::io::BufWriter<std::fs::File>>> {
+    let file = std::io::BufWriter::new(std::fs::File::create(target)?);
+    Ok(match paged {
+        Some(paged) => Sink::Text(crate::transfer::export::PagedWriter::new(file, paged, columns, types)),
+        None => Sink::Parquet(Box::new(crate::transfer::parquet::Pages::new(
+            file,
+            columns,
+            types,
+            engine,
+            scratch_path(target),
+        )?)),
+    })
+}
+
+/// Names a finished file as the part it is, and says so. (If it can't be
+/// renamed it's still there, under its own name.)
+fn keep_partial(target: &std::path::Path, rows: u64, why: &str) -> anyhow::Error {
+    let partial = partial_path(target);
+    let kept = if std::fs::rename(target, &partial).is_ok() { partial } else { target.to_path_buf() };
+    let shown = std::fs::canonicalize(&kept).unwrap_or(kept);
+    anyhow::anyhow!(t!("export.kept_partial", why = why, rows = rows, path = shown.display()))
+}
+
+/// Where an export cut short is kept: `a.csv` as `a.partial.csv`.
+fn partial_path(path: &std::path::Path) -> PathBuf {
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let ext = path.extension().unwrap_or_default().to_string_lossy();
+    path.with_file_name(format!("{stem}.partial.{ext}"))
+}
+
+fn disk_low(free: Option<u64>, keep: u64) -> String {
+    t!("export.disk_low", free = human_bytes(free.unwrap_or(0)), keep = human_bytes(keep))
+}
+
+/// What a question about an export's size says beside it.
+fn export_ask_details(limits: &ExportLimits, size: u64, free: Option<u64>) -> Vec<String> {
+    let mut details = Vec::new();
+    match free {
+        Some(free) => details.push(t!("export.ask_free", free = human_bytes(free))),
+        None if limits.min_free > 0 => details.push(t!("export.ask_free_unknown").to_string()),
+        None => {}
+    }
+    if !limits.has_room(size, free) {
+        details.push(t!("export.ask_wont_fit", keep = human_bytes(limits.min_free)));
+    } else if limits.min_free > 0 && free.is_some() {
+        details.push(t!("export.ask_kept", keep = human_bytes(limits.min_free)));
+    }
+    if limits.max > 0 {
+        details.push(t!("export.ask_stops_at", size = human_bytes(limits.max)));
+    }
+    details
 }
 
 /// Where rows go.
@@ -378,5 +833,16 @@ impl<W: std::io::Write + Send> Sink<W> {
             Sink::Text(out) => out.finish().map(drop),
             Sink::Parquet(out) => out.finish(stop).map(drop),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_partial_file_says_so_and_keeps_its_type() {
+        let partial = partial_path(std::path::Path::new("/x/podelis-export-1.csv"));
+        assert_eq!(partial, PathBuf::from("/x/podelis-export-1.partial.csv"));
     }
 }

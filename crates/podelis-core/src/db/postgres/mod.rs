@@ -240,6 +240,12 @@ impl SqlDialect for Postgres {
     fn format_plan(&self, _columns: &[String], rows: &[Vec<Option<String>>]) -> Option<Plan> {
         plan::format(rows.first()?.first()?.as_deref()?)
     }
+    fn plans_rows(&self, _version: &str) -> bool {
+        true
+    }
+    fn plan_rows(&self, _columns: &[String], rows: &[Vec<Option<String>>]) -> Option<f64> {
+        plan::top_rows(rows.first()?.first()?.as_deref()?)
+    }
     fn full_scans(&self, _columns: &[String], rows: &[Vec<Option<String>>]) -> Vec<crate::db::dialect::Scan> {
         rows.first().and_then(|r| r.first()).and_then(|c| c.as_deref()).map(plan::full_scans).unwrap_or_default()
     }
