@@ -31,7 +31,9 @@ their own beside it once they grow, named for what it tests (an engine's
 `#[path = "context_tests.rs"] mod tests;`), or a folder of files by topic
 (`src/app/tests/`, `src/ui/tests/`). A folder under `src/` holds code, so
 none holds only tests; data tests read sits in a crate's `testdata/`
-(podelis-ai's `testdata/context-eval/`). Being inside the crate, they
+(podelis-ai's `testdata/context-eval/`), snapshots too (`testdata/snapshots/`: a
+snapshot test holds `crate::snapshots_in_testdata()` while it asserts). The
+app's snapshots are its UI tests', in `src/ui/tests/snapshots/`. Being inside the crate, they
 can reach private code (`App`, its keys, what the UI drew), which is most
 of what they check. The app's tests reach the core's test helpers
 (`db::tests`: test servers, scratch databases) through its
