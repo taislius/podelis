@@ -25,9 +25,13 @@ their code); failures they find are saved in each crate's
 
 **Where tests go.** Tests sit with the code they test, as Rust's unit
 tests do: a `#[cfg(test)] mod tests` at the end of a file, or a file of
-their own beside it once they grow (an engine's
-`crates/podelis-core/src/db/<engine>/db_tests.rs`), or a folder of files by topic
-(`src/app/tests/`, `src/ui/tests/`). Being inside the crate, they
+their own beside it once they grow, named for what it tests (an engine's
+`crates/podelis-core/src/db/<engine>/db_tests.rs`, podelis-ai's
+`context_tests.rs` beside `context.rs`, which points to it with
+`#[path = "context_tests.rs"] mod tests;`), or a folder of files by topic
+(`src/app/tests/`, `src/ui/tests/`). A folder under `src/` holds code, so
+none holds only tests; data tests read sits in a crate's `testdata/`
+(podelis-ai's `testdata/context-eval/`). Being inside the crate, they
 can reach private code (`App`, its keys, what the UI drew), which is most
 of what they check. The app's tests reach the core's test helpers
 (`db::tests`: test servers, scratch databases) through its
@@ -100,7 +104,7 @@ repository's Security tab, not a failed run.
 
 **The context's eval.** `cargo test retrieval -- --nocapture` prints
 recall, precision and the context's size per database for the gold set
-in `crates/podelis-ai/src/context/eval/questions.txt` (`PODELIS_EVAL_ALL=1` also
+in `crates/podelis-ai/testdata/context-eval/questions.txt` (`PODELIS_EVAL_ALL=1` also
 lists each question's extra tables and why they came); it fails under
 the floors in `eval.rs`, to raise as the builder improves. The schemas
 are snapshots (`eval/<database>.json`, no rows); to make them again from
