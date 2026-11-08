@@ -406,7 +406,7 @@ not_updated = "Neatnaujinta nė viena eilutė: galbūt ji buvo pakeista ar ištr
 saved = "Išsaugota · atnaujinta 1 eilutė"
 updated = "Atnaujinta 1 eilutė"
 updated_many = "Atnaujinta eilučių: {n} (tikėtasi 1)"
-wait_for_query = "Vykdoma užklausa: keitimas liks atviras, kol ji baigsis"
+wait_for_query = "Sesijoje vienu metu galima vykdyti tik vieną užklausą, o ši dar vykdoma: keitimas liks atviras, kol ji baigsis"
 
 [editor]
 explain = "Planas"
@@ -496,7 +496,7 @@ not_in_schema = "{table} schemoje nėra"
 row = "eilutė {n}"
 several_tables = "{column} yra išorinis raktas lentelėse {tables}: rinkitės vieną jų"
 value_null = "reikšmė yra NULL"
-wait_for_query = "Vykdoma užklausa: sekite raktą, kai ji baigsis"
+wait_for_query = "Sesijoje vienu metu galima vykdyti tik vieną užklausą, o ši dar vykdoma: sekite raktą, kai ji baigsis"
 
 [form]
 agents = "DI agentai"
@@ -1031,7 +1031,7 @@ not_editable = "keisti galima tik paprasto SELECT iš vienos lentelės rezultatu
 read_only = "šis ryšys tik skaitymui"
 schema_loading = "schema dar neįkelta"
 table_not_found = "lentelės {table} schemoje nėra"
-wait_for_query = "Vykdoma užklausa: eilutė liks čia, kol ji baigsis"
+wait_for_query = "Sesijoje vienu metu galima vykdyti tik vieną užklausą, o ši dar vykdoma: eilutė liks čia, kol ji baigsis"
 
 [rows.copied_as]
 few = "Nukopijuotos {n} eilutės kaip {format}"
@@ -1106,17 +1106,18 @@ reconnected = "ryšys buvo nutrūkęs: prisijungta iš naujo (sesijos nustatymai
 result_set = "Rezultatų rinkinys {n}/{of}{from}: {rows}"
 rolled_back = "atšaukta (visada atšaukti)"
 rows_loaded = "įkelta eilučių: {n}"
-running = "Vykdoma užklausa: {then}"
+running = "Sesijoje vienu metu galima vykdyti tik vieną užklausą, o ši dar vykdoma: {then}"
 running_label = "vykdoma…"
 showing_first = "Rodomos pirmosios {shown} iš {total} eilučių per {time}"
 ssh_encrypts = "SSH tunelis vis tiek šifruoja"
 still_open = "transakcija vis dar atvira: {rollback} atšaukia"
 still_reconnecting = "Vis dar jungiamasi prie {names}…"
-tab_running = "Skirtukas „{tab}“{on} vykdo užklausą: {go}{then}"
+tab_running = "Sesijoje vienu metu galima vykdyti tik vieną užklausą: skirtukas „{tab}“{on} ją vykdo: {go}{then}"
 timed_out = "Viršyta laiko riba: {s} s (ryšio riba)"
 timed_out_early = "Viršyta laiko riba ({s} s, ryšio riba), sustabdyta anksčiau: {status}"
 tls_failed = "{warning}. TLS nepavyko: {why}"
 type_password = "{err} · įveskite slaptažodį ir paspauskite Enter (Ctrl+S išsaugo)"
+wait_or_esc = "palaukite arba Esc ją atšaukia"
 wait_or_esc_there = "palaukite arba Esc ten sustabdo"
 zoom_left_still_running = "Išėjote iš detalios peržiūros lango; užklausa vis dar vykdoma (Esc ją atšauks)"
 

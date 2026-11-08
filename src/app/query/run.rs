@@ -41,7 +41,12 @@ impl App {
     }
 
     pub(in crate::app) fn execute_with(&mut self, sql: String, offset: usize, purpose: RunPurpose) {
-        if self.tab.run.executing || self.busy_conn_tab().is_some() {
+        // One query at a time per session: here, or on another tab of the
+        // same connection, which is where Esc stops it.
+        if self.tab.run.executing {
+            return self.set_status(self.running_elsewhere(t!("run.wait_or_esc")), true);
+        }
+        if self.busy_conn_tab().is_some() {
             return self.set_status(self.running_elsewhere(t!("run.wait_or_esc_there")), true);
         }
         if self.connection.database.is_none() {
@@ -196,7 +201,8 @@ impl App {
         self.running_tabs().into_iter().find(|&i| i != self.active_tab && self.tabs[i].conn == Some(conn))
     }
 
-    /// "A query is running", naming its tab when that isn't this one (one
+    /// "One query at a time per session", naming the tab running it when
+    /// that isn't this one (one
     /// on this tab's connection): which tab, on which connection, how to
     /// get there, then `then`.
     pub(in crate::app) fn running_elsewhere(&self, then: &str) -> String {
