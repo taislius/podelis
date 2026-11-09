@@ -59,13 +59,23 @@ impl AgentConstraints {
         if let Some((_, way)) = self.instead.iter().find(|(w, _)| *w == word) {
             return (*way).to_string();
         }
+        // A language of its own names its calls (MongoDB's `find`…).
+        if !self.reads.contains(&"select") {
+            return format!(
+                "agents can call {} and, where allowed, {} on {engine}",
+                self.reads.join(", "),
+                self.writes.join(", ")
+            );
+        }
         format!("agents can run queries and, where allowed, INSERT, UPDATE, DELETE and schema changes on {engine}")
     }
 
-    /// The first of `words` (lowercase) that reaches past the data, and
-    /// what it does.
+    /// The first of `words` that reaches past the data, and what it does
+    /// (in any case: `mapReduce` is `mapreduce`).
     pub fn reaching_outside<'a>(&self, words: &'a [String]) -> Option<(&'a str, &'static str)> {
-        words.iter().find_map(|w| self.outside.iter().find(|(o, _)| o == w).map(|(_, why)| (w.as_str(), *why)))
+        words.iter().find_map(|w| {
+            self.outside.iter().find(|(o, _)| o.eq_ignore_ascii_case(w)).map(|(_, why)| (w.as_str(), *why))
+        })
     }
 }
 

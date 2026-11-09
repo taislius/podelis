@@ -154,6 +154,88 @@ async fn duckdb_for_agents_reaches_no_file() {
     }
 }
 
+/// MongoDB through the protocol, by the same rules as SQL's engines:
+/// reads, writes where allowed (one a call), production's dry run in a
+/// transaction where the server has them (a replica set) and refused
+/// where it hasn't, the guard against whole big collections, and plans.
+/// Live with `PODELIS_TEST_MONGO_PORT` (and `_REPLICA_SET` for one).
+#[cfg(feature = "mongodb")]
+#[tokio::test]
+async fn live_agents_on_mongodb() {
+    let Some(port) = std::env::var("PODELIS_TEST_MONGO_PORT").ok() else { return };
+    let host = std::env::var("PODELIS_TEST_MONGO_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    let replica_set = std::env::var_os("PODELIS_TEST_MONGO_REPLICA_SET").is_some();
+    let profile = |name: &str, agents, mode| ConnectionProfile {
+        port: port.clone(),
+        database: "podelis_mongo_agents".into(),
+        timeout: "10".into(),
+        ..server_connection(name, Engine::MongoDb, &host, agents, mode)
+    };
+    let setup = Database::connect(
+        crate::config::draft::ConnectionDraft::from_profile(
+            &profile("s", AgentAccess::Write, ConnectionMode::Normal),
+            String::new(),
+        )
+        .params()
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    setup.run("db.runCommand({dropDatabase: 1})", 1).await.unwrap();
+    setup.run("db.agent_t.insertMany([{_id: 1, x: 1}, {_id: 2, x: 2}, {_id: 3, x: 3}])", 1).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::new(
+        "p1".into(),
+        "live".into(),
+        vec![
+            profile("reads", AgentAccess::Read, ConnectionMode::Normal),
+            profile("writes", AgentAccess::Write, ConnectionMode::Normal),
+            profile("prod", AgentAccess::Write, ConnectionMode::Production),
+        ],
+        dir.path().join("log.jsonl"),
+    )
+    .guarding(2);
+    let client = connect(server).await;
+    let q = |conn: &str, sql: &str| serde_json::json!({ "connection": conn, "sql": sql });
+    let count = || async { setup.run("db.agent_t.countDocuments({x: 0})", 1).await.unwrap().rows[0][0].clone() };
+
+    let schema = call(&client, "schema", serde_json::json!({ "connection": "reads" })).await;
+    assert!(schema.contains("agent_t") && schema.contains("_id"), "{schema}");
+    let rows = call(&client, "query", q("reads", "db.agent_t.find({x: {$gte: 2}}).sort({_id: 1})")).await;
+    assert!(rows.contains("\"2\"") && rows.contains("\"3\"") && !rows.contains("\"1\""), "{rows}");
+    let refused = |answer: String, why: &str| assert!(answer.starts_with("ERROR") && answer.contains(why), "{answer}");
+    refused(call(&client, "query", q("reads", "db.agent_t.updateOne({_id: 1}, {$set: {x: 0}})")).await, "read only");
+    refused(call(&client, "query", q("reads", "db.agent_t.find({\"$where\": \"sleep(10)\"})")).await, "JavaScript");
+    refused(call(&client, "query", q("writes", "db.agent_t.deleteMany({})")).await, "destructive");
+    refused(call(&client, "query", q("writes", "db.startTransaction()")).await, "startTransaction()");
+
+    // Writes where allowed, one a call.
+    let wrote = call(&client, "query", q("writes", "db.agent_t.updateOne({_id: 1}, {$set: {x: 0}})")).await;
+    assert_eq!(wrote, r#"{"rows_affected":1}"#);
+    assert_eq!(count().await.as_deref(), Some("1"));
+    let two = "db.agent_t.updateOne({_id: 2}, {$set: {x: 0}}); db.agent_t.updateOne({_id: 3}, {$set: {x: 0}})";
+    refused(call(&client, "query", q("writes", two)).await, "one statement a call");
+
+    // Production: a dry run in a transaction, where there are any.
+    let dry = call(&client, "query", q("prod", "db.agent_t.updateMany({x: {$gt: 1}}, {$set: {x: 0}})")).await;
+    if replica_set {
+        assert!(dry.contains("dry run") && dry.contains("would change 2 row(s)"), "{dry}");
+    } else {
+        refused(dry, "replica set");
+    }
+    assert_eq!(count().await.as_deref(), Some("1"), "nothing changed");
+
+    // A whole "big" collection (3 documents is big here) on production.
+    refused(call(&client, "query", q("prod", "db.agent_t.find({x: 2})")).await, "read all of agent_t");
+    let by_key = call(&client, "query", q("prod", "db.agent_t.find({_id: 2})")).await;
+    assert!(!by_key.starts_with("ERROR"), "{by_key}");
+    let plan = call(&client, "explain", q("reads", "db.agent_t.find({x: 2})")).await;
+    assert!(plan.contains("COLLSCAN") && plan.contains("reads all of agent_t"), "{plan}");
+    refused(call(&client, "explain", q("reads", "db.agent_t.insertOne({})")).await, "can't be planned");
+    client.cancel().await.unwrap();
+    setup.run("db.runCommand({dropDatabase: 1})", 1).await.unwrap();
+}
+
 /// A sandbox: the agent's writes build on each other and its reads see
 /// them, a failed call doesn't spoil it, nobody else sees anything, and
 /// idle it's rolled back.

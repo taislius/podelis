@@ -171,9 +171,16 @@ pub(in crate::db) async fn routine_definition(_db: &Database, _routine: &Routine
     anyhow::bail!("MongoDB has no stored routines Podėlis lists")
 }
 
-/// Its plans aren't read yet.
-pub(in crate::db) async fn full_scans_of(_db: &Database, _statement: &str) -> Option<Vec<Scan>> {
-    None
+/// The collections a read would read whole, by its plan (`explain`, on the
+/// pool's client: the session may be busy); the rows from the catalog.
+pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Option<Vec<Scan>> {
+    let command = super::plans::explain_command(statement)?;
+    let call = super::language::call(&command)?;
+    let args = super::args::values(&command[call.args.clone()]).ok()?;
+    let command = super::args::document(args.first(), "the command").ok()?;
+    let answer = database(db).await.ok()?.run_command(command).await.ok()?;
+    let answer = ::mongodb::bson::Bson::Document(answer).into_relaxed_extjson();
+    Some(super::plans::collections_read_whole(&answer).iter().map(|c| Scan::new(c, None)).collect())
 }
 
 pub(in crate::db) async fn estimated_rows(db: &Database, scans: Vec<Scan>) -> Vec<(String, f64)> {

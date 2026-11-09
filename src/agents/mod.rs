@@ -12,6 +12,7 @@ pub use approvals::*;
 pub use log::*;
 
 use crate::db::{AgentAccess, ConnectionMode, Engine};
+use crate::language::TokenKind;
 use crate::language::statements::Kind;
 
 /// What happens to an agent's SQL. It always runs in a transaction of
@@ -69,6 +70,15 @@ pub fn verdict(access: AgentAccess, mode: ConnectionMode, sql: &str, engine: Eng
             risky.risk.unwrap_or_default()
         ));
     }
+    // Without SQL a write isn't in a transaction of Podėlis's (a dry run's
+    // aside): each statement stands as it runs, so one a call, not a
+    // script that could stop half-way.
+    if engine.dialect().is_none() && write.is_some() && infos.len() > 1 {
+        return Verdict::Refuse(format!(
+            "one statement a call when it writes on {}: each stands as it runs, so a script could stop half-way",
+            engine.label()
+        ));
+    }
     if access == AgentAccess::Approve {
         return Verdict::Run(if write.is_some() { Wrap::Ask } else { Wrap::ReadOnly });
     }
@@ -76,6 +86,14 @@ pub fn verdict(access: AgentAccess, mode: ConnectionMode, sql: &str, engine: Eng
     // writes); nothing is committed, so production too. Schema changes
     // only where they can be rolled back.
     if access == AgentAccess::Sandbox && may_write {
+        // Its calls each after a savepoint, in one transaction left open.
+        if engine.dialect().is_none() {
+            return Verdict::Refuse(format!(
+                "a sandbox needs savepoints and a transaction kept open between calls, which {} doesn't have: \
+                 ask the user to share this connection to read and write, or to approve writes",
+                engine.label()
+            ));
+        }
         if engine.capabilities().ddl_commits
             && let Some(ddl) = infos.iter().find(|i| i.kind == Kind::Ddl)
         {
@@ -115,10 +133,6 @@ pub fn explainable(sql: &str, engine: Engine) -> Result<(), String> {
 /// transaction (not SET, BEGIN, COMMIT, USE, CALL, DO, COPY, LOCK, GRANT…:
 /// they change the session, end Podėlis's transaction, or reach outside).
 fn allowed(sql: &str, engine: Engine) -> Result<Vec<crate::language::statements::StatementInfo>, String> {
-    // Podėlis's safety for agents is SQL's (its transactions and plans).
-    if engine.dialect().is_none() {
-        return Err(format!("agents need SQL here for now, which {} doesn't have", engine.label()));
-    }
     let rules = engine.backend().agent_constraints();
     // MySQL runs what's in `/*! … */` (MariaDB `/*M! … */` too): code the
     // checks below wouldn't see (`/*! INTO OUTFILE '…' */`). The whole text,
@@ -147,19 +161,18 @@ fn allowed(sql: &str, engine: Engine) -> Result<Vec<crate::language::statements:
     }
     let statements = crate::language::split_statements(sql, engine);
     if statements.is_empty() {
-        return Err("there's no SQL to run".to_string());
+        return Err(if engine.dialect().is_some() { "there's no SQL to run" } else { "there's nothing to run" }.into());
     }
     for statement in &statements {
-        let tokens = crate::language::tokenize(statement, engine);
-        let words: Vec<String> = tokens
-            .into_iter()
-            .filter(|t| t.kind == crate::language::TokenKind::Word)
-            .map(|t| statement[t.range].to_ascii_lowercase())
-            .collect();
-        let first = words.first().map_or("", String::as_str);
-        if !rules.may_start_with(first) {
-            let why = rules.why_not(first, engine.label());
-            return Err(format!("“{}”: not {}: {why}", one_line(statement), first.to_uppercase()));
+        let words = words(statement, engine);
+        let verb = crate::language::verb(engine, statement).unwrap_or_default();
+        if !rules.may_start_with(&verb) {
+            let why = rules.why_not(&verb, engine.label());
+            return Err(match (engine.dialect(), verb.as_str()) {
+                (Some(_), _) => format!("“{}”: not {}: {why}", one_line(statement), verb.to_uppercase()),
+                (None, "") => format!("“{}”: not a call Podėlis knows: {why}", one_line(statement)),
+                (None, _) => format!("“{}”: not {verb}(): {why}", one_line(statement)),
+            });
         }
         if let Some((word, does)) = rules.reaching_outside(&words) {
             return Err(format!("“{}” uses {}, which {does}: agents can't", one_line(statement), word.to_uppercase()));
@@ -195,6 +208,46 @@ pub fn kept_out(sql: &str, engine: Engine, service: Option<&dyn crate::db::servi
         let (schema, holds) = kept.iter().find(|(schema, _)| qualifies && *schema == name)?;
         Some(format!("{}'s {schema} schema {holds}: agents can't use it", service.name()))
     })
+}
+
+/// A statement's words, lower case where SQL's, to find what reaches past
+/// the data. Without SQL a key may be in quotes (`{"$where": …}`), escaped
+/// too (`"\u0024where"`): strings are words there, read as the server would.
+fn words(statement: &str, engine: Engine) -> Vec<String> {
+    let sql = engine.dialect().is_some();
+    crate::language::tokenize(statement, engine)
+        .into_iter()
+        .filter_map(|t| {
+            let text = &statement[t.range];
+            match t.kind {
+                TokenKind::Word if sql => Some(text.to_ascii_lowercase()),
+                TokenKind::Word => Some(text.to_string()),
+                TokenKind::String if !sql => Some(unescaped(text.get(1..text.len().saturating_sub(1)).unwrap_or(""))),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// A string's text with its escapes undone (`\u0024` is `$`).
+fn unescaped(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('u') => {
+                let hex: String = chars.by_ref().take(4).collect();
+                out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
+            }
+            Some(other) => out.push(other),
+            None => {}
+        }
+    }
+    out
 }
 
 fn one_line(s: &str) -> String {
@@ -307,7 +360,8 @@ mod tests {
     /// name, even beside a write.
     #[test]
     fn a_sandbox_refuses_only_schema_changes_that_commit() {
-        let engines: Vec<Engine> = Engine::ALL.into_iter().filter(|e| e.capabilities().ddl_commits).collect();
+        let engines: Vec<Engine> =
+            Engine::ALL.into_iter().filter(|e| e.capabilities().ddl_commits && e.dialect().is_some()).collect();
         assert!(!engines.is_empty(), "an engine whose DDL commits (MySQL)");
         for engine in engines {
             let v = |sql| verdict(AgentAccess::Sandbox, ConnectionMode::Normal, sql, engine);
@@ -357,12 +411,34 @@ mod tests {
         assert_eq!(kept_out("select * from vault.secrets", Engine::Postgres, elsewhere), None);
     }
 
-    /// On an engine whose language isn't SQL, agents are refused, saying why.
+    /// On an engine whose language isn't SQL the same rules hold, by what
+    /// its statements do: reads anywhere, writes where allowed (on
+    /// production a dry run), one a call; never a sandbox, which needs
+    /// savepoints.
     #[test]
-    fn agents_need_sql_for_now() {
+    fn engines_without_sql_by_the_same_rules() {
+        use AgentAccess::{Approve, Read, Sandbox, Write};
+        use ConnectionMode::{Normal, Production, ReadOnly};
         for engine in Engine::ALL.into_iter().filter(|e| e.dialect().is_none()) {
-            let Err(why) = allowed("db.t.find()", engine) else { panic!("{engine:?}") };
-            assert!(why.contains("need SQL"), "{engine:?}: {why}");
+            let v = |access, mode, sql| verdict(access, mode, sql, engine);
+            let said = |access, mode, sql| match v(access, mode, sql) {
+                Verdict::Refuse(said) => said,
+                Verdict::Run(wrap) => panic!("{engine:?} ran {sql}: {wrap:?}"),
+            };
+            let (read, write) = ("db.users.find({age: {$gt: 30}})", "db.users.updateOne({_id: 1}, {$set: {x: 1}})");
+            assert_eq!(v(Read, Normal, read), Verdict::Run(Wrap::ReadOnly));
+            assert_eq!(v(Read, Production, read), Verdict::Run(Wrap::ReadOnly));
+            assert!(said(Read, Normal, write).contains("read only"));
+            assert!(said(Write, ReadOnly, write).contains("read only"));
+            assert_eq!(v(Write, Normal, write), Verdict::Run(Wrap::Commit));
+            assert_eq!(v(Write, Production, write), Verdict::Run(Wrap::DryRun));
+            assert_eq!(v(Approve, Production, write), Verdict::Run(Wrap::Ask));
+            let (writes, reads) = (format!("{write}; {write}"), format!("{read}; {read}"));
+            assert!(said(Write, Normal, &writes).contains("one statement a call"));
+            assert_eq!(v(Read, Normal, &reads), Verdict::Run(Wrap::ReadOnly), "reads, any number");
+            assert!(said(Sandbox, Normal, write).contains("savepoints"));
+            assert!(explainable(read, engine).is_ok());
+            assert!(explainable(&format!("{read}; {read}"), engine).is_err());
         }
     }
 }
