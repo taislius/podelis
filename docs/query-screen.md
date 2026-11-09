@@ -53,7 +53,7 @@ Keys that work directly:
 
 | Key | Action |
 |---|---|
-| `F5` / `Ctrl+R` / `Ctrl+Enter`¹ | Run the selection, or everything in the editor. In a tab whose connection couldn't be opened again when Podėlis started (the server was down, the VPN off), `F5`, `F6` and `F7` try it again first and go ahead once it's open (or click **▶ F5 Run** right of the tabs; *Statement* and *Explain* are there too). The results pane switches to RESULT as it starts, with a result of its own (the one before stays: `,` in the results) |
+| `F5` / `Ctrl+Enter`¹ / `Alt+Enter` | Run the selection, or everything in the editor. In a tab whose connection couldn't be opened again when Podėlis started (the server was down, the VPN off), `F5`, `F6` and `F7` try it again first and go ahead once it's open (or click **▶ F5 Run** right of the tabs; *Statement* and *Explain* are there too). The results pane switches to RESULT as it starts, with a result of its own (the one before stays: `,` in the results) |
 | `F6` | Run the selection, or the statement under the cursor. With several statements in the editor, its footer says which one that is (`stmt 2/3`) |
 | `F7` | Show the plan for the selection / statement under the cursor (not executed), switching to QUERY PLAN as it starts. Pressed while a query runs, PostgreSQL and MySQL make it at once on a connection of their own; where that would see something else (SQLite, an open transaction, after `USE` or `SET`, `:parameters`) it follows when the query finishes, and if that fails its error stays in view instead (`Esc` stops both). MySQL and MariaDB show the classic `EXPLAIN` table, as a grid (`possible_keys`, `key_len`…), its notes above and each note's number on its row in the `◀` column |
 | `Shift+F7` | `EXPLAIN ANALYZE`: runs the statement and shows actual times and rows (writes ask first and are rolled back). MySQL needs 8.0.18+, and runs only reads and UPDATE/DELETE of several tables this way (for the rest it shows the plan, `F7`'s); MariaDB runs `ANALYZE` |
@@ -80,7 +80,7 @@ From any pane:
 | Key | Action |
 |---|---|
 | `Ctrl+T` / `Ctrl+W` | New tab on the same connection / close the tab, and its text with it (asks if it has unsaved changes); also a middle click on the tab, or *Close the tab* in the editor's menu. The last tab is emptied instead |
-| `Ctrl+PgUp` / `Ctrl+PgDn`, `Ctrl+K 1…9` | Previous / next tab, or jump to one |
+| `Ctrl+K [` / `Ctrl+K ]` (or `Ctrl+PgUp` / `Ctrl+PgDn`, where the terminal doesn't keep them for its own tabs), `Ctrl+K 1…9` or `Alt+1…9`, `Ctrl+K 0` or `Alt+0` the last | Previous / next tab, or jump to one; past nine tabs, `Ctrl+K g` lists them all to search |
 | `Ctrl+S` | Save the tab to the library; the first time asks for `group/name` (e.g. `reports/churn by month`), later saves update it |
 | `Ctrl+K t` | Rename the tab and its saved query; a different `group/` moves it |
 | *Save the statement to the library* | In the editor's menu (right-click): only the statement at the cursor (or the selection), under a `group/name` asked for, as a query of its own; the tab stays as it is (bind a key with `save_statement`) |
@@ -91,7 +91,7 @@ From any pane:
 | `Ctrl+K Space` | Every message whole, the newest first (`y` copies them). A message in a pane's footer is cut off with `…` to fit, beside the transaction modes in the editor's; clicking it opens this too |
 
 A tab's `SQL` label is orange while the tab isn't saved to the library
-(its text is still kept as a draft), and a `●` on a saved query's tab means
+(its text is still kept as a draft), and a `!` on a saved query's tab means
 its text has changed since it was saved. Tabs, their
 connections and cursors come back after a restart (unless
 `restore_session = false`); results don't, press `F5` to re-run. The active
@@ -125,7 +125,7 @@ out statements that set a password (`CREATE`/`ALTER USER` or `ROLE … PASSWORD`
 
 ¹ `Ctrl+Enter` needs a terminal that supports the kitty keyboard protocol
 (kitty, WezTerm, Ghostty, foot, iTerm2 with CSI u enabled). Elsewhere it
-arrives as a plain `Enter`; use `F5` or `Ctrl+R`.
+arrives as a plain `Enter`; use `F5` or `Alt+Enter`.
 
 ## Editor
 
@@ -145,7 +145,7 @@ When focused:
 | `Esc`, then `Tab` | Next pane, even right after a word (the status bar hint says `ESC TAB` when plain Tab would complete) |
 | `Space` `Space` | The `Ctrl+K` menu, when `leader_double_space = true`: two quick Spaces, and the first is taken back |
 | `Ctrl+F` | Find and replace: `Enter`/`↓` next, `↑` previous, `Tab` to the replacement, `Enter` replaces, `Ctrl+A` replaces all |
-| `Ctrl+/` | Comment / uncomment the selected lines (`Ctrl+7` in terminals that send that) |
+| `Ctrl+K -` · `Alt+/` | Comment / uncomment the selected lines (`gcc` in vim; `Ctrl+/` too where the terminal sends it, which few do: most send `Ctrl+7`, some a plain `/`) |
 | `Ctrl+K i` / `Ctrl+E` | Insert a snippet or saved query at the cursor (the library window, starting at the `snippets` group) |
 | `Ctrl+K m` / right-click | Menu of what you can do in the editor: copy, cut and paste first (right-clicking the selection keeps it) |
 | `Ctrl+K f` | Format the selection, or the statement at the cursor. Strings, quoted names and block comments stay exactly as written; if formatting would change anything but spacing, it's refused |
@@ -161,7 +161,8 @@ server's clipboard.
 Visual and Visual-line modes, shown in the status bar. Supported: counts,
 `h j k l w b e 0 ^ $ gg G`, `i a I A o O`, `x X dd D cc C yy p P J r ~ u`,
 operators with motions (`dw`, `c$`, `y3w`…), `iw` (`ciw`, `diw`, `yiw`) and
-`v`/`V` with `d y c x`. Redo is `Ctrl+Y`, since `Ctrl+R` runs the query.
+`v`/`V` with `d y c x`, `gcc` (comment the line; `3gcc` three). Redo is
+`Ctrl+R`, as vim's (or `Ctrl+Y`).
 Yanks also go to the system clipboard (deletes stay in vim's register), and
 `Ctrl+V` pastes from it in Normal mode as in Insert mode.
 
@@ -390,7 +391,13 @@ bar to open it. The activity monitor lists the server's sessions (Postgres
 `pg_stat_activity`, MySQL's process list) with their state, time, what
 they wait on and who blocks them, refreshing every 2 s: `Enter` shows a
 session's full query, `c` cancels its query, `x` ends the session (both ask
-first; read-only connections refuse). The **connection heartbeat** checks
+first; read-only connections refuse). **Server load** (`Ctrl+K s l`)
+reads the server's own statistics: on PostgreSQL connections in use of the
+most, running queries, sessions waiting on locks or idle in a transaction,
+the longest running query, the cache hit ratio, commits and rollbacks,
+deadlocks and the database's size; on MySQL the same from `SHOW GLOBAL
+STATUS`; on SQLite and DuckDB the file's size and its pages or memory.
+Pressed again, it reads them again. The **connection heartbeat** checks
 an idle connection regularly, so a drop is noticed (and reconnected) before
 your next query: switch it on or off from the palette ("Connection
 heartbeat", or bind `heartbeat`), with `keepalive = 60` in `config.toml`
@@ -439,12 +446,13 @@ When focused:
 | Key | Action |
 |---|---|
 | `↑`/`↓`, `PageUp`/`PageDown`, `Home`/`End` (`g`/`G`) | Move by a row, a page, or to the first / last |
-| `/` | Filter tables, views and functions by name (or click the filter line): the name itself first, then names starting with it, then those with a word starting with it (after `_`, `.`, `-`), then the rest, each by name |
+| `/` | Filter tables, views and functions by name (or click the filter line): the name itself first, then names starting with it, then those with a word starting with it (after `_`, `.`, `-`), then the rest, each by name. While typing, `↑`/`↓` pick among what's left and `Enter` opens the one picked (the filter stays); a paste goes into it; `Esc`, or a click on its `×`, clears it |
 | `o` | Order the tables by name, by rows, or by size on disk (indexes included; the size then shows instead of the rows). Both are the server's estimates; SQLite has no sizes, and rows once `ANALYZE` has counted them |
 | `Enter` / `→` | Expand a table: its columns (with `→ table.column` for foreign keys) and indexes, scrolled into view; on a function, show its definition |
 | `←` | Collapse |
 | `d` | Show the definition: `CREATE VIEW`, the function source, or a table's columns, keys and indexes (SQLite: its `CREATE TABLE`). In it, `←`/`→` show the previous / next table's (the navigator's selection follows), `y` copies it |
-| `s` | Add `SELECT * FROM <table> LIMIT 100;` at the end of the editor and run it (only it, as `F6` would). A last statement left without its `;` gets one first (before a comment after it), so the two stay apart |
+| `s` | Add `SELECT * FROM <table> LIMIT 100;` at the end of the editor and run it (only it, as `F6` would). A last statement left without its `;` gets one first (before a comment after it), so the two stay apart. The keys stay in the navigator, for the next table |
+| `a` | Update the table's statistics for the planner, the same way: `ANALYZE` (PostgreSQL, SQLite), `ANALYZE TABLE` (MySQL); not on DuckDB, which keeps them itself |
 | `f` | Related tables: what the table points to and what points to it through foreign keys, two steps each way |
 | `y` / `Ctrl+C` | Copy the selection's name as SQL writes it: a table with its schema (`public.orders`), a column, an index or a function |
 | `r` | Refresh (also happens automatically after DDL, `USE` and `SET`) |

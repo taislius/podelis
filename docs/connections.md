@@ -14,7 +14,7 @@ if it's still empty and unconnected. A `●` marks the open project and the
 connections open in tabs. On a narrow terminal the focused pane and the
 next one show. Clicking a row selects it; clicking it again (or a double
 click) opens it, and clicking a field in the settings focuses it.
-Quitting from here (`q`, `Ctrl+Q`, `Ctrl+C`) asks first if a transaction is open.
+Quitting from here (`Ctrl+Q`, `Ctrl+C`; not a plain `q`, which could be pressed by accident) asks first if a transaction is open.
 
 ## Projects
 
@@ -27,7 +27,7 @@ Quitting from here (`q`, `Ctrl+Q`, `Ctrl+C`) asks first if a transaction is open
 | `r` | Rename project |
 | `d` | Delete project, with all its connections, their saved passwords, its history and its memory for AI models (asks for confirmation; not the open one) |
 | `Esc` | Back to the project's tabs (with none open: to the project you left, or quit) |
-| `q` | Quit (asks if a transaction is open) |
+| `Ctrl+Q` | Quit (asks if a transaction is open) |
 
 A URL or file opened from the command line (`podelis postgres://…`)
 before there is any project goes into one named `default`, so its tabs
@@ -52,7 +52,7 @@ Another project selected shows its connections, to look at; `→` opens it.
 | `c` | Find running PostgreSQL and MySQL containers (Docker or Podman): `↵` fills in a new connection from one, with its published port, user and database, and a password command that reads the password from the container (`docker exec … printenv POSTGRES_PASSWORD`) rather than a copy |
 | `←` | Back to the projects |
 | `Esc` | Back to the project's tabs (connected or not) |
-| `q` | Quit (asks if a transaction is open) |
+| `Ctrl+Q` | Quit (asks if a transaction is open) |
 
 ## Settings
 
