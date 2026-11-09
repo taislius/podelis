@@ -49,20 +49,20 @@ says which line is wrong. The AI features say it too, rather than
 reporting no models set up: `podelis gateway models` and asking show the
 error.
 
-Rebindable actions (defaults in brackets): `run` (F5, Ctrl+R, Ctrl+Enter),
+Rebindable actions (defaults in brackets): `run` (F5, Ctrl+Enter, Alt+Enter),
 `run_statement` (F6), `explain` (F7, Ctrl+K e), `complete` (Ctrl+Space),
 `history_prev` / `history_next` (Ctrl+P / Ctrl+N), `undo` / `redo`
 (Ctrl+Z / Ctrl+Y), `toggle_schema` (Ctrl+K n, F2), `open_connection`
 (Ctrl+K o, Ctrl+O), `disconnect` (Ctrl+K d, Ctrl+D), `new_tab` (Ctrl+T),
 `close_tab` (Ctrl+W), `next_tab` / `prev_tab` (Ctrl+PageDown /
-Ctrl+PageUp), `save_tab` (Ctrl+S), `rename_tab` (Ctrl+K t, F4), `library`
+Ctrl+PageUp, Ctrl+K ] / Ctrl+K [), `save_tab` (Ctrl+S), `rename_tab` (Ctrl+K t, F4), `library`
 (Ctrl+K l, F3), `commit` / `rollback` (F8 / Shift+F8, Ctrl+K c / r),
-`find` (Ctrl+F), `comment` (Ctrl+K -, Ctrl+/, Ctrl+7), `format` (Ctrl+K f,
+`find` (Ctrl+F), `comment` (Ctrl+K -, Alt+/; Ctrl+/ and Ctrl+7 work but aren't shown), `format` (Ctrl+K f,
 F9), `palette` (Ctrl+K), `explain_analyze` (Shift+F7, Ctrl+K a),
 `connection_info` (Ctrl+K s i), `activity` (Ctrl+K s s), `heartbeat`
-(Ctrl+K s h), `insert_snippet` (Ctrl+K i, Ctrl+E), `menu` (Ctrl+K m,
+(Ctrl+K s h), `server_load` (Ctrl+K s l), `insert_snippet` (Ctrl+K i, Ctrl+E), `menu` (Ctrl+K m,
 Shift+F10, F10), `zoom` (Ctrl+K z, F12), `zoom_statement` (Ctrl+K b,
-Shift+F12), `select_statement` (Ctrl+K v), `projects` (Ctrl+K p),
+Shift+F12), `select_statement` (Ctrl+K v), `select_word` (Alt+W; a double click too), `projects` (Ctrl+K p),
 `transaction_mode` (Ctrl+K x), `messages` (Ctrl+K Space), `next_warning` (Ctrl+K w), `ask` (Ctrl+K q, Ctrl+K y q),
 `ai_explain` (Ctrl+K y y), `memory` (Ctrl+K y k), `tab_list` (Ctrl+K g), `connection_list` (Ctrl+K j),
 `settings` (Ctrl+K ,), `save_statement` (none; in the editor's menu). To

@@ -327,6 +327,7 @@ Use two databases with the same tables, e.g. `pgbench -i -s 10 a` and
 - [ ] The activity monitor (`Ctrl+K s s`): sessions show, and cancelling or
   ending one works.
 - [ ] Connection info (`Ctrl+K s i`).
+- [ ] Server load (`Ctrl+K s l`): each line a value, none "not readable", on every engine.
 
 ### AI models and the gateway
 
