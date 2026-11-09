@@ -365,7 +365,7 @@ async fn following_a_foreign_key_shows_the_referenced_row() {
     // An answer for another tab (or connection) than the one now shown:
     // dropped, so `e` can't run it on the wrong database.
     app.popups.cell_view = None;
-    let found = crate::app::follow::Followed {
+    let found = crate::app::follow_fk::Followed {
         title: "parent · id = 2".into(),
         tab_name: "→ parent".into(),
         sql: "SELECT 1".into(),
