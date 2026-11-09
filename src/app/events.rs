@@ -1,9 +1,8 @@
 //! Handling results from background tasks (connects, queries, catalog
-//! loads, syntax checks) and the periodic tick.
+//! loads, the servers' answers), each in the tab it belongs to.
 
 use super::*;
 use crate::config::keys::Action;
-use crate::language::statements;
 
 impl App {
     pub fn handle_db_event(&mut self, event: DbEvent) {
@@ -52,8 +51,8 @@ impl App {
             Background::ExportDone(path, result) => self.export_done(&path, result),
             Background::ExportShownDone(path, result, note) => {
                 // One stopped meanwhile: its word comes after it went.
-                if self.export_task.as_ref().is_some_and(|run| run.path == path) {
-                    self.export_task = None;
+                if self.exports.task.as_ref().is_some_and(|run| run.path == path) {
+                    self.exports.task = None;
                     self.clear_export_note();
                     self.export_said(&path, result, &note);
                 }
@@ -90,7 +89,7 @@ impl App {
     }
 
     fn export_progress(&mut self, rows: u64, size: u64, free: Option<u64>) {
-        if self.export_task.is_some() {
+        if self.exports.task.is_some() {
             self.clear_export_note();
             #[expect(clippy::cast_precision_loss, reason = "display only, one decimal")]
             let rows = crate::db::human_rows(rows as f64);
@@ -105,10 +104,10 @@ impl App {
 
     fn export_done(&mut self, path: &std::path::Path, result: Result<u64, String>) {
         // A stopped export's last word arrives after it was removed.
-        if self.export_task.as_ref().is_none_or(|run| run.path != path) {
+        if self.exports.task.as_ref().is_none_or(|run| run.path != path) {
             return;
         }
-        self.export_task = None;
+        self.exports.task = None;
         self.clear_export_note();
         match result {
             Ok(rows) => {
@@ -125,7 +124,7 @@ impl App {
 
     fn apply_event(&mut self, kind: DbEventKind) {
         match kind {
-            DbEventKind::PasswordLoaded(profile, password, note) => {
+            DbEventKind::PasswordLoaded { profile, password, note } => {
                 self.manager.loading_profile = false;
                 self.stash_active_form();
                 self.connection.form = ConnectForm::from_profile(&profile, password);
@@ -162,13 +161,13 @@ impl App {
                 self.on_query_done(outcome, txn, stream);
                 self.run_queued_plan();
             }
-            DbEventKind::QueryFailed(err, position, txn, missing_feature) => {
+            DbEventKind::QueryFailed { message, position, txn, missing_feature } => {
                 self.tab.run.missing_feature = missing_feature;
-                self.on_query_failed(&err, position, txn);
+                self.on_query_failed(&message, position, txn);
                 self.drop_queued_plan();
             }
             DbEventKind::PlanAside { stmt, line, plan, .. } => self.plan_aside(stmt, line, plan),
-            DbEventKind::MoreRows(page, show) => self.append_rows(page, show),
+            DbEventKind::MoreRows { page, shown } => self.append_rows(page, shown),
             // `handle_db_event` gives these to `apply_background` first.
             DbEventKind::Background(_) => {}
             DbEventKind::MoreFailed(err) => {
@@ -179,10 +178,10 @@ impl App {
                 self.log(status.clone(), true);
                 self.set_status(status, true);
             }
-            DbEventKind::CancelFailed(err, unreachable) => self.cancel_failed_with(&err, unreachable),
+            DbEventKind::CancelFailed { message, unreachable } => self.cancel_failed_with(&message, unreachable),
             DbEventKind::SyntaxChecked { text, hint } => {
                 // Ignore results for text that has since changed.
-                if text == self.tab.editor.text() && self.lint_due.is_none() {
+                if text == self.tab.editor.text() && self.editing.lint_due.is_none() {
                     self.tab.syntax_hint = hint;
                 }
             }
@@ -191,7 +190,7 @@ impl App {
             DbEventKind::SandboxCopied(copied) => self.sandbox_copied(copied),
             DbEventKind::ActivityLoaded(result) => self.activity_loaded(result),
             DbEventKind::SessionStopped(result) => self.session_stopped(result),
-            DbEventKind::Diagnosed(title, report) => {
+            DbEventKind::Diagnosed { title, report } => {
                 self.connection.form.info = None;
                 self.popups.cell_view = Some(CellView::new(title, report));
             }
@@ -209,12 +208,12 @@ impl App {
             }
             DbEventKind::SnapshotCompared(result) => self.snapshot_compared(result),
             DbEventKind::RowsCompared { other, result } => self.rows_compared(&other, *result),
-            DbEventKind::Opened(what, command, result) => self.opened(&what, &command, result),
+            DbEventKind::Opened { what, command, result } => self.opened(&what, &command, result),
             DbEventKind::Followed(followed) => {
                 let (found, result) = *followed;
                 self.followed(found, result);
             }
-            DbEventKind::Definition(title, result) => {
+            DbEventKind::Definition { title, text: result } => {
                 let browse = std::mem::take(&mut self.routine_definition_pending);
                 match result {
                     Ok(text) if browse => self.popups.cell_view = Some(CellView::definition(title, text)),
@@ -349,7 +348,7 @@ impl App {
             self.sandbox_step_done(step, rows_affected);
         }
         // The transaction gone (a reconnect): a sandbox with it.
-        if self.connection.txn == TxnState::Idle && self.sandbox_then.is_none() {
+        if self.connection.txn == TxnState::Idle && self.sandbox_flow.then.is_none() {
             self.connection.sandbox = None;
         }
         if reconnected {
@@ -359,7 +358,7 @@ impl App {
             self.open_review(rows_affected);
         }
         if self.tab.run.extra.dry_run.is_some() {
-            self.end_dry_run(review::DryRun::Done(rows_affected));
+            self.end_dry_run(query_screen::review::DryRun::Done(rows_affected));
         }
         // MySQL reports some interrupted statements (e.g. SLEEP) as
         // ordinary results: stopped by the connection's limit, it's said so.
@@ -417,9 +416,11 @@ impl App {
         // Where the error is in the editor; else what was sent (an EXPLAIN
         // around the statement, say), if it's one statement.
         let note = |db: &Database| {
-            let at_error =
-                shown.as_deref().and_then(|text| version_note(db.engine(), db.version(), text, failed_at, missing));
-            at_error.or_else(|| version_note(db.engine(), db.version(), &ran, None, missing))
+            let at_error = shown.as_deref().and_then(|text| {
+                query_screen::editor::lint::version_note(db.engine(), db.version(), text, failed_at, missing)
+            });
+            at_error
+                .or_else(|| query_screen::editor::lint::version_note(db.engine(), db.version(), &ran, None, missing))
         };
         if let Some(said) = ran_on.filter(|_| prefix.is_empty()).as_ref().and_then(note) {
             let _ = write!(status, " · {said}");
@@ -446,7 +447,7 @@ impl App {
         }
         self.notify_if_long(|took| t!("run.failed_after", took = format_elapsed(took), status = status));
         if dry_run {
-            self.end_dry_run(review::DryRun::Failed(status));
+            self.end_dry_run(query_screen::review::DryRun::Failed(status));
         }
         // A sandbox step that failed: back to before it, the sandbox goes on.
         if let Some(step) = self.tab.run.extra.sandbox_step.take() {
@@ -476,7 +477,7 @@ impl App {
                     })
                     .collect();
                 panel.error = None;
-                panel.selected = query_screen::step_selectable(&panel.nodes(), panel.selected, 1);
+                panel.selected = query_screen::navigator::step_selectable(&panel.nodes(), panel.selected, 1);
                 self.restore_expanded_tables();
                 let Some(panel) = &mut self.connection.schema else { return };
                 // Details were dropped with the old list: reload the open ones.
@@ -487,163 +488,6 @@ impl App {
             }
             Err(e) => panel.error = Some(e),
         }
-    }
-
-    /// When the background syntax check is due, if one is pending.
-    pub fn lint_due(&self) -> Option<Instant> {
-        self.lint_due
-    }
-
-    /// Runs the background syntax check once typing has paused.
-    /// Called every second while a query runs: enforces the connection's
-    /// timeout and notices background tasks that panicked.
-    pub fn tick_running(&mut self) {
-        self.offer_export_question();
-        self.watch_tick();
-        self.keepalive_tick();
-        self.activity_tick();
-        if self.watching_agents() {
-            self.approvals_tick();
-            self.agents_tick();
-        }
-        self.share_tick();
-        self.sandbox_tick();
-        // Each running tab's query: the shown one's, and those in other tabs.
-        self.run_tick();
-        let shown = self.active_tab;
-        for i in self.running_tabs().into_iter().filter(|&i| i != shown) {
-            self.in_tab(i, Self::run_tick);
-        }
-        self.check_background_panic();
-    }
-
-    /// The shown tab's running query, once a second: its timeout, and
-    /// saying how to cancel it once it's run long.
-    fn run_tick(&mut self) {
-        if let Some((deadline, limit)) = self.tab.run.extra.deadline
-            && self.tab.run.executing
-            && Instant::now() >= deadline
-        {
-            self.tab.run.extra.deadline = None;
-            self.tab.run.extra.timed_out = Some(limit);
-            self.cancel_query();
-        }
-        self.offer_cancel_tick();
-    }
-
-    /// A query running past `long_query` says, once, how to cancel it: in
-    /// the status bar (and a notification while you're in another window),
-    /// never as a question that takes the keys being typed.
-    fn offer_cancel_tick(&mut self) {
-        if !self.tab.run.executing {
-            self.tab.run.extra.offered_cancel = false;
-            return;
-        }
-        let after = self.settings.long_query;
-        let long = self.tab.run.since.is_some_and(|s| s.elapsed() >= Duration::from_secs(after));
-        if after == 0 || self.tab.run.cancelling || self.tab.run.extra.offered_cancel || !long {
-            return;
-        }
-        self.tab.run.extra.offered_cancel = true;
-        let secs = self.tab.run.since.map_or(0, |s| s.elapsed().as_secs());
-        let tab = self.run_tab().unwrap_or(self.active_tab);
-        let name = self.tabs.get(tab).map(|t| t.name.clone()).unwrap_or_default();
-        let on = self.tabs.get(tab).and_then(|t| t.conn).and_then(|id| self.conn_name(id)).unwrap_or_default();
-        let said = t!("run.long_running", time = mm_ss(secs), tab = name, on = on);
-        self.set_status(said.clone(), false);
-        if self.terminal_focused != Some(true) {
-            self.notification = Some(said);
-        }
-    }
-
-    /// Reports a background task that panicked (it never reports back).
-    fn check_background_panic(&mut self) {
-        if let Some(message) = crate::system::crash::take_background() {
-            self.tab.run.executing = false;
-            self.tab.run.task = None;
-            self.tab.run.set_stream(None);
-            let log = crate::system::crash::log_path();
-            self.set_status(t!("run.internal_error", message = message, log = log.display()), true);
-        }
-    }
-
-    pub fn tick(&mut self) {
-        if self.lint_due.is_none_or(|due| Instant::now() < due) {
-            return;
-        }
-        self.lint_due = None;
-        // Typing has paused: a good moment to save the tabs, so a crash or a
-        // killed terminal loses at most a few seconds of editing.
-        self.save_draft_in_background();
-        let text = self.tab.editor.text();
-        // Ask the server when it's safe: never inside a transaction (preparing
-        // can take locks there) or while a query runs on the session.
-        let server_ok = self.settings.server_syntax_check && self.connection.txn == TxnState::Idle && !self.conn_busy();
-        let db = self.connection.database.clone().filter(|_| server_ok);
-        let check = self.local_check();
-        // Parsing and linting a long script takes a while: off the UI thread,
-        // like the server check. The result is dropped if the text changed.
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            self.tab.syntax_hint = check.hint(&text);
-            return;
-        };
-        let engine = self.engine();
-        let send = self.sender();
-        runtime.spawn(async move {
-            let local = |text: String, lint_only: bool| async move {
-                let check = move || if lint_only { check.first_lint(&parse(&text, engine)) } else { check.hint(&text) };
-                tokio::task::spawn_blocking(check).await.unwrap_or_default()
-            };
-            let hint = match db {
-                Some(db) => match server_syntax_hint(&db, &text, engine).await {
-                    // A syntax error that is really a feature the server
-                    // hasn't got says so.
-                    ServerCheck::Done(Some((mut hint, missing))) => {
-                        if let Some(said) = version_note(engine, db.version(), &text, hint.offset, missing) {
-                            hint.message = format!("{} · {said}", hint.message);
-                        }
-                        Some(hint)
-                    }
-                    ServerCheck::Done(None) => local(text.clone(), true).await,
-                    ServerCheck::Busy => local(text.clone(), false).await,
-                },
-                None => local(text.clone(), false).await,
-            };
-            send(DbEventKind::SyntaxChecked { text, hint });
-        });
-    }
-
-    /// What the editor's own checks need, captured so they can run off the
-    /// UI thread.
-    fn local_check(&self) -> LocalCheck {
-        LocalCheck {
-            engine: self.engine(),
-            lint: self.settings.lint,
-            sql_mode: self.connection.database.as_ref().map(Database::sql_mode).unwrap_or_default(),
-        }
-    }
-
-    /// Every lint warning, unless lints are turned off.
-    fn lint_hints(&self, parsed: &ParsedScript) -> Vec<SyntaxHint> {
-        self.local_check().lints(parsed)
-    }
-
-    /// Moves the cursor to the next lint warning after it (wrapping) and
-    /// shows that warning.
-    pub(super) fn next_warning(&mut self) {
-        let text = self.tab.editor.text();
-        let hints = self.lint_hints(&parse(&text, self.engine()));
-        let cursor = self.tab.editor.cursor_offset();
-        let next = hints.iter().find(|h| h.offset.is_some_and(|o| o > cursor)).or_else(|| hints.first()).cloned();
-        let Some(hint) = next else {
-            let why = if self.settings.lint { t!("run.no_lint") } else { t!("run.lint_off") };
-            return self.set_status(why.to_string(), false);
-        };
-        if let Some(offset) = hint.offset {
-            self.tab.editor.set_cursor(self.tab.editor.pos_of_offset(offset));
-        }
-        self.tab.syntax_hint = Some(hint);
-        self.focus = Focus::Editor;
     }
 
     /// Maps a server error position to an editor range to underline, if the
@@ -683,83 +527,6 @@ impl App {
     }
 }
 
-/// The editor's own checks: `sqlparser`'s syntax hint and the lint rules.
-struct LocalCheck {
-    engine: Engine,
-    lint: bool,
-    /// The session's (MySQL), for rules that depend on it.
-    sql_mode: String,
-}
-
-impl LocalCheck {
-    /// The parser's syntax error, or else the first lint warning.
-    fn hint(&self, text: &str) -> Option<SyntaxHint> {
-        let parsed = parse(text, self.engine);
-        analyze::syntax_hint(&parsed).or_else(|| self.first_lint(&parsed))
-    }
-
-    fn first_lint(&self, parsed: &ParsedScript) -> Option<SyntaxHint> {
-        self.lints(parsed).into_iter().next()
-    }
-
-    /// Every lint warning, unless lints are turned off.
-    fn lints(&self, parsed: &ParsedScript) -> Vec<SyntaxHint> {
-        if self.lint { crate::sql::lint::lints(parsed, &self.sql_mode) } else { Vec::new() }
-    }
-}
-
-/// Prepares each statement of `text` on the server (without running it)
-/// and returns the first problem.
-/// Unknown-object errors are skipped when the script creates objects, since
-/// those may only exist once earlier statements have run.
-async fn server_syntax_hint(db: &Database, text: &str, engine: Engine) -> ServerCheck {
-    const MAX_STATEMENTS: usize = 50;
-    let parsed = parse(text, engine);
-    let creates_objects = statements::analyze(&parsed).iter().any(|i| i.kind == Kind::Ddl);
-    for stmt in parsed.statements.iter().take(MAX_STATEMENTS) {
-        let (base, stmt) = (stmt.offset, stmt.text);
-        let Ok(outcome) = db.check_statement(stmt).await else { return ServerCheck::Busy };
-        match outcome {
-            CheckOutcome::Ok | CheckOutcome::Unsupported => {}
-            CheckOutcome::Problem { syntax: false, .. } if creates_objects => {}
-            CheckOutcome::Problem { message, position, missing_feature, .. } => {
-                let range = position.and_then(|p| analyze::error_range(stmt, &p));
-                return ServerCheck::Done(Some((
-                    SyntaxHint {
-                        message,
-                        offset: Some(base + range.map_or(0, |r| r.0)),
-                        len: range.map(|r| r.1),
-                        source: HintSource::Server,
-                        nth: None,
-                    },
-                    missing_feature,
-                )));
-            }
-        }
-    }
-    ServerCheck::Done(None)
-}
-
-/// What to add to an error from running, or checking, `text` on a server
-/// of `version`, when it's a syntax error or an unknown function
-/// (`missing`, by its code) because of a feature the server is too old
-/// for: looked for in the statement at `at` (where the error is), else in
-/// `text` if it's one statement.
-fn version_note(engine: Engine, version: &str, text: &str, at: Option<usize>, missing: bool) -> Option<String> {
-    if !missing {
-        return None;
-    }
-    let range = match at {
-        Some(offset) => crate::language::statement_range(text, offset, engine)?,
-        None => match crate::language::statement_ranges(text, engine).as_slice() {
-            [only] => only.clone(),
-            _ => return None,
-        },
-    };
-    let n = engine.dialect()?.too_new(&text[range], version)?;
-    Some(t!("run.needs_version", feature = n.feature, needs = n.needs, server = n.server))
-}
-
 /// How a connection check failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ping {
@@ -780,20 +547,35 @@ pub struct DbEvent {
 pub(super) enum DbEventKind {
     /// A saved connection's password, and why it's missing if the keychain
     /// couldn't be read.
-    PasswordLoaded(ConnectionProfile, String, Option<String>),
+    PasswordLoaded {
+        profile: ConnectionProfile,
+        password: String,
+        note: Option<String>,
+    },
     Connected(Database),
     ConnectFailed(String),
     /// A finished run, with a stream of further rows if it was streamed.
     QueryDone(QueryOutcome, Option<TxnState>, Option<RowStream>),
-    /// Another page of a streamed result; true when `M` asked for it (the
-    /// first of its rows gets selected, so they're seen arriving).
-    MoreRows(Page, bool),
+    /// Another page of a streamed result; `shown` when `M` asked for it
+    /// (the first of its rows gets selected, so they're seen arriving).
+    MoreRows {
+        page: Page,
+        shown: bool,
+    },
     MoreFailed(String),
     /// Why, where, the transaction after it, and whether it's a syntax
     /// error or unknown function (maybe a feature the server lacks).
-    QueryFailed(String, Option<ErrorPos>, Option<TxnState>, bool),
+    QueryFailed {
+        message: String,
+        position: Option<ErrorPos>,
+        txn: Option<TxnState>,
+        missing_feature: bool,
+    },
     /// Why not, and whether the server couldn't be reached at all.
-    CancelFailed(String, bool),
+    CancelFailed {
+        message: String,
+        unreachable: bool,
+    },
     Catalog(Result<Vec<(TableInfo, Vec<ColumnInfo>)>, String>),
     Routines(Vec<RoutineInfo>),
     TableDetails {
@@ -809,18 +591,29 @@ pub(super) enum DbEventKind {
     /// A connection check: its latency and whether it reconnected, or why
     /// not and whether it got no answer at all (`Ping::NoAnswer`).
     Pinged(Result<(Duration, bool), (String, Ping)>),
-    /// A connection test's report (title, text).
-    Diagnosed(String, String),
+    /// A connection test's report.
+    Diagnosed {
+        title: String,
+        report: String,
+    },
     /// The output of piping rows through a command.
     PipeDone(String, Result<String, String>),
     /// A SQLite file's copy for a sandbox, opened (or why not).
     SandboxCopied(Result<(Database, PathBuf), String>),
-    /// A definition to show (title, text).
-    Definition(String, Result<String, String>),
-    /// Rows opened in an app (what, the command), or why they couldn't be.
-    Opened(String, String, Result<(), String>),
+    /// A definition to show, or why it can't be.
+    Definition {
+        title: String,
+        text: Result<String, String>,
+    },
+    /// Rows opened in an app (`what` they were, by `command`), or why they
+    /// couldn't be.
+    Opened {
+        what: String,
+        command: String,
+        result: Result<(), String>,
+    },
     /// The row a foreign key points to (`f`), looked up.
-    Followed(Box<(follow_fk::Followed, Result<QueryOutcome, String>)>),
+    Followed(Box<(query_screen::results::follow_fk::Followed, Result<QueryOutcome, String>)>),
     /// The background syntax check of `text`: the server's problem, else
     /// the parser's hint, else the first lint warning.
     SyntaxChecked {
@@ -849,12 +642,12 @@ pub(super) enum DbEventKind {
     SnapshotCompared(Result<(Vec<crate::transfer::diff::TableShape>, crate::transfer::snapshots::Snapshot), String>),
     /// Both sides' schemas, for comparing.
     SchemaCompared {
-        other: compare::Other,
-        result: Result<compare::Shapes, String>,
+        other: query_screen::compare::Other,
+        result: Result<query_screen::compare::Shapes, String>,
     },
     /// The same query's result on both sides.
     RowsCompared {
-        other: compare::Other,
+        other: query_screen::compare::Other,
         result: Box<Result<(QueryOutcome, QueryOutcome), String>>,
     },
     /// Not about the connection shown: see [`Background`].
@@ -891,33 +684,13 @@ pub(super) enum Background {
     /// The locks a sandbox's session holds (or why that can't be seen).
     SandboxLocks(String),
     /// Ask `n`'s answer: the SQL and what the model said, or why not.
-    AskDone(u64, Box<Result<serde_json::Value, ask::AskFailure>>),
+    AskDone(u64, Box<Result<serde_json::Value, query_screen::ask::AskFailure>>),
     /// A gateway call's answer (the memory window's).
-    GatewayDone(windows::memory::GatewayPurpose, Box<Result<serde_json::Value, ask::AskFailure>>),
+    GatewayDone(windows::memory::GatewayPurpose, Box<Result<serde_json::Value, query_screen::ask::AskFailure>>),
 }
 
 impl From<Background> for DbEventKind {
     fn from(event: Background) -> Self {
         DbEventKind::Background(event)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Engine, version_note};
-
-    #[test]
-    fn a_version_note_is_about_the_statement_that_failed() {
-        let syntax = true;
-        let one = "explain analyze select * from t";
-        assert!(version_note(Engine::MySql, "5.7.44", one, None, syntax).unwrap().contains("EXPLAIN ANALYZE"));
-        // Not for errors that aren't about syntax (an unknown table).
-        assert!(version_note(Engine::MySql, "5.7.44", one, None, false).is_none());
-        // In a script: the statement where the error is, else nothing.
-        let script = "with c as (select 1) select * from c;\nselct 1;";
-        assert!(version_note(Engine::MySql, "5.7.44", script, None, syntax).is_none());
-        let typo = script.find("selct").unwrap();
-        assert!(version_note(Engine::MySql, "5.7.44", script, Some(typo), syntax).is_none());
-        assert!(version_note(Engine::MySql, "5.7.44", script, Some(3), syntax).is_some());
     }
 }

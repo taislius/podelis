@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 /// `[[models]]`), the machine, data in and out, agents and the gateway,
 /// then the app, its drawing and the command line.
 const RULES: &[(&str, &[&str])] = &[
-    ("editor", ALL),
+    ("text_editor", ALL),
     ("related", &["ai", "config", "system", "transfer", "agents", "gateway", "app", "ui", "cli", "chart"]),
     ("chart", &["ai", "config", "system", "transfer", "agents", "gateway", "app", "ui", "cli", "related"]),
     ("config", &["system", "transfer", "agents", "gateway", "app", "ui", "cli"]),
@@ -33,7 +33,7 @@ const RULES: &[(&str, &[&str])] = &[
     ("ui", &["cli"]),
 ];
 
-/// Every module of the app's crate and the AI crate (`ai`), for `editor`,
+/// Every module of the app's crate and the AI crate (`ai`), for `text_editor`,
 /// which uses only the core.
 const ALL: &[&str] =
     &["ai", "related", "chart", "config", "system", "transfer", "agents", "gateway", "app", "ui", "cli"];

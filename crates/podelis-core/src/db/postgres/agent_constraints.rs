@@ -34,4 +34,6 @@ pub(in crate::db) static AGENT_CONSTRAINTS: AgentConstraints = AgentConstraints 
         ("dblink_exec", "reaches other servers"),
         ("dblink_connect", "reaches other servers"),
     ],
+    executable_comments: &[],
+    quotes_by_server_mode: false,
 };

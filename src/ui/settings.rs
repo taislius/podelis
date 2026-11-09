@@ -1,7 +1,7 @@
 //! The settings screen (`Ctrl+K ,`): each setting with its value, what the
 //! selected one does, and what the last change did.
 
-use super::results::wrap_words;
+use super::query_screen::results::wrap_words;
 use super::*;
 use crate::app::windows::settings::{Field, Kind};
 

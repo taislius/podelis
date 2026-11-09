@@ -224,7 +224,7 @@ fn find_replace_comment_and_format() {
     assert_eq!(app.tab.editor.text(), "select id from t where id = 1;\nselect id from u");
     assert!(app.tab.editor.undo());
     app.handle_key(key(KeyCode::Esc));
-    assert!(app.find.is_none());
+    assert!(app.editing.find.is_none());
 
     app.tab.editor.set_text("select 1");
     app.handle_key(KeyEvent::new(KeyCode::Char('7'), KeyModifiers::CONTROL));
@@ -254,7 +254,7 @@ fn command_palette_finds_and_runs_commands() {
     assert!(app.palette_menu_due().is_some_and(|due| due > Instant::now()));
     app.show_palette_menu();
     assert!(
-        app.popups.palette.as_ref().is_some_and(crate::app::palette::Palette::menu_shown)
+        app.popups.palette.as_ref().is_some_and(crate::app::query_screen::palette::Palette::menu_shown)
             && app.palette_menu_due().is_none()
     );
     // `/` searches (a letter alone would run its Ctrl+K action).
@@ -365,7 +365,7 @@ async fn following_a_foreign_key_shows_the_referenced_row() {
     // An answer for another tab (or connection) than the one now shown:
     // dropped, so `e` can't run it on the wrong database.
     app.popups.cell_view = None;
-    let found = crate::app::follow_fk::Followed {
+    let found = crate::app::query_screen::results::follow_fk::Followed {
         title: "parent · id = 2".into(),
         tab_name: "→ parent".into(),
         sql: "SELECT 1".into(),
@@ -530,8 +530,8 @@ fn space_twice_opens_the_command_menu_when_enabled() {
     type_text(&mut app, " a");
     space(&mut app);
     assert_eq!(app.tab.editor.text(), "select a ");
-    app.last_space =
-        app.last_space.map(|(at, pos)| (at.checked_sub(std::time::Duration::from_millis(500)).unwrap(), pos));
+    app.editing.last_space =
+        app.editing.last_space.map(|(at, pos)| (at.checked_sub(std::time::Duration::from_millis(500)).unwrap(), pos));
     space(&mut app);
     assert_eq!(app.tab.editor.text(), "select a  ");
     assert!(app.popups.palette.is_none());
@@ -627,18 +627,18 @@ fn ctrl_k_can_wait_quietly_and_ctrl_shift_k_shows_the_menu_at_once() {
     // With the menu coming by itself, Ctrl+K ? is every key, as before.
     app.handle_key(ctrl('k'));
     app.handle_key(key(KeyCode::Char('?')));
-    assert!(app.popups.palette.is_none() && app.help_visible);
-    app.help_visible = false;
+    assert!(app.popups.palette.is_none() && app.help.visible);
+    app.help.visible = false;
     app.settings.leader_menu = false;
     app.handle_key(ctrl('k'));
     assert!(app.palette_menu_due().is_none(), "no menu by itself");
     assert_eq!(app.notes.status, "^K… (? shows the menu)");
     // `?` shows it, then `?` again every key.
     app.handle_key(key(KeyCode::Char('?')));
-    assert!(app.popups.palette.as_ref().is_some_and(crate::app::palette::Palette::menu_shown));
+    assert!(app.popups.palette.as_ref().is_some_and(crate::app::query_screen::palette::Palette::menu_shown));
     app.handle_key(key(KeyCode::Char('?')));
-    assert!(app.popups.palette.is_none() && app.help_visible);
-    app.help_visible = false;
+    assert!(app.popups.palette.is_none() && app.help.visible);
+    app.help.visible = false;
     app.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::CONTROL | KeyModifiers::SHIFT));
     assert!(app.popups.palette.as_ref().is_some_and(|p| p.menu_shown() && !p.searching()));
 }

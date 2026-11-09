@@ -79,7 +79,12 @@ fn asking_in_plain_language_and_sharing_a_schema() {
         details: vec!["project 'shop' shares its schemas only with models on this machine".into()],
         danger: false,
         action: ConfirmAction::ShareSchema {
-            question: crate::app::ask::Question { text: "x".into(), tab: 0, connection: "prod".into(), explain: false },
+            question: crate::app::query_screen::ask::Question {
+                text: "x".into(),
+                tab: 0,
+                connection: "prod".into(),
+                explain: false,
+            },
             project_id: None,
         },
         offer_transaction: false,

@@ -69,10 +69,10 @@ pub fn verdict(access: AgentAccess, mode: ConnectionMode, sql: &str, engine: Eng
             risky.risk.unwrap_or_default()
         ));
     }
-    // Without SQL a write isn't in a transaction of Podėlis's (a dry run's
-    // aside): each statement stands as it runs, so one a call, not a
-    // script that could stop half-way.
-    if engine.dialect().is_none() && write.is_some() && infos.len() > 1 {
+    // Where a write isn't in a transaction of Podėlis's (a dry run's
+    // aside), each statement stands as it runs: one a call, not a script
+    // that could stop half-way.
+    if engine.capabilities().transactions == crate::db::Transactions::OneWrite && write.is_some() && infos.len() > 1 {
         return Verdict::Refuse(format!(
             "one statement a call when it writes on {}: each stands as it runs, so a script could stop half-way",
             engine.label()
@@ -86,7 +86,7 @@ pub fn verdict(access: AgentAccess, mode: ConnectionMode, sql: &str, engine: Eng
     // only where they can be rolled back.
     if access == AgentAccess::Sandbox && may_write {
         // Its calls each after a savepoint, in one transaction left open.
-        if engine.dialect().is_none() {
+        if engine.capabilities().transactions == crate::db::Transactions::OneWrite {
             return Verdict::Refuse(format!(
                 "a sandbox needs savepoints and a transaction kept open between calls, which {} doesn't have: \
                  ask the user to share this connection to read and write, or to approve writes",
@@ -133,27 +133,23 @@ pub fn explainable(sql: &str, engine: Engine) -> Result<(), String> {
 /// they change the session, end Podėlis's transaction, or reach outside).
 fn allowed(sql: &str, engine: Engine) -> Result<Vec<crate::language::statements::StatementInfo>, String> {
     let rules = engine.backend().agent_constraints();
-    // MySQL runs what's in `/*! … */` (MariaDB `/*M! … */` too): code the
-    // checks below wouldn't see (`/*! INTO OUTFILE '…' */`). The whole text,
-    // as the server gets it: a statement's comments around it aren't in
-    // what `split_statements` gives back.
-    if engine == Engine::MySql
+    // Code the checks below wouldn't see (`/*! INTO OUTFILE '…' */`). The
+    // whole text, as the server gets it: a statement's comments around it
+    // aren't in what `split_statements` gives back.
+    if !rules.executable_comments.is_empty()
         && let Some(t) = crate::language::tokenize(sql, engine).into_iter().find(|t| {
-            t.kind == crate::language::TokenKind::Comment && {
-                let c = &sql[t.range.clone()];
-                c.starts_with("/*!") || c.starts_with("/*M!") || c.starts_with("/*m!")
-            }
+            t.kind == crate::language::TokenKind::Comment
+                && rules.executable_comments.iter().any(|p| sql[t.range.clone()].starts_with(p))
         })
     {
         return Err(format!(
-            "“{}” is an executable comment, which MySQL runs as SQL: agents can't send them",
-            one_line(&sql[t.range])
+            "“{}” is an executable comment, which {} runs as SQL: agents can't send them",
+            one_line(&sql[t.range]),
+            engine.label()
         ));
     }
-    // Where a string ends after `\'` depends on the server's sql_mode
-    // (NO_BACKSLASH_ESCAPES, ANSI_QUOTES), which the checks here don't
-    // know: code could hide in what they'd take for a string.
-    if engine == Engine::MySql && (sql.contains("\\'") || sql.contains("\\\"")) {
+    // Code could hide in what the checks would take for a string.
+    if rules.quotes_by_server_mode && (sql.contains("\\'") || sql.contains("\\\"")) {
         return Err("a backslash before a quote (\\' or \\\"): its meaning depends on the server's sql_mode; \
              write a quote inside a string doubled ('') instead"
             .to_string());

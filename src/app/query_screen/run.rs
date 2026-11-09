@@ -1,7 +1,7 @@
 //! Running queries: the checks before (connection, guards), the run
 //! itself, more rows, cancelling and disconnecting.
 
-use super::super::*;
+use crate::app::*;
 use crate::language::statements;
 
 /// A run after this long without one first checks the server answers.
@@ -323,7 +323,12 @@ impl App {
         let sql = if self.tab.run.extra.vertical { sql::without_vertical(&sql, self.engine()) } else { sql };
         self.tab.run.task = Some(tokio::spawn(async move {
             if check_first && let Err(e) = db.answers_within(ANSWER_WITHIN).await {
-                return send(DbEventKind::QueryFailed(crate::db::error_message(&e), None, None, false));
+                return send(DbEventKind::QueryFailed {
+                    message: crate::db::error_message(&e),
+                    position: None,
+                    txn: None,
+                    missing_feature: false,
+                });
             }
             if stream {
                 // No transaction probe: the open stream holds the session,
@@ -355,7 +360,7 @@ impl App {
         let send = self.sender();
         tokio::spawn(async move {
             match stream.next_page(rows).await {
-                Ok(page) => send(DbEventKind::MoreRows(page, shown)),
+                Ok(page) => send(DbEventKind::MoreRows { page, shown }),
                 Err(e) => send(DbEventKind::MoreFailed(e)),
             }
         });
@@ -430,7 +435,10 @@ impl App {
         let send = self.sender();
         tokio::spawn(async move {
             if let Err(e) = db.cancel().await {
-                send(DbEventKind::CancelFailed(crate::db::error_message(&e), crate::db::is_unreachable(&e)));
+                send(DbEventKind::CancelFailed {
+                    message: crate::db::error_message(&e),
+                    unreachable: crate::db::is_unreachable(&e),
+                });
             }
         });
     }
@@ -484,7 +492,7 @@ impl App {
 /// after it, and whether it's a syntax error or unknown function.
 fn failed(e: &anyhow::Error, txn: Option<TxnState>) -> DbEventKind {
     let (message, position) = (crate::db::error_message(e), crate::db::error_position(e));
-    DbEventKind::QueryFailed(message, position, txn, crate::db::missing_feature(e))
+    DbEventKind::QueryFailed { message, position, txn, missing_feature: crate::db::missing_feature(e) }
 }
 
 /// The transaction state after a failed run: none once the session was
@@ -562,9 +570,9 @@ pub(in crate::app) struct RunExtra {
     /// It was started by `run_in_transaction`.
     pub(in crate::app) reviewing: bool,
     /// It is a dry run, rolled back when it ends.
-    pub(in crate::app) dry_run: Option<review::DryRun>,
+    pub(in crate::app) dry_run: Option<super::review::DryRun>,
     /// It's a sandbox step: added to the sandbox when it ends well.
-    pub(in crate::app) sandbox_step: Option<sandbox::PendingStep>,
+    pub(in crate::app) sandbox_step: Option<super::sandbox::PendingStep>,
     /// Said before the next result's status (what an edit just did).
     pub(in crate::app) status_prefix: Option<String>,
     /// When it started, to announce a long run's end.

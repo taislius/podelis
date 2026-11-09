@@ -503,7 +503,9 @@ impl Command {
             Command::Rows { to: Dest::ExportAll, .. } => {
                 format!("{} {}", self.label(app), t!("palette.not_just_loaded"))
             }
-            Command::SwitchTab(i) if app.popups.palette.as_ref().is_some_and(palette::Palette::tabs_only) => {
+            Command::SwitchTab(i)
+                if app.popups.palette.as_ref().is_some_and(query_screen::palette::Palette::tabs_only) =>
+            {
                 app.tab_entry(i)
             }
             Command::SwitchTab(i) => {
@@ -877,7 +879,7 @@ impl App {
                 let text = self.diagnostics();
                 self.copy_text(text, t!("palette.copied_diagnostics"));
             }
-            C::Help => self.help_visible = true,
+            C::Help => self.help.visible = true,
             C::Quit => self.request_quit(),
             C::SwitchTab(i) => self.switch_tab(i),
             C::GoToConnection(id) => self.go_to_connection(id),

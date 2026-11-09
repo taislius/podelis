@@ -39,7 +39,7 @@ pub enum ConfirmAction {
     /// The project doesn't share its schema with the model asked: `y`
     /// sends it this once, `a` always for the project.
     ShareSchema {
-        question: ask::Question,
+        question: query_screen::ask::Question,
         project_id: Option<String>,
     },
 }
@@ -76,7 +76,7 @@ impl App {
             if quit_key && key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
                 return self.request_quit();
             }
-            let settled = self.export_asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
+            let settled = self.exports.asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
             let answers = yes || matches!(key.code, KeyCode::Char('n' | 'N') | KeyCode::Esc);
             if !(settled && answers) {
                 self.popups.confirm = Some(confirm);

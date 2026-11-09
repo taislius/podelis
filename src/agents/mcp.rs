@@ -395,9 +395,10 @@ impl Server {
             self.write_log(entry);
             return failed(why);
         }
-        // (Without SQL the dry run's own BEGIN says if the server has none.)
+        // (With one write's transactions, the dry run's own begin says if
+        // the server has none.)
         if wrap == Wrap::DryRun
-            && engine.dialect().is_some()
+            && engine.capabilities().transactions == crate::db::Transactions::Scripts
             && let Some(why) = unrollable(&db).await
         {
             entry.refused = Some(why.clone());
@@ -794,8 +795,8 @@ impl Server {
 /// stay while the agent is told nothing changed.
 async fn unrollable(db: &Database) -> Option<String> {
     let engine = db.engine();
-    // (Without SQL the dry run's own BEGIN says if the server has none:
-    // `run_wrapped`.)
+    // (With one write's transactions, the dry run's own begin says if the
+    // server has none: `run_wrapped`.)
     let dialect = engine.dialect()?;
     let sql = dialect.tables_without_rollback()?;
     // (Not run again on a new session: inside a sandbox that would leave it.)
@@ -828,11 +829,11 @@ async fn dry_run_note(
     }
     // Most of MongoDB's (a drop, an index on a collection that has
     // documents) can't run in a transaction.
-    if db.engine().dialect().is_none() && ddl {
+    if db.engine().capabilities().transactions == crate::db::Transactions::OneWrite && ddl {
         return Ok(format!("no dry run: {}'s schema changes don't run in a transaction", db.engine().label()));
     }
-    // (Without SQL the dry run's own BEGIN is the check.)
-    if db.engine().dialect().is_some()
+    // (With one write's transactions, the dry run's own begin is the check.)
+    if db.engine().capabilities().transactions == crate::db::Transactions::Scripts
         && let Some(why) = unrollable(db).await
     {
         return Ok(format!("no dry run: {why}"));
@@ -854,7 +855,7 @@ async fn run_wrapped(
     use crate::language::statements::TxnOp;
     let engine = db.engine();
     let run = || db.run_within(sql, limit, Some(call_timeout(profile)), false);
-    let one_write = engine.dialect().is_none();
+    let one_write = engine.capabilities().transactions == crate::db::Transactions::OneWrite;
     if one_write {
         // Only a dry run is in a transaction (the language's own): a read
         // is one by what it calls, and a write one statement that stands as

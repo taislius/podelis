@@ -16,4 +16,6 @@ pub(in crate::db) static AGENT_CONSTRAINTS: AgentConstraints = AgentConstraints 
         ("mapReduce", "runs JavaScript on the server"),
     ],
     instead: &[("runCommand", "the schema tool tells collections and their fields")],
+    executable_comments: &[],
+    quotes_by_server_mode: false,
 };

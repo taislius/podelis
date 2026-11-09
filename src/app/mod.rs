@@ -16,79 +16,55 @@ use crate::db::{
     CheckOutcome, ColumnInfo, ConnectionMode, Database, Engine, ErrorPos, Page, QueryOutcome, RoutineInfo, RowStream,
     TableDetails, TableInfo, TxEnd, TxnState,
 };
-use crate::editor::{Pos, TextEditor};
 use crate::language::statements::{Kind, StatementInfo, TxnOp};
 use crate::sql;
 use crate::sql::analyze::{self, HintSource, SyntaxHint};
 use crate::sql::complete::{self, Candidate, TableRef};
 use crate::sql::params::Filled;
 use crate::sql::parse::{ParsedScript, parse};
-pub use find::FindBar;
-pub use grid::ResultGrid;
+use crate::text_editor::{Pos, TextEditor};
 pub use hits::Hits;
 pub use input::{InputResult, LineInput};
 use list::Nav;
-pub use overlay::Overlay;
-pub use params::ParamForm;
-pub use sandbox::Sandbox;
-pub use tabs::{PlanSource, TabState};
-pub use tabs::{TabMeta, TabPrompt, TabPromptKind};
-use vim::Vim;
-pub use vim::VimMode;
+pub use query_screen::editor::find::FindBar;
+pub use query_screen::editor::vim::VimMode;
+pub use query_screen::overlay::Overlay;
+pub use query_screen::params::ParamForm;
+pub use query_screen::results::grid::ResultGrid;
+pub use query_screen::sandbox::Sandbox;
+pub use query_screen::tabs::{PlanSource, TabState};
+pub use query_screen::tabs::{TabMeta, TabPrompt, TabPromptKind};
 pub use windows::agents::{AgentQuery, Agents, short_dir, short_time};
 pub use windows::library::{LibraryItem, LibraryView};
 
-pub mod ask;
 pub mod commands;
-mod compare;
 mod confirm;
-mod connections;
-mod edit;
 mod events;
-pub mod export_form;
-mod find;
-mod follow_fk;
-mod grid;
 mod hits;
-mod info;
 mod input;
 mod list;
-mod menu;
-mod messages;
+mod manager;
 mod mouse;
-mod overlay;
-pub mod palette;
-mod panes;
-mod params;
-mod pipes;
-mod plan_lines;
-mod projects;
-mod query_screen;
-mod results;
-mod review;
-mod rows;
-mod runs;
-mod sandbox;
-mod schema;
+pub(crate) mod query_screen;
 mod session;
-mod tabs;
 #[cfg(test)]
 mod tests;
-mod vim;
-mod watch;
+mod tick;
 pub mod windows;
+
+pub use query_screen::results::export_form;
 
 use crate::config::draft::{ConnectionDraft, looks_like_url};
 pub use confirm::{Confirm, ConfirmAction};
-pub use connections::{ConnectField, ConnectForm, fields_for};
 use events::{Background, DbEventKind};
 pub use events::{DbEvent, Ping};
+pub use manager::connections::{ConnectField, ConnectForm, fields_for};
+pub use query_screen::navigator::details::{SchemaNode, SchemaPanel, SchemaSection, SchemaSort, SchemaTable};
+pub use query_screen::results::view::CellEdit;
+pub use query_screen::results::view::{NULL_TEXT, display_prefix, format_elapsed, visible_columns};
+use query_screen::results::view::{column_widths, compute_view, one_line, pretty_value, widen_columns};
+pub use query_screen::review::TxMode;
 pub use query_screen::{Dest, Format, Run, RunPurpose};
-pub use results::CellEdit;
-pub use results::{NULL_TEXT, display_prefix, format_elapsed, visible_columns};
-use results::{column_widths, compute_view, one_line, pretty_value, widen_columns};
-pub use review::TxMode;
-pub use schema::{SchemaNode, SchemaPanel, SchemaSection, SchemaSort, SchemaTable};
 #[cfg(test)]
 pub use session::Splash;
 pub use windows::cell::CellView;
@@ -180,19 +156,19 @@ pub struct Completion {
 
 pub struct App {
     /// The popups that can open over the screens.
-    pub popups: overlay::Popups,
+    pub popups: query_screen::overlay::Popups,
     /// `Ctrl+K q`'s question being answered, and what goes with it.
-    pub ask: ask::AskState,
+    pub ask: query_screen::ask::AskState,
     /// What's said about the run starting now.
-    next_run: runs::NextRun,
+    next_run: query_screen::results::runs::NextRun,
     /// Keeping the connection alive.
     pub keepalive: session::KeepAlive,
     /// What's said to the user.
-    pub notes: messages::Notes,
+    pub notes: query_screen::results::messages::Notes,
     /// The panes' layout.
-    pub panes: panes::Panes,
+    pub panes: query_screen::panes::Panes,
     /// The projects and connections screen's state.
-    pub manager: projects::Manager,
+    pub manager: manager::projects::Manager,
     /// The shown tab's connection; the other tabs' are parked (`Conns`).
     pub connection: session::Connection,
     /// What agents did and asked for (the agents view).
@@ -204,46 +180,34 @@ pub struct App {
     /// Config folder holding per-project history and editor drafts; `None`
     /// disables persistence (tests).
     data_dir: Option<PathBuf>,
-    /// Where a sandbox's script goes once it's rolled back.
-    sandbox_then: Option<sandbox::Then>,
-    /// A sandbox's first step, waiting for the file's copy to be made.
-    sandbox_waiting: Option<(String, usize, Option<Filled>, RunPurpose)>,
-    /// The find/replace bar (Ctrl+F).
-    pub find: Option<find::FindBar>,
+    /// A sandbox's way in and out: its first step waiting, where its
+    /// script goes.
+    sandbox_flow: query_screen::sandbox::SandboxFlow,
+    /// The editor's own state beside the tab's text: find, vim, the
+    /// checks' timer.
+    pub editing: query_screen::editor::Editing,
     last_pipe: String,
-    /// A viewer to run with the terminal (`o`), picked up by the main loop.
-    external: Option<pipes::External>,
-    /// When and where the editor last got a typed Space, for
-    /// `leader_double_space`.
-    last_space: Option<(Instant, Pos)>,
-    /// Esc was the last key in the editor: Tab then moves to the next pane
-    /// even right after a word.
-    esc_then_tab: bool,
     /// Values typed for each parameter name, offered again next time.
     param_values: HashMap<String, String>,
     /// Tabs-file writes, so a late background one can't undo a newer one.
-    drafts: tabs::Drafts,
+    drafts: query_screen::tabs::Drafts,
     /// Tests that press random keys: nothing that reaches outside the app
     /// (connecting, `ssh`, shell commands).
     #[cfg(test)]
     pub(crate) sandbox: bool,
     /// Handling a key, click or paste (see `on_input`).
     handling_input: bool,
-    lint_due: Option<Instant>,
     pub settings: Settings,
     pub keymap: crate::config::keys::KeyMap,
     history: History,
     pub focus: Focus,
-    pub help_visible: bool,
-    /// How far every key's window is scrolled.
-    pub help_scroll: u16,
+    /// Every key's window (F1, `?`).
+    pub help: Help,
     /// Reopening the session's connections (Esc or any key hides it).
     pub splash: Option<session::Splash>,
     connect_started: Option<Instant>,
     /// The open cell-edit prompt.
     pub cell_edit: Option<CellEdit>,
-    /// Vim state, used when `editor_mode = "vim"`.
-    vim: Vim,
     /// Tabs' connections and the session being restored.
     conns: session::Conns,
     /// Open query tabs; the active one's state is in the fields above.
@@ -256,18 +220,10 @@ pub struct App {
     /// The project's saved queries.
     pub library: crate::config::library::Library,
     /// Watch mode: the last query run again every few seconds.
-    pub watch: Option<watch::Watch>,
-    /// "Export all rows" in progress: what stops it, and the file it writes.
-    export_task: Option<query_screen::export::ExportRun>,
-    /// Limits small enough to reach in a test (the settings are in GB).
-    #[cfg(test)]
-    export_limits_for_tests: Option<crate::transfer::limits::ExportLimits>,
-    /// How big a coming export would be is being worked out.
-    export_estimating: Option<query_screen::export::EstimateRequest>,
-    /// When a question about an export's size came up by itself.
-    export_asked: Option<Instant>,
-    /// What the export form was last run with, where it starts next time.
-    export_choice: export_form::ExportChoice,
+    pub watch: Option<query_screen::watch::Watch>,
+    /// Exports of every row: the one running, its size being worked out,
+    /// the form's last choice.
+    exports: query_screen::results::export::Exports,
     /// The last run id handed out ([`App::next_run_id`]).
     run_ids: u64,
     /// While a hidden tab's event is applied (`apply_in_tab`): that tab,
@@ -280,9 +236,8 @@ pub struct App {
     /// `f` is waiting for the result table's foreign keys to load.
     pending_follow: bool,
     pub should_quit: bool,
-    clipboard: Option<String>,
-    /// A long query ended: announced by the main loop (bell, notification).
-    notification: Option<String>,
+    /// What the main loop does for the app, outside the screen.
+    for_terminal: ForTerminal,
     /// Whether the terminal window has focus, once the terminal says.
     terminal_focused: Option<bool>,
     /// Bumped whenever in-flight work should be ignored (disconnect, cancelled
@@ -290,6 +245,24 @@ pub struct App {
     generation: u64,
     db_tx: mpsc::UnboundedSender<DbEvent>,
     db_rx: mpsc::UnboundedReceiver<DbEvent>,
+}
+
+/// What the main loop picks up from the app and does outside the screen.
+#[derive(Default)]
+struct ForTerminal {
+    /// Text for the system clipboard (OSC 52, or the system's tool).
+    clipboard: Option<String>,
+    /// A long query ended: announced (bell, notification).
+    notification: Option<String>,
+    /// A viewer to run with the terminal (`o`).
+    external: Option<query_screen::pipes::External>,
+}
+
+/// Every key's window (F1, `?`): whether it's open, how far it's scrolled.
+#[derive(Default)]
+pub struct Help {
+    pub visible: bool,
+    pub scroll: u16,
 }
 
 /// What the status bar says about AI ([`App::ai_state`]).
@@ -311,9 +284,9 @@ impl App {
             store.migrated_project.as_ref().map(|_| (t!("projects.migrated", project = store::DEFAULT_PROJECT), false))
         });
         Self {
-            popups: overlay::Popups::default(),
-            ask: ask::AskState::default(),
-            next_run: runs::NextRun::default(),
+            popups: query_screen::overlay::Popups::default(),
+            ask: query_screen::ask::AskState::default(),
+            next_run: query_screen::results::runs::NextRun::default(),
             keepalive: session::KeepAlive::default(),
             screen: Screen::Projects,
             store,
@@ -321,56 +294,47 @@ impl App {
             history: History::load_from(None),
             data_dir,
             last_pipe: String::new(),
-            external: None,
-            last_space: None,
-            esc_then_tab: false,
-            find: None,
-            sandbox_then: None,
-            sandbox_waiting: None,
+            editing: query_screen::editor::Editing::default(),
+            sandbox_flow: query_screen::sandbox::SandboxFlow::default(),
             param_values: HashMap::new(),
-            drafts: tabs::Drafts::default(),
+            drafts: query_screen::tabs::Drafts::default(),
             #[cfg(test)]
             sandbox: false,
             handling_input: false,
-            lint_due: None,
             settings: Settings::default(),
             keymap: crate::config::keys::KeyMap::default(),
             focus: Focus::Editor,
-            help_visible: false,
-            help_scroll: 0,
+            help: Help::default(),
             splash: None,
             connect_started: None,
             cell_edit: None,
-            vim: Vim::default(),
             conns: session::Conns::default(),
-            tabs: vec![TabMeta { name: tabs::default_tab_name(1), saved_id: None, conn: None }],
+            tabs: vec![TabMeta { name: query_screen::tabs::default_tab_name(1), saved_id: None, conn: None }],
             tab: TabState::default(),
             parked: vec![None],
             active_tab: 0,
             library: crate::config::library::Library::load_from(None),
             watch: None,
-            export_task: None,
-            #[cfg(test)]
-            export_limits_for_tests: None,
-            export_estimating: None,
-            export_asked: None,
-            export_choice: export_form::ExportChoice::default(),
+            exports: query_screen::results::export::Exports::default(),
             run_ids: 0,
             hidden_tab: None,
             hits: Hits::default(),
             pending_follow: false,
             routine_definition_pending: false,
             should_quit: false,
-            clipboard: None,
-            notification: None,
+            for_terminal: ForTerminal::default(),
             terminal_focused: None,
             generation: 0,
-            notes: messages::Notes::default(),
-            panes: panes::Panes { editor_percent: 40, editor_height: 1, ..panes::Panes::default() },
-            manager: projects::Manager {
+            notes: query_screen::results::messages::Notes::default(),
+            panes: query_screen::panes::Panes {
+                editor_percent: 40,
+                editor_height: 1,
+                ..query_screen::panes::Panes::default()
+            },
+            manager: manager::projects::Manager {
                 project_selected: projects_selected,
                 project_message: projects_message,
-                ..projects::Manager::default()
+                ..manager::projects::Manager::default()
             },
             connection: session::Connection {
                 form: ConnectForm::new(),
@@ -391,18 +355,21 @@ impl App {
 
     /// Text the UI layer should copy to the system clipboard.
     pub fn take_clipboard(&mut self) -> Option<String> {
-        self.clipboard.take()
+        self.for_terminal.clipboard.take()
     }
 
     /// Something the main loop must act on before more input: a program to
     /// hand the terminal to, text to copy, a notification, or quitting.
     pub fn has_pending_output(&self) -> bool {
-        self.external.is_some() || self.clipboard.is_some() || self.notification.is_some() || self.should_quit
+        self.for_terminal.external.is_some()
+            || self.for_terminal.clipboard.is_some()
+            || self.for_terminal.notification.is_some()
+            || self.should_quit
     }
 
     /// A long query's end, for the main loop to announce.
     pub fn take_notification(&mut self) -> Option<String> {
-        self.notification.take()
+        self.for_terminal.notification.take()
     }
 
     /// The terminal window gained or lost focus.
@@ -422,7 +389,7 @@ impl App {
         }
         let said = what(started.elapsed());
         let name = self.hidden_tab.and_then(|i| self.tabs.get(i)).map(|t| t.name.clone());
-        self.notification = Some(match name {
+        self.for_terminal.notification = Some(match name {
             Some(name) => format!("{name}: {said}"),
             None => said,
         });
@@ -562,7 +529,7 @@ impl App {
         self.history.reset();
         self.tab.error_marker = None;
         self.tab.syntax_hint = None;
-        self.lint_due = Some(Instant::now() + LINT_DELAY);
+        self.editing.lint_due = Some(Instant::now() + LINT_DELAY);
     }
 
     /// Queues `text` for the system clipboard and reports it in the status bar.
@@ -575,7 +542,7 @@ impl App {
         } else {
             status.to_string()
         };
-        self.clipboard = Some(text);
+        self.for_terminal.clipboard = Some(text);
         self.set_status(status, false);
     }
 
@@ -601,7 +568,7 @@ impl App {
                 None => {
                     self.focus == Focus::Editor
                         || self.manager.project_prompt.is_some()
-                        || self.find.is_some()
+                        || self.editing.find.is_some()
                         || self.cell_edit.is_some()
                         || self.tab.grid.filter_editing
                         || self.connection.schema.as_ref().is_some_and(|s| s.filter_editing)
@@ -630,12 +597,12 @@ impl App {
     fn set_status(&mut self, status: String, is_error: bool) {
         // The completion list belongs to the editor. Not while the find bar
         // or a cell's prompt has the footer's place.
-        let popup = self.help_visible || self.top_overlay().is_some_and(|o| o != Overlay::Completion);
+        let popup = self.help.visible || self.top_overlay().is_some_and(|o| o != Overlay::Completion);
         let footer = self.handling_input
             && self.screen == Screen::Query
             && !popup
             && match self.focus {
-                Focus::Editor => self.find.is_none(),
+                Focus::Editor => self.editing.find.is_none(),
                 Focus::Results => self.cell_edit.is_none(),
                 Focus::Schema => false,
             };
@@ -727,27 +694,27 @@ impl App {
         {
             return;
         }
-        if self.help_visible {
+        if self.help.visible {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('?') | KeyCode::F(1) => {
-                    self.help_visible = false;
-                    self.help_scroll = 0;
+                    self.help.visible = false;
+                    self.help.scroll = 0;
                 }
-                KeyCode::Down | KeyCode::Char('j') => self.help_scroll = self.help_scroll.saturating_add(1),
-                KeyCode::Up | KeyCode::Char('k') => self.help_scroll = self.help_scroll.saturating_sub(1),
-                KeyCode::PageDown => self.help_scroll = self.help_scroll.saturating_add(10),
-                KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(10),
+                KeyCode::Down | KeyCode::Char('j') => self.help.scroll = self.help.scroll.saturating_add(1),
+                KeyCode::Up | KeyCode::Char('k') => self.help.scroll = self.help.scroll.saturating_sub(1),
+                KeyCode::PageDown => self.help.scroll = self.help.scroll.saturating_add(10),
+                KeyCode::PageUp => self.help.scroll = self.help.scroll.saturating_sub(10),
                 _ => {}
             }
             return;
         }
         if key.code == KeyCode::F(1) {
-            self.help_visible = true;
+            self.help.visible = true;
             return;
         }
         // `?` is every key, wherever it isn't a character being typed.
         if key.code == KeyCode::Char('?') && !self.typing() && !self.popup_open() {
-            self.help_visible = true;
+            self.help.visible = true;
             return;
         }
         let ctrl_c = key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');

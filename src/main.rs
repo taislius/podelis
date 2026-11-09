@@ -21,12 +21,12 @@ mod app;
 mod chart;
 mod cli;
 mod config;
-mod editor;
 mod gateway;
 #[cfg(test)]
 mod i18n_keys;
 mod related;
 mod system;
+mod text_editor;
 mod transfer;
 mod ui;
 

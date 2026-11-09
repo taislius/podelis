@@ -1,16 +1,26 @@
 //! Rendering tests: each screen is drawn into an in-memory terminal and the
-//! text compared against a reviewed snapshot (`src/ui/snapshots/`). After an
+//! text compared against a reviewed snapshot (`testdata/snapshots/`, as each
+//! crate keeps them). After an
 //! intended UI change, review and accept with `cargo insta review` (or rerun
 //! with `INSTA_UPDATE=always` and check the diff).
 
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use insta::assert_snapshot;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
 use super::draw;
+
+/// insta's `assert_snapshot!`, its snapshots in `testdata/snapshots/` (as
+/// each crate keeps them), not beside these tests.
+macro_rules! assert_snapshot {
+    ($($args:tt)*) => {{
+        let mut settings = insta::Settings::clone_current();
+        settings.set_snapshot_path(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/snapshots"));
+        settings.bind(|| insta::assert_snapshot!($($args)*));
+    }};
+}
 use crate::app::{
     App, CellView, Completion, Confirm, ConfirmAction, ConnectField, Focus, ResultTab, SchemaPanel, SchemaTable, Screen,
 };

@@ -28,4 +28,6 @@ pub(in crate::db) static AGENT_CONSTRAINTS: AgentConstraints = AgentConstraints 
         ("pragma", "describe_table tells a table's columns, keys and indexes"),
         ("attach", "a connection is one database file: another one is a connection of its own"),
     ],
+    executable_comments: &[],
+    quotes_by_server_mode: false,
 };

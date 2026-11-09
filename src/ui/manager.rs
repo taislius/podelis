@@ -18,7 +18,7 @@ fn draw_welcome(f: &mut Frame, app: &App, body: Rect) {
     };
     let mut lines = vec![
         Line::default(),
-        Line::from(chrome::brand()).alignment(Alignment::Center),
+        Line::from(splash::brand()).alignment(Alignment::Center),
         Line::default(),
         Line::from(Span::styled(t!("welcome.tagline"), fg(t.text))).alignment(Alignment::Center),
         Line::default(),

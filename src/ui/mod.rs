@@ -21,18 +21,16 @@ use crate::language::Highlight;
 
 /// Narrowest the schema navigator gets.
 const SCHEMA_WIDTH: u16 = 30;
-/// Below this width the schema pane is hidden even when toggled on.
-const SCHEMA_MIN_TOTAL_WIDTH: u16 = 90;
 
 mod agents;
-mod chrome;
+mod bars;
 mod connect;
-mod editor;
+mod help;
 mod manager;
+mod popups;
 mod query_screen;
-mod results;
-mod schema;
 mod settings;
+mod splash;
 #[cfg(test)]
 mod tests;
 
@@ -43,25 +41,25 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
         .areas(area);
-    chrome::draw_app_bar(f, app, bar);
+    bars::draw_app_bar(f, app, bar);
     match app.screen {
         Screen::Projects | Screen::Connections | Screen::Connect => manager::draw_manager(f, app, body),
         Screen::Query => query_screen::draw_query(f, app, body),
     }
-    chrome::draw_status_bar(f, app, status);
+    bars::draw_status_bar(f, app, status);
     // Leaving the project with a transaction open asks first.
     if !matches!(app.screen, Screen::Query) && app.popups.confirm.is_some() {
-        query_screen::draw_confirm(f, app, area);
+        popups::draw_confirm(f, app, area);
     }
     // The text view also shows over other screens (the connection test).
     if !matches!(app.screen, Screen::Query) && app.popups.cell_view.is_some() {
-        query_screen::draw_cell_view(f, app, area);
+        popups::draw_cell_view(f, app, area);
     }
     if app.splash.as_ref().is_some_and(|s| s.shown) {
-        chrome::draw_splash(f, app, area);
+        splash::draw_splash(f, app, area);
     }
-    if app.help_visible {
-        chrome::draw_help(f, app, area);
+    if app.help.visible {
+        help::draw_help(f, app, area);
     }
 }
 

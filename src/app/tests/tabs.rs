@@ -204,20 +204,20 @@ async fn result_tabs_messages_and_help() {
 
     // F1 shows every key; any key but Esc/?/F1 is swallowed.
     app.handle_key(key(KeyCode::F(1)));
-    assert!(app.help_visible);
+    assert!(app.help.visible);
     app.handle_key(key(KeyCode::Char('1')));
-    assert!(app.help_visible && app.tab.result_tab == ResultTab::Messages);
+    assert!(app.help.visible && app.tab.result_tab == ResultTab::Messages);
     app.handle_key(key(KeyCode::Esc));
-    assert!(!app.help_visible);
+    assert!(!app.help.visible);
     // `?` outside the editor is every key.
     app.handle_key(key(KeyCode::Char('?')));
-    assert!(app.popups.palette.is_none() && app.help_visible);
+    assert!(app.popups.palette.is_none() && app.help.visible);
     app.handle_key(key(KeyCode::Esc));
     // In the editor `?` is just a character.
     app.focus = Focus::Editor;
     app.tab.editor.set_text("");
     app.handle_key(key(KeyCode::Char('?')));
-    assert!(!app.help_visible && app.popups.palette.is_none() && app.tab.editor.text() == "?");
+    assert!(!app.help.visible && app.popups.palette.is_none() && app.tab.editor.text() == "?");
 }
 
 #[cfg(feature = "sqlite")]
@@ -351,7 +351,7 @@ async fn the_pause_save_runs_in_the_background_and_the_newest_wins() {
     let saved = || std::fs::read_to_string(&file).unwrap_or_default();
 
     type_text(&mut app, "select 'typed'");
-    app.lint_due = Some(Instant::now());
+    app.editing.lint_due = Some(Instant::now());
     app.tick();
     let started = Instant::now();
     while !saved().contains("select 'typed'") {
@@ -377,7 +377,7 @@ fn tabs_are_autosaved_when_typing_pauses() {
     app.screen = Screen::Query;
     type_text(&mut app, "select 'unsaved work'");
     // Simulate the pause: the background syntax check (and autosave) is due.
-    app.lint_due = Some(Instant::now());
+    app.editing.lint_due = Some(Instant::now());
     app.tick();
     let saved = std::fs::read_to_string(dir.path().join("drafts").join(format!("{id}.json"))).unwrap();
     assert!(saved.contains("select 'unsaved work'"), "{saved}");
@@ -540,7 +540,7 @@ fn renaming_a_tab_copies_and_pastes() {
     assert!(app.popups.tab_prompt.is_some());
     // Ctrl+C copies what's typed (not the editor behind it, not quitting).
     app.handle_key(ctrl('c'));
-    assert_eq!(app.clipboard.as_deref(), Some("monthly churn"));
+    assert_eq!(app.for_terminal.clipboard.as_deref(), Some("monthly churn"));
     assert!(app.popups.confirm.is_none() && app.popups.tab_prompt.is_some());
     // A paste (the terminal's, or Ctrl+V's from the clipboard) goes in.
     app.handle_key(ctrl('u'));

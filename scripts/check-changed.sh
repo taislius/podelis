@@ -78,7 +78,7 @@ self_test() {
     expect crates/podelis-core/src/db/run.rs "db:: agents::"
     expect crates/podelis-core/src/sql/lint.rs "sql:: app::tests::editor app::tests::running app::tests::results"
     expect crates/podelis-ai/src/names.rs "package:podelis-ai"
-    expect src/app/edit.rs "app:: ui::"
+    expect src/app/query_screen/results/edit.rs "app:: ui::"
     expect src/cli/mod.rs "package:podelis"
     expect crates/podelis-core/src/db/duckdb/engine.toml "all"
     echo "check-changed: the map is as expected"

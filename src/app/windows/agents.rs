@@ -189,7 +189,8 @@ impl App {
         }
         details.push(String::new());
         details.push(request.dry_run.clone());
-        self.notification = Some(t!("agent_log.asks", agent = request.agent, connection = request.connection));
+        self.for_terminal.notification =
+            Some(t!("agent_log.asks", agent = request.agent, connection = request.connection));
         self.agents.asked = Some(Instant::now());
         self.popups.confirm = Some(Confirm {
             message: t!("agent_log.asks_allow", agent = request.agent, connection = request.connection, place = place),
