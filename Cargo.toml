@@ -108,7 +108,7 @@ mongodb = { version = "=3.9.1" }
 # 59: the first without thrift (an unbounded allocation reading its
 # protocol: RUSTSEC) and paste (unmaintained). DuckDB's arrow is 58: a
 # build with both has two arrows, which never meet.
-parquet = { version = "=59.3.1", default-features = false, features = ["arrow", "snap"] }
+parquet = { version = "=59.3.2", default-features = false, features = ["arrow", "snap"] }
 arrow-array = "59"
 arrow-schema = "59"
 sqlx = { version = "0.9.0", features = ["sqlite", "runtime-tokio", "tls-rustls-aws-lc-rs", "chrono", "rust_decimal", "uuid", "json"] }

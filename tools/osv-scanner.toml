@@ -13,3 +13,7 @@ reason = "zbus_names: unmaintained, merged into zbus 6; secret-service still on 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0372"
 reason = "zvariant_derive: unmaintained, merged into zbus 6; secret-service still on zbus 5"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0459"
+reason = "libsqlite3-sys 0.37 pinned by sqlx 0.9.0, the latest; needs a sqlx on libsqlite3-sys 0.39"
