@@ -93,7 +93,8 @@ async fn a_relative_sqlite_file_is_the_agents() {
 /// on any engine, and the file it is shut off from: what its SQL reads
 /// by itself (`FROM 'file.csv'`) fails on the agents' connection, whatever
 /// the words.
-#[cfg(feature = "duckdb")]
+// (`file_profile`, a saved file connection, is the SQLite build's.)
+#[cfg(all(feature = "duckdb", feature = "sqlite"))]
 #[tokio::test]
 async fn duckdb_for_agents_reaches_no_file() {
     let dir = tempfile::tempdir().unwrap();
