@@ -116,12 +116,37 @@ pub fn free_space(_dir: &Path) -> Option<u64> {
 
 /// Free space, or nothing if it doesn't come within `wait`: a hung network
 /// mount mustn't hold the screen. (The look goes on by itself, and ends with
-/// the mount.)
+/// the mount; while one is still out for a folder, none other starts there
+/// and nothing waits.)
 pub fn free_space_within(dir: &Path, wait: std::time::Duration) -> Option<u64> {
-    let (tx, rx) = std::sync::mpsc::channel();
+    static LOOKING: Looking = std::sync::Mutex::new(Vec::new());
+    look_within(&LOOKING, dir, free_space, wait)
+}
+
+/// The folders whose free space is being looked up.
+type Looking = std::sync::Mutex<Vec<std::path::PathBuf>>;
+
+/// `look` at `dir`, on a thread of its own, unless the last look there is
+/// still out.
+fn look_within(
+    looking: &'static Looking,
+    dir: &Path,
+    look: impl FnOnce(&Path) -> Option<u64> + Send + 'static,
+    wait: std::time::Duration,
+) -> Option<u64> {
     let dir = dir.to_path_buf();
+    {
+        let mut out = looking.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if out.contains(&dir) {
+            return None;
+        }
+        out.push(dir.clone());
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(free_space(&dir));
+        let free = look(&dir);
+        looking.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|d| *d != dir);
+        let _ = tx.send(free);
     });
     rx.recv_timeout(wait).ok().flatten()
 }
@@ -241,9 +266,38 @@ mod tests {
 
     #[test]
     fn a_disk_that_doesnt_answer_in_time_is_unknown() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        static LOOKING: Looking = std::sync::Mutex::new(Vec::new());
+        static LOOKS: AtomicUsize = AtomicUsize::new(0);
         let dir = tempfile::tempdir().unwrap();
-        assert!(free_space_within(dir.path(), std::time::Duration::from_secs(5)).is_some());
-        assert_eq!(free_space_within(dir.path(), std::time::Duration::ZERO), None);
+        assert!(free_space_within(dir.path(), Duration::from_secs(5)).is_some());
+        let (hung_dir, other) = (Path::new("/hung"), Path::new("/other"));
+        // A disk that hangs until it's let go.
+        let (release, hung) = std::sync::mpsc::channel::<()>();
+        let stuck = move |_: &Path| {
+            LOOKS.fetch_add(1, Ordering::SeqCst);
+            let _ = hung.recv();
+            Some(1)
+        };
+        assert_eq!(look_within(&LOOKING, hung_dir, stuck, Duration::from_millis(20)), None);
+        // While it hangs, another look there doesn't start, nor wait.
+        let started = std::time::Instant::now();
+        let again = |_: &Path| {
+            LOOKS.fetch_add(1, Ordering::SeqCst);
+            Some(2)
+        };
+        assert_eq!(look_within(&LOOKING, hung_dir, again, Duration::from_secs(5)), None);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(LOOKS.load(Ordering::SeqCst), 1);
+        // Another folder is looked at meanwhile.
+        assert_eq!(look_within(&LOOKING, other, |_| Some(3), Duration::from_secs(5)), Some(3));
+        // Once it answers, the next look there is made.
+        release.send(()).unwrap();
+        while LOOKING.lock().unwrap().iter().any(|d| d == hung_dir) {
+            std::thread::yield_now();
+        }
+        assert_eq!(look_within(&LOOKING, hung_dir, |_| Some(4), Duration::from_secs(5)), Some(4));
     }
 
     #[test]

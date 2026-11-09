@@ -687,7 +687,13 @@ impl App {
     /// This tab's connection is running a query: its own, or another
     /// tab's on the same connection (a session runs one at a time).
     pub(super) fn conn_busy(&self) -> bool {
-        self.tab.run.executing || self.busy_conn_tab().is_some()
+        self.tab.run.executing || self.busy_conn_tab().is_some() || self.exporting_here()
+    }
+
+    /// An export of every row reads on this tab's connection's session.
+    pub(super) fn exporting_here(&self) -> bool {
+        let conn = self.tabs.get(self.active_tab).and_then(|t| t.conn);
+        conn.is_some() && self.export_task.as_ref().is_some_and(|run| run.conn == conn)
     }
 
     /// A run that keeps every tab where it is: a write, a check, a comparison.

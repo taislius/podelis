@@ -50,6 +50,10 @@ impl App {
         if self.busy_conn_tab().is_some() {
             return self.set_status(self.running_elsewhere(t!("run.wait_or_esc_there")), true);
         }
+        // An export of every row reads on the session until it's done.
+        if self.exporting_here() {
+            return self.set_status(t!("run.exporting_here").to_string(), true);
+        }
         if self.connection.database.is_none() {
             return self.set_status(self.not_connected_message(), true);
         }

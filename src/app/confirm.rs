@@ -70,6 +70,12 @@ impl App {
         // An export's size is asked about by itself, maybe while typing, and
         // no would throw its file away: only y, or n / Esc, and not at once.
         if matches!(confirm.action, ConfirmAction::KeepExporting | ConfirmAction::ExportAll(..)) {
+            // Ctrl+Q quits, not held up by it (Ctrl+C, which copies, mustn't:
+            // it comes by itself, maybe while copying). Kept from quitting, a
+            // paused export asks again: it's still waiting.
+            if quit_key && key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
+                return self.request_quit();
+            }
             let settled = self.export_asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
             let answers = yes || matches!(key.code, KeyCode::Char('n' | 'N') | KeyCode::Esc);
             if !(settled && answers) {
