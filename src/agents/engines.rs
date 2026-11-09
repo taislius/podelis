@@ -136,6 +136,11 @@ mod mongodb {
         for (sql, why) in [
             ("db.users.deleteMany({})", "destructive"),
             ("db.users.updateMany({}, {$set: {x: 1}})", "destructive"),
+            // Empty, whatever comments are in it (found in review, 2026-11-09).
+            ("db.users.deleteMany({/**/})", "destructive"),
+            ("db.users.deleteMany({ // all\n })", "destructive"),
+            ("db.users.updateMany({} /*x*/, {$set: {x: 1}})", "destructive"),
+            ("db.users.aggregate([{/**/$out: 'copy'}])", "writes the result into a collection"),
             ("db.users.drop()", "not drop()"),
             ("db.users.aggregate([{$match: {}}, {$out: 'copy'}])", "writes the result into a collection"),
             ("db.users.aggregate([{$merge: {into: 'copy'}}])", "writes the result into a collection"),

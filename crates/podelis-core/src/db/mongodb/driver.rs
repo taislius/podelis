@@ -142,8 +142,13 @@ enum Outcome {
     Documents(Vec<Document>),
     Cursor(Box<::mongodb::Cursor<Document>>),
     Taken(Vec<Document>, u64),
+    /// A cursor in a transaction, for a stream: read with its session.
+    SessionCursor(Box<::mongodb::SessionCursor<Document>>),
     Changed(u64),
 }
+
+/// A `limit` that asks for a cursor to stream rather than what it has.
+const STREAM: usize = usize::MAX;
 
 /// `work`, unless a cancel comes first.
 async fn unless_cancelled<T>(interrupt: &Interrupt, work: impl Future<Output = Result<T>>) -> Result<T> {
@@ -312,6 +317,18 @@ fn find<'a>(
 }
 
 /// A `find` or an `aggregate`: its cursor, or (in a transaction) what it had.
+/// A cursor in a transaction: kept for a stream, else what it has.
+async fn in_session(
+    session: &mut ::mongodb::ClientSession,
+    cursor: ::mongodb::SessionCursor<Document>,
+    limit: usize,
+) -> Result<Outcome> {
+    if limit == STREAM {
+        return Ok(Outcome::SessionCursor(Box::new(cursor)));
+    }
+    take_in(session, cursor, limit).await
+}
+
 async fn read_cursor(
     c: &mut MongoConnection,
     collection: &::mongodb::Collection<Document>,
@@ -325,7 +342,7 @@ async fn read_cursor(
         return Ok(match c.txn.as_deref_mut() {
             Some(session) => {
                 let cursor = find.session(&mut *session).await?;
-                take_in(session, cursor, limit).await?
+                in_session(session, cursor, limit).await?
             }
             None => Outcome::Cursor(Box::new(find.await?)),
         });
@@ -335,7 +352,7 @@ async fn read_cursor(
     Ok(match c.txn.as_deref_mut() {
         Some(session) => {
             let cursor = collection.aggregate(stages).session(&mut *session).await?;
-            take_in(session, cursor, limit).await?
+            in_session(session, cursor, limit).await?
         }
         None => Outcome::Cursor(Box::new(collection.aggregate(stages).await?)),
     })
@@ -504,6 +521,7 @@ pub(in crate::db) async fn run(c: &mut MongoConnection, sql: &str, limit: usize)
             }
             Outcome::Taken(docs, all) => (docs, all),
             Outcome::Cursor(cursor) => take(c, *cursor, limit).await?,
+            Outcome::SessionCursor(_) => unreachable!("only a stream asks for a transaction's cursor"),
             Outcome::Changed(n) => {
                 result.rows_affected = n;
                 results.push(result);
@@ -525,8 +543,15 @@ pub(in crate::db) async fn run(c: &mut MongoConnection, sql: &str, limit: usize)
 pub(in crate::db) fn fetch(c: &mut MongoConnection, sql: String) -> Rows<'_> {
     c.interrupt.clear();
     let start = async move {
-        Ok::<_, anyhow::Error>(match execute(c, &sql, usize::MAX).await? {
+        Ok::<_, anyhow::Error>(match execute(c, &sql, STREAM).await? {
             Outcome::Cursor(cursor) => cursor.map_err(anyhow::Error::from).boxed(),
+            // Read as wanted, with the transaction's session.
+            Outcome::SessionCursor(cursor) => futures_util::stream::unfold((cursor, c), |(mut cursor, c)| async move {
+                let session = c.txn.as_deref_mut()?;
+                let next = cursor.next(session).await?;
+                Some((next.map_err(anyhow::Error::from), (cursor, c)))
+            })
+            .boxed(),
             Outcome::Documents(docs) | Outcome::Taken(docs, _) => {
                 futures_util::stream::iter(docs.into_iter().map(Ok)).boxed()
             }
@@ -567,6 +592,7 @@ pub(in crate::db) async fn text(c: &mut MongoConnection, sql: &str) -> Result<St
     let first = match execute(c, sql, 1).await? {
         Outcome::Documents(docs) | Outcome::Taken(docs, _) => docs.into_iter().next(),
         Outcome::Cursor(cursor) => take(c, *cursor, 1).await?.0.into_iter().next(),
+        Outcome::SessionCursor(_) => unreachable!("only a stream asks for a transaction's cursor"),
         Outcome::Changed(n) => return Ok(n.to_string()),
     };
     first.and_then(|d| d.iter().next().and_then(|(_, v)| cell(v))).ok_or_else(|| anyhow!("no value"))

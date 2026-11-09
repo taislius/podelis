@@ -382,7 +382,9 @@ impl Server {
             self.write_log(entry);
             return failed(why);
         }
+        // (Without SQL the dry run's own BEGIN says if the server has none.)
         if wrap == Wrap::DryRun
+            && engine.dialect().is_some()
             && let Some(why) = unrollable(&db).await
         {
             entry.refused = Some(why.clone());
@@ -784,6 +786,8 @@ async fn unrollable(db: &Database) -> Option<String> {
         ) else {
             return Some(format!("{} has no transactions to roll a dry run back in", engine.label()));
         };
+        // (One a cancelled call left open ended first.)
+        let _ = db.run_once(&rollback, 1).await;
         return match db.run_once(&begin, 1).await {
             Ok(_) => {
                 let _ = db.run_once(&rollback, 1).await;
@@ -812,9 +816,14 @@ async fn unrollable(db: &Database) -> Option<String> {
 /// that aren't `InnoDB`). A write that fails in its dry run isn't asked about.
 async fn dry_run_note(db: &Database, profile: &ConnectionProfile, sql: &str) -> Result<String, String> {
     let infos = crate::language::statements::analyze(&crate::sql::parse::parse(sql, db.engine()));
-    if db.engine().capabilities().ddl_commits && infos.iter().any(|i| i.kind == crate::language::statements::Kind::Ddl)
-    {
+    let ddl = infos.iter().any(|i| i.kind == crate::language::statements::Kind::Ddl);
+    if db.engine().capabilities().ddl_commits && ddl {
         return Ok(format!("no dry run: {} commits schema changes at once", db.engine().label()));
+    }
+    // Most of MongoDB's (a drop, an index on a collection that has
+    // documents) can't run in a transaction.
+    if db.engine().dialect().is_none() && ddl {
+        return Ok(format!("no dry run: {}'s schema changes don't run in a transaction", db.engine().label()));
     }
     if let Some(why) = unrollable(db).await {
         return Ok(format!("no dry run: {why}"));
@@ -835,15 +844,34 @@ async fn run_wrapped(
     use crate::language::statements::TxnOp;
     let engine = db.engine();
     let run = || db.run_within(sql, limit, Some(call_timeout(profile)), false);
-    // Without SQL only a dry run is in a transaction (the language's own):
-    // a read is one by what it calls, and a write one statement that
-    // stands as it runs (see `agents::verdict`).
-    if engine.dialect().is_none() && wrap != Wrap::DryRun {
-        return run().await.map_err(|e| ran_error(&e));
+    if engine.dialect().is_none() {
+        // A transaction a call cut short left open (the agent cancelled it
+        // mid-dry-run) mustn't take this one in: ended first.
+        if let Some(abort) = crate::language::transaction(engine, TxnOp::Rollback, false) {
+            let _ = db.run_once(&abort, 1).await;
+        }
+        // Without SQL only a dry run is in a transaction (the language's
+        // own): a read is one by what it calls, and a write one statement
+        // that stands as it runs (see `agents::verdict`). Its time limit
+        // stops Podėlis waiting, not the server.
+        if wrap != Wrap::DryRun {
+            return run().await.map_err(|e| match e {
+                crate::db::RunError::TimedOut(limit) => format!(
+                    "stopped waiting after {} s (the connection's time limit); {} may still finish it on the server: \
+                     if it was a write, check what it changed before sending it again",
+                    limit.as_secs(),
+                    engine.label()
+                ),
+                e @ crate::db::RunError::Failed(_) => ran_error(&e),
+            });
+        }
     }
     let begin = crate::language::transaction(engine, TxnOp::Begin, wrap == Wrap::ReadOnly)
         .ok_or_else(|| format!("{} has no transactions", engine.label()))?;
-    db.run_once(&begin, 1).await.map_err(|e| crate::db::error_message(&e))?;
+    db.run_once(&begin, 1).await.map_err(|e| {
+        let why = crate::db::error_message(&e);
+        if engine.dialect().is_none() { format!("a dry run needs a transaction: {why}") } else { why }
+    })?;
     let result = run().await.map_err(|e| ran_error(&e));
     let how = if wrap == Wrap::Commit && result.is_ok() { TxnOp::Commit } else { TxnOp::Rollback };
     let end = crate::language::transaction(engine, how, false).unwrap_or_default();

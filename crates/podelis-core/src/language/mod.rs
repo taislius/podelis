@@ -41,6 +41,16 @@ pub trait QueryLanguage: Sync {
     fn transaction(&self, _op: TxnOp) -> Option<&'static str> {
         None
     }
+    /// A statement's words, to find what reaches past the data in it: by
+    /// default its word tokens; a language whose keys may be strings gives
+    /// those too, decoded as its server reads them.
+    fn words(&self, statement: &str) -> Vec<String> {
+        self.tokenize(statement)
+            .into_iter()
+            .filter(|t| t.kind == TokenKind::Word)
+            .map(|t| statement[t.range].to_string())
+            .collect()
+    }
     /// What a statement calls, the way an engine's agent constraints name
     /// it (`find`, `insertOne`): `None` if it calls nothing Podėlis knows.
     fn verb<'a>(&self, _statement: &'a str) -> Option<&'a str> {
@@ -68,6 +78,19 @@ pub fn transaction(engine: Engine, op: TxnOp, read_only: bool) -> Option<String>
             TxnOp::Rollback => dialect.end(crate::db::TxEnd::Rollback).to_string(),
         }),
         Language::Other(language) => language.transaction(op).map(str::to_string),
+    }
+}
+
+/// `statement`'s words, for agents' checks: SQL's word tokens, lower case;
+/// another language's own (MongoDB's quoted keys decoded too).
+pub fn words(engine: Engine, statement: &str) -> Vec<String> {
+    match engine.backend().language() {
+        Language::Sql(_) => tokenize(statement, engine)
+            .into_iter()
+            .filter(|t| t.kind == TokenKind::Word)
+            .map(|t| statement[t.range].to_ascii_lowercase())
+            .collect(),
+        Language::Other(language) => language.words(statement),
     }
 }
 

@@ -156,27 +156,59 @@ fn command_name(args: &str) -> Option<&str> {
     Some(key.trim_matches(['"', '\'']))
 }
 
-/// `args` with its escapes undone (`\u0024out` is `$out`, `\$` is `$`),
-/// so a stage or a key can't hide behind one from the checks below; and
-/// without blanks.
-fn plain(args: &str) -> String {
+/// A string's text (between its quotes) as the server gets it: `\n`, `\t`,
+/// `\r`, `\uXXXX`, and any other character after `\` as itself. The one
+/// decoder: the arguments' reader (`args.rs`) and the checks here and of
+/// agents' calls read a string alike, so a key can't hide behind an escape
+/// one of them reads otherwise.
+pub fn unescape(body: &str) -> Result<String, String> {
     let mut out = String::new();
-    let mut chars = args.chars().peekable();
+    let mut chars = body.chars();
     while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('u') => {
-                    let hex: String = chars.by_ref().take(4).collect();
-                    out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
-                }
-                Some(other) => out.push(other),
-                None => {}
-            }
-        } else if !c.is_whitespace() {
+        if c != '\\' {
             out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('u') => {
+                let hex: String = chars.by_ref().take(4).collect();
+                let code = u32::from_str_radix(&hex, 16)
+                    .ok()
+                    .filter(|_| hex.len() == 4)
+                    .ok_or_else(|| "a \\u escape isn't four hex digits".to_string())?;
+                out.push(char::from_u32(code).unwrap_or('\u{fffd}'));
+            }
+            Some(other) => out.push(other),
+            None => return Err("a string ends in a lone \\".into()),
         }
     }
-    out
+    Ok(out)
+}
+
+/// A string token's text, unquoted and decoded (as written if it can't be).
+fn string_value(token: &str) -> String {
+    let body = token.get(1..token.len().saturating_sub(1)).unwrap_or_default();
+    unescape(body).unwrap_or_else(|_| body.to_string())
+}
+
+/// `args`'s code, as the server reads it: no blanks or comments, strings
+/// decoded (`"\u0024out"` is `$out`), so a stage or a key can't hide from
+/// the checks below behind any of them.
+fn plain(args: &str) -> String {
+    tokenize(args)
+        .into_iter()
+        .filter_map(|t| {
+            let text = &args[t.range];
+            match t.kind {
+                TokenKind::Whitespace | TokenKind::Comment => None,
+                TokenKind::String => Some(string_value(text)),
+                _ => Some(text.to_string()),
+            }
+        })
+        .collect()
 }
 
 /// Whether it writes its result somewhere (`$out`, `$merge`).
@@ -185,10 +217,39 @@ fn writes_out(args: &str) -> bool {
     plain.contains("$out") || plain.contains("$merge")
 }
 
-/// Whether the first argument (a filter) is empty: `{}`, or none at all.
+/// Whether the first argument (a filter) is empty: `{}` (whatever blanks
+/// and comments are in it), or none at all.
 fn empty_filter(args: &str) -> bool {
-    let first: String = args.split(',').next().unwrap_or_default().chars().filter(|c| !c.is_whitespace()).collect();
-    first.is_empty() || first == "{}"
+    let mut depth = 0i32;
+    let mut first = Vec::new();
+    for t in tokenize(args) {
+        let text = &args[t.range];
+        match (t.kind, text) {
+            (TokenKind::Whitespace | TokenKind::Comment, _) => continue,
+            (TokenKind::Punct, "," ) if depth == 0 => break,
+            (TokenKind::Punct, "(" | "[" | "{") => depth += 1,
+            (TokenKind::Punct, ")" | "]" | "}") => depth -= 1,
+            _ => {}
+        }
+        first.push(text);
+    }
+    first.is_empty() || first == ["{", "}"]
+}
+
+/// A statement's words for agents' checks: words as written, and strings
+/// decoded (a key may be quoted: `{"$where": …}`, `{"\u0024where": …}`).
+pub fn words(statement: &str) -> Vec<String> {
+    tokenize(statement)
+        .into_iter()
+        .filter_map(|t| {
+            let text = &statement[t.range];
+            match t.kind {
+                TokenKind::Word => Some(text.to_string()),
+                TokenKind::String => Some(string_value(text)),
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 impl QueryLanguage for Mongo {
@@ -298,6 +359,10 @@ impl QueryLanguage for Mongo {
         })
     }
 
+    fn words(&self, statement: &str) -> Vec<String> {
+        words(statement)
+    }
+
     /// The method: a collection's (`find`), else the database's
     /// (`runCommand`).
     fn verb<'a>(&self, statement: &'a str) -> Option<&'a str> {
@@ -371,6 +436,24 @@ pub fn tokenize(text: &str) -> Vec<Token> {
 
 #[cfg(test)]
 mod tests {
+
+    /// The one decoder: what the checks read is what the arguments' reader
+    /// reads, a key escaped or not.
+    #[test]
+    fn a_strings_escapes_read_one_way() {
+        assert_eq!(unescape(r"\u0024where"), Ok("$where".into()));
+        assert_eq!(unescape(r"a\nb\'c\\"), Ok("a\nb'c\\".into()));
+        assert!(unescape(r"\u00").is_err() && unescape("x\\").is_err());
+        let words = words(r#"db.t.find({"\u0024where": 1, '\$out': 2})"#);
+        assert!(words.contains(&"$where".to_string()) && words.contains(&"$out".to_string()), "{words:?}");
+        #[cfg(feature = "mongodb")]
+        {
+            let values = super::super::args::values(r#"{"\u0024where": 1, '\$out': 2}"#).unwrap();
+            let keys: Vec<String> = values[0].as_document().unwrap().keys().cloned().collect();
+            assert_eq!(keys, ["$where", "$out"]);
+        }
+    }
+
     use super::*;
 
     fn kind(statement: &str) -> (Kind, Option<&'static str>) {
