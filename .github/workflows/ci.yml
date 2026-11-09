@@ -68,7 +68,10 @@ jobs:
   engines:
     name: Engines (${{ matrix.features }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # A cold cache (master after a dependency change: it can't read a
+    # branch's) builds DuckDB's bundled C++ for clippy and again for the
+    # tests: over 30 minutes (2026-11-09).
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
