@@ -31,6 +31,23 @@ impl Database {
         out
     }
 
+    /// The server's load, as its own views say it (`SqlDialect::load_queries`):
+    /// each value, or why it isn't there (busy, or not readable by this
+    /// user). Empty where the engine has nothing to read.
+    pub async fn server_load(&self) -> Vec<(String, String)> {
+        let Some(dialect) = self.0.engine.dialect() else { return Vec::new() };
+        let mut out = Vec::new();
+        for (what, sql) in dialect.load_queries() {
+            let value = match tokio::time::timeout(std::time::Duration::from_secs(5), self.run(sql, 1)).await {
+                Ok(Ok(o)) => o.rows.first().and_then(|r| r.last().cloned().flatten()).unwrap_or_else(|| "none".into()),
+                Ok(Err(e)) => format!("not readable ({})", error_message(&e)),
+                Err(_) => "no answer within 5 s (the session is busy)".into(),
+            };
+            out.push(((*what).to_string(), value));
+        }
+        out
+    }
+
     /// The TLS version and cipher of the session, if it's encrypted.
     pub async fn tls_info(&self) -> Option<String> {
         on_driver!(self.0.engine, engine::queries::tls_info(self).await)

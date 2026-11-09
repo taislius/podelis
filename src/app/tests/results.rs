@@ -303,6 +303,7 @@ async fn export_parquet_shown_and_all_rows() {
     std::fs::remove_file(&shown[0]).unwrap();
 
     app.export_all(Format::Parquet);
+    assert!(app.exports.task.is_some(), "not started: {}", said(&app));
     loop {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
@@ -1125,6 +1126,7 @@ async fn export_all_rows_of_a_streamed_result() {
     }
 
     app.export_all(Format::Csv);
+    assert!(app.exports.task.is_some(), "not started: {}", said(&app));
     loop {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
@@ -1633,4 +1635,28 @@ fn a_results_filter_stays_with_its_grid() {
     app.handle_results_key(key(KeyCode::Char('1')));
     assert_eq!(app.tab.grid.filter.text(), "74");
     assert!(!app.tab.grid.filter_editing);
+}
+
+/// A failure's place, from MESSAGES (`g`) or a click on it in the results:
+/// the editor there, the spot selected and underlined (found by hand,
+/// 2026-11-09).
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_failure_leads_to_its_place_in_the_editor() {
+    let (mut app, _dir) = Box::pin(connected_app(ConnectionMode::Normal)).await;
+    run_sql(&mut app, "select 1;\nselect 2 frm t;").await;
+    let message = app.notes.log.last().unwrap();
+    assert!(message.is_error && message.at.is_some(), "{}", message.text);
+    let marker = app.tab.error_marker.expect("underlined");
+    app.tab.editor.set_cursor((0, 0));
+    app.tab.editor.clear_selection();
+    app.tab.error_marker = None;
+    app.focus = Focus::Results;
+    app.set_result_tab_for_tests(ResultTab::Messages);
+    app.notes.selected = Some(app.notes.log.len() - 1);
+    app.handle_key(key(KeyCode::Char('g')));
+    assert_eq!(app.focus, Focus::Editor);
+    assert_eq!(app.tab.error_marker, Some(marker));
+    assert_eq!(app.tab.editor.cursor(), marker.1);
+    assert_eq!(app.tab.editor.cursor().0, 1, "on the second line");
 }

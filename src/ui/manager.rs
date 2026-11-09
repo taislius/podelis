@@ -47,14 +47,16 @@ struct Panes {
 
 fn layout(app: &App, body: Rect) -> Panes {
     let longest = app.store.projects.iter().map(|p| p.name.chars().count()).max().unwrap_or(0) as u16;
-    let projects_w = fit(longest + 10, 24, 34);
+    let projects_w =
+        app.manager.projects_width.map_or_else(|| fit(longest + 10, 24, 34), |w| fit(w, 16, body.width / 2));
+    let settings_w = app.manager.settings_width.map_or(SETTINGS_WIDTH, |w| fit(w, 30, body.width * 2 / 3));
     let split = |widths: [Constraint; 2]| -> [Rect; 2] {
         Layout::default().direction(Direction::Horizontal).constraints(widths).areas(body)
     };
-    if body.width >= projects_w + CONNECTIONS_MIN + SETTINGS_WIDTH {
+    if body.width >= projects_w + CONNECTIONS_MIN + settings_w {
         let [p, c, s] = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(projects_w), Constraint::Min(0), Constraint::Length(SETTINGS_WIDTH)])
+            .constraints([Constraint::Length(projects_w), Constraint::Min(0), Constraint::Length(settings_w)])
             .areas(body);
         return Panes { projects: Some(p), connections: Some(c), settings: Some(s) };
     }
@@ -70,7 +72,7 @@ fn layout(app: &App, body: Rect) -> Panes {
         let [p, c] = split([Constraint::Length(projects_w), Constraint::Min(0)]);
         return Panes { projects: Some(p), connections: Some(c), settings: None };
     }
-    let [c, s] = split([Constraint::Min(0), Constraint::Length(SETTINGS_WIDTH.min(body.width / 2 + 6))]);
+    let [c, s] = split([Constraint::Min(0), Constraint::Length(settings_w.min(body.width / 2 + 6))]);
     Panes { projects: None, connections: Some(c), settings: Some(s) }
 }
 
@@ -82,6 +84,7 @@ pub(super) fn draw_manager(f: &mut Frame, app: &mut App, body: Rect) {
         return draw_welcome(f, app, body);
     }
     let panes = layout(app, body);
+    app.hits.manager_panes = (panes.projects, panes.settings);
     if let Some(area) = panes.projects {
         draw_projects(f, app, area);
     }

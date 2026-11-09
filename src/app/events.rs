@@ -402,7 +402,9 @@ impl App {
         self.tab.run.cancelling = false;
         let mut status = format!("{prefix}{}", one_line(err));
         let mut failed_at = None;
+        let mut place = None;
         if let Some(marker) = position.and_then(|p| self.locate_error(&p)) {
+            place = Some((self.active_tab, marker.0, marker.1));
             let (row, col) = marker.0;
             let _ = write!(status, " ({})", t!("run.at_line_col", line = row + 1, col = col + 1));
             failed_at = Some(self.tab.editor.offset_of(marker.0));
@@ -439,6 +441,9 @@ impl App {
             }
         }
         self.log(status.clone(), true);
+        if let Some(message) = self.notes.log.last_mut() {
+            message.at = place;
+        }
         self.set_status(status.clone(), true);
         self.notes.status_in_results = true;
         // Said where its result would be.

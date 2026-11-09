@@ -39,6 +39,15 @@ pub(in crate::ui) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
         _ => Line::styled(format!(" / {}", t!("navigator.filter")), dim()),
     };
     f.render_widget(Paragraph::new(line).style(Style::default().bg(t.inset)), filter);
+    // A filter with text: `×` at its end clears it (a click, or Esc).
+    let filtered = app.connection.schema.as_ref().is_some_and(|s| !s.filter.is_empty());
+    let (clear, width) = (" Esc × ", 7);
+    app.hits.schema_filter_clear = None;
+    if filtered && filter.width > width + 12 {
+        let at = Rect { x: filter.right() - width, width, ..filter };
+        f.render_widget(Paragraph::new(Span::styled(clear, dim())).style(Style::default().bg(t.inset)), at);
+        app.hits.schema_filter_clear = Some(at);
+    }
 
     let Some(panel) = &app.connection.schema else { return };
     if let Some(e) = &panel.error {

@@ -117,7 +117,7 @@ impl App {
 
     /// The tabs row, the text (the cursor placed, a drag begun) or the rest
     /// of the pane. True if it was the editor's.
-    pub(in crate::app) fn click_editor(&mut self, hits: &Hits, x: u16, y: u16) -> bool {
+    pub(in crate::app) fn click_editor(&mut self, hits: &Hits, x: u16, y: u16, double: bool) -> bool {
         if y == hits.tabs_y && inside(hits.editor, x, y) && self.click_tab_row(hits, x) {
             // The tabs are the editor's, even while one can't be switched to.
             self.focus = Focus::Editor;
@@ -127,6 +127,11 @@ impl App {
             self.focus = Focus::Editor;
             self.popups.completion = None;
             let pos = self.editor_pos_at(x, y);
+            // A double click selects the word there.
+            if double && self.tab.editor.select_word_at(pos) {
+                self.panes.dragging = false;
+                return true;
+            }
             self.tab.editor.clear_selection();
             self.tab.editor.set_cursor(pos);
             self.tab.editor.set_anchor(Some(pos));

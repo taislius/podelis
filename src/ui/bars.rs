@@ -167,11 +167,13 @@ pub(super) fn draw_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
     if let Some(note) = app.agent_note().filter(|_| matches!(app.screen, Screen::Query)) {
         right.push(Span::styled(format!(" {note} "), bold(t.warn)));
     }
-    // Whether AI is on, while no message needs the room.
+    // While no message needs the room: whether AI is on, beside the
+    // connection's badges (READ-ONLY…), and Ctrl+K at the right edge.
     let in_results = app.notes.status_in_results && app.hits.results.width > 0;
     let quiet = app.notes.status.is_empty() || in_results;
     if matches!(app.screen, Screen::Query) && quiet {
-        right.extend(ai_status(app));
+        left.extend(ai_status(app));
+        right.extend(chip(&app.keymap.short_label(Action::Palette), t!("hint.commands"), false));
     }
 
     let left_w = Line::from(left.clone()).width() as u16;
@@ -317,12 +319,16 @@ fn key_hints(app: &App, width: u16) -> Vec<Span<'static>> {
         if !matches!(app.screen, Screen::Query) {
             chips.extend(hints.iter().take(1).map(|(key, label)| chip(key, label, false)));
         }
-        let help = match app.screen {
-            Screen::Query => keys.short_label(Action::Palette),
-            _ if app.typing() => "F1".to_string(),
-            _ => "?".to_string(),
+        // Every key (Ctrl+K is at the right edge): `?`, or F1 where `?`
+        // would be typed.
+        let help = if app.typing()
+            || (matches!(app.screen, Screen::Query) && app.focus == Focus::Editor && app.editor_inserting())
+        {
+            "F1"
+        } else {
+            "?"
         };
-        chips.push(chip(&help, t!("hint.keys"), false));
+        chips.push(chip(help, t!("hint.all_keys"), false));
         // The pane's menu (what right-click opens), each item with its key.
         chips.extend(menu_chip(app));
     }

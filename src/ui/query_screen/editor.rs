@@ -407,7 +407,8 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Vec<Cols>, Optio
     };
     let width = |spans: &[Span]| spans.iter().map(Span::width).sum::<usize>();
     // A tab's spans with its name cut to `cols` screen columns: " SQL ",
-    // the name, " ●" (a saved query changed), " …" (running while hidden).
+    // the name, " !" (a saved query changed, not saved: dots are for
+    // connections), " …" (running while hidden).
     let tab_spans = |i: usize, cols: usize| -> Vec<Span<'static>> {
         let tab = &app.tabs[i];
         let active = i == app.active_tab;
@@ -422,7 +423,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Vec<Cols>, Optio
         ];
         // Only a saved query's changes: other tabs are drafts, kept anyway.
         if tab.saved_id.is_some() && app.tab_dirty(i) {
-            spans.push(Span::styled(" ●", fg(t.warn).bg(bg)));
+            spans.push(Span::styled(" !", bold(t.warn).bg(bg)));
         }
         if !active && app.tab_running(i) {
             spans.push(Span::styled(" …", fg(t.accent).bg(bg)));

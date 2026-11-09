@@ -335,6 +335,28 @@ impl TextEditor {
 
     /// Comments out the selected lines (or the cursor's) with `-- `, or
     /// uncomments them if they all are.
+    /// Selects the word at `pos`: what runs between spaces there, not a
+    /// `,`, `;` or bracket around it (`users.email` in `users.email,`).
+    /// False on a space.
+    pub fn select_word_at(&mut self, pos: Pos) -> bool {
+        let line: Vec<char> = self.lines[pos.0].chars().collect();
+        let part = |c: char| !c.is_whitespace() && !matches!(c, ',' | ';' | '(' | ')');
+        let at = pos.1.min(line.len());
+        // On the word, or right after its end (a click past the last letter).
+        let at = if line.get(at).is_some_and(|c| part(*c)) {
+            at
+        } else if at > 0 && part(line[at - 1]) {
+            at - 1
+        } else {
+            return false;
+        };
+        let start = (0..at).rev().take_while(|&i| part(line[i])).last().unwrap_or(at);
+        let end = (at..line.len()).take_while(|&i| part(line[i])).last().map_or(at, |i| i + 1);
+        self.set_anchor(Some((pos.0, start)));
+        self.set_cursor((pos.0, end));
+        true
+    }
+
     pub fn toggle_comment(&mut self) {
         let (first, last) = match self.selection() {
             // A selection ending at column 0 doesn't include that line.
@@ -808,6 +830,21 @@ mod tests {
         let e = editor("日本x");
         assert_eq!(e.cursor_col, 3);
         assert_eq!(e.cursor_display_col(), 5);
+    }
+
+    /// A double click (or Alt+W): what runs between spaces, without a
+    /// comma or bracket around it (found by hand, 2026-11-09).
+    #[test]
+    fn a_word_is_what_runs_between_spaces() {
+        let mut e = editor("select users.email, count(id) from t");
+        assert!(e.select_word_at((0, 10)));
+        assert_eq!(e.selected_text().as_deref(), Some("users.email"));
+        assert!(e.select_word_at((0, 26)));
+        assert_eq!(e.selected_text().as_deref(), Some("id"));
+        assert!(e.select_word_at((0, 6)), "right after a word: that word");
+        assert_eq!(e.selected_text().as_deref(), Some("select"));
+        let mut e = editor("a  b");
+        assert!(!e.select_word_at((0, 2)), "between spaces: nothing");
     }
 
     #[test]

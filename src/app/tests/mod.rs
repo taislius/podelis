@@ -40,6 +40,9 @@ pub(super) fn test_app() -> (App, tempfile::TempDir) {
     let id = store.add_project("p").unwrap();
     let mut app = App::new(store, warning, None);
     app.open_project(&id);
+    // No floor of free disk: an export test mustn't depend on this
+    // machine's (the tests on the limits set their own).
+    app.exports.limits_for_tests = Some(crate::transfer::limits::ExportLimits::from_gb(0, 1, 0));
     (app, dir)
 }
 
@@ -217,6 +220,8 @@ pub(super) async fn asking_app(dir: &std::path::Path, config: &str) -> App {
     std::fs::write(dir.join("config.toml"), config).unwrap();
     let (store, _) = ConnectionStore::load_from(dir.join("connections.toml"));
     let mut app = App::new(store, None, Some(dir.to_path_buf()));
+    // As the app starts: its settings (the models) from the file.
+    app.settings.models = crate::config::settings::Settings::load(dir).0.models;
     let id = app.store.project_by_name("p").unwrap().id.clone();
     app.open_project(&id);
     app.connection.form.engine = file_engine();

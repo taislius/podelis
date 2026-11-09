@@ -62,6 +62,7 @@ pub(in crate::ui) fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
     let block = pane(t!("results.title"), &info, focused);
     app.hits.results = area;
     app.hits.result_rows = Rect::default();
+    app.hits.result_body = Rect::default();
     app.hits.plan_source = Rect::default();
     app.hits.run_source = Rect::default();
     app.hits.run_tabs.clear();
@@ -100,6 +101,7 @@ pub(in crate::ui) fn draw_results(f: &mut Frame, app: &mut App, area: Rect) {
         }
         ResultTab::Rows => {
             let body = draw_run_source(f, app, body);
+            app.hits.result_body = body;
             draw_rows(f, app, body, footer);
         }
     }
@@ -284,7 +286,12 @@ fn draw_no_result(f: &mut Frame, app: &App, area: Rect) {
         let (said, then) = if link {
             (t!("results.no_answer"), t!("results.no_answer_then"))
         } else {
-            (t!("results.failed"), t!("results.failed_then"))
+            let then = if app.tab.error_marker.is_some() {
+                t!("results.failed_then_place")
+            } else {
+                t!("results.failed_then")
+            };
+            (t!("results.failed"), then)
         };
         Paragraph::new(vec![
             Line::from(Span::styled(format!(" {said}"), bold(t.error))),
@@ -405,45 +412,24 @@ fn draw_run_source(f: &mut Frame, app: &mut App, area: Rect) -> Rect {
     if app.tab.runs.is_empty() || area.height < 3 {
         return area;
     }
-    let [line, rest] = Layout::default()
+    // The statement in a row of its own, under the pane's tabs; the kept
+    // results' tabs under it (with more than one), then the rows.
+    let several = app.tab.runs.len() > 1 && area.height >= 4;
+    let [line, tabs_line, rest] = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .constraints([Constraint::Length(1), Constraint::Length(u16::from(several)), Constraint::Min(0)])
         .areas(area);
-    let mut spans = vec![Span::raw(" ")];
-    let mut x = line.x + 1;
-    let several = app.tab.runs.len() > 1;
-    let focused = app.focus == Focus::Results;
-    for (i, run) in app.tab.runs.iter().enumerate().filter(|_| several) {
-        let shown = i == app.tab.run_at;
-        // Like the pane's tabs: the shown one on the tab colour; pinned
-        // ones in the accent.
-        let style = match (shown, run.pinned) {
-            (true, _) if focused => fg(t.text_bright),
-            (true, _) => fg(t.text),
-            (false, true) => fg(t.accent),
-            (false, false) => muted(),
-        };
-        let style = if run.pinned { style.add_modifier(Modifier::BOLD) } else { style };
-        let style = if shown { style.bg(t.tab) } else { style };
-        let label = format!(" #{} ", run.number);
-        let w = label.chars().count() as u16;
-        app.hits.run_tabs.push((x, x + w, i));
-        spans.push(Span::styled(label, style));
-        x += w;
-    }
-    if several {
-        spans.push(Span::styled(" ", Style::default()));
-    }
     let run = &app.tab.runs[app.tab.run_at];
+    let mut spans = vec![Span::raw(" ")];
+    let x = line.x + 1;
     // A script's result set: exactly the statement that made it, where it is.
     match app.shown_source() {
         Some(source) => {
             let (place, place_style, found) = source_place(app, source);
             let when = format!("  {} · {}", source.at.format("%H:%M:%S"), age(chrono::Local::now() - source.at));
             let pin = if run.pinned { format!("  {}", t!("results.pinned")) } else { String::new() };
-            let used: usize = spans.iter().map(Span::width).sum();
             let room = usize::from(line.width)
-                .saturating_sub(used + place.chars().count() + when.chars().count() + pin.chars().count() + 3);
+                .saturating_sub(1 + place.chars().count() + when.chars().count() + pin.chars().count() + 3);
             spans.push(Span::styled(truncate(&one_line(&source.sql), room), fg(t.text)));
             spans.push(Span::raw("  "));
             spans.push(Span::styled(place, place_style));
@@ -455,9 +441,34 @@ fn draw_run_source(f: &mut Frame, app: &mut App, area: Rect) -> Rect {
         }
         None => spans.push(Span::styled(if run.pinned { t!("results.pinned") } else { "" }, fg(t.accent))),
     }
-    // The run tabs' row, for clicks (the statement only where it's linked).
     app.hits.run_source.y = line.y;
     f.render_widget(Paragraph::new(Line::from(spans)), line);
+    app.hits.run_tabs_y = None;
+    if several {
+        let mut spans = vec![Span::raw(" ")];
+        let mut x = tabs_line.x + 1;
+        let focused = app.focus == Focus::Results;
+        for (i, run) in app.tab.runs.iter().enumerate() {
+            let shown = i == app.tab.run_at;
+            // Like the pane's tabs: the shown one on the tab colour; pinned
+            // ones in the accent.
+            let style = match (shown, run.pinned) {
+                (true, _) if focused => fg(t.text_bright),
+                (true, _) => fg(t.text),
+                (false, true) => fg(t.accent),
+                (false, false) => muted(),
+            };
+            let style = if run.pinned { style.add_modifier(Modifier::BOLD) } else { style };
+            let style = if shown { style.bg(t.tab) } else { style };
+            let label = format!(" #{} ", run.number);
+            let w = label.chars().count() as u16;
+            app.hits.run_tabs.push((x, x + w, i));
+            spans.push(Span::styled(label, style));
+            x += w;
+        }
+        app.hits.run_tabs_y = Some(tabs_line.y);
+        f.render_widget(Paragraph::new(Line::from(spans)), tabs_line);
+    }
     rest
 }
 

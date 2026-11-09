@@ -135,6 +135,9 @@ pub struct Message {
     pub time: String,
     pub text: String,
     pub is_error: bool,
+    /// Where a failure was in the editor (its tab, and the range then):
+    /// `g` in MESSAGES goes there.
+    pub at: Option<(usize, Pos, Pos)>,
 }
 
 /// Outcome of checking the editor text with the server.
@@ -549,7 +552,7 @@ impl App {
     /// Adds a line to the MESSAGES tab (keeps the last 200).
     fn log(&mut self, text: String, is_error: bool) {
         let time = chrono::Local::now().format("%H:%M:%S").to_string();
-        self.notes.log.push(Message { time, text, is_error });
+        self.notes.log.push(Message { time, text, is_error, at: None });
         if self.notes.log.len() > 200 {
             self.notes.log.remove(0);
             // The selected one stays selected (or goes with the oldest).
@@ -738,6 +741,12 @@ impl App {
             return self.request_quit();
         }
 
+        if key.modifiers == KeyModifiers::CONTROL
+            && matches!(self.screen, Screen::Projects | Screen::Connections)
+            && self.resize_manager(key.code)
+        {
+            return;
+        }
         match self.screen {
             Screen::Projects => self.handle_projects_key(key),
             Screen::Connections => self.handle_connections_key(key),

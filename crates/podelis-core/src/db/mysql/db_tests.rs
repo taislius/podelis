@@ -160,6 +160,16 @@ async fn live_reconnect_mysql() {
     live_reconnect(&db, &other, "SELECT CAST(CONNECTION_ID() AS CHAR)", "KILL {pid}").await;
 }
 
+/// Stopping a session that's gone (closed, or reconnected under another
+/// id) is done, not MySQL's "Unknown thread id" (found by hand, 2026-11-09).
+#[tokio::test]
+async fn live_stopping_a_gone_session_is_done_mysql() {
+    let Some(db) = live_db(Engine::MySql).await else { return };
+    let gone = i64::from(i32::MAX) - 7;
+    super::queries::cancel(&db, gone).await.unwrap();
+    super::queries::stop_session(&db, gone, true).await.unwrap();
+}
+
 #[tokio::test]
 async fn live_activity_mysql() {
     // KILL QUERY ends SLEEP early, with a result rather than an error.

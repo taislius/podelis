@@ -109,6 +109,13 @@ impl Backend for Sqlite {
 }
 
 impl SqlDialect for Sqlite {
+    fn load_queries(&self) -> &'static [(&'static str, &'static str)] {
+        &[
+            ("Size (bytes)", "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()"),
+            ("Free pages", "SELECT freelist_count FROM pragma_freelist_count()"),
+            ("Journal mode", "SELECT journal_mode FROM pragma_journal_mode()"),
+        ]
+    }
     fn copy_into(&self, path: &str) -> Option<String> {
         Some(format!("VACUUM INTO {}", crate::db::sql_literal(path, crate::db::Engine::Sqlite)))
     }

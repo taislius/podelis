@@ -286,6 +286,17 @@ pub trait SqlDialect: Backend {
         let limit = limit.map(|n| format!(" LIMIT {n}")).unwrap_or_default();
         format!("SELECT * FROM {table}{filter}{limit}")
     }
+    /// The server's load, as its own views say it: (what, a query whose
+    /// first row's last column says it). Read one by one, each in a few
+    /// seconds or left out; empty where there's nothing to read.
+    fn load_queries(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+    /// Updates `table`'s statistics for the planner (`ANALYZE`): `None`
+    /// where the engine keeps them itself.
+    fn analyze_table(&self, table: &str) -> Option<String> {
+        Some(format!("ANALYZE {table}"))
+    }
     /// An INSERT of `rows` (each `(value, …)`) into `columns` of `table`.
     fn insert(&self, table: &str, columns: &[String], rows: &[String]) -> String {
         format!("INSERT INTO {table} ({}) VALUES {}", columns.join(", "), rows.join(", "))

@@ -163,6 +163,20 @@ impl Backend for MySql {
 }
 
 impl SqlDialect for MySql {
+    fn load_queries(&self) -> &'static [(&'static str, &'static str)] {
+        &[
+            ("Connections", "SHOW GLOBAL STATUS LIKE 'Threads_connected'"),
+            ("Running", "SHOW GLOBAL STATUS LIKE 'Threads_running'"),
+            ("Up for (s)", "SHOW GLOBAL STATUS LIKE 'Uptime'"),
+            ("Statements since start", "SHOW GLOBAL STATUS LIKE 'Questions'"),
+            ("Slow queries", "SHOW GLOBAL STATUS LIKE 'Slow_queries'"),
+            ("Waiting on row locks", "SHOW GLOBAL STATUS LIKE 'Innodb_row_lock_current_waits'"),
+            ("Reads from disk (buffer pool missed)", "SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_reads'"),
+        ]
+    }
+    fn analyze_table(&self, table: &str) -> Option<String> {
+        Some(format!("ANALYZE TABLE {table}"))
+    }
     fn begin(&self, read_only: bool) -> &'static str {
         if read_only { "START TRANSACTION READ ONLY" } else { "START TRANSACTION" }
     }

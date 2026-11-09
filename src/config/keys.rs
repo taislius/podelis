@@ -49,6 +49,7 @@ pub enum Action {
     Menu,
     Zoom,
     Heartbeat,
+    ServerLoad,
     Projects,
     TxMode,
     Messages,
@@ -56,6 +57,7 @@ pub enum Action {
     Ask,
     Memory,
     SelectStatement,
+    SelectWord,
     ZoomStatement,
     TabList,
     ConnectionList,
@@ -99,6 +101,7 @@ impl Action {
             Action::Menu => t!("action.menu"),
             Action::Zoom => t!("action.zoom"),
             Action::Heartbeat => t!("action.heartbeat"),
+            Action::ServerLoad => t!("action.server_load"),
             Action::Projects => t!("action.projects"),
             Action::TxMode => t!("action.tx_mode"),
             Action::Messages => t!("action.messages"),
@@ -106,6 +109,7 @@ impl Action {
             Action::Ask => t!("action.ask"),
             Action::Memory => t!("action.memory"),
             Action::SelectStatement => t!("action.select_statement"),
+            Action::SelectWord => t!("action.select_word"),
             Action::ZoomStatement => t!("action.zoom_statement"),
             Action::TabList => t!("action.tab_list"),
             Action::ConnectionList => t!("action.connection_list"),
@@ -135,6 +139,7 @@ impl Action {
             Action::Menu => t!("action_brief.menu"),
             Action::Zoom => t!("action_brief.zoom"),
             Action::Heartbeat => t!("action_brief.heartbeat"),
+            Action::ServerLoad => t!("action_brief.server_load"),
             Action::Projects => t!("action_brief.projects"),
             Action::TxMode => t!("action_brief.tx_mode"),
             Action::Messages => t!("action_brief.messages"),
@@ -142,6 +147,7 @@ impl Action {
             Action::Ask => t!("action_brief.ask"),
             Action::Memory => t!("action_brief.memory"),
             Action::SelectStatement => t!("action_brief.select_statement"),
+            Action::SelectWord => t!("action_brief.select_word"),
             Action::ZoomStatement => t!("action_brief.zoom_statement"),
             Action::TabList => t!("action_brief.tab_list"),
             Action::ConnectionList => t!("action_brief.connection_list"),
@@ -169,6 +175,7 @@ impl Action {
                 | Action::InsertSnippet
                 | Action::NextWarning
                 | Action::SelectStatement
+                | Action::SelectWord
                 | Action::ZoomStatement
                 | Action::SaveStatement
                 | Action::AiExplain
@@ -192,7 +199,9 @@ impl Action {
 
 /// Every action: its name in config.toml and default keys.
 const ACTIONS: &[(Action, &str, &[&str])] = &[
-    (Action::Run, "run", &["F5", "Ctrl+R", "Ctrl+Enter"]),
+    // Not Ctrl+R (vim's redo). Alt+Enter where Ctrl+Enter doesn't arrive
+    // (it needs the kitty keyboard protocol) and F5 needs Fn.
+    (Action::Run, "run", &["F5", "Ctrl+Enter", "Alt+Enter"]),
     (Action::RunStatement, "run_statement", &["F6"]),
     (Action::Explain, "explain", &["F7", "Ctrl+K e"]),
     (Action::Complete, "complete", &["Ctrl+Space"]),
@@ -205,16 +214,19 @@ const ACTIONS: &[(Action, &str, &[&str])] = &[
     (Action::Disconnect, "disconnect", &["Ctrl+K d", "Ctrl+D"]),
     (Action::NewTab, "new_tab", &["Ctrl+T"]),
     (Action::CloseTab, "close_tab", &["Ctrl+W"]),
-    (Action::NextTab, "next_tab", &["Ctrl+PageDown"]),
-    (Action::PrevTab, "prev_tab", &["Ctrl+PageUp"]),
+    // Ctrl+PageUp/Down are many terminals' own (GNOME's tabs): Ctrl+K ] and
+    // [ reach every one.
+    (Action::NextTab, "next_tab", &["Ctrl+PageDown", "Ctrl+K ]"]),
+    (Action::PrevTab, "prev_tab", &["Ctrl+PageUp", "Ctrl+K ["]),
     (Action::SaveTab, "save_tab", &["Ctrl+S"]),
     (Action::RenameTab, "rename_tab", &["Ctrl+K t", "F4"]),
     (Action::Library, "library", &["Ctrl+K l", "F3"]),
     (Action::Commit, "commit", &["F8", "Ctrl+K c"]),
     (Action::Rollback, "rollback", &["Shift+F8", "Ctrl+K r"]),
     (Action::Find, "find", &["Ctrl+F"]),
-    // Most terminals send Ctrl+/ as Ctrl+7.
-    (Action::Comment, "comment", &["Ctrl+K -", "Ctrl+/", "Ctrl+7"]),
+    // Ctrl+/ reaches few terminals as itself (most send Ctrl+7, some a
+    // plain `/`): bound, not shown, so no hint promises it.
+    (Action::Comment, "comment", &["Ctrl+K -", "Alt+/", "~Ctrl+/", "~Ctrl+7"]),
     (Action::Format, "format", &["Ctrl+K f", "F9"]),
     (Action::Palette, "palette", &["Ctrl+K"]),
     (Action::ConnectionInfo, "connection_info", &["Ctrl+K s i"]),
@@ -228,7 +240,9 @@ const ACTIONS: &[(Action, &str, &[&str])] = &[
     (Action::ConnectionList, "connection_list", &["Ctrl+K j"]),
     (Action::Settings, "settings", &["Ctrl+K ,"]),
     (Action::SelectStatement, "select_statement", &["Ctrl+K v"]),
+    (Action::SelectWord, "select_word", &["Alt+W"]),
     (Action::Heartbeat, "heartbeat", &["Ctrl+K s h"]),
+    (Action::ServerLoad, "server_load", &["Ctrl+K s l"]),
     (Action::Projects, "projects", &["Ctrl+K p"]),
     (Action::TxMode, "transaction_mode", &["Ctrl+K x"]),
     (Action::Messages, "messages", &["Ctrl+K Space"]),
@@ -303,6 +317,12 @@ impl KeyMap {
             let specs = specs_of(name, defaults);
             let mut labels = Vec::new();
             for spec in specs {
+                // `~`: a default bound but not shown (a key not every
+                // terminal sends: a hint mustn't promise it).
+                let (shown, spec) = match spec.strip_prefix('~') {
+                    Some(rest) => (false, rest.to_string()),
+                    None => (true, spec),
+                };
                 if let Some(rest) = leader_spec(&spec) {
                     match rest {
                         Ok(letters) => {
@@ -317,7 +337,9 @@ impl KeyMap {
                 match parse_key(&spec) {
                     Ok(binding) => {
                         map.bindings.push((binding, action));
-                        labels.push(spec);
+                        if shown {
+                            labels.push(spec);
+                        }
                     }
                     Err(e) => warnings.push(format!("[keys] {name}: {e}")),
                 }
@@ -382,7 +404,7 @@ impl KeyMap {
         self.bindings.iter().find(|((c, m), _)| *c == code && *m == mods).map(|(_, a)| *a)
     }
 
-    /// The keys for `action`, for help and hints ("F5 · Ctrl+R").
+    /// The keys for `action`, for help and hints ("F5 · Ctrl+Enter").
     pub fn label(&self, action: Action) -> &str {
         self.labels.get(&action).map_or("", String::as_str)
     }
@@ -507,6 +529,18 @@ mod tests {
         assert!(parse_key("Hyper+X").unwrap_err().contains("unknown modifier"));
         assert!(parse_key("Ctrl+Foo").unwrap_err().contains("unknown key"));
         assert!(parse_key("F99").is_err());
+    }
+
+    /// A key not every terminal sends is bound but not shown, so no hint
+    /// promises it (Ctrl+/ typed a `/`: found by hand, 2026-11-09).
+    #[test]
+    fn keys_some_terminals_lack_work_unshown() {
+        let map = KeyMap::default();
+        let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+        assert_eq!(map.action(ctrl('/')), Some(Action::Comment));
+        assert_eq!(map.action(ctrl('7')), Some(Action::Comment));
+        assert_eq!(map.action(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::ALT)), Some(Action::Comment));
+        assert_eq!(map.label(Action::Comment), "Ctrl+K - · Alt+/");
     }
 
     #[test]

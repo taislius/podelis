@@ -165,7 +165,7 @@ pub(super) fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
             .enumerate()
             .take(9)
             .map(|(i, tab)| {
-                let dirty = if app.tab_dirty(i) { " ●" } else { "" };
+                let dirty = if app.tab_dirty(i) { " !" } else { "" };
                 let here = if i == app.active_tab { format!(" ({})", t!("menu.this_one")) } else { String::new() };
                 ((i + 1).to_string(), format!("{}{dirty}{here}", tab.name))
             })
@@ -244,6 +244,10 @@ pub(super) fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
     );
     let first = palette.selected.saturating_sub(rows.saturating_sub(1));
     let w = list.width as usize;
+    // The tabs and the connections as a table: each entry's parts (split
+    // at `  · `) in columns as wide as their widest.
+    let texts: Vec<String> = items.iter().map(|c| c.text(app)).collect();
+    let texts = if palette.tabs_only() || palette.conns_only() { as_columns(&texts) } else { texts };
     let lines: Vec<Line> = items
         .iter()
         .enumerate()
@@ -251,7 +255,7 @@ pub(super) fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
         .take(rows)
         .map(|(i, cmd)| {
             let keys = cmd.keys(app);
-            let name = truncate(&cmd.text(app), w.saturating_sub(keys.chars().count() + 4));
+            let name = truncate(&texts[i], w.saturating_sub(keys.chars().count() + 4));
             let pad = w.saturating_sub(name.chars().count() + keys.chars().count() + 2);
             let style = if i == palette.selected { bold(t.text_bright).bg(t.active) } else { fg(t.text) };
             Line::from(vec![
@@ -266,4 +270,33 @@ pub(super) fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
         lines
     };
     f.render_widget(Paragraph::new(lines), list);
+}
+
+/// Entries made of parts joined by `  · ` (a tab: its name, connection and
+/// state), as rows of a table: each column padded to its widest.
+fn as_columns(texts: &[String]) -> Vec<String> {
+    let rows: Vec<Vec<&str>> = texts.iter().map(|t| t.split("  · ").collect()).collect();
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let widths: Vec<usize> = (0..columns)
+        .map(|c| rows.iter().filter_map(|r| r.get(c)).map(|p| p.chars().count()).max().unwrap_or(0))
+        .collect();
+    rows.iter()
+        .map(|parts| {
+            let last = parts.len().saturating_sub(1);
+            let cells = parts
+                .iter()
+                .enumerate()
+                .map(|(c, p)| if c == last { (*p).to_string() } else { format!("{p:<w$}", w = widths[c]) });
+            cells.collect::<Vec<_>>().join("   ")
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn tabs_line_up_as_a_table() {
+        let texts = ["orders  · shop  · running 0:03".to_string(), "a  · warehouse".to_string()];
+        assert_eq!(super::as_columns(&texts), ["orders   shop        running 0:03", "a        warehouse"]);
+    }
 }

@@ -33,7 +33,7 @@ fn query_help(app: &App) -> Vec<(&'static str, Vec<(String, String)>)> {
                     (t!("help.key_vim"), t!("help.vim")),
                     (t!("help.key_rebind"), t!("help.rebind")),
                 ],
-                Group::Tabs => vec![("Ctrl+K 1…9", t!("help.switch_tab"))],
+                Group::Tabs => vec![("Ctrl+K 1…9 · 0 · Alt+1…9 · 0", t!("help.switch_tab"))],
                 Group::View => vec![("Tab / Shift+Tab", t!("help.next_pane"))],
                 Group::App => vec![("? · F1", t!("palette.help")), ("Ctrl+Q", t!("palette.quit"))],
                 _ => Vec::new(),
@@ -78,7 +78,7 @@ pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String
                     ("Tab / Shift+Tab", t!("help.next_pane_round")),
                     ("→", t!("help.its_connections")),
                     ("Esc", t!("help.back_to_tabs")),
-                    ("q", t!("help.quit")),
+                    ("Ctrl+Q", t!("help.quit")),
                 ],
             ),
             (
@@ -119,12 +119,17 @@ pub(super) fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
     // A long description ends in `…`, not at the border.
     let what_w = usize::from(area.width).saturating_sub(key_w + 7);
     let mut lines = Vec::new();
+    // With no model, AI's keys are there but dimmed, and say why.
+    let ai_off = app.ai_state() == crate::app::AiState::Off;
     for (title, keys) in sections {
-        lines.push(Line::from(Span::styled(title.to_uppercase(), bold(t.accent))));
+        let off = ai_off && title == crate::app::commands::Group::Ai.title();
+        let heading =
+            if off { format!("{} · {}", title.to_uppercase(), t!("bar.ai_off")) } else { title.to_uppercase() };
+        lines.push(Line::from(Span::styled(heading, if off { dim() } else { bold(t.accent) })));
         for (key, what) in keys {
             lines.push(Line::from(vec![
-                Span::styled(format!("  {key:<key_w$} "), bold(t.text)),
-                Span::styled(truncate(&what, what_w), muted()),
+                Span::styled(format!("  {key:<key_w$} "), if off { dim() } else { bold(t.text) }),
+                Span::styled(truncate(&what, what_w), if off { dim() } else { muted() }),
             ]));
         }
         lines.push(Line::default());

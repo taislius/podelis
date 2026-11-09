@@ -1140,6 +1140,11 @@ async fn open_connections_are_listed_gone_to_and_closed() {
     );
     assert!(entries[1].starts_with("alpha") && entries[1].contains("orders, refunds"), "{entries:?}");
 
+    // Enter on the shown tab's own: the list stays and says what can be
+    // done (found by hand, 2026-11-09).
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.popups.palette.is_some(), "still open");
+    assert!(said(&app).contains("Ctrl+D closes it"), "{}", said(&app));
     // Found by a tab's name; Enter goes to its first tab.
     type_text(&mut app, "refunds");
     app.handle_key(key(KeyCode::Enter));
@@ -1173,6 +1178,28 @@ async fn open_connections_are_listed_gone_to_and_closed() {
     assert!(app.popups.palette.is_none());
 }
 
+/// Ctrl+X in the connections list closes them all, asking first.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn every_open_connection_is_closed_at_once() {
+    let (mut app, dir) = test_app();
+    let project = project_id(&app);
+    let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
+    app.store.upsert(&project, None, a.clone()).unwrap();
+    app.store.upsert(&project, None, b.clone()).unwrap();
+    connect_profile(&mut app, &a).await;
+    app.handle_key(ctrl('o'));
+    connect_profile(&mut app, &b).await;
+    app.handle_key(ctrl('k'));
+    app.handle_key(key(KeyCode::Char('j')));
+    app.handle_key(ctrl('x'));
+    let confirm = app.popups.confirm.as_ref().expect("asked first");
+    assert!(confirm.message.contains("all 2"), "{}", confirm.message);
+    app.handle_key(key(KeyCode::Char('y')));
+    assert!(app.tabs.iter().all(|t| t.conn.is_none()) && app.parked_connections().is_empty());
+    assert_eq!(said(&app), "Closed 2 connections");
+}
+
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn closing_a_connection_says_its_transaction_goes() {
@@ -1186,4 +1213,21 @@ async fn closing_a_connection_says_its_transaction_goes() {
     app.handle_key(ctrl('d'));
     let confirm = app.popups.confirm.as_ref().unwrap();
     assert!(confirm.danger && confirm.message.contains("rolled back"), "{}", confirm.message);
+}
+
+/// `Ctrl+K s l`: the server's load, as its own views say it (found by hand,
+/// 2026-11-09: a diagnostics window).
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn the_servers_load_is_shown() {
+    let (mut app, _dir) = Box::pin(connected_app(ConnectionMode::Normal)).await;
+    app.run_action(Action::ServerLoad);
+    while app.popups.cell_view.is_none() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    let view = app.popups.cell_view.as_ref().unwrap();
+    assert!(view.title.starts_with("SERVER LOAD"), "{}", view.title);
+    assert!(view.text.contains("Size (bytes)") && view.text.contains("Journal mode"), "{}", view.text);
+    assert!(!view.text.contains("not readable"), "{}", view.text);
 }

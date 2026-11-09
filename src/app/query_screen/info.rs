@@ -54,6 +54,32 @@ impl App {
         });
     }
 
+    /// `Ctrl+K s l`: the server's load, as its own views say it
+    /// (connections, running queries, lock waits, cache hits…), in the text
+    /// view; again to read it again.
+    pub(in crate::app) fn show_server_load(&mut self) {
+        let Some(db) = self.connection.database.clone() else {
+            return self.set_status(t!("info.not_connected").to_string(), true);
+        };
+        if db.engine().dialect().is_none_or(|d| d.load_queries().is_empty()) {
+            return self.set_status(t!("info.no_load", engine = db.engine().label()), true);
+        }
+        let title = format!("{} · {}", t!("info.load_title"), self.connection.form.short_name());
+        self.set_status(t!("info.reading_load").to_string(), false);
+        let send = self.sender();
+        tokio::spawn(async move {
+            let rows = db.server_load().await;
+            let at = chrono::Local::now().format("%H:%M:%S");
+            let width = rows.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0);
+            let mut text = String::new();
+            for (k, v) in rows {
+                let _ = writeln!(text, "{k:<width$}  {v}");
+            }
+            let _ = write!(text, "\n{}", t!("info.load_at", at = at));
+            send(DbEventKind::Definition { title, text: Ok(text) });
+        });
+    }
+
     /// Facts for a bug report: versions, terminal, settings, the kind of
     /// connection. No hosts, users, passwords or SQL.
     pub(in crate::app) fn diagnostics(&self) -> String {

@@ -564,3 +564,27 @@ fn a_paste_doesnt_reach_the_library_search_behind_its_delete_question() {
     assert_eq!(app.popups.library_view.as_ref().unwrap().query.text(), "top");
     assert!(app.prompt_text().is_none());
 }
+
+/// Past nine tabs: Ctrl+K 0 and Alt+0 go to the last, Ctrl+K ] and [ step
+/// (found by hand, 2026-11-09: Ctrl+PgDn is the terminal's own on Linux).
+#[test]
+fn more_than_nine_tabs_are_reached_by_keys_every_terminal_sends() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    for _ in 0..11 {
+        app.handle_key(ctrl('t'));
+    }
+    app.switch_tab(0);
+    app.handle_key(ctrl('k'));
+    app.handle_key(key(KeyCode::Char('0')));
+    assert_eq!(app.active_tab, 11);
+    app.handle_key(ctrl('k'));
+    app.handle_key(key(KeyCode::Char('[')));
+    assert_eq!(app.active_tab, 10);
+    app.handle_key(ctrl('k'));
+    app.handle_key(key(KeyCode::Char(']')));
+    assert_eq!(app.active_tab, 11);
+    app.switch_tab(0);
+    app.handle_key(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::ALT));
+    assert_eq!(app.active_tab, 11);
+}

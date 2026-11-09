@@ -157,7 +157,7 @@ impl App {
             }
             return;
         }
-        if self.click_editor(&hits, x, y) || self.click_results(&hits, x, y, double) {
+        if self.click_editor(&hits, x, y, double) || self.click_results(&hits, x, y, double) {
             return;
         }
         if hits.schema.is_some_and(|r| inside(r, x, y)) {

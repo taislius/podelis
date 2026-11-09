@@ -11,13 +11,14 @@ Run (the selection, or everything)  [F5]
 Run the statement at the cursor  [F6]
 Explain (plan only)  [F7]
 Explain analyze (runs it)  [Shift+F7]
-Explain in plain words (AI)  [Ctrl+K y y]
+Explain in plain words (AI)  [Ctrl+K y y]  (dimmed)
 ---
 Commit the open transaction  [F8]  (dimmed)
 Roll back the open transaction  [Shift+F8]  (dimmed)
 Transaction mode…  [Ctrl+K x]
 ---
 Select the statement  [Ctrl+K v]
+Select the word  [Alt+W]
 Zoom the statement (alone)  [Ctrl+K b]
 Format SQL  [Ctrl+K f]
 Comment / uncomment lines  [Ctrl+K -]

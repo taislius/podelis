@@ -17,6 +17,10 @@ enum ManagerHit {
 /// reached.
 #[derive(Default)]
 pub struct Manager {
+    /// Widths set with Ctrl+←/→: the projects pane's, the settings pane's
+    /// (else from the names, and fixed).
+    pub projects_width: Option<u16>,
+    pub settings_width: Option<u16>,
     pub project_selected: usize,
     /// Message on the projects screen, and whether it's an error.
     pub project_message: Option<(String, bool)>,
@@ -74,7 +78,6 @@ impl App {
         }
         match key.code {
             KeyCode::Esc => self.leave_projects(),
-            KeyCode::Char('q') => self.request_quit(),
             KeyCode::Char('n') => self.start_prompt(PromptKind::NewProject, String::new()),
             // Into the selected project's connections (opening it first if
             // it isn't the open one), or back round to the settings.
@@ -353,5 +356,31 @@ impl App {
     pub fn viewing_open_project(&self) -> bool {
         let selected = self.store.projects.get(self.manager.project_selected).map(|p| &p.id);
         self.current_project.is_some() && (selected == self.current_project.as_ref() || self.screen != Screen::Projects)
+    }
+}
+
+impl App {
+    /// Ctrl+←/→ on the projects and connections screens move a border,
+    /// from where it's drawn: on the projects, the projects pane's; on the
+    /// connections, the one with the connection's settings. Not while a
+    /// name is typed (there they move by word). True if handled.
+    pub(in crate::app) fn resize_manager(&mut self, code: KeyCode) -> bool {
+        let grow = match code {
+            KeyCode::Right => true,
+            KeyCode::Left => false,
+            _ => return false,
+        };
+        if self.manager.project_prompt.is_some() {
+            return false;
+        }
+        let (projects, settings) = self.hits.manager_panes;
+        let step = |w: u16, wider: bool| if wider { w + 2 } else { w.saturating_sub(2) };
+        match (self.screen, projects, settings) {
+            (Screen::Projects, Some(p), _) => self.manager.projects_width = Some(step(p.width, grow)),
+            // The border moves right: the settings get narrower.
+            (Screen::Connections, _, Some(s)) => self.manager.settings_width = Some(step(s.width, !grow)),
+            _ => return false,
+        }
+        true
     }
 }

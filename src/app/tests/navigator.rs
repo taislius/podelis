@@ -143,7 +143,52 @@ fn s_in_the_navigator_adds_the_select_after_everything() {
     app.tab.editor.set_cursor((1, 1));
     app.handle_schema_key(key(KeyCode::Char('s')));
     assert_eq!(app.tab.editor.text(), "select a,\n  b\nfrom t;\n\nSELECT * FROM public.users LIMIT 100;");
-    assert_eq!((app.focus, app.tab.editor.cursor_row), (Focus::Editor, 4));
+    // The keys stay in the navigator, for the next table (found by hand,
+    // 2026-11-09).
+    assert_eq!((app.focus, app.tab.editor.cursor_row), (Focus::Schema, 4));
+}
+
+/// While the filter is typed: the arrows pick among what's left, Enter
+/// opens the one picked, and a paste goes into it, opening it (found by
+/// hand, 2026-11-09).
+#[test]
+fn the_navigators_filter_picks_opens_and_takes_a_paste() {
+    let (mut app, _dir) = test_app();
+    let table = |name: &str| SchemaTable {
+        info: crate::db::TableInfo {
+            schema: "main".into(),
+            name: name.into(),
+            is_view: false,
+            rows: None,
+            bytes: None,
+            system: false,
+            partition_of: None,
+        },
+        expanded: false,
+        columns: Vec::new(),
+        details: None,
+        details_loading: false,
+    };
+    let tables = vec![table("orders"), table("order_items"), table("users")];
+    app.screen = Screen::Query;
+    app.connection.schema = Some(SchemaPanel { tables, selected: 1, ..SchemaPanel::default() });
+    app.focus = Focus::Schema;
+    app.paste_into_pane("order");
+    let panel = app.connection.schema.as_ref().unwrap();
+    assert!(panel.filter_editing && panel.filter.text() == "order", "a paste is a name to look for");
+    let picked = |app: &App| {
+        let panel = app.connection.schema.as_ref().unwrap();
+        panel.nodes().get(panel.selected).and_then(|n| n.table()).map(|t| panel.tables[t].info.name.clone())
+    };
+    let first = picked(&app);
+    app.handle_schema_key(key(KeyCode::Down));
+    let second = picked(&app);
+    assert!(first.is_some() && second.is_some() && first != second, "the arrows pick: {first:?} {second:?}");
+    app.handle_schema_key(key(KeyCode::Enter));
+    let panel = app.connection.schema.as_ref().unwrap();
+    assert!(!panel.filter_editing && panel.filter.text() == "order", "the filter stays");
+    let t = panel.nodes()[panel.selected].table().unwrap();
+    assert!(panel.tables[t].expanded, "Enter opened the one picked");
 }
 
 #[test]
@@ -235,4 +280,25 @@ async fn a_far_model_sees_the_schema_once_allowed_and_always_saves_it() {
     until_answered(&mut app).await;
     // (The address is made up: it fails, but it was sent.)
     assert!(said(&app).starts_with("Couldn't ask") && said(&app).contains("models.invalid"), "{}", said(&app));
+}
+
+/// `a` updates the selected table's statistics, as each engine words it,
+/// run alone as `s` runs its select (found by hand, 2026-11-09).
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_in_the_navigator_analyzes_the_table() {
+    let (mut app, _dir) = Box::pin(connected_app(ConnectionMode::Normal)).await;
+    run_sql(&mut app, "create table people (id integer primary key, name text)").await;
+    while app.connection.schema.as_ref().is_none_or(|s| s.loading || s.tables.is_empty()) {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    let panel = app.connection.schema.as_mut().unwrap();
+    panel.selected = panel.nodes().iter().position(|n| matches!(n, SchemaNode::Table(_))).unwrap();
+    app.focus = Focus::Schema;
+    app.handle_key(key(KeyCode::Char('a')));
+    finish(&mut app).await;
+    assert!(app.tab.editor.text().ends_with("ANALYZE main.people;"), "{}", app.tab.editor.text());
+    assert!(app.tab.run_error.is_none(), "{:?}", app.tab.run_error);
+    assert_eq!(app.focus, Focus::Schema);
 }

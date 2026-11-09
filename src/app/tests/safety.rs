@@ -291,14 +291,18 @@ async fn quitting_from_the_panes_asks_about_an_open_transaction() {
     run_sql(&mut app, "begin").await;
     assert_eq!(app.connection.txn, TxnState::Open);
     show_projects(&mut app);
-    for quit in [key(KeyCode::Char('q')), ctrl('c')] {
+    for quit in [ctrl('q'), ctrl('c')] {
         app.handle_key(quit);
         assert!(!app.should_quit);
         assert!(matches!(app.popups.confirm.as_ref().unwrap().action, ConfirmAction::Quit));
         app.handle_key(key(KeyCode::Char('n')));
     }
-    app.handle_key(key(KeyCode::Right));
+    // A plain `q` quits nothing: it's pressed by accident (found by hand,
+    // 2026-11-09).
     app.handle_key(key(KeyCode::Char('q')));
+    assert!(!app.should_quit && app.popups.confirm.is_none());
+    app.handle_key(key(KeyCode::Right));
+    app.handle_key(ctrl('q'));
     assert!(!app.should_quit && app.popups.confirm.is_some());
 }
 

@@ -8,6 +8,7 @@ Show the definition  [d]
 Related tables (foreign keys, both ways)  [f]
 ---
 SELECT * from it: add to the editor and run  [s]
+Update its statistics (ANALYZE)  [a]
 Copy the name  [y]
 ---
 Filter by name  [/]

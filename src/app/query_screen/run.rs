@@ -335,7 +335,7 @@ impl App {
                 // and a single read can't change the transaction state.
                 match db.run_streaming(&sql, row_limit).await {
                     Ok((outcome, rows)) => send(DbEventKind::QueryDone(outcome, None, rows)),
-                    Err(e) => send(failed(&e, after_error(&db, &e).await)),
+                    Err(e) => send(failed(&e, db.engine(), after_error(&db, &e).await)),
                 }
                 return;
             }
@@ -344,7 +344,7 @@ impl App {
                     let txn = db.transaction_state().await;
                     send(DbEventKind::QueryDone(outcome, txn, None));
                 }
-                Err(e) => send(failed(&e, after_error(&db, &e).await)),
+                Err(e) => send(failed(&e, db.engine(), after_error(&db, &e).await)),
             }
         }));
     }
@@ -490,8 +490,11 @@ impl App {
 
 /// A run's failure as the app is told it: what, where, the transaction
 /// after it, and whether it's a syntax error or unknown function.
-fn failed(e: &anyhow::Error, txn: Option<TxnState>) -> DbEventKind {
-    let (message, position) = (crate::db::error_message(e), crate::db::error_position(e));
+fn failed(e: &anyhow::Error, engine: crate::db::Engine, txn: Option<TxnState>) -> DbEventKind {
+    let message = crate::db::error_message(e);
+    // Where the server says, else where its message says (SQLite's
+    // `near "x"`), as the syntax check finds it.
+    let position = crate::db::error_position(e).or_else(|| engine.backend().position_in_message(&message));
     DbEventKind::QueryFailed { message, position, txn, missing_feature: crate::db::missing_feature(e) }
 }
 

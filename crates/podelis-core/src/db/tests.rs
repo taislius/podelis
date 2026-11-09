@@ -756,3 +756,17 @@ async fn a_schema_changed_elsewhere_is_seen() {
         db.close().await;
     }
 }
+
+/// Every SQL engine's load reads without an error (a query against a view
+/// this server lacks would say "not readable").
+#[tokio::test]
+async fn live_server_load() {
+    for engine in [Engine::Postgres, Engine::MySql] {
+        let Some(db) = live_db(engine).await else { continue };
+        let load = db.server_load().await;
+        assert!(!load.is_empty(), "{engine:?}");
+        for (what, value) in &load {
+            assert!(!value.starts_with("not readable"), "{engine:?} {what}: {value}");
+        }
+    }
+}

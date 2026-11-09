@@ -154,3 +154,23 @@ fn the_open_connections_list_says_its_keys() {
         render(&mut app, 60, height);
     }
 }
+
+/// Ctrl+←/→ move the borders on the projects and connections screens too
+/// (found by hand, 2026-11-09).
+#[test]
+fn ctrl_arrows_resize_the_managers_panes() {
+    let ctrl = |code| crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::CONTROL);
+    let (mut app, _dir) = app();
+    app.screen = Screen::Projects;
+    render(&mut app, 140, 16);
+    let before = app.hits.manager_panes.0.unwrap().width;
+    app.handle_key(ctrl(KeyCode::Right));
+    render(&mut app, 140, 16);
+    assert_eq!(app.hits.manager_panes.0.unwrap().width, before + 2, "the projects pane is wider");
+    app.screen = Screen::Connections;
+    render(&mut app, 140, 16);
+    let before = app.hits.manager_panes.1.unwrap().width;
+    app.handle_key(ctrl(KeyCode::Right));
+    render(&mut app, 140, 16);
+    assert_eq!(app.hits.manager_panes.1.unwrap().width, before - 2, "the border moved right: settings narrower");
+}

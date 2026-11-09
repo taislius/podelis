@@ -168,7 +168,14 @@ fn kept_results_and_the_statement_above_a_result() {
     app.tab.runs[1].source.as_mut().unwrap().at = chrono::Local::now();
     app.focus = Focus::Results;
     let screen = render(&mut app, 140, 22);
-    assert!(screen.contains(" #1  #2  select id, email, note from users where id < 4;  lines 2–4"), "{screen}");
+    // The statement in its own row, the kept results' tabs under it (found
+    // by hand, 2026-11-09).
+    let lines: Vec<&str> = screen.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.contains(" select id, email, note from users where id < 4;  lines 2–4"))
+        .expect(&screen);
+    assert!(lines[at + 1].contains(" #1  #2 "), "{screen}");
     // A click on #1 shows it; on the lines, its statement in the editor.
     let (x0, _, i) = app.hits.run_tabs[0];
     let click = |x, y| MouseEvent {
@@ -177,7 +184,7 @@ fn kept_results_and_the_statement_above_a_result() {
         row: y,
         modifiers: KeyModifiers::NONE,
     };
-    app.handle_mouse(click(x0 + 1, app.hits.run_source.y));
+    app.handle_mouse(click(x0 + 1, app.hits.run_tabs_y.unwrap()));
     assert_eq!((i, app.tab.run_at), (0, 0));
     let screen = render(&mut app, 140, 22);
     assert!(screen.contains("select 1;  line 1"), "{screen}");

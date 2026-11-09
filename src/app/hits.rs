@@ -10,6 +10,8 @@ pub struct Hits {
     pub schema: Option<Rect>,
     /// The schema's filter line (a click starts typing in it).
     pub schema_filter: Rect,
+    /// The filter's `×`, while it has text.
+    pub schema_filter_clear: Option<Rect>,
     /// The schema tree's rows, and the index of the first one shown.
     pub schema_list: Rect,
     pub schema_offset: usize,
@@ -38,6 +40,8 @@ pub struct Hits {
     /// and indices into `runs`.
     pub run_source: Rect,
     pub run_tabs: Vec<(u16, u16, usize)>,
+    /// The kept results' tabs' row, under the statement's.
+    pub run_tabs_y: Option<u16>,
     /// The MESSAGES lines, and the index of the first one shown.
     pub messages: Rect,
     pub messages_offset: usize,
@@ -58,6 +62,8 @@ pub struct Hits {
     /// The run buttons right of the tabs: x ranges and actions.
     pub run_buttons: Vec<(u16, u16, crate::config::keys::Action)>,
     pub results: Rect,
+    /// The rows' place under the statement (where a failure is said).
+    pub result_body: Rect,
     /// The result table's body rows, and each visible column's x range.
     pub result_rows: Rect,
     pub result_cols: Vec<(u16, u16, usize)>,
@@ -73,6 +79,8 @@ pub struct Hits {
     pub manager_projects: (Rect, usize),
     pub manager_connections: (Rect, usize),
     pub manager_settings: Rect,
+    /// The projects pane and the settings pane as drawn, for Ctrl+←/→.
+    pub manager_panes: (Option<Rect>, Option<Rect>),
     /// The results pane's tabs: their x ranges, and their row.
     pub result_tabs: Vec<(u16, u16, ResultTab)>,
     /// `export ▾` and `menu ▾` right of them: x ranges, and whether it's

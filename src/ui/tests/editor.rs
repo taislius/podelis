@@ -161,7 +161,7 @@ fn the_active_tab_shows_its_whole_name_and_stays_in_sight() {
     );
     assert_eq!(app.active_tab, 10, "no tab picked yet");
     app.popups.palette = None;
-    // Whatever is beside the name (a saved query's " ●", wide characters,
+    // Whatever is beside the name (a saved query's " !", wide characters,
     // the left line after "‹N"), a narrow row keeps the active tab and `+`.
     let active = app.active_tab;
     app.tabs[active].saved_id = Some("changed".into());
@@ -172,7 +172,7 @@ fn the_active_tab_shows_its_whole_name_and_stays_in_sight() {
             let screen = render(&mut app, width, 24);
             let row = screen.lines().nth(2).unwrap();
             assert!(row.contains(" + ") && app.hits.new_tab.is_some(), "the + in sight at {width}: {row}");
-            assert!(row.contains("●"), "the change mark at {width}: {row}");
+            assert!(row.contains(" ! "), "the change mark at {width}: {row}");
             assert!(app.hits.tabs.iter().any(|(_, _, i)| *i == active), "the active tab at {width}: {row}");
         }
     }
@@ -198,7 +198,10 @@ fn ctrl_k_menu_shows_its_letters_by_group() {
     app.focus = Focus::Schema;
     app.notes.status.clear();
     let screen = render(&mut app, 90, 30);
-    assert!(screen.contains("^K  keys") && !screen.contains("REFRESH"), "minimal hints, no pane footer:\n{screen}");
+    assert!(
+        screen.contains("^K  commands") && screen.contains("?  all keys") && !screen.contains("REFRESH"),
+        "minimal hints, no pane footer:\n{screen}"
+    );
     // Ctrl+K's menu here (Space opens it in the navigator too).
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
     app.show_palette_menu();
@@ -342,7 +345,8 @@ fn a_long_message_is_cut_beside_the_write_modes_and_opens_whole() {
     assert!(app.popups.cell_view.is_none());
 
     // Ctrl+K Space: the list, the newest first, each once.
-    let said = |text: &str| crate::app::Message { time: "10:00:00".into(), text: text.into(), is_error: false };
+    let said =
+        |text: &str| crate::app::Message { time: "10:00:00".into(), text: text.into(), is_error: false, at: None };
     app.notes.log = vec![said("older"), said("newer")];
     app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));

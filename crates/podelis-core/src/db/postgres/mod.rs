@@ -161,6 +161,39 @@ impl Backend for Postgres {
 }
 
 impl SqlDialect for Postgres {
+    fn load_queries(&self) -> &'static [(&'static str, &'static str)] {
+        &[
+            (
+                "Connections",
+                "SELECT count(*) || ' of ' || current_setting('max_connections') FROM pg_stat_activity",
+            ),
+            (
+                "Running queries",
+                "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND pid <> pg_backend_pid()",
+            ),
+            ("Waiting on locks", "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'"),
+            (
+                "Longest running",
+                "SELECT coalesce(date_trunc('second', max(now() - query_start))::text, 'none') FROM pg_stat_activity \
+                 WHERE state = 'active' AND pid <> pg_backend_pid()",
+            ),
+            (
+                "Idle in transaction",
+                "SELECT count(*) FROM pg_stat_activity WHERE state LIKE 'idle in transaction%'",
+            ),
+            (
+                "Cache hit ratio",
+                "SELECT coalesce(round(100.0 * sum(blks_hit) / nullif(sum(blks_hit) + sum(blks_read), 0), 1) || ' %', \
+                 'none yet') FROM pg_stat_database",
+            ),
+            (
+                "Transactions (commit / rollback)",
+                "SELECT sum(xact_commit) || ' / ' || sum(xact_rollback) FROM pg_stat_database",
+            ),
+            ("Deadlocks", "SELECT sum(deadlocks) FROM pg_stat_database"),
+            ("Database size", "SELECT pg_size_pretty(pg_database_size(current_database()))"),
+        ]
+    }
     fn begin(&self, read_only: bool) -> &'static str {
         if read_only { "BEGIN READ ONLY" } else { "BEGIN" }
     }

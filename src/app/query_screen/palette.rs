@@ -93,12 +93,12 @@ impl App {
         self.popups.palette = Some(palette);
     }
 
-    /// A tab as the tab list shows it: its name, ● if its saved query has
+    /// A tab as the tab list shows it: its name, ! if its saved query has
     /// changed, its connection and how that is (a query running and for
     /// how long, a transaction open, lost), and which is shown.
     pub fn tab_entry(&self, i: usize) -> String {
         let Some(tab) = self.tabs.get(i) else { return String::new() };
-        let dirty = if tab.saved_id.is_some() && self.tab_dirty(i) { " ●" } else { "" };
+        let dirty = if tab.saved_id.is_some() && self.tab_dirty(i) { " !" } else { "" };
         let on = tab.conn.and_then(|id| self.conn_name(id)).map(|n| format!("  · {n}")).unwrap_or_default();
         let status = self.tab_status(i).map(|s| format!("  · {s}")).unwrap_or_default();
         let here = if i == self.active_tab { format!("  ({})", t!("menu.this_one")) } else { String::new() };
@@ -259,6 +259,10 @@ impl App {
             palette.selected = i;
             return;
         }
+        // Ctrl+X in the connections: close them all.
+        if palette.conns_only() && ctrl && key.code == KeyCode::Char('x') {
+            return self.request_close_all_connections();
+        }
         // Ctrl+D in the connections: close the one selected.
         if palette.conns_only() && ctrl && key.code == KeyCode::Char('d') {
             let selected = palette.selected;
@@ -277,6 +281,14 @@ impl App {
             KeyCode::Enter => {
                 let selected = palette.selected;
                 let chosen = self.palette_items().get(selected).copied();
+                // The shown tab's own: nothing to go to. The list stays, and
+                // says what can be done with it.
+                if let Some(Command::GoToConnection(id)) = chosen
+                    && self.conns.active == Some(id)
+                {
+                    let name = self.conn_name(id).unwrap_or_default();
+                    return self.set_status(t!("conn_list.here", name = name), false);
+                }
                 self.popups.palette = None;
                 if let Some(command) = chosen {
                     self.run_command(command);
@@ -317,9 +329,11 @@ impl App {
     /// A letter straight after Ctrl+K.
     fn handle_top_letter(&mut self, c: char) {
         let Some(palette) = &mut self.popups.palette else { return };
-        if let Some(n) = c.to_digit(10).filter(|n| *n > 0) {
+        // 1…9 a tab by its place, 0 the last one (past nine, too).
+        if let Some(n) = c.to_digit(10) {
             self.popups.palette = None;
-            return self.switch_tab((n as usize - 1).min(self.tabs.len() - 1));
+            let last = self.tabs.len() - 1;
+            return self.switch_tab(if n == 0 { last } else { (n as usize - 1).min(last) });
         }
         // `?`: with no menu coming by itself, the menu; then (or with it
         // coming) every key.
