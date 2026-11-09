@@ -42,6 +42,13 @@ fn query_help(app: &App) -> Vec<(&'static str, Vec<(String, String)>)> {
             (group.title(), rows)
         })
         .collect();
+    if let Some(leader) = app.settings.local_leader.chars().next().filter(|_| app.vim_enabled()) {
+        let rows = crate::app::commands::EDITOR_LEADER_KEYS
+            .iter()
+            .map(|&(c, a)| (format!("{leader} {c}"), Command::Action(a).label(app)))
+            .collect();
+        out.push((t!("help.local_leader"), rows));
+    }
     let of = |here: Here, by_hand: &[(&str, &str)]| {
         let mut rows: Vec<(String, String)> =
             pane_key_list(here).into_iter().map(|(keys, c): (String, Command)| (keys, c.label(app))).collect();

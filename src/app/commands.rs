@@ -202,6 +202,24 @@ const NAVIGATOR_KEYS: Keys = &[
     (KeyCode::Char(' '), Command::Action(Action::Palette)),
 ];
 
+/// The editor's own commands, after the local leader (`local_leader`, `\`)
+/// in vim's Normal mode, as Neovim's `<LocalLeader>`: Space, the leader, is
+/// Ctrl+K's for everything. Ctrl+K's letters where it has them.
+pub const EDITOR_LEADER_KEYS: &[(char, Action)] = &[
+    ('r', Action::Run),
+    ('s', Action::RunStatement),
+    ('e', Action::Explain),
+    ('a', Action::ExplainAnalyze),
+    ('f', Action::Format),
+    ('-', Action::Comment),
+    ('v', Action::SelectStatement),
+    ('b', Action::ZoomStatement),
+    ('w', Action::NextWarning),
+    ('i', Action::InsertSnippet),
+    ('q', Action::Ask),
+    ('y', Action::AiExplain),
+];
+
 /// The tables a pane's keys are in, its own first.
 fn keys_of(here: Here) -> &'static [Keys] {
     match here {

@@ -227,6 +227,9 @@ impl App {
         let KeyCode::Char(ch) = key.code else {
             // Arrows, Home/End etc. behave as in the standard editor.
             if key.code == KeyCode::Esc {
+                if self.editing.vim.pending == self.settings.local_leader {
+                    self.notes.status.clear();
+                }
                 self.editing.vim.pending.clear();
             } else {
                 self.handle_standard_editor_key(key);
@@ -243,6 +246,23 @@ impl App {
         // Space is the leader, as in Neovim: Ctrl+K's menu.
         if ch == ' ' && self.editing.vim.pending.is_empty() {
             return self.open_palette(false);
+        }
+        // The local leader, as Neovim's: the editor's own commands.
+        let local = self.settings.local_leader.chars().next();
+        if local
+            .is_some_and(|l| self.editing.vim.pending.len() == l.len_utf8() && self.editing.vim.pending.starts_with(l))
+        {
+            self.editing.vim.pending.clear();
+            self.notes.status.clear();
+            return self.local_leader_key(ch);
+        }
+        // Waiting for its letter: said in the status bar, as Ctrl+K's (not
+        // in the editor's footer, which MESSAGES keeps).
+        if local == Some(ch) && self.editing.vim.pending.is_empty() {
+            self.editing.vim.pending.push(ch);
+            self.notes.status = format!("{ch}…");
+            self.notes.status_is_error = false;
+            return;
         }
         // Counts: 1-9, then any digit (a lone 0 is a motion).
         if ch.is_ascii_digit()
@@ -308,6 +328,16 @@ impl App {
                 }
             }
         }
+    }
+
+    /// The key after the local leader: one of the editor's own commands.
+    fn local_leader_key(&mut self, ch: char) {
+        let found = crate::app::commands::EDITOR_LEADER_KEYS.iter().find(|(c, _)| *c == ch);
+        if let Some(&(_, action)) = found {
+            return self.run_command(crate::app::commands::Command::Action(action));
+        }
+        let keys = format!("{}{ch}", self.settings.local_leader);
+        self.set_status(t!("editor.no_local_key", keys = keys), true);
     }
 
     /// `i a I A o O`: enter Insert mode somewhere. True if `ch` was one.
@@ -643,6 +673,24 @@ mod tests {
         assert!(app.take_clipboard().is_none(), "a delete stays in the register");
         keys(&mut app, "p");
         assert_eq!(app.tab.editor.text(), "from t\nselect 1");
+    }
+
+    #[test]
+    fn the_local_leader_runs_the_editors_commands() {
+        let (mut app, _dir) = vim_app("select  1");
+        keys(&mut app, "\\");
+        assert_eq!(app.notes.status, "\\…");
+        keys(&mut app, "f");
+        assert_ne!(app.tab.editor.text(), "select  1", "\\f formats");
+        keys(&mut app, "\\-");
+        assert!(app.tab.editor.text().starts_with("--"), "\\- comments");
+        keys(&mut app, "\\Z");
+        assert!(app.notes.editor_note_is_error, "an unknown key says so");
+        keys(&mut app, "\\\u{1b}");
+        assert!(app.editing.vim.pending.is_empty() && app.notes.status.is_empty(), "Esc drops it");
+        app.settings.local_leader = String::new();
+        keys(&mut app, "\\");
+        assert!(app.editing.vim.pending.is_empty());
     }
 
     #[test]
