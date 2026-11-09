@@ -80,7 +80,7 @@ const OTHER_RESULTS_MENU: &[&[C]] = &[&[C::NextSet, C::PrevSet], &[C::EarlierRes
 
 const NAVIGATOR_MENU: &[&[C]] = &[
     &[C::Expand, C::Definition, C::Related],
-    &[C::SelectFrom, C::CopyName],
+    &[C::SelectFrom, C::AnalyzeTable, C::CopyName],
     &[C::FilterNames, C::OrderNames, C::SystemTables, C::RefreshSchema, C::Action(A::Zoom)],
     &[C::CompareSchema(None), C::SnapshotSchema],
 ];
@@ -97,6 +97,7 @@ const EDITOR_MENU: &[&[C]] = &[
     &[C::Action(A::Commit), C::Action(A::Rollback), C::Action(A::TxMode)],
     &[
         C::Action(A::SelectStatement),
+        C::Action(A::SelectWord),
         C::Action(A::ZoomStatement),
         C::Action(A::Format),
         C::Action(A::Comment),

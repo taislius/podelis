@@ -126,6 +126,19 @@ impl Backend for DuckDb {
 }
 
 impl SqlDialect for DuckDb {
+    fn load_queries(&self) -> &'static [(&'static str, &'static str)] {
+        &[
+            ("Database size", "SELECT database_size FROM pragma_database_size()"),
+            ("Memory used", "SELECT memory_usage FROM pragma_database_size()"),
+            ("Memory limit", "SELECT memory_limit FROM pragma_database_size()"),
+            ("Threads", "SELECT current_setting('threads')"),
+        ]
+    }
+    /// Its statistics are kept as data changes (its `ANALYZE` is the whole
+    /// database's, for after a bulk load).
+    fn analyze_table(&self, _table: &str) -> Option<String> {
+        None
+    }
     fn lexer(&self) -> LexerRules {
         LexerRules {
             hash_comments: false,

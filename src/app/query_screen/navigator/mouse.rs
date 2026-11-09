@@ -9,6 +9,14 @@ impl App {
     pub(in crate::app) fn click_schema(&mut self, x: u16, y: u16, double: bool) {
         let hits = &self.hits;
         self.focus = Focus::Schema;
+        if hits.schema_filter_clear.is_some_and(|r| inside(r, x, y)) {
+            if let Some(panel) = &mut self.connection.schema {
+                panel.filter.clear();
+                panel.filter_editing = false;
+                panel.selected = super::step_selectable(&panel.nodes(), 0, 1);
+            }
+            return;
+        }
         if inside(hits.schema_filter, x, y) {
             if let Some(panel) = &mut self.connection.schema {
                 panel.filter_editing = true;

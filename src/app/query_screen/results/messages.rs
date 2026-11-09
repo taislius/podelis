@@ -32,6 +32,28 @@ pub struct Notes {
 }
 
 impl App {
+    /// `g` in MESSAGES: where the selected failure was, in its tab's
+    /// editor, selected and underlined again.
+    pub(in crate::app) fn go_to_message_place(&mut self) {
+        let place = self.notes.selected.and_then(|i| self.notes.log.get(i)).and_then(|m| m.at);
+        let Some((tab, start, end)) = place else { return };
+        if tab != self.active_tab && tab < self.tabs.len() {
+            self.switch_tab(tab);
+        }
+        self.show_error_place(start, end);
+    }
+
+    /// The editor at a failure's place: selected, underlined, focused.
+    pub(in crate::app) fn show_error_place(&mut self, start: Pos, end: Pos) {
+        let last = self.tab.editor.lines.len().saturating_sub(1);
+        let clamp = |(r, c): Pos, ed: &crate::text_editor::TextEditor| (r.min(last), c.min(ed.line_len(r.min(last))));
+        let (start, end) = (clamp(start, &self.tab.editor), clamp(end, &self.tab.editor));
+        self.tab.editor.set_anchor(Some(start));
+        self.tab.editor.set_cursor(end);
+        self.tab.error_marker = Some((start, end));
+        self.focus = Focus::Editor;
+    }
+
     /// A key in MESSAGES; false leaves it to scrolling (←/→ across).
     pub(in crate::app) fn handle_messages_key(&mut self, key: KeyEvent) -> bool {
         let n = self.notes.log.len();

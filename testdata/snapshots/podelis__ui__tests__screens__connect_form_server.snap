@@ -23,4 +23,4 @@ expression: server
 "│                                ││ form · Ctrl+T tests the connection step by │"
 "│                                ││ step                                       │"
 "└────────────────────────────────┘└────────────────────────────────────────────┘"
-"                             ↵  connect   F1  keys                              "
+"                           ↵  connect   F1  all keys                            "

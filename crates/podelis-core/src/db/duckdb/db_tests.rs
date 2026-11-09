@@ -152,3 +152,13 @@ async fn live_one_instance_per_file_duckdb() {
     assert!(format!("{writer:#}").contains("one way at a time"), "{writer:#}");
     first.close().await;
 }
+
+#[tokio::test]
+async fn its_load_reads() {
+    let (_dir, db) = open("load").await;
+    let load = db.server_load().await;
+    assert_eq!(load.len(), 4);
+    for (what, value) in &load {
+        assert!(!value.starts_with("not readable") && !value.is_empty(), "{what}: {value}");
+    }
+}

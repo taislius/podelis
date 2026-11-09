@@ -206,7 +206,6 @@ impl App {
         }
         match key.code {
             KeyCode::Esc => self.leave_connections(),
-            KeyCode::Char('q') => self.request_quit(),
             KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => {
                 self.manager.connection_message = None;
                 self.screen = Screen::Projects;

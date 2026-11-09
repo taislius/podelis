@@ -51,6 +51,8 @@ pub enum Command {
     ShowMessages,
     ShowPlan,
     WholeMessage,
+    /// Where the selected message's failure is, in the editor.
+    GoToError,
     CopyMessage,
     CopyMessages,
     CopyPlanLines,
@@ -60,6 +62,8 @@ pub enum Command {
     Definition,
     Related,
     SelectFrom,
+    /// The selected table's statistics updated (`ANALYZE`).
+    AnalyzeTable,
     CopyName,
     FilterNames,
     OrderNames,
@@ -180,6 +184,7 @@ const GRID_KEYS: Keys = &[
 
 const MESSAGES_KEYS: Keys = &[
     (KeyCode::Enter, Command::WholeMessage),
+    (KeyCode::Char('g'), Command::GoToError),
     (KeyCode::Char('v'), Command::WholeMessage),
     (KeyCode::Char('y'), Command::CopyMessage),
     (KeyCode::Char('Y'), Command::CopyMessages),
@@ -192,6 +197,7 @@ const NAVIGATOR_KEYS: Keys = &[
     (KeyCode::Char('d'), Command::Definition),
     (KeyCode::Char('f'), Command::Related),
     (KeyCode::Char('s'), Command::SelectFrom),
+    (KeyCode::Char('a'), Command::AnalyzeTable),
     (KeyCode::Char('y'), Command::CopyName),
     (KeyCode::Char('/'), Command::FilterNames),
     (KeyCode::Char('o'), Command::OrderNames),
@@ -305,6 +311,7 @@ pub const ACTION_GROUPS: &[(Group, &[Action])] = &[
             Action::Format,
             Action::Comment,
             Action::SelectStatement,
+            Action::SelectWord,
             Action::ZoomStatement,
             Action::NextWarning,
             Action::InsertSnippet,
@@ -328,6 +335,7 @@ pub const ACTION_GROUPS: &[(Group, &[Action])] = &[
             Action::Activity,
             Action::ConnectionInfo,
             Action::Heartbeat,
+            Action::ServerLoad,
         ],
     ),
     (
@@ -386,6 +394,7 @@ impl Command {
             Command::ShowMessages,
             Command::ShowPlan,
             Command::WholeMessage,
+            Command::GoToError,
             Command::CopyMessage,
             Command::CopyMessages,
             Command::CopyPlanLines,
@@ -394,6 +403,7 @@ impl Command {
             Command::Definition,
             Command::Related,
             Command::SelectFrom,
+            Command::AnalyzeTable,
             Command::CopyName,
             Command::FilterNames,
             Command::OrderNames,
@@ -450,6 +460,7 @@ impl Command {
             Command::ShowMessages => t!("menu.show_messages"),
             Command::ShowPlan => t!("menu.show_plan"),
             Command::WholeMessage => t!("menu.whole_message"),
+            Command::GoToError => t!("menu.go_to_error"),
             Command::CopyMessage => t!("menu.copy_message"),
             Command::CopyMessages => t!("menu.copy_messages"),
             Command::CopyPlanLines => t!("menu.copy_plan_lines"),
@@ -458,6 +469,7 @@ impl Command {
             Command::Definition => t!("menu.definition"),
             Command::Related => t!("menu.related"),
             Command::SelectFrom => t!("menu.select_from"),
+            Command::AnalyzeTable => t!("menu.analyze_table"),
             Command::CopyName => t!("menu.copy_name"),
             Command::FilterNames => t!("menu.filter_name"),
             Command::OrderNames => t!("menu.order"),
@@ -487,6 +499,7 @@ impl Command {
         match action {
             Action::Run => t!("menu.run"),
             Action::SelectStatement => t!("menu.select_statement"),
+            Action::SelectWord => t!("menu.select_word"),
             Action::ZoomStatement if app.panes.statement_zoom => t!("menu.unzoom_statement"),
             Action::ZoomStatement => t!("menu.zoom_statement"),
             Action::Explain => t!("menu.explain"),
@@ -709,6 +722,10 @@ impl App {
             C::LaterResult => no(at + 1 >= runs, t!("runs.newest")),
             C::Pin => no(self.tab.runs.get(at).is_none(), t!("runs.nothing_to_pin")),
             C::OtherResults => no(sets < 2 && runs == 0, t!("runs.none_kept")),
+            C::GoToError => {
+                let selected = self.notes.selected.and_then(|i| self.notes.log.get(i));
+                no(selected.is_none_or(|m| m.at.is_none()), t!("messages.no_place"))
+            }
             C::WholeMessage | C::CopyMessage | C::CopyMessages => {
                 no(self.notes.log.is_empty(), t!("commands.no_messages"))
             }
@@ -719,21 +736,14 @@ impl App {
             C::FilterNames | C::Expand if self.hits.navigator_too_narrow => {
                 Can::not_now(t!("commands.navigator_too_narrow"))
             }
-            C::SelectFrom | C::Related | C::Definition if self.connection.schema.is_some() => {
-                let node = self.selected_node();
-                let is_routine = matches!(node, Some(SchemaNode::Routine(_)));
-                if command == C::Definition && is_routine {
-                    Can::Yes
-                } else if node.and_then(SchemaNode::table).is_none() {
-                    Can::not_now(t!("commands.no_table"))
-                } else {
-                    no(command == C::SelectFrom && self.engine().dialect().is_none(), t!("commands.no_sql"))
-                }
+            C::AnalyzeTable | C::SelectFrom | C::Related | C::Definition if self.connection.schema.is_some() => {
+                self.can_on_the_selected(command)
             }
             C::Expand
             | C::Definition
             | C::Related
             | C::SelectFrom
+            | C::AnalyzeTable
             | C::CopyName
             | C::FilterNames
             | C::OrderNames
@@ -744,8 +754,33 @@ impl App {
                 no(self.tab.editor.selection().is_none() && self.editor_line().is_none(), t!("copy.nothing"))
             }
             C::ClipCut => no(self.tab.editor.selection().is_none(), t!("commands.no_selection")),
+            // No model: dimmed wherever they're listed, and said why.
+            C::Action(Action::Ask | Action::AiExplain) if self.ai_state() == AiState::Off => {
+                Can::not_now(t!("ask.no_model"))
+            }
             C::Action(Action::Commit | Action::Rollback) if self.connection.txn == TxnState::Idle => {
                 Can::refused(t!("review.none_open"))
+            }
+            _ => Can::Yes,
+        }
+    }
+
+    /// `can` for what's done to the navigator's selected table (or
+    /// function): there's one, and the engine can do it.
+    fn can_on_the_selected(&self, command: Command) -> Can {
+        use Command as C;
+        let node = self.selected_node();
+        if command == C::Definition && matches!(node, Some(SchemaNode::Routine(_))) {
+            return Can::Yes;
+        }
+        if node.and_then(SchemaNode::table).is_none() {
+            return Can::not_now(t!("commands.no_table"));
+        }
+        let dialect = self.engine().dialect();
+        match command {
+            C::SelectFrom if dialect.is_none() => Can::not_now(t!("commands.no_sql")),
+            C::AnalyzeTable if dialect.and_then(|d| d.analyze_table("t")).is_none() => {
+                Can::not_now(&t!("commands.no_analyze", engine = self.engine().label()))
             }
             _ => Can::Yes,
         }
@@ -787,6 +822,7 @@ impl App {
             C::Definition
             | C::Related
             | C::SelectFrom
+            | C::AnalyzeTable
             | C::CopyName
             | C::OrderNames
             | C::SystemTables
@@ -871,6 +907,7 @@ impl App {
             C::ShowMessages => self.set_result_tab(ResultTab::Messages),
             C::ShowPlan => self.set_result_tab(ResultTab::Plan),
             C::WholeMessage => self.open_message(),
+            C::GoToError => self.go_to_message_place(),
             C::CopyMessage => self.copy_message(),
             C::CopyMessages => self.copy_messages(),
             C::CopyPlanLines => self.copy_plan(false),
@@ -879,6 +916,7 @@ impl App {
             C::Definition => self.show_selected_definition(),
             C::Related => self.show_selected_related(),
             C::SelectFrom => self.select_from_selected(),
+            C::AnalyzeTable => self.analyze_selected(),
             C::CopyName => self.copy_schema_name(),
             C::FilterNames => {
                 if let Some(panel) = &mut self.connection.schema {

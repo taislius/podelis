@@ -47,8 +47,22 @@ impl App {
     pub(in crate::app) fn handle_schema_key(&mut self, key: KeyEvent) {
         let Some(panel) = &mut self.connection.schema else { return };
         if panel.filter_editing {
+            // While typing: the arrows pick among what's left, Enter opens
+            // the one picked (the filter stays), Ctrl+V pastes.
+            let nodes = panel.nodes();
+            match key.code {
+                KeyCode::Down => return panel.selected = step_selectable(&nodes, panel.selected + 1, 1),
+                KeyCode::Up => {
+                    return panel.selected = step_selectable(&nodes, panel.selected.saturating_sub(1), -1);
+                }
+                KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => return self.paste_clipboard(),
+                _ => {}
+            }
             match panel.filter.handle(key) {
-                InputResult::Submit => panel.filter_editing = false,
+                InputResult::Submit => {
+                    panel.filter_editing = false;
+                    return self.run_command(crate::app::commands::Command::Expand);
+                }
                 InputResult::Cancel => {
                     panel.filter_editing = false;
                     panel.filter.clear();
@@ -152,8 +166,29 @@ impl App {
         let Some(dialect) = engine.dialect() else { return };
         let query = format!("{};", dialect.select_rows(&table, None, Some(100)));
         // After everything, a blank line apart: never inside another
-        // statement. Then it runs, alone (as F6 would).
+        // statement. Then it runs, alone (as F6 would), and the keys stay
+        // here, for the next table.
+        let focus = self.focus;
         self.append_statement(&query);
+        self.focus = focus;
+        if self.connection.database.is_some() {
+            self.execute_current();
+        }
+    }
+
+    /// `a`: the selected table's statistics updated (`ANALYZE`), as `s`
+    /// does its select: added after everything and run alone, through the
+    /// usual checks (a production or read-only connection's).
+    pub(in crate::app) fn analyze_selected(&mut self) {
+        let engine = self.engine();
+        let Some(t) = self.selected_node().and_then(SchemaNode::table) else { return };
+        let Some(panel) = &self.connection.schema else { return };
+        let info = &panel.tables[t].info;
+        let table = format!("{}.{}", engine.quote_ident(&info.schema), engine.quote_ident(&info.name));
+        let Some(statement) = engine.dialect().and_then(|d| d.analyze_table(&table)) else { return };
+        let focus = self.focus;
+        self.append_statement(&format!("{statement};"));
+        self.focus = focus;
         if self.connection.database.is_some() {
             self.execute_current();
         }

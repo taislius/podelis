@@ -1,7 +1,7 @@
 //! Vim-style modal editing for the SQL editor (`editor_mode = "vim"`).
 //! Covers the everyday subset: counts, motions, operators with motions,
-//! `iw`, visual modes, registers for yank/paste. Redo stays on Ctrl+Y
-//! because Ctrl+R runs the query.
+//! `iw`, visual modes, registers for yank/paste, `gc` comments. Redo is
+//! Ctrl+R, as vim's (and Ctrl+Y, as everywhere).
 
 use crate::app::*;
 use crate::text_editor::{Pos, is_word_char};
@@ -237,9 +237,12 @@ impl App {
             return;
         };
         if key.modifiers.contains(KeyModifiers::CONTROL) {
-            // Ctrl+V pastes the system clipboard, as everywhere (no block mode).
-            if ch == 'v' {
-                self.paste_clipboard();
+            // Ctrl+V pastes the system clipboard, as everywhere (no block
+            // mode); Ctrl+R redoes, as vim's.
+            match ch {
+                'v' => self.paste_clipboard(),
+                'r' => self.redo(),
+                _ => {}
             }
             return;
         }
@@ -247,21 +250,7 @@ impl App {
         if ch == ' ' && self.editing.vim.pending.is_empty() {
             return self.open_palette(false);
         }
-        // The local leader, as Neovim's: the editor's own commands.
-        let local = self.settings.local_leader.chars().next();
-        if local
-            .is_some_and(|l| self.editing.vim.pending.len() == l.len_utf8() && self.editing.vim.pending.starts_with(l))
-        {
-            self.editing.vim.pending.clear();
-            self.notes.status.clear();
-            return self.local_leader_key(ch);
-        }
-        // Waiting for its letter: said in the status bar, as Ctrl+K's (not
-        // in the editor's footer, which MESSAGES keeps).
-        if local == Some(ch) && self.editing.vim.pending.is_empty() {
-            self.editing.vim.pending.push(ch);
-            self.notes.status = format!("{ch}…");
-            self.notes.status_is_error = false;
+        if self.vim_prefix_key(ch) {
             return;
         }
         // Counts: 1-9, then any digit (a lone 0 is a motion).
@@ -328,6 +317,59 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Comments (or uncomments) `count` lines from the cursor's.
+    fn vim_comment_lines(&mut self, count: usize) {
+        let ed = &mut self.tab.editor;
+        let row = ed.cursor().0;
+        let last = (row + count.max(1) - 1).min(ed.lines.len() - 1);
+        if last > row {
+            ed.set_anchor(Some((row, 0)));
+            ed.set_cursor((last, ed.line_len(last)));
+        }
+        self.toggle_comment();
+        let ed = &mut self.tab.editor;
+        ed.clear_selection();
+        ed.set_cursor((row, 0));
+    }
+
+    /// The prefixes that wait for a key of their own: the local leader
+    /// (`\`) and `gc`. True if `ch` was one's.
+    fn vim_prefix_key(&mut self, ch: char) -> bool {
+        // The local leader, as Neovim's: the editor's own commands.
+        let local = self.settings.local_leader.chars().next();
+        if local
+            .is_some_and(|l| self.editing.vim.pending.len() == l.len_utf8() && self.editing.vim.pending.starts_with(l))
+        {
+            self.editing.vim.pending.clear();
+            self.notes.status.clear();
+            self.local_leader_key(ch);
+            return true;
+        }
+        // Waiting for its letter: said in the status bar, as Ctrl+K's (not
+        // in the editor's footer, which MESSAGES keeps).
+        if local == Some(ch) && self.editing.vim.pending.is_empty() {
+            self.editing.vim.pending.push(ch);
+            self.notes.status = format!("{ch}…");
+            self.notes.status_is_error = false;
+            return true;
+        }
+        // `gc` comments, as vim-commentary's: `gcc` the line, `3gcc` three
+        // from it. Before the operators: `c` after `g` isn't a change.
+        if self.editing.vim.pending.ends_with("gc") {
+            let count = self.take_count();
+            self.editing.vim.pending.clear();
+            if ch == 'c' {
+                self.vim_comment_lines(count);
+            }
+            return true;
+        }
+        if ch == 'c' && self.editing.vim.pending.ends_with('g') {
+            self.editing.vim.pending.push('c');
+            return true;
+        }
+        false
     }
 
     /// The key after the local leader: one of the editor's own commands.
@@ -761,11 +803,19 @@ mod tests {
         assert_eq!(run("one two", "ywP").0, "one one two");
         assert_eq!(run("ab", "xp").0, "ba");
         assert_eq!(run("one two", "dwu").0, "one two");
+        let (mut app, _dir) = vim_app("one two");
+        keys(&mut app, "dwu");
+        app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert_eq!(app.tab.editor.text(), "two", "Ctrl+R redoes");
     }
 
     #[test]
     fn other_commands() {
         assert_eq!(run("a\n   b", "J").0, "a b");
+        assert_eq!(run("select 1", "gcc").0, "-- select 1");
+        assert_eq!(run("-- select 1", "gcc").0, "select 1");
+        assert_eq!(run("a\nb\nc", "2gcc").0, "-- a\n-- b\nc");
+        assert_eq!(run("a\nb", "gcx").0, "a\nb", "gc then something else: nothing");
         assert_eq!(run("abc", "rX").0, "Xbc");
         assert_eq!(run("abc", "~~").0, "ABc");
     }

@@ -1,6 +1,5 @@
 ---
 source: src/ui/tests/navigator.rs
-assertion_line: 47
 expression: "render(&mut app, 90, 16)"
 ---
 " >_  PODĖLIS v0.0.0   │  project  shop ▼                                                  "

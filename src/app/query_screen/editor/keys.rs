@@ -37,7 +37,7 @@ impl App {
 
     /// Whether the editor takes typed text now (always, unless vim is in
     /// Normal/Visual mode). Autocomplete only applies then.
-    pub(in crate::app) fn editor_inserting(&self) -> bool {
+    pub fn editor_inserting(&self) -> bool {
         self.vim_mode().is_none_or(|m| m == VimMode::Insert)
     }
 

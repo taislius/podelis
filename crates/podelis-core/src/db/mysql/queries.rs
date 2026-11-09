@@ -249,11 +249,26 @@ pub(in crate::db) async fn activity(db: &Database) -> Result<Vec<Activity>> {
     }
 }
 
-pub(in crate::db) async fn stop_session(db: &Database, id: i64, terminate: bool) -> Result<()> {
+/// Whether `KILL` found no such session (`Unknown thread id`, 1094): it
+/// ended meanwhile (closed, or reconnected under another id), so there's
+/// nothing left to stop rather than an error to show.
+fn session_gone(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .and_then(|d| d.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>())
+        .is_some_and(|m| m.number() == 1094)
+}
+
+/// `KILL` (or `KILL QUERY`) `id`, done if the session is gone already.
+async fn kill(db: &Database, sql: String) -> Result<()> {
     let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
-    let sql = if terminate { format!("KILL {id}") } else { format!("KILL QUERY {id}") };
-    sqlx::raw_sql(AssertSqlSafe(sql)).execute(p).await?;
-    Ok(())
+    match sqlx::raw_sql(AssertSqlSafe(sql)).execute(p).await {
+        Err(e) if !session_gone(&e) => Err(e.into()),
+        _ => Ok(()),
+    }
+}
+
+pub(in crate::db) async fn stop_session(db: &Database, id: i64, terminate: bool) -> Result<()> {
+    kill(db, if terminate { format!("KILL {id}") } else { format!("KILL QUERY {id}") }).await
 }
 
 /// The session-info query and the name of each column it returns.
@@ -292,7 +307,6 @@ pub(in crate::db) async fn connections(db: &Database) -> Option<String> {
     Some(format!("{in_use} in use, up to {max}{each}"))
 }
 
-
 /// The session's TLS version and cipher, if it's encrypted.
 pub(in crate::db) async fn tls_info(db: &Database) -> Option<String> {
     let o = db.run("SHOW SESSION STATUS WHERE Variable_name IN ('Ssl_version', 'Ssl_cipher')", 2).await.ok()?;
@@ -303,10 +317,10 @@ pub(in crate::db) async fn tls_info(db: &Database) -> Option<String> {
 }
 
 /// Cancels connection `id`'s running query.
+/// (A session gone already has nothing running: done, not "Unknown thread
+/// id".)
 pub(in crate::db) async fn cancel(db: &Database, id: i64) -> Result<()> {
-    let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
-    sqlx::raw_sql(AssertSqlSafe(format!("KILL QUERY {id}"))).execute(p).await?;
-    Ok(())
+    kill(db, format!("KILL QUERY {id}")).await
 }
 
 /// Its plans are made on the session (as the user's statements run).

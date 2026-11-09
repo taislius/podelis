@@ -309,6 +309,42 @@ impl App {
         });
     }
 
+    /// Ctrl+X in the connections list: asks before closing every open
+    /// connection (open transactions rolled back). Not while a query runs.
+    pub(super) fn request_close_all_connections(&mut self) {
+        let mut ids: Vec<u64> = self.conns.active.into_iter().collect();
+        ids.extend(self.parked_connections().into_iter().map(|(id, ..)| id));
+        self.popups.palette = None;
+        if let Some(busy) = (0..self.tabs.len()).find(|&i| self.tab_running(i)) {
+            let tab = self.tabs[busy].name.clone();
+            return self.set_status(t!("conn_list.busy_all", tab = tab), true);
+        }
+        let open = ids.iter().any(|&id| self.conn_txn(id) == Some(TxnState::Open));
+        let n = ids.len();
+        self.popups.confirm = Some(Confirm {
+            message: if open {
+                t!("conn_list.close_all_rollback", n = n)
+            } else {
+                t!("conn_list.close_all_ask", n = n)
+            },
+            details: Vec::new(),
+            danger: open,
+            action: ConfirmAction::CloseAllConnections,
+            offer_transaction: false,
+        });
+    }
+
+    /// Closes every open connection, as `close_connection` closes one.
+    pub(super) fn close_every_connection(&mut self) {
+        let mut ids: Vec<u64> = self.conns.active.into_iter().collect();
+        ids.extend(self.parked_connections().into_iter().map(|(id, ..)| id));
+        let n = ids.len();
+        for id in ids {
+            self.close_connection(id);
+        }
+        self.set_status(t!("conn_list.closed_all", n = n), false);
+    }
+
     /// Closes connection `id`: every tab on it is disconnected (and isn't
     /// reopened by its next run), the connection closed; the shown tab
     /// stays where it is.

@@ -84,6 +84,9 @@ impl App {
 
     /// Why asking can't start here, if it can't.
     fn why_cant_ask(&self) -> Option<String> {
+        if self.ai_state() == AiState::Off {
+            return Some(t!("ask.no_model").into());
+        }
         if self.ask.asking.is_some() {
             return Some(t!("ask.busy").into());
         }

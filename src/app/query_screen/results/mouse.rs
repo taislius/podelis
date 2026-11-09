@@ -31,7 +31,7 @@ impl App {
             } else {
                 self.set_result_tab(tab);
             }
-        } else if y == hits.run_source.y
+        } else if hits.run_tabs_y == Some(y)
             && let Some((_, _, i)) = find(&hits.run_tabs)
         {
             self.focus = Focus::Results;
@@ -74,6 +74,15 @@ impl App {
         }
         if inside(hits.results, x, y) {
             self.focus = Focus::Results;
+            // A failure with its place: a click on it goes there.
+            if inside(hits.result_body, x, y)
+                && self.tab.run_error.is_some()
+                && !self.grid_shown()
+                && self.tab.result_tab == ResultTab::Rows
+                && let Some((start, end)) = self.tab.error_marker
+            {
+                self.show_error_place(start, end);
+            }
             return true;
         }
         false

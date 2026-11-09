@@ -348,9 +348,12 @@ impl App {
                 self.tab.grid.filter.insert_str(text);
                 self.tab.grid.refresh_view();
             }
+            // In the navigator a paste is a name to look for: into its
+            // filter, opened for it.
             Focus::Schema => {
-                if let Some(panel) = self.connection.schema.as_mut().filter(|p| p.filter_editing) {
-                    panel.filter.insert_str(text);
+                if let Some(panel) = self.connection.schema.as_mut() {
+                    panel.filter_editing = true;
+                    panel.filter.insert_str(text.trim());
                     panel.selected = step_selectable(&panel.nodes(), 0, 1);
                 }
             }
@@ -370,6 +373,11 @@ impl App {
         match key.code {
             KeyCode::Char(c @ '1'..='9') if key.modifiers == KeyModifiers::ALT => {
                 self.switch_tab(c as usize - '1' as usize);
+                true
+            }
+            // The last tab, as in browsers' Alt+9 (past nine, too).
+            KeyCode::Char('0') if key.modifiers == KeyModifiers::ALT => {
+                self.switch_tab(self.tabs.len() - 1);
                 true
             }
             _ => false,
@@ -464,7 +472,13 @@ impl App {
             Action::ConnectionList => self.open_connection_list(),
             Action::Settings => self.open_settings(),
             Action::SelectStatement => self.select_statement(),
+            Action::SelectWord => {
+                let pos = self.tab.editor.cursor();
+                self.focus = Focus::Editor;
+                self.tab.editor.select_word_at(pos);
+            }
             Action::Heartbeat => self.toggle_heartbeat(),
+            Action::ServerLoad => self.show_server_load(),
             Action::TxMode => self.open_tx_picker(),
             Action::Messages => self.open_messages(),
             Action::Projects => self.open_manager(Screen::Projects),
