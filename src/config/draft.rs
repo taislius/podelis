@@ -227,6 +227,7 @@ impl ConnectionDraft {
                 read_only: self.mode == ConnectionMode::ReadOnly,
                 ssh: None,
                 password_command: Vec::new(),
+                for_agents: false,
             });
         }
         if host.is_empty() {
@@ -250,6 +251,7 @@ impl ConnectionDraft {
             read_only: self.mode == ConnectionMode::ReadOnly,
             ssh,
             password_command,
+            for_agents: false,
         })
     }
 

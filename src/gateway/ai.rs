@@ -357,8 +357,10 @@ async fn load(
             .await
             .map_err(|e| e.to_string())?;
     let mut params = crate::config::draft::ConnectionDraft::from_profile(&profile, password).params()?;
-    // Reading the catalog is all it does.
+    // Reading the catalog is all it does: shut off as agents' connections
+    // are (which it can then share a DuckDB file with, in the gateway).
     params.read_only = true;
+    params.for_agents = true;
     let db =
         crate::db::Database::connect(params).await.map_err(|e| crate::db::with_hint(&crate::db::error_message(&e)))?;
     let said = |e: anyhow::Error| crate::db::error_message(&e);

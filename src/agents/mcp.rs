@@ -255,7 +255,7 @@ impl Server {
     #[tool(description = "Tables and views with their columns (name type, PK marks the primary key). \
         On big databases pass a filter.")]
     async fn schema(&self, Parameters(args): Parameters<SchemaArgs>) -> Result<CallToolResult, ErrorData> {
-        let (db, _, turn) = match self.database(&args.connection).await {
+        let (db, profile, turn) = match self.database(&args.connection).await {
             Ok(found) => found,
             Err(e) => return failed(e),
         };
@@ -266,8 +266,9 @@ impl Server {
         };
         let filter = args.filter.as_deref().map(str::to_lowercase);
         let mut out = String::new();
-        let matching =
-            catalog.iter().filter(|(t, _)| filter.as_ref().is_none_or(|f| t.name.to_lowercase().contains(f)));
+        let matching = catalog.iter().filter(|(t, _)| {
+            filter.as_ref().is_none_or(|f| t.name.to_lowercase().contains(f)) && !schema_kept_out(&profile, &t.schema)
+        });
         for (table, columns) in matching {
             if out.len() > MAX_ANSWER_BYTES {
                 let _ = writeln!(out, "… more tables left out: pass a filter");
@@ -292,7 +293,7 @@ impl Server {
     #[tool(description = "One table's columns, primary key, indexes, foreign keys and (for a view) \
         its definition.")]
     async fn describe_table(&self, Parameters(args): Parameters<TableArgs>) -> Result<CallToolResult, ErrorData> {
-        let (db, _, turn) = match self.database(&args.connection).await {
+        let (db, profile, turn) = match self.database(&args.connection).await {
             Ok(found) => found,
             Err(e) => return failed(e),
         };
@@ -302,7 +303,7 @@ impl Server {
             Err(e) => return failed(crate::db::error_message(&e)),
         };
         let wanted = args.table.to_lowercase();
-        let found = catalog.iter().find(|(t, _)| {
+        let found = catalog.iter().filter(|(t, _)| !schema_kept_out(&profile, &t.schema)).find(|(t, _)| {
             t.name.to_lowercase() == wanted || format!("{}.{}", t.schema, t.name).to_lowercase() == wanted
         });
         let Some((table, columns)) = found else {
@@ -361,6 +362,11 @@ impl Server {
         let engine = db.engine();
         let mut entry = self.entry(&peer, &profile.name, Some(engine), "query", &args.sql);
         let wrap = match agents::verdict(profile.agents, profile.mode, &args.sql, engine) {
+            Verdict::Run(_) if let Some(why) = kept_out(&profile, engine, &args.sql) => {
+                entry.refused = Some(why.clone());
+                self.write_log(entry);
+                return failed(why);
+            }
             Verdict::Run(wrap) => wrap,
             Verdict::Refuse(why) => {
                 entry.refused = Some(why.clone());
@@ -439,7 +445,9 @@ impl Server {
         let mut entry = self.entry(&peer, &profile.name, Some(engine), "explain", &args.sql);
         // One statement, planned in a read-only transaction: nothing after
         // it can ride along, and nothing in it can write.
-        if let Err(why) = agents::explainable(&args.sql, engine) {
+        if let Err(why) = agents::explainable(&args.sql, engine)
+            .and_then(|()| kept_out(&profile, engine, &args.sql).map_or(Ok(()), Err))
+        {
             entry.refused = Some(why.clone());
             self.write_log(entry);
             return failed(why);
@@ -505,6 +513,7 @@ impl Server {
         // gateway runs elsewhere).
         let opened = store::opened_from(&profile, self.dir.as_deref());
         let mut params = ConnectionDraft::from_profile(&opened, password).params()?;
+        params.for_agents = true;
         params.read_only |= !matches!(profile.agents, AgentAccess::Write | AgentAccess::Approve | AgentAccess::Sandbox)
             || profile.mode == ConnectionMode::ReadOnly;
         let db = Database::connect(params).await.map_err(|e| crate::db::with_hint(&crate::db::error_message(&e)))?;
@@ -829,6 +838,19 @@ async fn end_sandbox(db: &Database) {
 /// need SQL for now (its transactions and plans are Podėlis's safety).
 fn no_sql(engine: crate::db::Engine) -> String {
     format!("agents need SQL here for now, which {} doesn't have", engine.label())
+}
+
+/// Why `sql` is refused on the service `profile`'s database is on, if it
+/// keeps agents out of what it names (Supabase's secrets).
+fn kept_out(profile: &ConnectionProfile, engine: Engine, sql: &str) -> Option<String> {
+    agents::kept_out(sql, engine, crate::db::services::serving(engine, profile.host.trim()))
+}
+
+/// Whether agents are kept out of `schema` on `profile`'s database: not
+/// listed or described to them.
+fn schema_kept_out(profile: &ConnectionProfile, schema: &str) -> bool {
+    crate::db::services::serving(profile.engine, profile.host.trim())
+        .is_some_and(|s| s.agents_kept_out().iter().any(|(kept, _)| kept.eq_ignore_ascii_case(schema)))
 }
 
 /// How long one call may run: the connection's Timeout, else 30 s.

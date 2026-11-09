@@ -45,6 +45,7 @@ pub(in crate::db) fn server_params(engine: Engine, prefix: &str, user: &str) -> 
         read_only: false,
         ssh: None,
         password_command: Vec::new(),
+        for_agents: false,
     })
 }
 
@@ -246,6 +247,7 @@ pub fn file_params(path: &std::path::Path, read_only: bool) -> ConnectParams {
         read_only,
         ssh: None,
         password_command: Vec::new(),
+        for_agents: false,
     }
 }
 

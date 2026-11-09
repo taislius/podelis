@@ -120,6 +120,7 @@ mod tests {
             read_only: false,
             ssh: None,
             password_command: Vec::new(),
+            for_agents: false,
         }
     }
 

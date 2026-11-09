@@ -29,6 +29,11 @@ pub trait Service: Sync {
     fn is_internal_schema(&self, _schema: &str) -> bool {
         false
     }
+    /// Schemas AI agents are kept out of there, each with what it holds:
+    /// a statement naming one (`vault.secrets`) is refused.
+    fn agents_kept_out(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
 }
 
 /// Every service Podėlis knows.

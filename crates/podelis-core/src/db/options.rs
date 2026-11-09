@@ -244,6 +244,10 @@ pub struct ConnectParams {
     /// Program and arguments that print the password, run when connecting
     /// if `password` is empty (see [`super::password_command`]).
     pub password_command: Vec<String>,
+    /// Opened for AI agents (`podelis mcp`): where SQL itself reaches past
+    /// the data, that's switched off on the connection (DuckDB's files,
+    /// URLs and extensions), not just checked for in what they send.
+    pub for_agents: bool,
 }
 
 /// Everything but the password: a `{:?}` in a log line or a panic mustn't
@@ -260,6 +264,7 @@ impl std::fmt::Debug for ConnectParams {
             .field("ssl_mode", &self.ssl_mode)
             .field("read_only", &self.read_only)
             .field("ssh", &self.ssh)
+            .field("for_agents", &self.for_agents)
             .field("password_command", &self.password_command)
             .finish()
     }
@@ -334,6 +339,7 @@ mod debug_tests {
             read_only: false,
             ssh: None,
             password_command: Vec::new(),
+            for_agents: false,
         };
         let shown = format!("{params:?}");
         assert!(!shown.contains("hunter2") && shown.contains("<hidden>") && shown.contains("bob"), "{shown}");

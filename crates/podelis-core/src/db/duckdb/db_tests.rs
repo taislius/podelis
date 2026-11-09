@@ -23,6 +23,7 @@ fn params(path: &std::path::Path, read_only: bool) -> ConnectParams {
         read_only,
         ssh: None,
         password_command: Vec::new(),
+        for_agents: false,
     }
 }
 
