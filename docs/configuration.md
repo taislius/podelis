@@ -23,6 +23,7 @@ mouse = true                # clicks and the wheel (false: terminal selection wi
 keepalive = 0               # seconds between checks of an idle connection (0: off)
 leader_double_space = false # Space twice quickly in the editor opens the Ctrl+K menu
 leader_menu = true          # Ctrl+K shows its menu after half a second without a letter (false: only `?` or Ctrl+Shift+K show it)
+local_leader = "\\"         # in vim's Normal mode, the key before the editor's own commands: `\r` runs, `\f` formats… ("": off)
 long_query = 600            # a query running this many seconds says, once, how to cancel it (0: never)
 query_timeout = 0           # cancel any query after this many seconds, on connections without a Timeout of their own (0: off)
 notify_after = 10           # a query running this many seconds rings and notifies when done (0: off); a hidden tab's too, with the terminal in front

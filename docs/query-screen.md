@@ -165,6 +165,13 @@ operators with motions (`dw`, `c$`, `y3w`…), `iw` (`ciw`, `diw`, `yiw`) and
 Yanks also go to the system clipboard (deletes stay in vim's register), and
 `Ctrl+V` pastes from it in Normal mode as in Insert mode.
 
+Space is the leader, as in Neovim (Ctrl+K's menu), and `\` the local
+leader (`local_leader` in `config.toml`): the editor's own commands, one
+key after it, with Ctrl+K's letters where it has them: `\r` run, `\s` run
+the statement, `\e` explain, `\a` explain analyze, `\f` format, `\-`
+comment, `\v` select the statement, `\b` the statement alone, `\w` next
+warning, `\i` snippet, `\q` ask AI, `\y` AI explain. Help (`?`) lists them.
+
 ## Results
 
 When focused:
