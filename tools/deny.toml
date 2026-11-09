@@ -14,6 +14,11 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant: merged into zbus 6; secret-service still on zbus 5" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names: merged into zbus 6; secret-service still on zbus 5" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: merged into zbus 6; secret-service still on zbus 5" },
+    # SQLite before 3.54.0 can return stale memory for a crafted database
+    # file opened with a `-wal` of another page size: local, and only for a
+    # file pair someone else made. sqlx 0.9.0 (the latest) pins
+    # libsqlite3-sys 0.37; remove this once a sqlx takes 0.39.
+    { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys 0.37 pinned by sqlx 0.9.0, the latest; needs a sqlx on 0.39" },
 ]
 
 [licenses]
