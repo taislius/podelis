@@ -3174,7 +3174,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "podelis"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "arrow-array 59.3.2",
@@ -3208,7 +3208,7 @@ dependencies = [
 
 [[package]]
 name = "podelis-ai"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "chrono",
  "futures-util",
@@ -3227,7 +3227,7 @@ dependencies = [
 
 [[package]]
 name = "podelis-core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "chrono",

@@ -4,10 +4,24 @@ What changed in each release of Podėlis, newest first. Drafted from the
 commits by [git-cliff](https://git-cliff.org) (`cliff.toml`), then edited.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.8.1] — 2026-11-09
+
+### Security
+
+- Agents on DuckDB could read any file the user can: SQL that reads files by itself (`FROM 'file.csv'`, `read_parquet`, `COPY`, `ATTACH`, `INSTALL`) ran even for a read-only agent. DuckDB's connections for agents are now opened with external access off and locked. Affected: 0.8.0 with `--features duckdb`.
+- Agents on Supabase are kept out of `vault`, `pgsodium` and `auth`: not listed or described to them, and a query or plan naming one is refused.
+- Dependencies: rmcp 3.9.0 (RUSTSEC-2026-0457, -0461, -0462) and arrow 59.3.2 (RUSTSEC-2026-0442).
 
 ### Added
 
+- Agents on MongoDB, by the same rules as SQL's engines: reads anywhere, writes where allowed and one per call, never with a filter that names no field, `$out`/`$merge`, server JavaScript or `runCommand`; on production a dry run in a transaction where the server has them (a replica set), approvals, and the guard on reading whole big collections.
+- Vim's local leader, `\` (`local_leader` in `config.toml`): the editor's own commands one key after it (`\r` run, `\f` format, `\-` comment…). Vim's `gc` and `gcc` comment, and `Ctrl+R` redoes.
+- A failed run says where the server says it failed; `g` in MESSAGES, or a click on the failure, goes there.
+- `Ctrl+K s l` shows the server's load (PostgreSQL, MySQL, SQLite, DuckDB); `a` in the navigator updates a table's statistics (`ANALYZE`).
+- `Ctrl+X` in `Ctrl+K j`'s list closes every connection, after asking.
+- A double click or `Alt+W` selects a word.
+- More than nine tabs: `Ctrl+K 0` and `Alt+0` go to the last, `Ctrl+K ]` and `[` to the next and previous.
+- The footer shows AI's state beside the connection's, `^K commands` at its right, and `? all keys`; AI's keys are dimmed in help while AI is off.
 - Copying rows as TSV.
 - `E` in the results opens the export menu, which was mouse-only; the palette finds the panes' commands too (sort, filter, chart, delete…), each with its key.
 - F1's window scrolls, by keys or the wheel, says which lines are showing, and lists every command with a key.
@@ -27,9 +41,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Big exports: none of every row leaves less than `export_min_free_gb` free on its disk (5 GB; the rows shown only have to fit), one the plan says is big asks first, and one that grows to `export_ask_gb` (1 GB) asks whether to go on, at each multiple; `export_max_gb` stops a file at a size (off by default). All three in the settings; the progress says the size and what's free. An export the server ends after a question was answered keeps what it wrote, as `….partial.csv`.
 - A long message in a pane's footer is cut off with `…`, never hiding the transaction modes; clicking it or `Ctrl+K Space` shows every message whole.
 - Changing the transaction mode no longer shows a message: the footer shows the mode, and a `?` after the modes opens all four with what each does. In that list a click picks a mode, and a click outside closes it.
+- Comment is `Ctrl+K -` or `Alt+/`; `Ctrl+/` still works where the terminal sends it, but isn't shown (many send `/`).
+- `Ctrl+R` no longer runs (`F5` and `Ctrl+Enter` do), so in vim it redoes.
+- On the projects and connections screens only `Ctrl+Q` quits, not `q`.
+- A saved query changed and not saved shows `!` in its tab, not an orange dot (dots are connections').
+- The navigator's filter takes the arrows, `Enter`, `Ctrl+V` and a paste, and `Esc` or `×` clears it; `s` and `a` keep the focus in the navigator.
+- The running queries and the open connections lists are tables, in columns.
+- The statement a result is from has its own row above the kept runs' tabs.
+- `Enter` on the current connection in `Ctrl+K j`'s list keeps the list open and says so.
+- Lithuanian wording: skirtukai, redaktorius, DB naršyklė, bandomoji aplinka, veiklos aplinka, prieigos vartai.
 
 ### Fixed
 
+- MySQL: cancelling or closing a connection whose session the server had already ended failed with "unknown thread".
+- `Ctrl+←/→` resize the projects and connections screens' panes, as elsewhere.
 - Long menus ran off small terminals, and the selection with them.
 - MongoDB: `ISODate("2026-01-05")` and `new Date("2026-01-05")` read as the shell reads them, a time without a zone as UTC; what isn't a date says what it wants.
 - `duckdb:/path`, `duckdb:./path` and `sqlite3:/path` open the file: they were taken for a SQLite file of that name. `a.duckdb` and `a.ddb` open as DuckDB.
