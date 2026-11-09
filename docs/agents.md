@@ -78,7 +78,10 @@ On MongoDB agents send mongosh's calls instead of SQL
 reads (`find`, `findOne`, `aggregate`, the counts, `distinct`) wherever
 they may look; where they may write, `insertOne`/`insertMany`,
 `updateOne`/`updateMany`, `replaceOne`, `deleteOne`/`deleteMany`, never one
-with an empty filter, nor a collection dropped. What reaches past the data
+whose filter names no field (`{}`, `{$comment: …}`, `{$expr: true}`,
+`{_id: {$exists: true}}`: they may match every document), nor a collection
+dropped. That's a safety net, not a proof (`{x: {$ne: -1}}` can match
+everything too): the database user's rights are what holds. What reaches past the data
 is refused anywhere in a call, a key in quotes too: `$out` and `$merge`
 (they write a collection), `$where`, `$function`, `$accumulator` and
 `mapReduce` (JavaScript on the server), `runCommand`. A write is one call
@@ -94,6 +97,11 @@ one), so on a standalone server agents can't write there, and an approved
 write comes without a dry run. A whole big collection on production is
 refused by its plan (a `COLLSCAN`), and `explain` shows the winning plan.
 There's no sandbox on MongoDB: it needs savepoints.
+
+A call an agent cancels (or stops waiting for) between the start of
+Podėlis's transaction and its end leaves that transaction open on the
+session; the next call on the connection rolls it back before anything
+else, on every engine, so a later approved write commits only itself.
 
 ## A sandbox for agents
 
