@@ -901,8 +901,9 @@ async fn live_dry_run_notes_and_sandbox_ends() {
             database: params.database.clone(),
             ..server_connection("d", engine, &params.host, AgentAccess::Approve, ConnectionMode::Production)
         };
-        let ddl = dry_run_note(&db, &profile, "CREATE TABLE dry_u (id INT)").await.unwrap();
-        let write = dry_run_note(&db, &profile, "UPDATE dry_t SET x = 0 WHERE x > 0").await.unwrap();
+        let ddl = dry_run_note(&db, &profile, "CREATE TABLE dry_u (id INT)", &mut Turn::default()).await.unwrap();
+        let write =
+            dry_run_note(&db, &profile, "UPDATE dry_t SET x = 0 WHERE x > 0", &mut Turn::default()).await.unwrap();
         assert_eq!(write, "dry run: would change 2 row(s)", "{engine:?}");
         if engine.capabilities().ddl_commits {
             assert_eq!(ddl, format!("no dry run: {} commits schema changes at once", engine.label()));
@@ -936,4 +937,28 @@ async fn a_plans_notes_lead_only_when_there_are_some() {
     assert!(sorted.starts_with("What stands out:\n- Sorts in a temporary B-tree"), "{sorted}");
     let looked_up = explain("SELECT * FROM t WHERE id = 2").await;
     assert!(!looked_up.contains("What stands out") && looked_up.contains("PRIMARY KEY"), "{looked_up}");
+}
+
+/// A call cut short between its transaction's begin and its end leaves it
+/// open on the session: the next call rolls it back first, so its own
+/// commit commits only itself (found in review, 2026-11-09).
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_transaction_a_cancelled_call_left_open_is_rolled_back_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("c.db");
+    make_file_db(&path, "CREATE TABLE t (x INT)");
+    let db = Database::connect(crate::db::tests::file_params(&path, false)).await.unwrap();
+    let profile = file_connection("c", &path, AgentAccess::Write, ConnectionMode::Normal);
+    // As a dry run cancelled after its write: begun, written, never ended.
+    let mut held = Turn { left_open: true };
+    db.run_once("BEGIN", 1).await.unwrap();
+    db.run_once("INSERT INTO t VALUES (1)", 1).await.unwrap();
+    settle(&db, &mut held).await;
+    assert!(!held.left_open);
+    run_wrapped(&db, &profile, Wrap::Commit, "INSERT INTO t VALUES (2)", 1, &mut held).await.unwrap();
+    assert!(!held.left_open, "ended");
+    let rows = db.run_once("SELECT x FROM t", 10).await.unwrap().rows;
+    assert_eq!(rows, vec![vec![Some("2".to_string())]], "the dry run's write wasn't committed with it");
+    db.close().await;
 }

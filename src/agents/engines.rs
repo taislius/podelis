@@ -162,4 +162,21 @@ mod mongodb {
         assert_eq!(run(ENGINE, "db.users.aggregate([{$group: {_id: '$city', n: {$sum: 1}}}])"), Wrap::Commit);
         assert_eq!(run(ENGINE, "db.users.deleteOne({_id: 1})"), Wrap::Commit);
     }
+
+    /// A filter that names no field may match every document, written as
+    /// `{}` or not (found in review, 2026-11-09). Read as values, which the
+    /// driver's build does.
+    #[cfg(feature = "mongodb")]
+    #[test]
+    fn a_filter_that_keeps_nothing_out_is_destructive() {
+        for sql in [
+            "db.users.deleteMany({$comment: 'all'})",
+            "db.users.deleteMany({$expr: true})",
+            "db.users.deleteMany({_id: {$exists: true}})",
+            "db.users.updateMany({$or: [{x: 1}, {}]}, {$set: {y: 1}})",
+        ] {
+            assert!(refused(ENGINE, sql).contains("destructive"), "{sql}: {}", refused(ENGINE, sql));
+        }
+        assert_eq!(run(ENGINE, "db.users.deleteMany({status: 'gone', $comment: 'cleanup'})"), Wrap::Commit);
+    }
 }

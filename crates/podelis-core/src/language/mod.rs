@@ -41,16 +41,11 @@ pub trait QueryLanguage: Sync {
     fn transaction(&self, _op: TxnOp) -> Option<&'static str> {
         None
     }
-    /// A statement's words, to find what reaches past the data in it: by
-    /// default its word tokens; a language whose keys may be strings gives
-    /// those too, decoded as its server reads them.
-    fn words(&self, statement: &str) -> Vec<String> {
-        self.tokenize(statement)
-            .into_iter()
-            .filter(|t| t.kind == TokenKind::Word)
-            .map(|t| statement[t.range].to_string())
-            .collect()
-    }
+    /// A statement's words, to find what reaches past the data in it, as
+    /// its server reads them: a language whose keys may be strings gives
+    /// those too, decoded. No default: each language says how its words
+    /// compare (MongoDB's as written; SQL's, in `words`, lower case).
+    fn words(&self, statement: &str) -> Vec<String>;
     /// What a statement calls, the way an engine's agent constraints name
     /// it (`find`, `insertOne`): `None` if it calls nothing Podėlis knows.
     fn verb<'a>(&self, _statement: &'a str) -> Option<&'a str> {

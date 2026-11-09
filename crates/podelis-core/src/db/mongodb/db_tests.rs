@@ -145,6 +145,9 @@ async fn live_transactions_mongodb() {
     assert_eq!(changed.rows_affected, Some(1));
     let inside = db.run_once("db.t.find({x: 2})", 10).await.unwrap();
     assert_eq!(inside.total_rows, 1, "seen in it");
+    // No limit (the command line's) is a limit, not a stream.
+    let unlimited = db.run_once("db.t.find({x: 2})", usize::MAX).await.unwrap();
+    assert_eq!(unlimited.rows.len(), 1, "read whole");
     // Streamed too, page by page, in the transaction.
     let (first, stream) = db.run_streaming("db.t.find({x: 2})", 10).await.unwrap();
     assert_eq!(first.rows.len(), 1, "streamed in it");

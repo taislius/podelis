@@ -149,11 +149,25 @@ pub fn call(statement: &str) -> Option<Call<'_>> {
     Some(Call { collection, method, args, chain })
 }
 
-/// The first key of the document a command is (`{find: "t", …}` → `find`).
-fn command_name(args: &str) -> Option<&str> {
-    let inner = args.trim().strip_prefix('{')?;
-    let key = inner.split([':', ',', '}']).next()?.trim();
-    Some(key.trim_matches(['"', '\'']))
+/// The first key of the document a command is (`{find: "t", …}` → `find`),
+/// read by tokens as the arguments' reader reads it: past comments, a key
+/// in quotes decoded (`"\u0066ind"` is `find`), and only a key a `:`
+/// follows (`{"find:x": …}` names no `find`). None if it isn't one.
+fn command_name(args: &str) -> Option<String> {
+    let tokens = tokenize(args);
+    let text = |i: usize| &args[tokens[i].range.clone()];
+    let open = next_code(&tokens, 0)?;
+    if !(tokens[open].kind == TokenKind::Punct && text(open) == "{") {
+        return None;
+    }
+    let key = next_code(&tokens, open + 1)?;
+    let name = match tokens[key].kind {
+        TokenKind::Word => text(key).to_string(),
+        TokenKind::String | TokenKind::QuotedIdent => string_value(text(key)),
+        _ => return None,
+    };
+    let colon = next_code(&tokens, key + 1)?;
+    (tokens[colon].kind == TokenKind::Punct && text(colon) == ":").then_some(name)
 }
 
 /// A string's text (between its quotes) as the server gets it: `\n`, `\t`,
@@ -175,9 +189,11 @@ pub fn unescape(body: &str) -> Result<String, String> {
             Some('r') => out.push('\r'),
             Some('u') => {
                 let hex: String = chars.by_ref().take(4).collect();
+                // Four digits, nothing else (`from_str_radix` takes a `+`).
+                let digits = hex.len() == 4 && hex.bytes().all(|b| b.is_ascii_hexdigit());
                 let code = u32::from_str_radix(&hex, 16)
                     .ok()
-                    .filter(|_| hex.len() == 4)
+                    .filter(|_| digits)
                     .ok_or_else(|| "a \\u escape isn't four hex digits".to_string())?;
                 out.push(char::from_u32(code).unwrap_or('\u{fffd}'));
             }
@@ -217,9 +233,15 @@ fn writes_out(args: &str) -> bool {
     plain.contains("$out") || plain.contains("$merge")
 }
 
-/// Whether the first argument (a filter) is empty: `{}` (whatever blanks
-/// and comments are in it), or none at all.
+/// Whether a write's filter (its first argument) may match every document:
+/// none, `{}` (whatever blanks and comments are in it), or one that names
+/// no field (`filters::names_no_field`).
 fn empty_filter(args: &str) -> bool {
+    super::filters::first_names_no_field(args).unwrap_or_else(|| empty_filter_by_tokens(args))
+}
+
+/// [`empty_filter`] for arguments Podėlis can't read as values: by tokens.
+fn empty_filter_by_tokens(args: &str) -> bool {
     let mut depth = 0i32;
     let mut first = Vec::new();
     for t in tokenize(args) {
@@ -234,6 +256,13 @@ fn empty_filter(args: &str) -> bool {
         first.push(text);
     }
     first.is_empty() || first == ["{", "}"]
+}
+
+/// Whether a `delete` command (`db.runCommand({delete: …, deletes: […]})`)
+/// has a delete whose filter (`q`) names no field; by its text when it
+/// can't be read.
+fn deletes_everything(args: &str) -> bool {
+    super::filters::a_delete_names_no_field(args).unwrap_or_else(|| plain(args).contains("q:{}"))
 }
 
 /// A statement's words for agents' checks: words as written, and strings
@@ -309,12 +338,13 @@ impl QueryLanguage for Mongo {
         match (call.collection.is_some(), call.method) {
             (false, "runCommand" | "adminCommand") => {
                 let name = command_name(args).unwrap_or_default();
+                let name = name.as_str();
                 if named(READ_COMMANDS, name) && !writes_out(args) {
                     (Kind::Read, None)
                 } else if name == "aggregate" {
                     (Kind::Write, Some("writes its result into a collection ($out/$merge)"))
-                } else if name == "delete" && plain(args).contains("q:{}") {
-                    (Kind::Write, Some("a delete with an empty filter"))
+                } else if name == "delete" && deletes_everything(args) {
+                    (Kind::Write, Some("a delete whose filter names no field (it may match every document)"))
                 } else if named(WRITE_COMMANDS, name) {
                     (Kind::Write, None)
                 } else if named(SCHEMA_COMMANDS, name) {
@@ -335,7 +365,11 @@ impl QueryLanguage for Mongo {
             }
             (true, m) if named(READS, m) => (Kind::Read, None),
             (true, m @ ("deleteMany" | "updateMany")) if empty_filter(args) => {
-                (Kind::Write, Some(if m == "deleteMany" { "deleteMany with an empty filter" } else { "updateMany with an empty filter" }))
+                (Kind::Write, Some(if m == "deleteMany" {
+                    "deleteMany whose filter names no field (it may match every document)"
+                } else {
+                    "updateMany whose filter names no field (it may match every document)"
+                }))
             }
             (true, m) if named(WRITES, m) => (Kind::Write, None),
             (true, "drop") => (Kind::Ddl, Some("drops the collection")),
@@ -465,7 +499,10 @@ mod tests {
         assert_eq!(kind("db.users.find({age: {$gt: 30}}).sort({name: 1}).limit(5)"), (Kind::Read, None));
         assert_eq!(kind("db.getCollection('my orders').countDocuments({})"), (Kind::Read, None));
         assert_eq!(kind("db.users.insertOne({name: 'Ada'})"), (Kind::Write, None));
-        assert_eq!(kind("db.users.deleteMany({})").1, Some("deleteMany with an empty filter"));
+        assert_eq!(
+            kind("db.users.deleteMany({})").1,
+            Some("deleteMany whose filter names no field (it may match every document)")
+        );
         assert_eq!(kind("db.users.deleteMany({x: 1})"), (Kind::Write, None));
         assert_eq!(kind("db.users.aggregate([{$match: {}}, {$out: 'copy'}])").0, Kind::Write);
         assert_eq!(kind("db.users.aggregate([{$group: {_id: '$city'}}])"), (Kind::Read, None));
@@ -474,6 +511,11 @@ mod tests {
         assert_eq!(kind("db.runCommand({find: 'users', filter: {}})"), (Kind::Read, None));
         assert_eq!(kind("db.runCommand({\"delete\": 'users', deletes: []})").0, Kind::Write);
         assert_eq!(kind("db.runCommand({dropDatabase: 1})").0, Kind::Ddl);
+        // The key as the server reads it (found in review, 2026-11-09).
+        assert_eq!(kind(r#"db.runCommand({"\u0066ind": 't'})"#), (Kind::Read, None));
+        assert_eq!(kind("db.runCommand({/* c */ find: 't'})"), (Kind::Read, None));
+        assert_ne!(kind(r#"db.runCommand({"find:x": 't'})"#).0, Kind::Read);
+        assert_eq!(kind(r#"db.runCommand({"\u0064ropDatabase": 1})"#).0, Kind::Ddl);
         assert_eq!(kind("db.createCollection('logs')").0, Kind::Ddl);
         assert_eq!(kind("show dbs").0, Kind::Session, "not a call Podėlis knows");
         // An escape can't hide a stage that writes.
