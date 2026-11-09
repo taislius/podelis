@@ -88,10 +88,19 @@ pub struct ExplainArgs {
 #[derive(Clone)]
 struct Open {
     db: Database,
-    turn: Arc<tokio::sync::Mutex<()>>,
+    turn: Arc<tokio::sync::Mutex<Turn>>,
     /// The settings it was opened with: changed ones (say, sharing narrowed
     /// to read) open it again.
     profile: ConnectionProfile,
+}
+
+/// What a connection's turn knows between calls.
+#[derive(Default)]
+struct Turn {
+    /// A transaction of Podėlis's was begun and not yet ended: a call cut
+    /// short (cancelled, or given up on) left it open. The next call on
+    /// the connection rolls it back before anything else (`settle`).
+    left_open: bool,
 }
 
 #[derive(Clone)]
@@ -260,7 +269,8 @@ impl Server {
             Ok(found) => found,
             Err(e) => return failed(e),
         };
-        let _turn = turn.lock().await;
+        let mut held = turn.lock().await;
+        settle(&db, &mut held).await;
         let catalog = match db.catalog(false).await {
             Ok(c) => c,
             Err(e) => return failed(crate::db::error_message(&e)),
@@ -298,7 +308,8 @@ impl Server {
             Ok(found) => found,
             Err(e) => return failed(e),
         };
-        let _turn = turn.lock().await;
+        let mut held = turn.lock().await;
+        settle(&db, &mut held).await;
         let catalog = match db.catalog(false).await {
             Ok(c) => c,
             Err(e) => return failed(crate::db::error_message(&e)),
@@ -338,7 +349,8 @@ impl Server {
             Ok(found) => found,
             Err(e) => return failed(e),
         };
-        let _turn = turn.lock().await;
+        let mut held = turn.lock().await;
+        settle(&db, &mut held).await;
         let links = match db.links().await {
             Ok(links) => links,
             Err(e) => return failed(crate::db::error_message(&e)),
@@ -359,7 +371,8 @@ impl Server {
             Ok(found) => found,
             Err(e) => return self.not_opened(&peer, "query", &args.connection, &args.sql, e),
         };
-        let _turn = turn.lock().await;
+        let mut held = turn.lock().await;
+        settle(&db, &mut held).await;
         let engine = db.engine();
         let mut entry = self.entry(&peer, &profile.name, Some(engine), "query", &args.sql);
         let wrap = match agents::verdict(profile.agents, profile.mode, &args.sql, engine) {
@@ -392,7 +405,7 @@ impl Server {
             return failed(why);
         }
         let wrap = if wrap == Wrap::Ask {
-            if let Err(why) = self.approval(&db, &profile, &args.sql, &entry).await {
+            if let Err(why) = self.approval(&db, &profile, &args.sql, &entry, &mut held).await {
                 entry.refused = Some(why.clone());
                 self.write_log(entry);
                 return failed(why);
@@ -413,7 +426,7 @@ impl Server {
             };
             result.map(|(outcome, _)| outcome)
         } else {
-            run_wrapped(&db, &profile, wrap, &args.sql, limit).await
+            run_wrapped(&db, &profile, wrap, &args.sql, limit, &mut held).await
         };
         entry.ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         entry.dry_run = wrap == Wrap::DryRun;
@@ -443,7 +456,8 @@ impl Server {
             Ok(found) => found,
             Err(e) => return self.not_opened(&peer, "explain", &args.connection, &args.sql, e),
         };
-        let _turn = turn.lock().await;
+        let mut held = turn.lock().await;
+        settle(&db, &mut held).await;
         let engine = db.engine();
         let mut entry = self.entry(&peer, &profile.name, Some(engine), "explain", &args.sql);
         // One statement, planned in a read-only transaction: nothing after
@@ -469,7 +483,7 @@ impl Server {
         let result = if in_sandbox {
             self.run_sandboxed(&db, &profile, &turn, &explain, 10_000).await.map(|(outcome, _)| outcome)
         } else {
-            run_wrapped(&db, &profile, Wrap::ReadOnly, &explain, 10_000).await
+            run_wrapped(&db, &profile, Wrap::ReadOnly, &explain, 10_000, &mut held).await
         };
         entry.ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let outcome = match result {
@@ -501,7 +515,10 @@ impl Server {
     /// The open connection for `name` (opened the first time, without
     /// holding up calls on the others), and its turn. Read-only on the
     /// server too unless agents may write there.
-    async fn database(&self, name: &str) -> Result<(Database, ConnectionProfile, Arc<tokio::sync::Mutex<()>>), String> {
+    async fn database(
+        &self,
+        name: &str,
+    ) -> Result<(Database, ConnectionProfile, Arc<tokio::sync::Mutex<Turn>>), String> {
         let profile = self
             .shared()
             .into_iter()
@@ -574,7 +591,7 @@ impl Server {
         &self,
         db: &Database,
         profile: &ConnectionProfile,
-        turn: &Arc<tokio::sync::Mutex<()>>,
+        turn: &Arc<tokio::sync::Mutex<Turn>>,
         sql: &str,
         limit: usize,
     ) -> Result<(QueryOutcome, u32), String> {
@@ -645,7 +662,7 @@ impl Server {
     /// once another has taken its place, or once the agent's session has
     /// ended (every handle to the server dropped), so a forgotten one
     /// doesn't hold its locks.
-    fn watch_sandbox(&self, db: Database, name: String, number: u32, turn: Arc<tokio::sync::Mutex<()>>) {
+    fn watch_sandbox(&self, db: Database, name: String, number: u32, turn: Arc<tokio::sync::Mutex<Turn>>) {
         let sandboxes = Arc::downgrade(&self.sandboxes);
         let idle = self.sandbox_idle;
         tokio::spawn(async move {
@@ -702,8 +719,9 @@ impl Server {
         profile: &ConnectionProfile,
         sql: &str,
         entry: &Entry,
+        held: &mut Turn,
     ) -> Result<(), String> {
-        let dry_run = dry_run_note(db, profile, sql).await?;
+        let dry_run = dry_run_note(db, profile, sql, held).await?;
         let dir = self.log.with_extension("pending");
         let request = agents::Request {
             id: format!("{}-{}", chrono::Local::now().format("%Y%m%d-%H%M%S%.3f"), self.session),
@@ -775,27 +793,10 @@ impl Server {
 /// tables a rollback doesn't undo (`MyISAM`, `MEMORY`…). A write to them would
 /// stay while the agent is told nothing changed.
 async fn unrollable(db: &Database) -> Option<String> {
-    use crate::language::statements::TxnOp;
     let engine = db.engine();
-    let Some(dialect) = engine.dialect() else {
-        // A language's own transactions (MongoDB's), where the server takes
-        // them: tried, and rolled back at once.
-        let (Some(begin), Some(rollback)) = (
-            crate::language::transaction(engine, TxnOp::Begin, false),
-            crate::language::transaction(engine, TxnOp::Rollback, false),
-        ) else {
-            return Some(format!("{} has no transactions to roll a dry run back in", engine.label()));
-        };
-        // (One a cancelled call left open ended first.)
-        let _ = db.run_once(&rollback, 1).await;
-        return match db.run_once(&begin, 1).await {
-            Ok(_) => {
-                let _ = db.run_once(&rollback, 1).await;
-                None
-            }
-            Err(e) => Some(format!("a dry run needs a transaction: {}", crate::db::error_message(&e))),
-        };
-    };
+    // (Without SQL the dry run's own BEGIN says if the server has none:
+    // `run_wrapped`.)
+    let dialect = engine.dialect()?;
     let sql = dialect.tables_without_rollback()?;
     // (Not run again on a new session: inside a sandbox that would leave it.)
     let outcome = match db.run_once(sql, 1).await {
@@ -814,7 +815,12 @@ async fn unrollable(db: &Database) -> Option<String> {
 /// What a write's dry run says, for the user approving it, or why it had
 /// none (MySQL commits schema changes at once, and can't roll back tables
 /// that aren't `InnoDB`). A write that fails in its dry run isn't asked about.
-async fn dry_run_note(db: &Database, profile: &ConnectionProfile, sql: &str) -> Result<String, String> {
+async fn dry_run_note(
+    db: &Database,
+    profile: &ConnectionProfile,
+    sql: &str,
+    held: &mut Turn,
+) -> Result<String, String> {
     let infos = crate::language::statements::analyze(&crate::sql::parse::parse(sql, db.engine()));
     let ddl = infos.iter().any(|i| i.kind == crate::language::statements::Kind::Ddl);
     if db.engine().capabilities().ddl_commits && ddl {
@@ -825,10 +831,13 @@ async fn dry_run_note(db: &Database, profile: &ConnectionProfile, sql: &str) -> 
     if db.engine().dialect().is_none() && ddl {
         return Ok(format!("no dry run: {}'s schema changes don't run in a transaction", db.engine().label()));
     }
-    if let Some(why) = unrollable(db).await {
+    // (Without SQL the dry run's own BEGIN is the check.)
+    if db.engine().dialect().is_some()
+        && let Some(why) = unrollable(db).await
+    {
         return Ok(format!("no dry run: {why}"));
     }
-    let outcome = run_wrapped(db, profile, Wrap::DryRun, sql, 1).await?;
+    let outcome = run_wrapped(db, profile, Wrap::DryRun, sql, 1, held).await?;
     Ok(format!("dry run: would change {} row(s)", outcome.rows_affected.unwrap_or(0)))
 }
 
@@ -840,20 +849,17 @@ async fn run_wrapped(
     wrap: Wrap,
     sql: &str,
     limit: usize,
+    held: &mut Turn,
 ) -> Result<QueryOutcome, String> {
     use crate::language::statements::TxnOp;
     let engine = db.engine();
     let run = || db.run_within(sql, limit, Some(call_timeout(profile)), false);
-    if engine.dialect().is_none() {
-        // A transaction a call cut short left open (the agent cancelled it
-        // mid-dry-run) mustn't take this one in: ended first.
-        if let Some(abort) = crate::language::transaction(engine, TxnOp::Rollback, false) {
-            let _ = db.run_once(&abort, 1).await;
-        }
-        // Without SQL only a dry run is in a transaction (the language's
-        // own): a read is one by what it calls, and a write one statement
-        // that stands as it runs (see `agents::verdict`). Its time limit
-        // stops Podėlis waiting, not the server.
+    let one_write = engine.dialect().is_none();
+    if one_write {
+        // Only a dry run is in a transaction (the language's own): a read
+        // is one by what it calls, and a write one statement that stands as
+        // it runs (see `agents::verdict`). Its time limit stops Podėlis
+        // waiting, not the server.
         if wrap != Wrap::DryRun {
             return run().await.map_err(|e| match e {
                 crate::db::RunError::TimedOut(limit) => format!(
@@ -868,17 +874,39 @@ async fn run_wrapped(
     }
     let begin = crate::language::transaction(engine, TxnOp::Begin, wrap == Wrap::ReadOnly)
         .ok_or_else(|| format!("{} has no transactions", engine.label()))?;
+    // Marked open from before its begin until it has ended: a call cut
+    // short in between leaves the mark for the next one (`settle`).
+    held.left_open = true;
     db.run_once(&begin, 1).await.map_err(|e| {
+        held.left_open = false;
         let why = crate::db::error_message(&e);
-        if engine.dialect().is_none() { format!("a dry run needs a transaction: {why}") } else { why }
+        if one_write { format!("a dry run needs a transaction: {why}") } else { why }
     })?;
     let result = run().await.map_err(|e| ran_error(&e));
     let how = if wrap == Wrap::Commit && result.is_ok() { TxnOp::Commit } else { TxnOp::Rollback };
     let end = crate::language::transaction(engine, how, false).unwrap_or_default();
     let ended = db.run_once(&end, 1).await;
+    // A failed end may have left it open: the next call rolls it back.
+    held.left_open = ended.is_err();
     let outcome = result?;
     ended.map_err(|e| format!("couldn't end the transaction ({end}): {}", crate::db::error_message(&e)))?;
     Ok(outcome)
+}
+
+/// A transaction of Podėlis's that a call cut short left open (the agent
+/// cancelled the call, or stopped waiting for it, between its begin and its
+/// end), rolled back before anything else runs on the session: otherwise
+/// the next call's commit would commit it too (a dry run's writes), and an
+/// explain would run inside it (MongoDB refuses that, which would skip the
+/// production guard). A sandbox's own transaction isn't one of these.
+async fn settle(db: &Database, held: &mut Turn) {
+    if !std::mem::take(&mut held.left_open) {
+        return;
+    }
+    let rollback = crate::language::transaction(db.engine(), crate::language::statements::TxnOp::Rollback, false);
+    if let Some(rollback) = rollback {
+        let _ = db.run_once(&rollback, 1).await;
+    }
 }
 
 /// What an agent is told when its sandbox turned out to be gone.

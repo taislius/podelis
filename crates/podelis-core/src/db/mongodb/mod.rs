@@ -11,6 +11,18 @@ mod plans;
 pub(super) mod args;
 #[cfg(feature = "mongodb")]
 pub(super) mod connect;
+#[cfg(feature = "mongodb")]
+mod filters;
+/// Without the driver nothing runs: the filters' words decide.
+#[cfg(not(feature = "mongodb"))]
+mod filters {
+    pub(super) fn first_names_no_field(_args: &str) -> Option<bool> {
+        None
+    }
+    pub(super) fn a_delete_names_no_field(_args: &str) -> Option<bool> {
+        None
+    }
+}
 #[cfg(all(any(test, feature = "test-support"), feature = "mongodb"))]
 pub(in crate::db) mod db_tests;
 #[cfg(feature = "mongodb")]
@@ -82,8 +94,11 @@ impl Backend for MongoDb {
             schemas: true,
             routines: false,
             server_txn_state: false,
-            // A schema change in a transaction stays in it (where the server
-            // takes one there at all: agents' dry runs don't try).
+            // It doesn't commit a transaction: the server refuses most schema
+            // changes in one (a drop, dropIndex, an index on a collection
+            // with documents) rather than ending it, and the transaction
+            // stays open. Agents' dry runs don't try one ("no dry run: …
+            // don't run in a transaction").
             ddl_commits: false,
             stores_create_sql: false,
             table_sizes: false,
@@ -149,7 +164,8 @@ mod tests {
         let infos = crate::language::statements::analyze(&crate::sql::parse::parse(text, Engine::MongoDb));
         let kinds: Vec<_> = infos.iter().map(|i| (i.kind, i.risk)).collect();
         use crate::language::statements::Kind;
-        assert_eq!(kinds, [(Kind::Read, None), (Kind::Write, Some("deleteMany with an empty filter"))]);
+        let risk = Some("deleteMany whose filter names no field (it may match every document)");
+        assert_eq!(kinds, [(Kind::Read, None), (Kind::Write, risk)]);
         assert!(crate::language::is_keyword("find", Engine::MongoDb) && !crate::language::is_keyword("select", Engine::MongoDb));
     }
 

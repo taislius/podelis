@@ -147,8 +147,14 @@ enum Outcome {
     Changed(u64),
 }
 
-/// A `limit` that asks for a cursor to stream rather than what it has.
-const STREAM: usize = usize::MAX;
+/// What a read is for: at most this many documents kept (all counted), or
+/// a cursor to stream. Not a limit value standing for one: any limit,
+/// `usize::MAX` too, is a limit.
+#[derive(Clone, Copy)]
+enum Want {
+    Up(usize),
+    Stream,
+}
 
 /// `work`, unless a cancel comes first.
 async fn unless_cancelled<T>(interrupt: &Interrupt, work: impl Future<Output = Result<T>>) -> Result<T> {
@@ -158,12 +164,12 @@ async fn unless_cancelled<T>(interrupt: &Interrupt, work: impl Future<Output = R
     }
 }
 
-/// Runs one statement, waiting for it unless a cancel comes. `limit`: the
-/// documents kept of a cursor read in a transaction.
-async fn execute(c: &mut MongoConnection, statement: &str, limit: usize) -> Result<Outcome> {
+/// Runs one statement, waiting for it unless a cancel comes. `want`: what a
+/// cursor read in a transaction gives (its documents, or itself).
+async fn execute(c: &mut MongoConnection, statement: &str, want: Want) -> Result<Outcome> {
     check_reads(c, statement)?;
     let interrupt = Arc::clone(&c.interrupt);
-    unless_cancelled(&interrupt, run_call(c, statement, limit)).await
+    unless_cancelled(&interrupt, run_call(c, statement, want)).await
 }
 
 /// `action` in the session's transaction, if one is open.
@@ -316,33 +322,33 @@ fn find<'a>(
     Ok(find)
 }
 
-/// A `find` or an `aggregate`: its cursor, or (in a transaction) what it had.
 /// A cursor in a transaction: kept for a stream, else what it has.
 async fn in_session(
     session: &mut ::mongodb::ClientSession,
     cursor: ::mongodb::SessionCursor<Document>,
-    limit: usize,
+    want: Want,
 ) -> Result<Outcome> {
-    if limit == STREAM {
-        return Ok(Outcome::SessionCursor(Box::new(cursor)));
+    match want {
+        Want::Stream => Ok(Outcome::SessionCursor(Box::new(cursor))),
+        Want::Up(limit) => take_in(session, cursor, limit).await,
     }
-    take_in(session, cursor, limit).await
 }
 
+/// A `find` or an `aggregate`: its cursor, or (in a transaction) what it had.
 async fn read_cursor(
     c: &mut MongoConnection,
     collection: &::mongodb::Collection<Document>,
     statement: &str,
     call: &Call<'_>,
     args: &[Bson],
-    limit: usize,
+    want: Want,
 ) -> Result<Outcome> {
     if call.method == "find" {
         let find = find(collection, statement, call, args)?;
         return Ok(match c.txn.as_deref_mut() {
             Some(session) => {
                 let cursor = find.session(&mut *session).await?;
-                in_session(session, cursor, limit).await?
+                in_session(session, cursor, want).await?
             }
             None => Outcome::Cursor(Box::new(find.await?)),
         });
@@ -352,20 +358,20 @@ async fn read_cursor(
     Ok(match c.txn.as_deref_mut() {
         Some(session) => {
             let cursor = collection.aggregate(stages).session(&mut *session).await?;
-            in_session(session, cursor, limit).await?
+            in_session(session, cursor, want).await?
         }
         None => Outcome::Cursor(Box::new(collection.aggregate(stages).await?)),
     })
 }
 
-async fn run_call(c: &mut MongoConnection, statement: &str, limit: usize) -> Result<Outcome> {
+async fn run_call(c: &mut MongoConnection, statement: &str, want: Want) -> Result<Outcome> {
     let (call, args) = read_call(statement)?;
     let db = c.db();
     let Some(name) = call.collection.as_deref() else { return run_db_call(c, &call, &args).await };
     let collection = db.collection::<Document>(name);
     let filter = || document(args.first(), "the filter");
     Ok(match call.method {
-        "find" | "aggregate" => read_cursor(c, &collection, statement, &call, &args, limit).await?,
+        "find" | "aggregate" => read_cursor(c, &collection, statement, &call, &args, want).await?,
         "findOne" => {
             let mut find = collection.find_one(filter()?);
             if let Some(projection) = args.get(1) {
@@ -514,14 +520,14 @@ pub(in crate::db) async fn run(c: &mut MongoConnection, sql: &str, limit: usize)
     let mut results = Vec::new();
     for statement in crate::language::split_statements(sql, Engine::MongoDb) {
         let mut result = StatementResult::default();
-        let (docs, all) = match execute(c, statement, limit).await? {
+        let (docs, all) = match execute(c, statement, Want::Up(limit)).await? {
             Outcome::Documents(docs) => {
                 let all = docs.len() as u64;
                 (docs.into_iter().take(limit).collect(), all)
             }
             Outcome::Taken(docs, all) => (docs, all),
             Outcome::Cursor(cursor) => take(c, *cursor, limit).await?,
-            Outcome::SessionCursor(_) => unreachable!("only a stream asks for a transaction's cursor"),
+            Outcome::SessionCursor(_) => unreachable!("only Want::Stream gives a transaction's cursor"),
             Outcome::Changed(n) => {
                 result.rows_affected = n;
                 results.push(result);
@@ -543,9 +549,12 @@ pub(in crate::db) async fn run(c: &mut MongoConnection, sql: &str, limit: usize)
 pub(in crate::db) fn fetch(c: &mut MongoConnection, sql: String) -> Rows<'_> {
     c.interrupt.clear();
     let start = async move {
-        Ok::<_, anyhow::Error>(match execute(c, &sql, STREAM).await? {
+        Ok::<_, anyhow::Error>(match execute(c, &sql, Want::Stream).await? {
             Outcome::Cursor(cursor) => cursor.map_err(anyhow::Error::from).boxed(),
             // Read as wanted, with the transaction's session.
+            // Dropped before its end, its cursor stays open on the server
+            // until the transaction ends: the server closes a transaction's
+            // cursors when it commits or aborts.
             Outcome::SessionCursor(cursor) => futures_util::stream::unfold((cursor, c), |(mut cursor, c)| async move {
                 let session = c.txn.as_deref_mut()?;
                 let next = cursor.next(session).await?;
@@ -589,10 +598,10 @@ pub(in crate::db) async fn columns(_c: &mut MongoConnection, _sql: &str) -> Opti
 
 /// The first value of what `sql` returns, as text (`buildInfo`'s version).
 pub(in crate::db) async fn text(c: &mut MongoConnection, sql: &str) -> Result<String> {
-    let first = match execute(c, sql, 1).await? {
+    let first = match execute(c, sql, Want::Up(1)).await? {
         Outcome::Documents(docs) | Outcome::Taken(docs, _) => docs.into_iter().next(),
         Outcome::Cursor(cursor) => take(c, *cursor, 1).await?.0.into_iter().next(),
-        Outcome::SessionCursor(_) => unreachable!("only a stream asks for a transaction's cursor"),
+        Outcome::SessionCursor(_) => unreachable!("only Want::Stream gives a transaction's cursor"),
         Outcome::Changed(n) => return Ok(n.to_string()),
     };
     first.and_then(|d| d.iter().next().and_then(|(_, v)| cell(v))).ok_or_else(|| anyhow!("no value"))

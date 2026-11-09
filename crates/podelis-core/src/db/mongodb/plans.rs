@@ -90,7 +90,11 @@ fn winning_plans(answer: &Value) -> Vec<(Option<String>, &Value)> {
                 };
                 for (key, value) in map {
                     match key.as_str() {
-                        "winningPlan" => found.push((ns.clone(), value.get("queryPlan").unwrap_or(value))),
+                        // A mongos's: each shard's plan is inside it too.
+                        "winningPlan" => {
+                            found.push((ns.clone(), value.get("queryPlan").unwrap_or(value)));
+                            stack.push((ns.clone(), value));
+                        }
                         // Plans not chosen: what they'd read doesn't count.
                         "rejectedPlans" => {}
                         _ => stack.push((ns.clone(), value)),
@@ -123,11 +127,32 @@ fn stage_name(stage: &Value) -> &str {
     stage.get("stage").and_then(Value::as_str).unwrap_or("?")
 }
 
+/// The first `namespace` anywhere in an answer, for a plan with none
+/// beside or above it (a shard's, a layout of another version's): a scan
+/// that can't be placed mustn't go unsaid.
+fn any_namespace(answer: &Value) -> Option<String> {
+    let mut stack = vec![answer];
+    while let Some(v) = stack.pop() {
+        match v {
+            Value::Object(map) => {
+                if let Some(Value::String(ns)) = map.get("namespace") {
+                    return Some(ns.split_once('.').map_or(ns.as_str(), |(_, c)| c).to_string());
+                }
+                stack.extend(map.values());
+            }
+            Value::Array(items) => stack.extend(items),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// The collections an `explain` answer reads whole: a `COLLSCAN` in a
 /// winning plan with no `LIMIT` (nor a limited sort) over it, each once.
 pub fn collections_read_whole(answer: &Value) -> Vec<String> {
     let mut whole = Vec::new();
     for (ns, plan) in winning_plans(answer) {
+        let ns = ns.or_else(|| any_namespace(answer));
         let stages = stages(plan);
         let limited = stages.iter().any(|(_, s)| {
             matches!(stage_name(s), "LIMIT" | "EOF") || (stage_name(s) == "SORT" && s.get("limitAmount").is_some())
@@ -235,6 +260,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(collections_read_whole(&answer), ["huge"]);
+        // A mongos's: each shard's plan inside the merged one, with its
+        // namespace.
+        let sharded: Value = serde_json::from_str(
+            r#"{"queryPlanner": {"winningPlan": {"stage": "SHARD_MERGE", "shards": [
+                {"shardName": "s0", "namespace": "shop.events", "winningPlan": {"stage": "COLLSCAN"}}]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(collections_read_whole(&sharded), ["events"]);
+        // No namespace beside or above the plan: the answer's, rather than
+        // a scan unsaid.
+        let elsewhere: Value =
+            serde_json::from_str(r#"{"plan": {"winningPlan": {"stage": "COLLSCAN"}}, "about": {"namespace": "shop.logs"}}"#)
+                .unwrap();
+        assert_eq!(collections_read_whole(&elsewhere), ["logs"]);
     }
 
     #[test]
