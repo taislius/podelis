@@ -71,6 +71,27 @@ them](configuration.md#who-can-read-them)). Passwords aren't in those
 files; on macOS another program asking the keychain for them gets its
 Allow dialog.
 
+## MongoDB
+
+On MongoDB agents send mongosh's calls instead of SQL
+(`db.orders.find({status: "open"}).sort({_id: -1})`), by the same rules:
+reads (`find`, `findOne`, `aggregate`, the counts, `distinct`) wherever
+they may look; where they may write, `insertOne`/`insertMany`,
+`updateOne`/`updateMany`, `replaceOne`, `deleteOne`/`deleteMany`, never one
+with an empty filter, nor a collection dropped. What reaches past the data
+is refused anywhere in a call, a key in quotes too: `$out` and `$merge`
+(they write a collection), `$where`, `$function`, `$accumulator` and
+`mapReduce` (JavaScript on the server), `runCommand`. A write is one call
+on its own (each stands as it runs: there's no transaction of Podėlis's
+around it), and a read-only share is read-only on the connection too.
+
+On production a write runs as a dry run in a MongoDB transaction, rolled
+back: those need a replica set or a sharded cluster (Atlas is always
+one), so on a standalone server agents can't write there, and an approved
+write comes without a dry run. A whole big collection on production is
+refused by its plan (a `COLLSCAN`), and `explain` shows the winning plan.
+There's no sandbox on MongoDB: it needs savepoints.
+
 ## A sandbox for agents
 
 With **write in a sandbox**, an agent can do a whole job (insert test

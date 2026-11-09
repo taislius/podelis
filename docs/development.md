@@ -200,6 +200,7 @@ system's temporary one). Tests against other live services are opt-in:
 |---|---|
 | `PODELIS_TEST_PG_PORT=5432` | PostgreSQL tests (also `_HOST`, `_USER`, `_PASSWORD`, `_DB` with the same prefix; defaults `127.0.0.1`, `postgres`, empty, none) |
 | `PODELIS_TEST_MYSQL_PORT=3306` | MySQL tests (same extra variables; default user `root`). Each test makes a database of its own (`podelis_<topic>`) |
+| `PODELIS_TEST_MONGO_PORT=27017` | MongoDB tests (`--features mongodb`; a `mongo:7.0` container, as CI's). Transactions (agents' dry runs) need a replica set: `docker run -p 27018:27018 mongo:7.0 --replSet rs0 --port 27018 --bind_ip_all`, then `rs.initiate({_id: "rs0", members: [{_id: 0, host: "localhost:27018"}]})` in its `mongosh --port 27018`, and `PODELIS_TEST_MONGO_REPLICA_SET=1` with that port, so the tests insist on one |
 | `PODELIS_TEST_SSH_DEST=host` | SSH tunnel test: reaches the first engine's test server that's set through `ssh` to this host |
 | `PODELIS_TEST_KEYCHAIN=1` | Round-trips throwaway entries through the real OS keychain |
 

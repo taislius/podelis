@@ -284,8 +284,8 @@ Three concerns are kept apart:
   unparsed.
 - **`engine.dialect()` is an `Option`**: `None` for an engine whose
   language isn't SQL (MongoDB). What's SQL's says so and stops there —
-  edits in the grid, the row forms, follow, review, sandboxes, plans,
-  exports as INSERTs, imports, agents (`App::sql_dialect` sets the status:
+  edits in the grid, the row forms, follow, review, sandboxes, the plan
+  view, exports as INSERTs, imports (`App::sql_dialect` sets the status:
   "MongoDB has no SQL: this works on SQL databases only"); string literals
   are JSON's, names stay as written, types and placeholders are none.
 - **SQL dialect** (`engine.dialect()`, `SqlDialect: Backend`): what differs
@@ -378,8 +378,20 @@ the key; details are its indexes. Read-only refuses all but reads; a
 cancel stops the call Podėlis waits on; what Podėlis can't read is a
 syntax error before the server sees it (`check_statement`).
 
-**Not yet:** plans, activity, agents (they need SQL), editing in the grid,
-imports and exports as statements; the AI's prompts say SQL.
+Its **transactions** are statements of Podėlis's own, as SQL's `BEGIN`
+and `ROLLBACK` are: `db.startTransaction()`, `db.commitTransaction()`,
+`db.abortTransaction()` (`QueryLanguage::transaction`); the driver then
+runs every call with that transaction's driver session, and a standalone
+server says it has none (they need a replica set). Its **plans**
+(`plans.rs`): the `explain` command of a read, its winning plan's stages,
+and the collections it reads whole (`COLLSCAN` with no `LIMIT`), for
+`explain` and the guard on production. **Agents** go by the same rules
+(`crate::agents`) by what its calls do (`QueryLanguage::verb`: the
+method): one write a call, as each stands as it runs; a dry run in a
+transaction; no sandbox (no savepoints).
+
+**Not yet:** activity, editing in the grid, imports and exports as
+statements; the AI's prompts say SQL.
 
 ### DuckDB
 
