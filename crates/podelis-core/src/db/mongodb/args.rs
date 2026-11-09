@@ -132,47 +132,23 @@ impl Reader<'_> {
         }
     }
 
+    /// A string: to its closing quote (a `\\` takes the character after it
+    /// along), decoded by the one decoder the checks use too.
     fn string(&mut self) -> Result<String> {
         let quote = self.s[self.i];
-        self.i += 1;
-        let mut out = String::new();
+        let start = self.i + 1;
+        let mut i = start;
         loop {
-            let Some(&c) = self.s.get(self.i) else { bail!("a string isn't closed") };
-            self.i += 1;
-            match c {
-                c if c == quote => return Ok(out),
-                b'\\' => {
-                    let Some(&e) = self.s.get(self.i) else { bail!("a string isn't closed") };
-                    self.i += 1;
-                    match e {
-                        b'n' => out.push('\n'),
-                        b't' => out.push('\t'),
-                        b'r' => out.push('\r'),
-                        b'u' => {
-                            let hex = self.text.get(self.i..self.i + 4).ok_or_else(|| anyhow!("a \\u escape is cut"))?;
-                            let code = u32::from_str_radix(hex, 16)?;
-                            out.push(char::from_u32(code).unwrap_or('\u{fffd}'));
-                            self.i += 4;
-                        }
-                        // Any other character as itself (a whole one: it may
-                        // be more than a byte).
-                        _ => {
-                            let start = self.i - 1;
-                            let len = self.text[start..].chars().next().map_or(1, char::len_utf8);
-                            out.push_str(&self.text[start..start + len]);
-                            self.i = start + len;
-                        }
-                    }
-                }
-                _ => {
-                    // A whole UTF-8 character.
-                    let start = self.i - 1;
-                    let len = self.text[start..].chars().next().map_or(1, char::len_utf8);
-                    out.push_str(&self.text[start..start + len]);
-                    self.i = start + len;
-                }
+            match self.s.get(i) {
+                None => bail!("a string isn't closed"),
+                Some(b'\\') => i += 2,
+                Some(&c) if c == quote => break,
+                Some(_) => i += 1,
             }
         }
+        let body = self.text.get(start..i).ok_or_else(|| anyhow!("a string isn't closed"))?;
+        self.i = i + 1;
+        super::language::unescape(body).map_err(|e| anyhow!(e))
     }
 
     fn number(&mut self) -> Result<Bson> {

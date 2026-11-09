@@ -82,9 +82,9 @@ impl Backend for MongoDb {
             schemas: true,
             routines: false,
             server_txn_state: false,
-            // A collection's or an index's change isn't a transaction's:
-            // it stands at once (and most can't run in one).
-            ddl_commits: true,
+            // A schema change in a transaction stays in it (where the server
+            // takes one there at all: agents' dry runs don't try).
+            ddl_commits: false,
             stores_create_sql: false,
             table_sizes: false,
             plan_as_grid: false,

@@ -75,23 +75,29 @@ pub fn explain_command(statement: &str) -> Option<String> {
 }
 
 /// Every winning plan in an `explain` answer (an aggregation's are in its
-/// stages; a newer server's under `queryPlan`).
-fn winning_plans(answer: &Value) -> Vec<&Value> {
+/// stages; a newer server's under `queryPlan`), each with the collection
+/// it reads: the `namespace` beside it, without the database (a
+/// `$lookup`'s or `$unionWith`'s plan has its own).
+fn winning_plans(answer: &Value) -> Vec<(Option<String>, &Value)> {
     let mut found = Vec::new();
-    let mut stack = vec![answer];
-    while let Some(v) = stack.pop() {
+    let mut stack = vec![(None::<String>, answer)];
+    while let Some((ns, v)) = stack.pop() {
         match v {
             Value::Object(map) => {
+                let ns = match map.get("namespace") {
+                    Some(Value::String(n)) => Some(n.split_once('.').map_or(n.as_str(), |(_, c)| c).to_string()),
+                    _ => ns,
+                };
                 for (key, value) in map {
                     match key.as_str() {
-                        "winningPlan" => found.push(value.get("queryPlan").unwrap_or(value)),
+                        "winningPlan" => found.push((ns.clone(), value.get("queryPlan").unwrap_or(value))),
                         // Plans not chosen: what they'd read doesn't count.
                         "rejectedPlans" => {}
-                        _ => stack.push(value),
+                        _ => stack.push((ns.clone(), value)),
                     }
                 }
             }
-            Value::Array(items) => stack.extend(items),
+            Value::Array(items) => stack.extend(items.iter().map(|item| (ns.clone(), item))),
             _ => {}
         }
     }
@@ -117,39 +123,24 @@ fn stage_name(stage: &Value) -> &str {
     stage.get("stage").and_then(Value::as_str).unwrap_or("?")
 }
 
-/// The collection an `explain` answer is about: its namespace's, without
-/// the database.
-fn collection_of(answer: &Value) -> Option<String> {
-    let mut stack = vec![answer];
-    while let Some(v) = stack.pop() {
-        match v {
-            Value::Object(map) => {
-                if let Some(Value::String(ns)) = map.get("namespace") {
-                    return Some(ns.split_once('.').map_or(ns.as_str(), |(_, c)| c).to_string());
-                }
-                stack.extend(map.values());
-            }
-            Value::Array(items) => stack.extend(items),
-            _ => {}
-        }
-    }
-    None
-}
-
 /// The collections an `explain` answer reads whole: a `COLLSCAN` in a
-/// winning plan with no `LIMIT` (nor a limited sort) over it.
+/// winning plan with no `LIMIT` (nor a limited sort) over it, each once.
 pub fn collections_read_whole(answer: &Value) -> Vec<String> {
-    let read_whole = winning_plans(answer).into_iter().any(|plan| {
+    let mut whole = Vec::new();
+    for (ns, plan) in winning_plans(answer) {
         let stages = stages(plan);
         let limited = stages.iter().any(|(_, s)| {
             matches!(stage_name(s), "LIMIT" | "EOF") || (stage_name(s) == "SORT" && s.get("limitAmount").is_some())
         });
-        !limited && stages.iter().any(|(_, s)| stage_name(s) == "COLLSCAN")
-    });
-    if !read_whole {
-        return Vec::new();
+        if !limited
+            && stages.iter().any(|(_, s)| stage_name(s) == "COLLSCAN")
+            && let Some(ns) = ns
+            && !whole.contains(&ns)
+        {
+            whole.push(ns);
+        }
     }
-    collection_of(answer).into_iter().collect()
+    whole
 }
 
 /// An `explain` answer as Podėlis shows a plan: the winning plan's stages
@@ -168,7 +159,7 @@ pub fn format_plan(columns: &[String], rows: &[Vec<Option<String>>]) -> Option<P
         return None;
     }
     let mut text = String::new();
-    for plan in plans {
+    for (_, plan) in plans {
         for (depth, stage) in stages(plan) {
             let by = stage
                 .get("indexName")
@@ -228,6 +219,22 @@ mod tests {
         // A newer server's: the plan under `queryPlan`.
         let newer = answer(r#"{"queryPlan": {"stage": "COLLSCAN"}, "slotBasedPlan": {}}"#);
         assert_eq!(collections_read_whole(&newer), ["orders"]);
+    }
+
+    /// A plan inside the pipeline (a `$unionWith`'s) is of its own
+    /// collection, not the one the aggregation starts from.
+    #[test]
+    fn a_scan_is_of_the_collection_its_plan_is_about() {
+        let answer: Value = serde_json::from_str(
+            r#"{"stages": [
+                {"$cursor": {"queryPlanner": {"namespace": "shop.small",
+                    "winningPlan": {"stage": "IXSCAN", "indexName": "_id_"}}}},
+                {"$unionWith": {"coll": "huge", "pipeline": [{"$cursor": {"queryPlanner": {
+                    "namespace": "shop.huge", "winningPlan": {"stage": "COLLSCAN"}}}}]}}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(collections_read_whole(&answer), ["huge"]);
     }
 
     #[test]

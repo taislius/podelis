@@ -145,6 +145,10 @@ async fn live_transactions_mongodb() {
     assert_eq!(changed.rows_affected, Some(1));
     let inside = db.run_once("db.t.find({x: 2})", 10).await.unwrap();
     assert_eq!(inside.total_rows, 1, "seen in it");
+    // Streamed too, page by page, in the transaction.
+    let (first, stream) = db.run_streaming("db.t.find({x: 2})", 10).await.unwrap();
+    assert_eq!(first.rows.len(), 1, "streamed in it");
+    drop(stream);
     db.run_once("db.abortTransaction()", 1).await.unwrap();
     assert_eq!(db.run("db.t.countDocuments({x: 2})", 1).await.unwrap().rows[0][0].as_deref(), Some("0"));
     db.run_once("db.startTransaction()", 1).await.unwrap();

@@ -12,7 +12,6 @@ pub use approvals::*;
 pub use log::*;
 
 use crate::db::{AgentAccess, ConnectionMode, Engine};
-use crate::language::TokenKind;
 use crate::language::statements::Kind;
 
 /// What happens to an agent's SQL. It always runs in a transaction of
@@ -164,7 +163,7 @@ fn allowed(sql: &str, engine: Engine) -> Result<Vec<crate::language::statements:
         return Err(if engine.dialect().is_some() { "there's no SQL to run" } else { "there's nothing to run" }.into());
     }
     for statement in &statements {
-        let words = words(statement, engine);
+        let words = crate::language::words(engine, statement);
         let verb = crate::language::verb(engine, statement).unwrap_or_default();
         if !rules.may_start_with(&verb) {
             let why = rules.why_not(&verb, engine.label());
@@ -208,46 +207,6 @@ pub fn kept_out(sql: &str, engine: Engine, service: Option<&dyn crate::db::servi
         let (schema, holds) = kept.iter().find(|(schema, _)| qualifies && *schema == name)?;
         Some(format!("{}'s {schema} schema {holds}: agents can't use it", service.name()))
     })
-}
-
-/// A statement's words, lower case where SQL's, to find what reaches past
-/// the data. Without SQL a key may be in quotes (`{"$where": …}`), escaped
-/// too (`"\u0024where"`): strings are words there, read as the server would.
-fn words(statement: &str, engine: Engine) -> Vec<String> {
-    let sql = engine.dialect().is_some();
-    crate::language::tokenize(statement, engine)
-        .into_iter()
-        .filter_map(|t| {
-            let text = &statement[t.range];
-            match t.kind {
-                TokenKind::Word if sql => Some(text.to_ascii_lowercase()),
-                TokenKind::Word => Some(text.to_string()),
-                TokenKind::String if !sql => Some(unescaped(text.get(1..text.len().saturating_sub(1)).unwrap_or(""))),
-                _ => None,
-            }
-        })
-        .collect()
-}
-
-/// A string's text with its escapes undone (`\u0024` is `$`).
-fn unescaped(s: &str) -> String {
-    let mut out = String::new();
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c != '\\' {
-            out.push(c);
-            continue;
-        }
-        match chars.next() {
-            Some('u') => {
-                let hex: String = chars.by_ref().take(4).collect();
-                out.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
-            }
-            Some(other) => out.push(other),
-            None => {}
-        }
-    }
-    out
 }
 
 fn one_line(s: &str) -> String {
