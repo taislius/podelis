@@ -51,7 +51,7 @@ src/
   system/                the clipboard, database containers, crash reports,
                          the debug log, installed programs, the install's
                          facts for bug reports, password prompts on a tty
-  editor.rs              the text editor (TextEditor)
+  text_editor.rs         the text editor (TextEditor)
 ```
 
 ### Layers
@@ -59,10 +59,10 @@ src/
 Each module uses only those to its left (lower):
 
 ```
-podelis-core (lang, sql, db)  →  podelis-ai | editor, related, chart  →  config  →  system  →  transfer  →  agents, gateway  →  app  →  ui  →  cli, main.rs
+podelis-core (lang, sql, db)  →  podelis-ai | text_editor, related, chart  →  config  →  system  →  transfer  →  agents, gateway  →  app  →  ui  →  cli, main.rs
 ```
 
-`podelis-ai` and `editor`, `related`, `chart` sit side by side on the
+`podelis-ai` and `text_editor`, `related`, `chart` sit side by side on the
 core: neither uses the other, and `config` is the first to use the AI
 crate (`[[models]]`). The app's code names it as `podelis_ai::…` (no
 re-exports), so every use of it reads the same.
@@ -98,14 +98,50 @@ connection, `Connection`: parked per tab and swapped in, like tabs), `run`
 `manager` (the projects and connections screen), `agents` (the agents
 view), `popups` (each popup's state), `ask` (a question being answered),
 `next_run` (what applies to the run starting now only), `keepalive`
-(checking an idle connection) and `hits` (where the UI drew what can be
-clicked).
+(checking an idle connection), `editing` (the editor's find bar, vim, the
+checks' timer), `exports` (an export of every row running, its size being
+worked out), `sandbox_flow`, `help` (every key's window), `for_terminal`
+(what the main loop does outside the screen: the clipboard, a
+notification, a viewer) and `hits` (where the UI drew what can be
+clicked). A new piece of state goes into the part it belongs to, not
+beside `App`'s fields.
 
 `app/mod.rs` is `App` itself, building it, what's said, and where keys,
 clicks and pastes go first; each part's types and methods live in its own
-file (`confirm.rs` the y/n questions, `schema.rs` the navigator,
-`events.rs` the background events, `results.rs` what's shown and its
-popups, `tabs.rs` which tab runs what, `query/` running and exports).
+file. What's the whole app's is in `app/` (`events.rs` the background
+events, `tick.rs` what's done once a second, `commands.rs`, `confirm.rs`
+the y/n questions, `session.rs`, `mouse.rs` the mouse's way in, `input.rs`
+and `list.rs` the text inputs and lists); then a folder per screen, laid
+out as the screen is:
+
+```
+app/manager/        the projects and connections screens
+app/windows/        the windows over the query screen (memory, settings, agents, library…)
+app/query_screen/   its keys and mouse, popups (overlay.rs), layout (panes.rs),
+                    running (run.rs), parameters, watch mode, tabs (tabs.rs);
+                    Ctrl+K (palette.rs) and the menus (menu.rs), writes
+                    reviewed (review.rs) or in a sandbox (sandbox.rs), asking
+                    the AI (ask.rs), comparing, pipes, the connection's info
+  editor/           its keys and mouse, find and replace, vim, the checks
+                    as typing pauses (lint.rs)
+  results/          its keys and mouse, the grid and how rows are shown (grid.rs,
+                    view.rs), cell edits, rows, foreign keys, plans, kept runs,
+                    messages, exports
+  navigator/        its keys and mouse, a table's details (details.rs)
+```
+
+`ui/` draws them the same way: `ui/query_screen/` with `editor.rs`,
+`results.rs` and `navigator.rs`, so a pane's state and its drawing are
+found by the same path, and its popups in `ui/query_screen/popups/`
+(`menus.rs`, `prompts.rs`, `windows.rs`, `writes.rs`). Around every screen:
+`ui/bars.rs` the top and status bars, `ui/help.rs` every key's window,
+`ui/popups.rs` the y/n question and the text view, `ui/splash.rs` the
+badge and the reopening card. Drawing decides nothing: what depends on the
+screen's size is asked of the app (`fit_query_screen`: whether the
+navigator fits, and the keys off it when it doesn't).
+
+Files in a folder import their screen's names with `use crate::app::*;`
+(or `crate::ui::*`), not by counting `super`s.
 
 A few pieces in `app/` are shared, so the same thing works the same way
 everywhere:
@@ -117,25 +153,25 @@ everywhere:
   `App::run_command` is the one way to run it. `Command::label` is its words in
   a menu, `Command::text` in the palette, longer where that's what's searched. `App::here` says what the focused pane shows, and each pane's
   keys are tables of `(KeyCode, Command)`: its handler keeps only moving
-  about. Help (`ui/chrome.rs`) and the palette list from these, so a command
+  about. Help (`ui/help.rs`) and the palette list from these, so a command
   with a key can't be left out; a test checks. A new command is a variant, its
   `label` and `run_command` arm (the compiler asks), and a line in a table or
   a menu if it has a key or a place there.
-- **Menus** (`menu.rs`): each is data, groups of `Command`s; `show_menu` asks
-  each its label, key and whether it's dimmed. `ui/query_screen.rs` draws them, and
+- **Menus** (`query_screen/menu.rs`): each is data, groups of `Command`s; `show_menu` asks
+  each its label, key and whether it's dimmed. `ui/query_screen/popups/menus.rs` draws them, and
   notes which item each row holds (`hits.menu_rows`) for clicks, as separators
   and scrolling mean rows aren't items.
-- **Formats** (`query/export.rs`): one `Format`, in the order every menu lists
+- **Formats** (`query_screen/results/export.rs`): one `Format`, in the order every menu lists
   them, and `Format::supports(Dest)` for what can go where (`Dest`: copying,
   exporting those shown or every row, opening); those menus are generated.
-- **Ctrl+K** (`palette.rs`, `PaletteMode`): waiting for a letter (at the top or
+- **Ctrl+K** (`query_screen/palette.rs`, `PaletteMode`): waiting for a letter (at the top or
   in a group), or a list to search: commands, tabs or connections. The letters
   are `KeyMap::leader_step`, one letter or a group's and one.
-- **Tabs** (`tabs.rs`): the active tab's state is `App::tab`, a `TabState`
-  with the editor, the last run and a `ResultGrid` (`grid.rs`: the result
+- **Tabs** (`query_screen/tabs.rs`): the active tab's state is `App::tab`, a `TabState`
+  with the editor, the last run and a `ResultGrid` (`results/grid.rs`: the result
   sets, filter, sort, marks, selection and scroll). Switching tabs swaps
   the whole struct with a parked one, so nothing can leak between tabs.
-- **Kept results** (`runs.rs`): each query run opens a `KeptRun` in the
+- **Kept results** (`results/runs.rs`): each query run opens a `KeptRun` in the
   tab's `runs`. The one shown lives in the tab (`grid`, `last_sql`, its
   infos and parameters, its error), so every key works on it unchanged;
   the others are parked in their slots and swapped in to be shown, the
@@ -145,7 +181,7 @@ everywhere:
   keeps the engine it ran on; a script's result set is shown with (and
   links to) its own statement, split from it once (`PlanSource::statement`),
   and only when the script split into as many statements as it ran.
-- **Popups** (`overlay.rs`): their state is `App::popups` (`Popups`, one
+- **Popups** (`query_screen/overlay.rs`): their state is `App::popups` (`Popups`, one
   `Option` each), and `App::overlays()` lists the open ones front first.
   Key handling, drawing (back to front), mouse blocking and "is the user
   typing" all read it, so a new popup is a field there and a line in
@@ -164,16 +200,16 @@ everywhere:
 - **Lists** (`list.rs`): `list::step` moves any list's selection, with a
   `Nav` saying whether it wraps, takes j/k and Home/End, or Tab.
 - **Messages** (`mod.rs`): what's said is `App::notes` (`Notes`, in
-  `messages.rs`). `set_status` puts a message where it belongs.
+  `results/messages.rs`). `set_status` puts a message where it belongs.
   Said while handling a key, click or paste with the editor or the results
   focused (no popup, find bar or cell prompt open), it goes to that pane's
   footer (`notes.editor_note`, `notes.results_note`) and to MESSAGES
   (`notes.log`); otherwise to the
   status bar. A run's progress and outcome use `set_result_status`, for the
   results pane's footer. They last until the next key (a run's until it
-  ends). The MESSAGES tab is a list (`messages.rs`): one can be selected,
+  ends). The MESSAGES tab is a list (`results/messages.rs`): one can be selected,
   opened whole and copied.
-- **Runs and tabs** (`query/`, `tabs.rs`, `events.rs`): each tab has its
+- **Runs and tabs** (`query_screen/run.rs`, `query_screen/tabs.rs`, `events.rs`): each tab has its
   own query state, `TabState::run` (`Run`: `executing`, its id, task,
   connection, purpose, stream, timeout…), swapped in and out with the tab,
   so tabs on different connections run at once. A write, a review or a
@@ -301,8 +337,14 @@ Three concerns are kept apart:
 - **Capabilities** (`engine.capabilities()`): what an engine supports —
   file-based, cancel (and so timeouts), activity monitor, schemas, routines,
   server-side transaction state, DDL that commits, CREATE statements in the
-  catalog, table sizes, plans as grids, `COPY`. The app and UI ask these
-  instead of checking which engine it is.
+  catalog, table sizes, plans as grids, `COPY`, and what a transaction of
+  Podėlis's can hold (`Transactions::Scripts`: any statements with
+  savepoints, the SQL engines; `OneWrite`: one write at a time where the
+  server has them, MongoDB). The app, the UI and the agents ask these
+  instead of checking which engine it is, and instead of reading
+  `dialect().is_none()` as "no transactions": no SQL is a question about
+  the language. An engine's quirks for agents (MySQL's executable comments,
+  quotes that depend on `sql_mode`) are its `AgentConstraints`.
 - **Driver** (the engine folder's `driver.rs` / `connect.rs` / `queries.rs`
   / `cells.rs`): the I/O. Every engine has the same functions with the
   same signatures; shared code (`run.rs`, `errors.rs`) calls only those,
@@ -491,7 +533,7 @@ schemas, each project's memory connection (opened and set up once,
 reopened after an error), and what models' `key_command`s printed (15
 minutes; a key the provider refuses is dropped at once).
 
-The app asks through the gateway too (`app/ask.rs`): `Ctrl+K q` opens a
+The app asks through the gateway too (`app/query_screen/ask.rs`): `Ctrl+K q` opens a
 prompt, a task connects (starting the gateway if needed) and calls `ask`,
 passing `ask.delta` notifications on as progress events; the SQL goes to
 the end of the tab's editor (`append_statement`, which ends a last
@@ -731,7 +773,7 @@ MySQL's `sql_mode`, MariaDB versus MySQL (both use `MySqlDialect`; MariaDB
 has `RETURNING` and sequences, MySQL doesn't), the SQLite version,
 PostgreSQL extensions. Neither the parser nor the rules can know these.
 **The server decides.** Podėlis asks it when that is safe
-(`server_syntax_hint` in `app/events.rs`) and uses the local parser
+(`server_syntax_hint` in `app/query_screen/editor/lint.rs`) and uses the local parser
 otherwise.
 
 Settings that change *meaning* can be read, though. Podėlis reads MySQL's
@@ -819,7 +861,7 @@ and why:
 
 - Unit tests next to the code; app behaviour in `app/tests/` and drawing in
   `ui/tests/` (a file per topic, shared helpers in their `mod.rs`), with
-  insta snapshots in `ui/tests/snapshots/`.
+  insta snapshots in `testdata/snapshots/`.
 - The command line from outside, the built program run as a script would
   (`tests/cli.rs`): formats, a script's result sets, stdin, `--limit`,
   exit codes, `--help`.

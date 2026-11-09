@@ -32,8 +32,9 @@ their own beside it once they grow, named for what it tests (an engine's
 (`src/app/tests/`, `src/ui/tests/`). A folder under `src/` holds code, so
 none holds only tests; data tests read sits in a crate's `testdata/`
 (podelis-ai's `testdata/context-eval/`), snapshots too (`testdata/snapshots/`: a
-snapshot test holds `crate::snapshots_in_testdata()` while it asserts). The
-app's snapshots are its UI tests', in `src/ui/tests/snapshots/`. Being inside the crate, they
+snapshot test holds `crate::snapshots_in_testdata()` while it asserts; the
+app's UI tests' `assert_snapshot!` is a wrapper that does it). The app's are
+in its `testdata/snapshots/`, beside `src/`. Being inside the crate, its tests
 can reach private code (`App`, its keys, what the UI drew), which is most
 of what they check. The app's tests reach the core's test helpers
 (`db::tests`: test servers, scratch databases) through its
@@ -188,7 +189,7 @@ tables) is in [manual-testing.md](manual-testing.md): data sets
 to test with, from generated to public servers with real data, and a
 checklist to go through before a release.
 
-UI rendering is covered by snapshot tests (`src/ui/snapshots/`), and every
+UI rendering is covered by snapshot tests (`testdata/snapshots/`), and every
 menu's items and order by those of `src/ui/tests/menus.rs`. After an
 intended UI change, review and accept them with `cargo insta review` (or
 rerun with `INSTA_UPDATE=always` and check the diff).
