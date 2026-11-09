@@ -820,7 +820,7 @@ pub(super) enum DbEventKind {
     /// Rows opened in an app (what, the command), or why they couldn't be.
     Opened(String, String, Result<(), String>),
     /// The row a foreign key points to (`f`), looked up.
-    Followed(Box<(follow::Followed, Result<QueryOutcome, String>)>),
+    Followed(Box<(follow_fk::Followed, Result<QueryOutcome, String>)>),
     /// The background syntax check of `text`: the server's problem, else
     /// the parser's hint, else the first lint warning.
     SyntaxChecked {

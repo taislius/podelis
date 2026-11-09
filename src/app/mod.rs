@@ -47,7 +47,7 @@ mod edit;
 mod events;
 pub mod export_form;
 mod find;
-mod follow;
+mod follow_fk;
 mod grid;
 mod hits;
 mod info;
