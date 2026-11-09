@@ -63,12 +63,15 @@ impl MongoPool {
     }
 }
 
-/// A session: the client (cheap to clone) and its database.
+/// A session: the client (cheap to clone) and its database, and the
+/// driver's session of a transaction begun on it (`db.startTransaction()`),
+/// which every call goes with until it ends (dropped, it's rolled back).
 pub struct MongoConnection {
     client: ::mongodb::Client,
     database: String,
     read_only: bool,
     interrupt: Arc<Interrupt>,
+    txn: Option<Box<::mongodb::ClientSession>>,
 }
 
 impl MongoConnection {
@@ -96,6 +99,7 @@ pub(in crate::db) async fn acquire(pool: &MongoPool) -> Result<MongoConnection> 
         database: pool.database.clone(),
         read_only: pool.read_only,
         interrupt: Arc::clone(&pool.interrupt),
+        txn: None,
     })
 }
 
@@ -120,47 +124,120 @@ fn read_call(statement: &str) -> Result<(Call<'_>, Vec<Bson>)> {
     Ok((call, args))
 }
 
-/// An error unless `statement` only reads, on a read-only connection.
+/// An error unless `statement` only reads, on a read-only connection (or
+/// begins or ends a transaction, which writes nothing).
 fn check_reads(c: &MongoConnection, statement: &str) -> Result<()> {
-    if c.read_only && language::Mongo.classify(statement).0 != crate::language::statements::Kind::Read {
+    use crate::language::statements::Kind;
+    if c.read_only && !matches!(language::Mongo.classify(statement).0, Kind::Read | Kind::Transaction(_)) {
         bail!("this connection is read-only: only reads run on it");
     }
     Ok(())
 }
 
 /// What a statement gave: documents, a cursor over them (`find`,
-/// `aggregate`: read as they're wanted), or a count of those it changed.
+/// `aggregate`: read as they're wanted), those a cursor had in a
+/// transaction (read there and then, at most a limit kept) and how many
+/// there were, or a count of those it changed.
 enum Outcome {
     Documents(Vec<Document>),
     Cursor(Box<::mongodb::Cursor<Document>>),
+    Taken(Vec<Document>, u64),
     Changed(u64),
 }
 
 /// `work`, unless a cancel comes first.
-async fn unless_cancelled<T>(c: &MongoConnection, work: impl Future<Output = Result<T>>) -> Result<T> {
+async fn unless_cancelled<T>(interrupt: &Interrupt, work: impl Future<Output = Result<T>>) -> Result<T> {
     tokio::select! {
         done = work => done,
-        () = c.interrupt.cancelled() => bail!("interrupted: the call was cancelled"),
+        () = interrupt.cancelled() => bail!("interrupted: the call was cancelled"),
     }
 }
 
-/// Runs one statement, waiting for it unless a cancel comes.
-async fn execute(c: &MongoConnection, statement: &str) -> Result<Outcome> {
+/// Runs one statement, waiting for it unless a cancel comes. `limit`: the
+/// documents kept of a cursor read in a transaction.
+async fn execute(c: &mut MongoConnection, statement: &str, limit: usize) -> Result<Outcome> {
     check_reads(c, statement)?;
-    unless_cancelled(c, run_call(c, statement)).await
+    let interrupt = Arc::clone(&c.interrupt);
+    unless_cancelled(&interrupt, run_call(c, statement, limit)).await
+}
+
+/// `action` in the session's transaction, if one is open.
+macro_rules! in_txn {
+    ($c:expr, $action:expr) => {
+        match $c.txn.as_deref_mut() {
+            Some(session) => $action.session(&mut *session).await?,
+            None => $action.await?,
+        }
+    };
+}
+
+/// Up to `limit` documents of a cursor in a transaction, and how many there
+/// were in all.
+async fn take_in(
+    session: &mut ::mongodb::ClientSession,
+    mut cursor: ::mongodb::SessionCursor<Document>,
+    limit: usize,
+) -> Result<Outcome> {
+    let (mut docs, mut all) = (Vec::new(), 0u64);
+    while let Some(d) = cursor.next(session).await {
+        let d = d?;
+        all += 1;
+        if docs.len() < limit {
+            docs.push(d);
+        }
+    }
+    Ok(Outcome::Taken(docs, all))
+}
+
+/// Why a transaction can't begin on a server.
+const NO_TRANSACTIONS: &str =
+    "transactions need a replica set or a sharded cluster, and this MongoDB server is a standalone one";
+
+/// Begins a transaction on the session: on a server that has them.
+async fn start_transaction(c: &mut MongoConnection) -> Result<Outcome> {
+    if c.txn.is_some() {
+        bail!("a transaction is open already: db.commitTransaction() or db.abortTransaction() ends it");
+    }
+    // A standalone server takes a transaction's first call, then refuses
+    // it with a number: said now, plainly.
+    let hello = c.db().run_command(doc! {"hello": 1}).await?;
+    if hello.get_str("setName").is_err() && hello.get_str("msg") != Ok("isdbgrid") {
+        bail!(NO_TRANSACTIONS);
+    }
+    let mut session = c.client.start_session().await?;
+    session.start_transaction().await?;
+    c.txn = Some(Box::new(session));
+    Ok(Outcome::Changed(0))
+}
+
+/// Commits or aborts the session's transaction.
+async fn end_transaction(c: &mut MongoConnection, commit: bool) -> Result<Outcome> {
+    let Some(mut session) = c.txn.take() else { bail!("no transaction is open: db.startTransaction() begins one") };
+    if commit {
+        session.commit_transaction().await?;
+    } else {
+        session.abort_transaction().await?;
+    }
+    Ok(Outcome::Changed(0))
 }
 
 /// A call on the database: `db.runCommand({…})`, `db.createCollection(…)`…
-async fn run_db_call(c: &MongoConnection, call: &Call<'_>, args: &[Bson]) -> Result<Outcome> {
+async fn run_db_call(c: &mut MongoConnection, call: &Call<'_>, args: &[Bson]) -> Result<Outcome> {
     let db = c.db();
     match call.method {
-        "runCommand" => Ok(Outcome::Documents(vec![db.run_command(document(args.first(), "the command")?).await?])),
+        "startTransaction" => start_transaction(c).await,
+        "commitTransaction" => end_transaction(c, true).await,
+        "abortTransaction" => end_transaction(c, false).await,
+        "runCommand" => {
+            let command = document(args.first(), "the command")?;
+            Ok(Outcome::Documents(vec![in_txn!(c, db.run_command(command))]))
+        }
         "adminCommand" => Ok(Outcome::Documents(vec![
             c.client.database("admin").run_command(document(args.first(), "the command")?).await?,
         ])),
         "createCollection" => {
             let Some(Bson::String(name)) = args.first() else { bail!("createCollection takes the collection's name") };
-            db.create_collection(name).await?;
+            in_txn!(c, db.create_collection(name));
             Ok(Outcome::Changed(0))
         }
         "getCollectionNames" => {
@@ -176,7 +253,7 @@ async fn run_db_call(c: &MongoConnection, call: &Call<'_>, args: &[Bson]) -> Res
 /// (counted, not kept, as SQL's rows are).
 async fn take(c: &MongoConnection, cursor: ::mongodb::Cursor<Document>, limit: usize) -> Result<(Vec<Document>, u64)> {
     let mut cursor = cursor;
-    unless_cancelled(c, async {
+    unless_cancelled(&c.interrupt, async {
         let (mut docs, mut all) = (Vec::new(), 0u64);
         while let Some(d) = cursor.try_next().await? {
             all += 1;
@@ -212,12 +289,12 @@ fn number(b: Option<Bson>) -> Option<i64> {
 
 /// `find(filter, projection)` with what's chained after it: `.sort()`,
 /// `.limit()`, `.skip()`, `.projection()`.
-async fn find(
-    collection: &::mongodb::Collection<Document>,
+fn find<'a>(
+    collection: &'a ::mongodb::Collection<Document>,
     statement: &str,
     call: &Call<'_>,
     args: &[Bson],
-) -> Result<::mongodb::Cursor<Document>> {
+) -> Result<::mongodb::action::Find<'a, Document>> {
     let mut find = collection.find(document(args.first(), "the filter")?);
     if let Some(projection) = args.get(1).cloned().or(chained(statement, call, "projection")?) {
         find = find.projection(document(Some(&projection), "the projection")?);
@@ -231,77 +308,104 @@ async fn find(
     if let Some(n) = number(chained(statement, call, "skip")?) {
         find = find.skip(u64::try_from(n).unwrap_or(0));
     }
-    Ok(find.await?)
+    Ok(find)
 }
 
-async fn run_call(c: &MongoConnection, statement: &str) -> Result<Outcome> {
+/// A `find` or an `aggregate`: its cursor, or (in a transaction) what it had.
+async fn read_cursor(
+    c: &mut MongoConnection,
+    collection: &::mongodb::Collection<Document>,
+    statement: &str,
+    call: &Call<'_>,
+    args: &[Bson],
+    limit: usize,
+) -> Result<Outcome> {
+    if call.method == "find" {
+        let find = find(collection, statement, call, args)?;
+        return Ok(match c.txn.as_deref_mut() {
+            Some(session) => {
+                let cursor = find.session(&mut *session).await?;
+                take_in(session, cursor, limit).await?
+            }
+            None => Outcome::Cursor(Box::new(find.await?)),
+        });
+    }
+    let Some(Bson::Array(stages)) = args.first() else { bail!("aggregate takes a pipeline ([…])") };
+    let stages: Vec<Document> = stages.iter().map(|s| document(Some(s), "a pipeline stage")).collect::<Result<_>>()?;
+    Ok(match c.txn.as_deref_mut() {
+        Some(session) => {
+            let cursor = collection.aggregate(stages).session(&mut *session).await?;
+            take_in(session, cursor, limit).await?
+        }
+        None => Outcome::Cursor(Box::new(collection.aggregate(stages).await?)),
+    })
+}
+
+async fn run_call(c: &mut MongoConnection, statement: &str, limit: usize) -> Result<Outcome> {
     let (call, args) = read_call(statement)?;
     let db = c.db();
     let Some(name) = call.collection.as_deref() else { return run_db_call(c, &call, &args).await };
     let collection = db.collection::<Document>(name);
     let filter = || document(args.first(), "the filter");
     Ok(match call.method {
-        "find" => Outcome::Cursor(Box::new(find(&collection, statement, &call, &args).await?)),
+        "find" | "aggregate" => read_cursor(c, &collection, statement, &call, &args, limit).await?,
         "findOne" => {
             let mut find = collection.find_one(filter()?);
             if let Some(projection) = args.get(1) {
                 find = find.projection(document(Some(projection), "the projection")?);
             }
-            Outcome::Documents(find.await?.into_iter().collect())
-        }
-        "aggregate" => {
-            let Some(Bson::Array(stages)) = args.first() else { bail!("aggregate takes a pipeline ([…])") };
-            let stages: Vec<Document> =
-                stages.iter().map(|s| document(Some(s), "a pipeline stage")).collect::<Result<_>>()?;
-            Outcome::Cursor(Box::new(collection.aggregate(stages).await?))
+            Outcome::Documents(in_txn!(c, find).into_iter().collect())
         }
         "countDocuments" | "count" => {
-            Outcome::Documents(vec![doc! {"count": i64::try_from(collection.count_documents(filter()?).await?)?}])
+            Outcome::Documents(vec![doc! {"count": i64::try_from(in_txn!(c, collection.count_documents(filter()?)))?}])
         }
         "estimatedDocumentCount" => {
             Outcome::Documents(vec![doc! {"count": i64::try_from(collection.estimated_document_count().await?)?}])
         }
         "distinct" => {
             let Some(Bson::String(field)) = args.first() else { bail!("distinct takes a field's name") };
-            let values = collection.distinct(field, document(args.get(1), "the filter")?).await?;
+            let values = in_txn!(c, collection.distinct(field, document(args.get(1), "the filter")?));
             Outcome::Documents(values.into_iter().map(|v| doc! {field.as_str(): v}).collect())
         }
         "insertOne" => {
-            collection.insert_one(document(args.first(), "the document")?).await?;
+            in_txn!(c, collection.insert_one(document(args.first(), "the document")?));
             Outcome::Changed(1)
         }
         "insertMany" => {
             let Some(Bson::Array(docs)) = args.first() else { bail!("insertMany takes an array of documents") };
             let docs: Vec<Document> = docs.iter().map(|d| document(Some(d), "a document")).collect::<Result<_>>()?;
             let n = docs.len() as u64;
-            collection.insert_many(docs).await?;
+            in_txn!(c, collection.insert_many(docs));
             Outcome::Changed(n)
         }
         "updateOne" | "updateMany" => {
             let update = document(args.get(1), "the update")?;
             let result = if call.method == "updateOne" {
-                collection.update_one(filter()?, update).await?
+                in_txn!(c, collection.update_one(filter()?, update))
             } else {
-                collection.update_many(filter()?, update).await?
+                in_txn!(c, collection.update_many(filter()?, update))
             };
             Outcome::Changed(result.modified_count)
         }
-        "replaceOne" => Outcome::Changed(collection.replace_one(filter()?, document(args.get(1), "the document")?).await?.modified_count),
-        "deleteOne" => Outcome::Changed(collection.delete_one(filter()?).await?.deleted_count),
-        "deleteMany" => Outcome::Changed(collection.delete_many(filter()?).await?.deleted_count),
+        "replaceOne" => {
+            let replaced = in_txn!(c, collection.replace_one(filter()?, document(args.get(1), "the document")?));
+            Outcome::Changed(replaced.modified_count)
+        }
+        "deleteOne" => Outcome::Changed(in_txn!(c, collection.delete_one(filter()?)).deleted_count),
+        "deleteMany" => Outcome::Changed(in_txn!(c, collection.delete_many(filter()?)).deleted_count),
         "drop" => {
-            collection.drop().await?;
+            in_txn!(c, collection.drop());
             Outcome::Changed(0)
         }
         "createIndex" => {
             let keys = document(args.first(), "the index's keys")?;
             let index = ::mongodb::IndexModel::builder().keys(keys).build();
-            let made = collection.create_index(index).await?;
+            let made = in_txn!(c, collection.create_index(index));
             Outcome::Documents(vec![doc! {"name": made.index_name}])
         }
         "dropIndex" => {
             let Some(Bson::String(index)) = args.first() else { bail!("dropIndex takes the index's name") };
-            collection.drop_index(index).await?;
+            in_txn!(c, collection.drop_index(index));
             Outcome::Changed(0)
         }
         "getIndexes" => {
@@ -393,11 +497,12 @@ pub(in crate::db) async fn run(c: &mut MongoConnection, sql: &str, limit: usize)
     let mut results = Vec::new();
     for statement in crate::language::split_statements(sql, Engine::MongoDb) {
         let mut result = StatementResult::default();
-        let (docs, all) = match execute(c, statement).await? {
+        let (docs, all) = match execute(c, statement, limit).await? {
             Outcome::Documents(docs) => {
                 let all = docs.len() as u64;
                 (docs.into_iter().take(limit).collect(), all)
             }
+            Outcome::Taken(docs, all) => (docs, all),
             Outcome::Cursor(cursor) => take(c, *cursor, limit).await?,
             Outcome::Changed(n) => {
                 result.rows_affected = n;
@@ -419,11 +524,12 @@ pub(in crate::db) async fn run(c: &mut MongoConnection, sql: &str, limit: usize)
 /// show), and come with it.
 pub(in crate::db) fn fetch(c: &mut MongoConnection, sql: String) -> Rows<'_> {
     c.interrupt.clear();
-    let c = &*c;
     let start = async move {
-        Ok::<_, anyhow::Error>(match execute(c, &sql).await? {
+        Ok::<_, anyhow::Error>(match execute(c, &sql, usize::MAX).await? {
             Outcome::Cursor(cursor) => cursor.map_err(anyhow::Error::from).boxed(),
-            Outcome::Documents(docs) => futures_util::stream::iter(docs.into_iter().map(Ok)).boxed(),
+            Outcome::Documents(docs) | Outcome::Taken(docs, _) => {
+                futures_util::stream::iter(docs.into_iter().map(Ok)).boxed()
+            }
             Outcome::Changed(_) => futures_util::stream::empty().boxed(),
         })
     };
@@ -458,8 +564,8 @@ pub(in crate::db) async fn columns(_c: &mut MongoConnection, _sql: &str) -> Opti
 
 /// The first value of what `sql` returns, as text (`buildInfo`'s version).
 pub(in crate::db) async fn text(c: &mut MongoConnection, sql: &str) -> Result<String> {
-    let first = match execute(c, sql).await? {
-        Outcome::Documents(docs) => docs.into_iter().next(),
+    let first = match execute(c, sql, 1).await? {
+        Outcome::Documents(docs) | Outcome::Taken(docs, _) => docs.into_iter().next(),
         Outcome::Cursor(cursor) => take(c, *cursor, 1).await?.0.into_iter().next(),
         Outcome::Changed(n) => return Ok(n.to_string()),
     };

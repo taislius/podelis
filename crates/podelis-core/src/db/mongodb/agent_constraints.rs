@@ -1,6 +1,6 @@
 //! What AI agents may send to MongoDB (see `db::agent_constraints`): by
-//! the method a statement calls (`db.<collection>.<method>(…)`). Agents
-//! need SQL for now (`agents/mcp.rs`), so this is for when they don't.
+//! the method a statement calls (`db.<collection>.<method>(…)`), and the
+//! stages and operators anywhere in it (a key in quotes too).
 
 use crate::db::agent_constraints::AgentConstraints;
 

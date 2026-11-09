@@ -125,3 +125,36 @@ mod duckdb {
         assert_eq!(run(ENGINE, "summarize t"), Wrap::Commit);
     }
 }
+
+mod mongodb {
+    use super::*;
+
+    const ENGINE: Engine = Engine::MongoDb;
+
+    #[test]
+    fn its_own_statements() {
+        for (sql, why) in [
+            ("db.users.deleteMany({})", "destructive"),
+            ("db.users.updateMany({}, {$set: {x: 1}})", "destructive"),
+            ("db.users.drop()", "not drop()"),
+            ("db.users.aggregate([{$match: {}}, {$out: 'copy'}])", "writes the result into a collection"),
+            ("db.users.aggregate([{$merge: {into: 'copy'}}])", "writes the result into a collection"),
+            ("db.users.find({$where: 'sleep(100)'})", "runs JavaScript on the server"),
+            // A key in quotes, or escaped there, is the same key to the server.
+            ("db.users.find({\"$where\": 'sleep(100)'})", "runs JavaScript on the server"),
+            ("db.users.find({'\\u0024where': 'sleep(100)'})", "runs JavaScript on the server"),
+            ("db.users.aggregate([{$group: {_id: 1, x: {$accumulator: {}}}}])", "runs JavaScript on the server"),
+            ("db.runCommand({dropDatabase: 1})", "the schema tool tells"),
+            ("db.users.createIndex({x: 1})", "not createIndex()"),
+            ("db.startTransaction()", "not startTransaction()"),
+            ("db.users.bulkWrite([])", "not bulkWrite()"),
+            ("select * from users", "not a call Podėlis knows: agents can call find, findOne"),
+        ] {
+            assert!(refused(ENGINE, sql).contains(why), "{sql}: {}", refused(ENGINE, sql));
+        }
+        assert_eq!(run(ENGINE, "db.users.insertOne({name: 'Ada'})"), Wrap::Commit);
+        assert_eq!(run(ENGINE, "db.getCollection('my orders').countDocuments({})"), Wrap::Commit);
+        assert_eq!(run(ENGINE, "db.users.aggregate([{$group: {_id: '$city', n: {$sum: 1}}}])"), Wrap::Commit);
+        assert_eq!(run(ENGINE, "db.users.deleteOne({_id: 1})"), Wrap::Commit);
+    }
+}

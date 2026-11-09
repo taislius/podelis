@@ -117,3 +117,56 @@ async fn live_cancel_mongodb() {
     assert!(format!("{err:#}").contains("cancelled"), "{err:#}");
     assert_eq!(cells(&db.run("db.t.countDocuments({})", 1).await.unwrap()), vec![vec![Some("1")]]);
 }
+
+/// A transaction on the session: its writes are seen in it and gone once
+/// it's aborted, kept once committed; a standalone server says it has none.
+/// (On a replica set: `mongod --replSet`, as `docs/development.md` says;
+/// `PODELIS_TEST_MONGO_REPLICA_SET` says the test server is one.)
+#[tokio::test]
+async fn live_transactions_mongodb() {
+    let Some((db, _)) = own_live_db("podelis_mongo_txn").await else { return };
+    db.run("db.t.insertOne({_id: 1, x: 1})", 1).await.unwrap();
+    let hello = db.run("db.runCommand({hello: 1})", 1).await.unwrap();
+    let replica_set = hello.columns.iter().any(|c| c == "setName" || c == "msg");
+    // Said to be one (`PODELIS_TEST_MONGO_REPLICA_SET`): it must be.
+    assert!(replica_set || std::env::var_os("PODELIS_TEST_MONGO_REPLICA_SET").is_none(), "not a replica set");
+    let begun = db.run_once("db.startTransaction()", 1).await;
+    if !replica_set {
+        let said = crate::db::error_message(&begun.unwrap_err());
+        assert!(said.contains("replica set") && said.contains("standalone"), "{said}");
+        // Nothing was left open: a write runs as it is.
+        db.run("db.t.insertOne({_id: 2})", 1).await.unwrap();
+        return;
+    }
+    begun.unwrap();
+    let again = db.run_once("db.startTransaction()", 1).await.unwrap_err();
+    assert!(crate::db::error_message(&again).contains("open already"));
+    let changed = db.run_once("db.t.updateMany({x: 1}, {$set: {x: 2}})", 1).await.unwrap();
+    assert_eq!(changed.rows_affected, Some(1));
+    let inside = db.run_once("db.t.find({x: 2})", 10).await.unwrap();
+    assert_eq!(inside.total_rows, 1, "seen in it");
+    db.run_once("db.abortTransaction()", 1).await.unwrap();
+    assert_eq!(db.run("db.t.countDocuments({x: 2})", 1).await.unwrap().rows[0][0].as_deref(), Some("0"));
+    db.run_once("db.startTransaction()", 1).await.unwrap();
+    db.run_once("db.t.insertOne({_id: 3})", 1).await.unwrap();
+    db.run_once("db.commitTransaction()", 1).await.unwrap();
+    assert_eq!(db.run("db.t.countDocuments({})", 1).await.unwrap().rows[0][0].as_deref(), Some("2"));
+    let none = db.run_once("db.commitTransaction()", 1).await.unwrap_err();
+    assert!(crate::db::error_message(&none).contains("no transaction is open"));
+}
+
+/// The collections a read reads whole, by its plan: the guard on
+/// production goes by it.
+#[tokio::test]
+async fn live_full_scans_mongodb() {
+    let Some((db, _)) = own_live_db("podelis_mongo_scans").await else { return };
+    db.run("db.t.insertMany([{_id: 1, x: 1}, {_id: 2, x: 2}])", 1).await.unwrap();
+    let scans = db.full_scans("db.t.find({x: 2})").await.unwrap();
+    assert_eq!(scans.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["t"]);
+    assert!(db.full_scans("db.t.find({_id: 2})").await.unwrap().is_empty(), "by its index");
+    assert!(db.full_scans("db.t.find({x: 2}).limit(1)").await.unwrap().is_empty(), "stopped early");
+    let plan = db.run(&crate::language::explain(db.engine(), "db.t.aggregate([{$match: {x: 1}}])", "").unwrap(), 1).await;
+    let plan = plan.unwrap();
+    let shown = crate::language::format_plan(db.engine(), &plan.columns, &plan.rows).expect("a plan");
+    assert!(shown.text.contains("COLLSCAN") && shown.notes.iter().any(|n| n.text.contains("reads all of t")), "{shown:?}");
+}

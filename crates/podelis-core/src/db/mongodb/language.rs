@@ -7,7 +7,7 @@
 use std::ops::Range;
 
 use crate::language::QueryLanguage;
-use crate::language::statements::Kind;
+use crate::language::statements::{Kind, TxnOp};
 use crate::language::{Token, TokenKind};
 
 pub struct Mongo;
@@ -38,11 +38,11 @@ const SCHEMA_COMMANDS: &[&str] =
 /// The words coloured as keywords: `db`, its helpers and the methods, upper
 /// case and sorted (`crate::language::is_keyword` searches them).
 const KEYWORDS: &[&str] = &[
-    "AGGREGATE", "BULKWRITE", "COUNT", "COUNTDOCUMENTS", "CREATECOLLECTION", "CREATEINDEX", "CREATEINDEXES", "DB",
+    "ABORTTRANSACTION", "AGGREGATE", "BULKWRITE", "COMMITTRANSACTION", "COUNT", "COUNTDOCUMENTS", "CREATECOLLECTION", "CREATEINDEX", "CREATEINDEXES", "DB",
     "DELETEMANY", "DELETEONE", "DISTINCT", "DROP", "DROPINDEX", "DROPINDEXES", "ESTIMATEDDOCUMENTCOUNT", "EXPLAIN",
     "FALSE", "FIND", "FINDONE", "FINDONEANDDELETE", "FINDONEANDREPLACE", "FINDONEANDUPDATE", "GETCOLLECTION",
     "GETINDEXES", "INSERTMANY", "INSERTONE", "ISODATE", "LIMIT", "NULL", "OBJECTID", "PROJECTION",
-    "RENAMECOLLECTION", "REPLACEONE", "RUNCOMMAND", "SKIP", "SORT", "STATS", "TRUE", "UPDATEMANY", "UPDATEONE",
+    "RENAMECOLLECTION", "REPLACEONE", "RUNCOMMAND", "SKIP", "SORT", "STARTTRANSACTION", "STATS", "TRUE", "UPDATEMANY", "UPDATEONE",
 ];
 
 /// What a statement calls: the collection (`None` for `db.runCommand` and
@@ -110,7 +110,8 @@ pub fn call(statement: &str) -> Option<Call<'_>> {
     i = next_code(&tokens, i + 1)?;
     let first = word(i)?;
     let (collection, method, args, mut after) = match first {
-        "runCommand" | "adminCommand" | "createCollection" | "getCollectionNames" | "stats" => {
+        "runCommand" | "adminCommand" | "createCollection" | "getCollectionNames" | "stats" | "startTransaction"
+        | "commitTransaction" | "abortTransaction" => {
             let (args, after) = args_at(i + 1)?;
             (None, first, args, after)
         }
@@ -264,6 +265,9 @@ impl QueryLanguage for Mongo {
                 }
             }
             (false, "createCollection") => (Kind::Ddl, None),
+            (false, "startTransaction") => (Kind::Transaction(TxnOp::Begin), None),
+            (false, "commitTransaction") => (Kind::Transaction(TxnOp::Commit), None),
+            (false, "abortTransaction") => (Kind::Transaction(TxnOp::Rollback), None),
             (false, _) => (Kind::Read, None),
             (true, "aggregate") if writes_out(args) => {
                 (Kind::Write, Some("writes its result into a collection ($out/$merge)"))
@@ -281,6 +285,31 @@ impl QueryLanguage for Mongo {
 
     fn keywords(&self) -> &'static [&'static str] {
         KEYWORDS
+    }
+
+    /// Podėlis's own statements for the session's transaction (mongosh
+    /// has them on a session object): a server takes them only as a
+    /// replica set or a sharded cluster's member.
+    fn transaction(&self, op: TxnOp) -> Option<&'static str> {
+        Some(match op {
+            TxnOp::Begin => "db.startTransaction()",
+            TxnOp::Commit => "db.commitTransaction()",
+            TxnOp::Rollback => "db.abortTransaction()",
+        })
+    }
+
+    /// The method: a collection's (`find`), else the database's
+    /// (`runCommand`).
+    fn verb<'a>(&self, statement: &'a str) -> Option<&'a str> {
+        call(statement).map(|c| c.method)
+    }
+
+    fn explain(&self, statement: &str) -> Option<String> {
+        super::plans::explain_command(statement)
+    }
+
+    fn format_plan(&self, columns: &[String], rows: &[Vec<Option<String>>]) -> Option<crate::db::Plan> {
+        super::plans::format_plan(columns, rows)
     }
 }
 

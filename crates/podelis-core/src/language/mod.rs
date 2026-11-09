@@ -8,8 +8,8 @@ pub mod statements;
 
 use std::ops::Range;
 
-use crate::db::{Engine, SqlDialect};
-use statements::Kind;
+use crate::db::{Engine, Plan, SqlDialect};
+use statements::{Kind, TxnOp};
 
 /// An engine's query language: SQL (the `sql` module, which its dialect
 /// fills in), or a language of its own.
@@ -34,6 +34,69 @@ pub trait QueryLanguage: Sync {
     /// Its words, upper case and sorted, for colouring and completion.
     fn keywords(&self) -> &'static [&'static str] {
         &[]
+    }
+    /// Its statement that begins, commits or rolls back a transaction on
+    /// the session, as SQL's `BEGIN` / `COMMIT` / `ROLLBACK` (`None`: it
+    /// has none). Whether the server takes it is the server's.
+    fn transaction(&self, _op: TxnOp) -> Option<&'static str> {
+        None
+    }
+    /// What a statement calls, the way an engine's agent constraints name
+    /// it (`find`, `insertOne`): `None` if it calls nothing Podėlis knows.
+    fn verb<'a>(&self, _statement: &'a str) -> Option<&'a str> {
+        None
+    }
+    /// The statement that plans `statement` without running it, if it can
+    /// be planned.
+    fn explain(&self, _statement: &str) -> Option<String> {
+        None
+    }
+    /// What the plan [`explain`](Self::explain)'s statement returned says.
+    fn format_plan(&self, _columns: &[String], _rows: &[Vec<Option<String>>]) -> Option<Plan> {
+        None
+    }
+}
+
+/// The statement that begins (`read_only`: a read-only one, where the
+/// language has that), commits or rolls back a transaction on `engine`'s
+/// session; `None` where its language has none.
+pub fn transaction(engine: Engine, op: TxnOp, read_only: bool) -> Option<String> {
+    match engine.backend().language() {
+        Language::Sql(dialect) => Some(match op {
+            TxnOp::Begin => dialect.begin(read_only).to_string(),
+            TxnOp::Commit => dialect.end(crate::db::TxEnd::Commit).to_string(),
+            TxnOp::Rollback => dialect.end(crate::db::TxEnd::Rollback).to_string(),
+        }),
+        Language::Other(language) => language.transaction(op).map(str::to_string),
+    }
+}
+
+/// What `statement` calls, as `engine`'s agent constraints name it: SQL's
+/// first word, lower case (`select`); another language's own (`find`).
+pub fn verb(engine: Engine, statement: &str) -> Option<String> {
+    match engine.backend().language() {
+        Language::Sql(_) => tokenize(statement, engine)
+            .into_iter()
+            .find(|t| t.kind == TokenKind::Word)
+            .map(|t| statement[t.range].to_ascii_lowercase()),
+        Language::Other(language) => language.verb(statement).map(str::to_string),
+    }
+}
+
+/// The statement that plans `statement` on `engine` (of server `version`)
+/// without running it; `None` where it can't be planned.
+pub fn explain(engine: Engine, statement: &str, version: &str) -> Option<String> {
+    match engine.backend().language() {
+        Language::Sql(dialect) => Some(dialect.explain(statement.trim().trim_end_matches(';'), version)),
+        Language::Other(language) => language.explain(statement),
+    }
+}
+
+/// What a plan [`explain`]'s statement returned says, as Podėlis shows it.
+pub fn format_plan(engine: Engine, columns: &[String], rows: &[Vec<Option<String>>]) -> Option<Plan> {
+    match engine.backend().language() {
+        Language::Sql(dialect) => dialect.format_plan(columns, rows),
+        Language::Other(language) => language.format_plan(columns, rows),
     }
 }
 

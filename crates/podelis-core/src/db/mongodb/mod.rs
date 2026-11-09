@@ -5,6 +5,7 @@
 
 mod agent_constraints;
 pub(super) mod language;
+mod plans;
 
 #[cfg(feature = "mongodb")]
 pub(super) mod args;
@@ -81,7 +82,9 @@ impl Backend for MongoDb {
             schemas: true,
             routines: false,
             server_txn_state: false,
-            ddl_commits: false,
+            // A collection's or an index's change isn't a transaction's:
+            // it stands at once (and most can't run in one).
+            ddl_commits: true,
             stores_create_sql: false,
             table_sizes: false,
             plan_as_grid: false,
