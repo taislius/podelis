@@ -421,8 +421,10 @@ pub fn tokenize(text: &str) -> Vec<Token> {
     while i < b.len() {
         let start = i;
         let c = b[i];
-        let kind = if c.is_ascii_whitespace() {
-            while i < b.len() && b[i].is_ascii_whitespace() {
+        // A vertical tab too: JavaScript's blank space, and `trim`'s.
+        let blank = |c: u8| c.is_ascii_whitespace() || c == 0x0b;
+        let kind = if blank(c) {
+            while i < b.len() && blank(b[i]) {
                 i += 1;
             }
             TokenKind::Whitespace

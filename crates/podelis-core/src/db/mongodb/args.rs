@@ -48,7 +48,7 @@ impl Reader<'_> {
 
     fn blank(&mut self) {
         loop {
-            while self.i < self.s.len() && self.s[self.i].is_ascii_whitespace() {
+            while self.i < self.s.len() && (self.s[self.i].is_ascii_whitespace() || self.s[self.i] == 0x0b) {
                 self.i += 1;
             }
             if self.s[self.i..].starts_with(b"//") {
