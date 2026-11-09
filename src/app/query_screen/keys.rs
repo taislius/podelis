@@ -3,14 +3,14 @@
 //! and paste. The app's own (F1, `?`, Ctrl+Q, a question's answer) come
 //! first, in `App::handle_key`.
 
-use super::super::*;
-use super::navigator_keys::step_selectable;
+use super::navigator::step_selectable;
+use crate::app::*;
 use crate::config::keys::Action;
 
 impl App {
     pub(in crate::app) fn handle_query_key(&mut self, key: KeyEvent) {
-        let after_esc = std::mem::take(&mut self.esc_then_tab);
-        self.esc_then_tab = key.code == KeyCode::Esc && self.focus == Focus::Editor;
+        let after_esc = std::mem::take(&mut self.editing.esc_then_tab);
+        self.editing.esc_then_tab = key.code == KeyCode::Esc && self.focus == Focus::Editor;
         // Ctrl+V in a prompt (renaming a tab, the palette, the pipe…) or a
         // form: the system clipboard, as the terminal's own paste goes.
         if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('v') && self.takes_paste() {
@@ -33,12 +33,12 @@ impl App {
             match self.focus {
                 Focus::Results if self.tab.grid.filter_editing => return self.handle_filter_key(key),
                 Focus::Schema if schema_filter => return self.handle_schema_key(key),
-                Focus::Editor if self.find.is_some() => return self.handle_find_key(key),
+                Focus::Editor if self.editing.find.is_some() => return self.handle_find_key(key),
                 _ => {}
             }
         }
         // The find bar takes typing; bound actions (run, palette…) still work.
-        if self.find.is_some() && self.focus == Focus::Editor && self.keymap.action(key).is_none() {
+        if self.editing.find.is_some() && self.focus == Focus::Editor && self.keymap.action(key).is_none() {
             return self.handle_find_key(key);
         }
         let action = self.keymap.action(key);
@@ -75,8 +75,8 @@ impl App {
         match key.code {
             // An export stops on Esc, but a query running here comes first:
             // that's what its message says Esc does.
-            KeyCode::Esc if self.export_task.is_some() && !self.running_here() => return self.stop_export(),
-            KeyCode::Esc if self.export_estimating.is_some() && !self.running_here() => {
+            KeyCode::Esc if self.exports.task.is_some() && !self.running_here() => return self.stop_export(),
+            KeyCode::Esc if self.exports.estimating.is_some() && !self.running_here() => {
                 return self.stop_estimating();
             }
             // Esc leaves the zoom first (before cancelling a query), after a
@@ -189,7 +189,7 @@ impl App {
             Some(Overlay::Palette) => {
                 if let Some(palette) = &mut self.popups.palette {
                     if !palette.searching() {
-                        palette.mode = palette::PaletteMode::Commands;
+                        palette.mode = super::palette::PaletteMode::Commands;
                     }
                     palette.query.insert_str(text);
                     palette.selected = 0;
@@ -354,7 +354,7 @@ impl App {
                     panel.selected = step_selectable(&panel.nodes(), 0, 1);
                 }
             }
-            Focus::Editor if self.find.is_some() => self.paste_find(text),
+            Focus::Editor if self.editing.find.is_some() => self.paste_find(text),
             Focus::Editor => {
                 self.tab.editor.insert_str(text);
                 self.edited();

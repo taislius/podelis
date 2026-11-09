@@ -155,7 +155,10 @@ fn the_active_tab_shows_its_whole_name_and_stays_in_sight() {
         row: app.hits.tabs_y,
         modifiers: KeyModifiers::NONE,
     });
-    assert!(app.popups.palette.as_ref().is_some_and(crate::app::palette::Palette::tabs_only), "the tab list");
+    assert!(
+        app.popups.palette.as_ref().is_some_and(crate::app::query_screen::palette::Palette::tabs_only),
+        "the tab list"
+    );
     assert_eq!(app.active_tab, 10, "no tab picked yet");
     app.popups.palette = None;
     // Whatever is beside the name (a saved query's " ●", wide characters,

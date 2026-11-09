@@ -380,11 +380,17 @@ async fn a_cancel_the_server_cant_be_told_lets_esc_stop_waiting() {
     assert!(app.tab.run.cancelling);
     let generation = app.generation;
     // A server that answers and refuses (no privilege): just said.
-    let refused = DbEventKind::CancelFailed("Access denied; you need the PROCESS privilege".into(), false);
+    let refused = DbEventKind::CancelFailed {
+        message: "Access denied; you need the PROCESS privilege".into(),
+        unreachable: false,
+    };
     app.handle_db_event(DbEvent { generation, run: None, kind: refused });
     assert!(!app.tab.run.cancel_failed && !app.keepalive.connection_lost && app.tab.run.executing);
     app.handle_key(key(KeyCode::Esc));
-    let failed = DbEventKind::CancelFailed("pool timed out while waiting for an open connection".into(), true);
+    let failed = DbEventKind::CancelFailed {
+        message: "pool timed out while waiting for an open connection".into(),
+        unreachable: true,
+    };
     app.handle_db_event(DbEvent { generation, run: None, kind: failed });
     assert!(app.tab.run.cancel_failed && app.keepalive.connection_lost && app.tab.run.executing);
     assert!(said(&app).starts_with("Couldn't cancel: Esc again stops waiting"), "{}", said(&app));
@@ -400,7 +406,7 @@ async fn a_cancel_the_server_cant_be_told_lets_esc_stop_waiting() {
     app.tab.run.executing = true;
     app.tab.run.task = Some(tokio::spawn(std::future::pending()));
     app.handle_key(key(KeyCode::Esc));
-    let failed = DbEventKind::CancelFailed("pool timed out".into(), true);
+    let failed = DbEventKind::CancelFailed { message: "pool timed out".into(), unreachable: true };
     app.handle_db_event(DbEvent { generation: app.generation, run: None, kind: failed });
     app.tab.run.task = None;
     app.tab.run.executing = false;
@@ -1125,7 +1131,7 @@ async fn open_connections_are_listed_gone_to_and_closed() {
     app.handle_key(ctrl('k'));
     app.handle_key(key(KeyCode::Char('j')));
     let items = app.palette_items();
-    assert!(app.popups.palette.as_ref().is_some_and(crate::app::palette::Palette::conns_only));
+    assert!(app.popups.palette.as_ref().is_some_and(crate::app::query_screen::palette::Palette::conns_only));
     assert_eq!(items.len(), 2);
     let entries: Vec<String> = items.iter().map(|c| app.palette_command_text(*c)).collect();
     assert!(

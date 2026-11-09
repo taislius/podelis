@@ -15,4 +15,6 @@ pub(in crate::db) static AGENT_CONSTRAINTS: AgentConstraints = AgentConstraints 
         ("load_file", "reads a file on the server"),
         ("get_lock", "holds a lock past the transaction"),
     ],
+    executable_comments: &["/*!", "/*M!", "/*m!"],
+    quotes_by_server_mode: true,
 };

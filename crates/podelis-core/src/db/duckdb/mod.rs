@@ -114,6 +114,7 @@ impl Backend for DuckDb {
             table_sizes: false,
             plan_as_grid: false,
             copy_in: false,
+            transactions: crate::db::Transactions::Scripts,
         }
     }
     fn connect_hint(&self, message: &str) -> Option<&'static str> {

@@ -34,6 +34,20 @@ pub struct Capabilities {
     pub plan_as_grid: bool,
     /// Rows load fastest with `COPY … FROM STDIN` (PostgreSQL).
     pub copy_in: bool,
+    /// What Podėlis can put in a transaction of its own.
+    pub transactions: Transactions,
+}
+
+/// What a transaction of Podėlis's can hold on an engine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Transactions {
+    /// Any statements, with savepoints: the app's write modes, sandboxes, a
+    /// script undone as one (the SQL engines).
+    Scripts,
+    /// One write at a time, and only where the server has them (MongoDB on
+    /// a replica set): agents' dry runs. Every other write stands as it
+    /// runs, and schema changes don't run in one.
+    OneWrite,
 }
 
 /// The login an engine's container was given (see
@@ -136,5 +150,18 @@ impl Engine {
     /// The engine a URL scheme selects.
     pub fn from_scheme(scheme: &str) -> Option<Engine> {
         Engine::ALL.into_iter().find(|e| e.backend().url_schemes().iter().any(|s| s.eq_ignore_ascii_case(scheme)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_sql_engine_puts_scripts_in_a_transaction_and_mongodb_one_write() {
+        for engine in Engine::ALL {
+            let expected = if engine == Engine::MongoDb { Transactions::OneWrite } else { Transactions::Scripts };
+            assert_eq!(engine.capabilities().transactions, expected, "{engine:?}");
+        }
     }
 }

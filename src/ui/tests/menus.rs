@@ -262,7 +262,7 @@ fn a_dimmed_item_says_why_and_a_menu_item_does_what_its_key_does() {
 fn every_command_with_a_key_is_in_the_keys_and_the_palette() {
     use crate::app::commands::{Command, Here, pane_key_list};
     let (app, _dir) = query_app();
-    let help: Vec<String> = super::super::chrome::help_sections(&app)
+    let help: Vec<String> = super::super::help::help_sections(&app)
         .into_iter()
         .flat_map(|(_, rows)| rows.into_iter().map(|(keys, what)| format!("{keys} {what}")))
         .collect();
@@ -333,13 +333,13 @@ fn the_keys_window_scrolls() {
     let (mut app, _dir) = query_app();
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Char('?')));
-    assert!(app.help_visible);
+    assert!(app.help.visible);
     let top = render(&mut app, 100, 24);
     app.handle_key(key(KeyCode::PageDown));
     let lower = render(&mut app, 100, 24);
-    assert!(app.help_visible && top != lower);
+    assert!(app.help.visible && top != lower);
     app.handle_key(key(KeyCode::Char('?')));
-    assert!(!app.help_visible && app.help_scroll == 0);
+    assert!(!app.help.visible && app.help.scroll == 0);
 }
 
 fn ctrl_k() -> KeyEvent {
@@ -377,7 +377,7 @@ fn a_groups_menu_shows_after_the_pause_and_with_a_question_mark() {
     assert_snapshot!(screen);
     // `?` again is every key, as everywhere.
     app.handle_key(key(KeyCode::Char('?')));
-    assert!(app.popups.palette.is_none() && app.help_visible);
+    assert!(app.popups.palette.is_none() && app.help.visible);
 }
 
 #[test]
@@ -452,7 +452,7 @@ fn all_commands_opens_the_list_at_once() {
     assert_eq!(menu.items[at].keys, "Ctrl+K /");
     menu.selected = at;
     app.handle_key(key(KeyCode::Enter));
-    assert!(app.popups.palette.as_ref().is_some_and(crate::app::palette::Palette::searching));
+    assert!(app.popups.palette.as_ref().is_some_and(crate::app::query_screen::palette::Palette::searching));
 }
 
 #[test]
@@ -585,7 +585,7 @@ fn refusals_look_alike_however_theyre_asked_for() {
 #[test]
 fn the_keys_say_how_to_quit() {
     let (app, _dir) = query_app();
-    let keys = super::super::chrome::help_sections(&app);
+    let keys = super::super::help::help_sections(&app);
     assert!(keys.iter().flat_map(|(_, rows)| rows).any(|(key, _)| key == "Ctrl+Q"));
 }
 
@@ -742,7 +742,7 @@ fn the_wheel_moves_a_menu_and_the_keys() {
     let top = render(&mut app, 100, 24);
     assert!(top.contains("KEYS 1–22/"), "{top}");
     app.handle_mouse(wheel(MouseEventKind::ScrollDown));
-    assert!(app.help_scroll > 0);
+    assert!(app.help.scroll > 0);
     let lower = render(&mut app, 100, 24);
     assert!(!lower.contains("KEYS 1–") && lower.contains("KEYS "), "{lower}");
 }

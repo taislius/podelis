@@ -18,6 +18,14 @@ pub struct AgentConstraints {
     /// Statements agents can't start with that have a better way, and
     /// that way: SQLite's `PRAGMA` (`describe_table`).
     pub instead: &'static [(&'static str, &'static str)],
+    /// How comments the server runs as code begin (MySQL's `/*! … */`,
+    /// MariaDB's `/*M! … */`): refused, since the checks don't see into
+    /// comments.
+    pub executable_comments: &'static [&'static str],
+    /// Whether `\'` ends a string depends on the server's settings (MySQL's
+    /// `sql_mode`: `NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`), which the checks
+    /// don't know: a backslash before a quote is refused.
+    pub quotes_by_server_mode: bool,
 }
 
 /// Statements that change the session or its transaction, refused on

@@ -97,13 +97,15 @@ impl Backend for MongoDb {
             // It doesn't commit a transaction: the server refuses most schema
             // changes in one (a drop, dropIndex, an index on a collection
             // with documents) rather than ending it, and the transaction
-            // stays open. Agents' dry runs don't try one ("no dry run: …
-            // don't run in a transaction").
+            // stays open. What that means is `transactions: OneWrite`'s: no
+            // write modes in the editor, and agents' dry runs don't try one
+            // ("no dry run: … don't run in a transaction").
             ddl_commits: false,
             stores_create_sql: false,
             table_sizes: false,
             plan_as_grid: false,
             copy_in: false,
+            transactions: crate::db::Transactions::OneWrite,
         }
     }
     /// Its own collections (`system.*`) and databases (`admin`, `config`,

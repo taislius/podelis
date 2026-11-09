@@ -89,7 +89,7 @@ pub(super) async fn finish(app: &mut App) {
 
 /// Makes the pending syntax check due now and runs it to completion.
 pub(super) async fn check_syntax_now(app: &mut App) {
-    app.lint_due = Some(Instant::now());
+    app.editing.lint_due = Some(Instant::now());
     // The check runs in the background (with or without the server).
     app.tick();
     loop {

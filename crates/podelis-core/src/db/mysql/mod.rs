@@ -143,6 +143,7 @@ impl Backend for MySql {
             table_sizes: true,
             plan_as_grid: true,
             copy_in: false,
+            transactions: crate::db::Transactions::Scripts,
         }
     }
     fn connect_hint(&self, message: &str) -> Option<&'static str> {

@@ -129,6 +129,7 @@ impl Backend for Postgres {
             table_sizes: true,
             plan_as_grid: false,
             copy_in: true,
+            transactions: crate::db::Transactions::Scripts,
         }
     }
     fn connect_hint(&self, message: &str) -> Option<&'static str> {

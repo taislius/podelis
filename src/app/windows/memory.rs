@@ -5,7 +5,7 @@
 
 use serde_json::{Value, json};
 
-use crate::app::ask::AskFailure;
+use crate::app::query_screen::ask::AskFailure;
 use crate::app::*;
 use crate::gateway::client::{CallError, connect_or_start, spawn_gateway};
 

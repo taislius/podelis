@@ -15,7 +15,7 @@ fn renders_at_any_size() {
                 _ => Screen::Query,
             };
             app.panes.schema_visible = true;
-            app.help_visible = screen == 1;
+            app.help.visible = screen == 1;
             app.popups.cell_view = Some(CellView { scroll: 3, ..CellView::new("x".into(), "y\n".repeat(50)) });
             app.popups.confirm = Some(Confirm {
                 message: "Sure?".into(),
@@ -408,11 +408,11 @@ fn dragging_past_the_editors_top_scrolls_it_and_selects_on() {
     assert_eq!(app.tab.editor.selection().unwrap().0.0, scroll - 4);
     // A dialog over the editor stops it.
     // (Opened by something else than a key, which would stop it anyway.)
-    app.help_visible = true;
+    app.help.visible = true;
     app.drag_scroll();
     assert_eq!(app.tab.editor.scroll_row, scroll - 4, "not under a dialog");
     assert!(app.drag_scroll_due().is_none());
-    app.help_visible = false;
+    app.help.visible = false;
     app.handle_mouse(at(MouseEventKind::Drag(MouseButton::Left), area.y - 1));
     // Let go: no more.
     app.handle_mouse(at(MouseEventKind::Up(MouseButton::Left), area.y - 1));
