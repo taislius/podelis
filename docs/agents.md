@@ -54,6 +54,16 @@ on a MySQL server that way: update, and give agents a user without the
 (for reading, `GRANT SELECT` on what they need, no superuser or `FILE`
 privilege). Podėlis's rules then sit on top.
 
+DuckDB reads and writes files by itself (`SELECT * FROM 'data.csv'`,
+`read_parquet`, `COPY`, `ATTACH`, extensions from the network), so the
+connection agents get is opened with its *external access* off and that
+setting locked: those fail on DuckDB itself, whatever the SQL says. Before
+this, a read-only agent could read any file you can. On **Supabase**,
+agents are kept out of `vault` (the project's secrets), `pgsodium` (its
+keys) and `auth` (sign-ins: password hashes and tokens): those schemas
+aren't listed to them, and a query naming one is refused. What an agent
+needs of your users goes in a view of yours, in `public`.
+
 They hold for what an agent does *through* `podelis mcp`. An agent that
 also has a shell runs as you, and can read your files as you can: the
 project's memory, saved queries and history included (see [who can read
