@@ -99,6 +99,9 @@ pub struct Settings {
     /// off, it waits quietly (`?`, or Ctrl+Shift+K where the terminal can
     /// tell it apart, shows the menu).
     pub leader_menu: bool,
+    /// In vim's Normal mode, the key before one of the editor's own
+    /// commands (`\r` runs, `\f` formats…); empty turns it off.
+    pub local_leader: String,
     /// Seconds a query runs before Podėlis says how to cancel it; 0 never
     /// says.
     pub long_query: u64,
@@ -143,6 +146,7 @@ impl Default for Settings {
             keepalive: 0,
             leader_double_space: false,
             leader_menu: true,
+            local_leader: "\\".to_string(),
             long_query: 600,
             query_timeout: 0,
             notify_after: 10,
