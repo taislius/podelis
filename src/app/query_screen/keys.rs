@@ -73,8 +73,12 @@ impl App {
             Some(a) => return self.run_bound(a, key),
         }
         match key.code {
-            KeyCode::Esc if self.export_task.is_some() => return self.stop_export(),
-            KeyCode::Esc if self.export_estimating.is_some() => return self.stop_estimating(),
+            // An export stops on Esc, but a query running here comes first:
+            // that's what its message says Esc does.
+            KeyCode::Esc if self.export_task.is_some() && !self.running_here() => return self.stop_export(),
+            KeyCode::Esc if self.export_estimating.is_some() && !self.running_here() => {
+                return self.stop_estimating();
+            }
             // Esc leaves the zoom first (before cancelling a query), after a
             // results filter (which it clears first) and outside vim mode in
             // the editor (where it's vim's).

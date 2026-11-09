@@ -620,6 +620,101 @@ async fn keep_going_doesnt_count_whats_written_twice() {
     assert!(!details.contains("won't fit"), "{details}");
 }
 
+/// Once rows were agreed to, the largest file (or the disk's floor) ends
+/// the export, but what's written stays, named as a part.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn rows_agreed_to_stay_when_a_limit_ends_the_export() {
+    // Asks after the first page (about 50 kB), stops after the second.
+    let (mut app, dir) = big_export(0, 1, 80_000).await;
+    app.export_all(Format::Csv);
+    while app.export_task.is_some() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+        if app.popups.confirm.is_some() {
+            answer(&mut app, 'y');
+        }
+    }
+    assert!(said_error(&app) && said(&app).contains("largest allowed"), "{}", said(&app));
+    assert!(said(&app).contains("rows kept") && !said(&app).contains("removed"), "{}", said(&app));
+    let files = export_files(dir.path());
+    assert!(files.len() == 1 && files[0].to_string_lossy().contains(".partial.csv"), "{files:?}");
+}
+
+/// Every row of a result that's all loaded is a file of known size: it
+/// only has to fit, as the rows shown.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn every_row_of_a_loaded_result_only_has_to_fit() {
+    let (mut app, dir) = connected_app(ConnectionMode::Normal).await;
+    app.settings.export_dir = Some(dir.path().to_string_lossy().into_owned());
+    app.export_limits_for_tests =
+        Some(crate::transfer::limits::ExportLimits { min_free: u64::MAX, ask_every: 0, max: 0 });
+    run_sql(&mut app, "SELECT 1 AS n UNION ALL SELECT 2").await;
+    app.focus = Focus::Results;
+    app.export_all(Format::Csv);
+    assert!(!said_error(&app) && said(&app).contains("Exported"), "{}", said(&app));
+    assert_eq!(export_files(dir.path()).len(), 1);
+}
+
+/// An export of every row reads on its session: no query runs there
+/// meanwhile, and Ctrl+Q at its question still quits.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn no_query_runs_on_a_session_an_export_reads() {
+    let (mut app, _dir) = big_export(0, 1, 0).await;
+    app.export_all(Format::Csv);
+    while app.popups.confirm.is_none() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    app.execute("select 1".to_string(), 0);
+    assert!(!app.tab.run.executing, "it doesn't start");
+    assert!(said_error(&app) && said(&app).contains("export of every row"), "{}", said(&app));
+    // Ctrl+C (which copies) doesn't quit from a question that came by itself.
+    app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(!app.should_quit && app.popups.confirm.is_some());
+    app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+    assert!(app.should_quit);
+}
+
+/// Esc cancels a query running here before it stops an export, as the
+/// query's message says.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn esc_cancels_the_query_here_before_the_export() {
+    let (mut app, _dir) = big_export(0, 0, 0).await;
+    app.export_task = Some(crate::app::query_screen::export::ExportRun::for_tests());
+    app.tab.run.executing = true;
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.export_task.is_some(), "{}", said(&app));
+    app.tab.run.executing = false;
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.export_task.is_none());
+}
+
+/// Paused behind another question, the export says so once, not every
+/// second over what's said since.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_paused_export_says_so_once() {
+    let (mut app, _dir) = big_export(0, 1, 0).await;
+    app.export_task = Some(crate::app::query_screen::export::ExportRun::for_tests());
+    app.popups.confirm = Some(Confirm {
+        message: "Run this write?".into(),
+        details: vec![],
+        danger: true,
+        action: ConfirmAction::Quit,
+        offer_transaction: false,
+    });
+    app.export_ask(10, 2000, None);
+    assert!(app.notes.status.contains("paused"), "{}", app.notes.status);
+    app.notes.status = "An agent's word".into();
+    app.offer_export_question();
+    assert_eq!(app.notes.status, "An agent's word");
+}
+
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_shown_parquet_export_is_held_to_about_its_size() {
