@@ -84,6 +84,9 @@ is refused anywhere in a call, a key in quotes too: `$out` and `$merge`
 `mapReduce` (JavaScript on the server), `runCommand`. A write is one call
 on its own (each stands as it runs: there's no transaction of Podėlis's
 around it), and a read-only share is read-only on the connection too.
+A call's time limit stops Podėlis waiting, not MongoDB: a write past it
+may still finish on the server, and the agent is told to check before
+sending it again.
 
 On production a write runs as a dry run in a MongoDB transaction, rolled
 back: those need a replica set or a sharded cluster (Atlas is always
