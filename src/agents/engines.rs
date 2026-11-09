@@ -102,3 +102,26 @@ mod sqlite {
         assert_eq!(run(ENGINE, "values (1), (2)"), Wrap::Commit);
     }
 }
+
+mod duckdb {
+    use super::*;
+
+    const ENGINE: Engine = Engine::DuckDb;
+
+    #[test]
+    fn its_own_statements() {
+        for (sql, why) in [
+            ("select * from read_csv('/etc/passwd')", "reads files on this machine"),
+            ("copy t to '/tmp/x.csv'", "not COPY"),
+            ("install httpfs", "not INSTALL"),
+            ("attach 'other.duckdb' as o", "a connection is one database file"),
+            ("pragma database_list", "describe_table tells"),
+            ("set enable_external_access = true", "transaction of its own"),
+            ("select * from glob('*')", "lists files on this machine"),
+        ] {
+            assert!(refused(ENGINE, sql).contains(why), "{sql}: {}", refused(ENGINE, sql));
+        }
+        assert_eq!(run(ENGINE, "from t"), Wrap::Commit);
+        assert_eq!(run(ENGINE, "summarize t"), Wrap::Commit);
+    }
+}

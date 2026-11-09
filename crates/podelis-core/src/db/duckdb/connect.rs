@@ -14,18 +14,27 @@ use super::driver::{self, DuckPool};
 static OPEN: std::sync::LazyLock<std::sync::Mutex<Vec<Opened>>> = std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
 
 /// A file open in this process: its path, whether its instance is
-/// read-only, and a pool's first connection (gone once that pool closes).
-type Opened = (String, bool, std::sync::Weak<std::sync::Mutex<Option<::duckdb::Connection>>>);
+/// read-only, whether it's agents' (shut off from files and the network),
+/// and a pool's first connection (gone once that pool closes).
+type Opened = (String, bool, bool, std::sync::Weak<std::sync::Mutex<Option<::duckdb::Connection>>>);
 
 /// A connection to `path`'s instance open in this process, if there is one.
 /// A read-only connection shares an instance that writes (its driver runs
-/// only reads on it); one that writes can't share a read-only instance.
-fn shared(path: &str, read_only: bool) -> Result<Option<::duckdb::Connection>> {
+/// only reads on it); one that writes can't share a read-only instance, nor
+/// agents' an instance that isn't theirs (or the other way round): its
+/// settings are the instance's.
+fn shared(path: &str, read_only: bool, for_agents: bool) -> Result<Option<::duckdb::Connection>> {
     let mut open = OPEN.lock().map_err(|_| anyhow::anyhow!("the open databases' list broke"))?;
-    open.retain(|(_, _, first)| first.upgrade().is_some_and(|f| f.lock().is_ok_and(|c| c.is_some())));
-    for (file, mode, first) in open.iter() {
+    open.retain(|(_, _, _, first)| first.upgrade().is_some_and(|f| f.lock().is_ok_and(|c| c.is_some())));
+    for (file, mode, agents, first) in open.iter() {
         if file != path {
             continue;
+        }
+        if *agents != for_agents {
+            anyhow::bail!(
+                "this file is open in this process for {}: DuckDB opens a file one way at a time",
+                if *agents { "AI agents, shut off from files and the network" } else { "more than agents may do" }
+            );
         }
         if *mode && !read_only {
             anyhow::bail!(
@@ -57,14 +66,20 @@ pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, _port: u1
     // not be there yet).
     let path = if memory { String::new() } else { resolved(host) };
     let read_only = params.read_only;
-    let reused = if memory { None } else { shared(&path, read_only)? };
+    let for_agents = params.for_agents;
+    let reused = if memory { None } else { shared(&path, read_only, for_agents)? };
     let pool = if let Some(conn) = reused {
         DuckPool::sharing(conn, read_only)
     } else {
         let file = path.clone();
         let first = tokio::task::spawn_blocking(move || -> Result<::duckdb::Connection> {
             let mode = if read_only { ::duckdb::AccessMode::ReadOnly } else { ::duckdb::AccessMode::ReadWrite };
-            let config = ::duckdb::Config::default().access_mode(mode)?;
+            let mut config = ::duckdb::Config::default().access_mode(mode)?;
+            // Agents' SQL can't read or write files, reach URLs, attach other
+            // databases or load extensions, nor SET that back on.
+            if for_agents {
+                config = config.with("enable_external_access", "false")?.with("lock_configuration", "true")?;
+            }
             let opened = if memory {
                 ::duckdb::Connection::open_in_memory_with_flags(config)
             } else {
@@ -76,7 +91,7 @@ pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, _port: u1
         DuckPool::new(first)
     };
     if !memory && let Ok(mut open) = OPEN.lock() {
-        open.push((path, read_only, std::sync::Arc::downgrade(pool.first())));
+        open.push((path, read_only, for_agents, std::sync::Arc::downgrade(pool.first())));
     }
     let session = driver::acquire(&pool).await.context("failed to open session")?;
     Ok((Pool::DuckDb(pool), Session::DuckDb(session)))

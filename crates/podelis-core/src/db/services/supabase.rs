@@ -40,7 +40,20 @@ impl Service for Supabase {
     fn is_internal_schema(&self, schema: &str) -> bool {
         is_internal_schema(schema)
     }
+
+    fn agents_kept_out(&self) -> &'static [(&'static str, &'static str)] {
+        AGENTS_KEPT_OUT
+    }
 }
+
+/// What agents may not read on Supabase: its secrets, its keys, and its
+/// sign-ins (users' password hashes, their sessions' and refresh tokens).
+/// What an agent needs of `auth.users` goes in a view of the user's.
+const AGENTS_KEPT_OUT: &[(&str, &str)] = &[
+    ("vault", "holds the project's secrets"),
+    ("pgsodium", "holds encryption keys"),
+    ("auth", "holds sign-ins: password hashes and tokens (a view in public with what's needed is the way)"),
+];
 
 /// A host of Supabase's: a project's database or the pooler.
 fn is_supabase(host: &str) -> bool {

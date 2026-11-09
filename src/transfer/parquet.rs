@@ -672,6 +672,7 @@ mod tests {
             read_only: false,
             ssh: None,
             password_command: Vec::new(),
+            for_agents: false,
         };
         let db = crate::db::Database::connect(params).await.unwrap();
         db.run("db.pq.drop()", 1).await.unwrap();

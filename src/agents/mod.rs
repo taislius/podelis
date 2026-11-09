@@ -175,6 +175,28 @@ fn allowed(sql: &str, engine: Engine) -> Result<Vec<crate::language::statements:
     Ok(infos)
 }
 
+/// Why `sql` is refused on a database `service` runs (Supabase's): it names
+/// a schema agents are kept out of there (`vault.secrets`, `"auth"."users"`).
+pub fn kept_out(sql: &str, engine: Engine, service: Option<&dyn crate::db::services::Service>) -> Option<String> {
+    use crate::language::TokenKind;
+    let service = service?;
+    let kept = service.agents_kept_out();
+    let tokens: Vec<_> = crate::language::tokenize(sql, engine)
+        .into_iter()
+        .filter(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Comment))
+        .collect();
+    tokens.windows(2).find_map(|pair| {
+        let name = match pair[0].kind {
+            TokenKind::Word => sql[pair[0].range.clone()].to_ascii_lowercase(),
+            TokenKind::QuotedIdent => sql[pair[0].range.clone()].trim_matches(['"', '`']).replace("\"\"", "\""),
+            _ => return None,
+        };
+        let qualifies = pair[1].kind == TokenKind::Punct && &sql[pair[1].range.clone()] == ".";
+        let (schema, holds) = kept.iter().find(|(schema, _)| qualifies && *schema == name)?;
+        Some(format!("{}'s {schema} schema {holds}: agents can't use it", service.name()))
+    })
+}
+
 fn one_line(s: &str) -> String {
     let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
     if s.chars().count() > 60 { format!("{}…", s.chars().take(60).collect::<String>()) } else { s }
@@ -309,6 +331,30 @@ mod tests {
         assert_eq!(one_line(&sixty), sixty, "60 fit");
         assert_eq!(one_line(&format!("{sixty}y")), format!("{sixty}…"));
         assert_eq!(one_line(&"ą".repeat(61)), format!("{}…", "ą".repeat(60)), "characters, not bytes");
+    }
+
+    /// On Supabase its secrets, keys and sign-ins are out of agents' reach,
+    /// however the name is written; elsewhere the same names are any others.
+    #[test]
+    fn supabase_keeps_agents_out_of_its_secrets() {
+        let supabase = crate::db::services::serving(Engine::Postgres, "db.abcdefghijklmnop.supabase.co");
+        let out = |sql: &str| kept_out(sql, Engine::Postgres, supabase);
+        for sql in [
+            "select * from vault.decrypted_secrets",
+            "select email, encrypted_password from auth.users",
+            "select * from \"auth\" . \"refresh_tokens\"",
+            "select vault.create_secret('x')",
+            "select * from public.t join AUTH.sessions s on true",
+            "select * from pgsodium.key",
+        ] {
+            let why = out(sql).unwrap_or_else(|| panic!("ran {sql}"));
+            assert!(why.contains("Supabase's") && why.contains("agents can't"), "{why}");
+        }
+        for sql in ["select auth from t", "select * from public.vault", "select 'vault.secrets'", "select * from t"] {
+            assert_eq!(out(sql), None, "{sql}");
+        }
+        let elsewhere = crate::db::services::serving(Engine::Postgres, "db.example.com");
+        assert_eq!(kept_out("select * from vault.secrets", Engine::Postgres, elsewhere), None);
     }
 
     /// On an engine whose language isn't SQL, agents are refused, saying why.

@@ -89,6 +89,71 @@ async fn a_relative_sqlite_file_is_the_agents() {
     assert!(rows.contains("\"7\""), "{rows}");
 }
 
+/// DuckDB through the protocol: reads, writes and production's dry run as
+/// on any engine, and the file it is shut off from: what its SQL reads
+/// by itself (`FROM 'file.csv'`) fails on the agents' connection, whatever
+/// the words.
+#[cfg(feature = "duckdb")]
+#[tokio::test]
+async fn duckdb_for_agents_reaches_no_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, secret) = (dir.path().join("shop.duckdb"), dir.path().join("secret.csv"));
+    std::fs::write(&secret, "token\nhunter2\n").unwrap();
+    let target = path.clone();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let params = crate::db::ConnectParams {
+                engine: Engine::DuckDb,
+                host: target.to_string_lossy().into_owned(),
+                port: 0,
+                user: String::new(),
+                password: String::new(),
+                database: String::new(),
+                ssl_mode: crate::db::SslMode::Disable,
+                read_only: false,
+                ssh: None,
+                password_command: Vec::new(),
+                for_agents: false,
+            };
+            let db = Database::connect(params).await.unwrap();
+            db.run("create table t (id int primary key, x int); insert into t values (1, 1), (2, 2)", 1).await.unwrap();
+            db.close().await;
+        });
+    })
+    .join()
+    .unwrap();
+    let duck = |name: &str, agents, mode| ConnectionProfile {
+        engine: Engine::DuckDb,
+        agents,
+        mode,
+        timeout: "5".into(),
+        ..crate::config::store::file_profile(name, &path)
+    };
+    // One instance of the file per process: the connections take turns.
+    for (agents, mode) in
+        [(AgentAccess::Read, ConnectionMode::Normal), (AgentAccess::Write, ConnectionMode::Production)]
+    {
+        let server = Server::new("p1".into(), "shop".into(), vec![duck("d", agents, mode)], dir.path().join("a.jsonl"));
+        let client = connect(server).await;
+        let q = |sql: &str| serde_json::json!({ "connection": "d", "sql": sql });
+        assert!(call(&client, "query", q("select x from t order by id")).await.contains("\"2\""));
+        let file = format!("select * from '{}'", secret.display());
+        let read = call(&client, "query", q(&file)).await;
+        assert!(read.starts_with("ERROR") && !read.contains("hunter2"), "{agents:?}: {read}");
+        let copied = call(&client, "query", q(&format!("create table s as {file}"))).await;
+        assert!(copied.starts_with("ERROR") && !copied.contains("hunter2"), "{agents:?}: {copied}");
+        if agents == AgentAccess::Write {
+            let dry = call(&client, "query", q("update t set x = 0 where x > 0")).await;
+            assert!(dry.contains("dry run") && dry.contains("would change 2 row(s)"), "{dry}");
+            assert!(call(&client, "query", q("select count(*) from t where x = 0")).await.contains("[[\"0\"]]"));
+        }
+        client.cancel().await.unwrap();
+        // The server lets go of the file once its session has ended.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 /// A sandbox: the agent's writes build on each other and its reads see
 /// them, a failed call doesn't spoil it, nobody else sees anything, and
 /// idle it's rolled back.
@@ -396,6 +461,14 @@ async fn live_agents_on_servers() {
         if let Some([create, _, _]) = sql.sequence {
             setup.run(create, 1).await.unwrap();
         }
+        // A file open in this process is opened one way: as agents' (shut
+        // off from other files), like the server's connections to it.
+        let setup = if engine.is_file_based() {
+            setup.close().await;
+            Database::connect(crate::db::ConnectParams { for_agents: true, ..params.clone() }).await.unwrap()
+        } else {
+            setup
+        };
         let profile = |name: &str, agents, mode| ConnectionProfile {
             port: if params.port == 0 { String::new() } else { params.port.to_string() },
             user: params.user.clone(),
