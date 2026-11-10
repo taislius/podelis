@@ -1,5 +1,12 @@
 # Podėlis
 
+[![CI](https://github.com/taislius/podelis/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/taislius/podelis/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/taislius/podelis)](https://github.com/taislius/podelis/releases/latest)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![Rust version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Ftaislius%2Fpodelis%2Fmaster%2FCargo.toml&query=%24.workspace.package.rust-version&label=rust&logo=rust&color=orange)](Cargo.toml)
+![Platforms: Linux, macOS](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey)
+![Databases: PostgreSQL, MySQL, SQLite, DuckDB, MongoDB](https://img.shields.io/badge/databases-PostgreSQL%20%7C%20MySQL%20%7C%20SQLite%20%7C%20DuckDB%20%7C%20MongoDB-336791)
+
 A terminal UI database client for PostgreSQL, MySQL and SQLite, with
 [DuckDB and MongoDB as opt-in builds](#install), built in Rust with [ratatui](https://ratatui.rs). Runs as a plain terminal app — works
 fine inside a regular terminal or inside a Neovim `:terminal` split, the
