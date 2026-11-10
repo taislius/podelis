@@ -103,6 +103,86 @@ first time a provider's model would see them, Podėlis asks: this once, or
 always for the project (`share_schema = "all"` in `connections.toml`;
 remove it to go back).
 
+### What a model can see, engine by engine
+
+On every engine, a model asked a question is shown: the question; the
+chosen tables' and views' names; their columns, each with its type and
+whether it may be null; primary keys and where foreign keys point; an
+estimate of each table's rows; the database's comments; and your team's
+facts about those tables. With AI explain (`Ctrl+K y y`), the statement
+you selected, as you wrote it, so any value you typed into it goes too.
+What differs is where those come from:
+
+| Engine | A column's type, as shown | The row count | Comments | Reads your data? |
+|---|---|---|---|---|
+| PostgreSQL | The type's name, with its length or precision (`varchar(30)`, `numeric(10,2)`; an enum as its type's name, `mood`, not its values) | The planner's estimate (`reltuples`) | `COMMENT ON` tables, views, columns | No |
+| MySQL | As MySQL writes it, with lengths, and an `ENUM` or `SET` column's allowed values (`enum('new','paid')`) | `information_schema`'s estimate (`table_rows`) | Table and column `COMMENT`s | No |
+| SQLite | As declared | Only after `ANALYZE` (`sqlite_stat1`); otherwise none | None (SQLite keeps none) | No |
+| DuckDB | As DuckDB writes it, an `ENUM`'s values included (`ENUM('happy', 'sad')`) | Its estimate (`estimated_size`) | `COMMENT ON` tables, views, columns | No |
+| MongoDB | One per field, from its values' kind (`string`, `int`, `array`, `object`) | `estimatedDocumentCount` | None | **Yes, a sample**: 100 documents per collection, for their top-level field names; the values are dropped |
+
+Never shown, on any engine: a row or a document's values, column
+defaults, `CHECK` constraints, view definitions, indexes, users or grants,
+passwords and connection details.
+
+Two of these carry what people typed: comments (whatever their author
+wrote) and, on MySQL and DuckDB, enum values (the allowed values, not
+which rows have them). On MongoDB a collection keyed by data
+(`{"ana@example.com": {…}}`) would show those keys, since they are its
+field names.
+
+### Why a row can't reach a model
+
+Not a setting, and not a promise in a prompt: how the code is built.
+
+1. **A question goes one way.** The app's and `podelis ask`'s questions go
+   to the gateway as `ask`, with the question, the connection's name, the
+   project and the folder: nothing from your results. The gateway is the
+   only part that talks to models. (Its other model call, `complete`,
+   sends a local client's own messages as they are; in Podėlis only
+   `podelis gateway test` uses it, for one word.)
+2. **For a question, the gateway reads only the catalog,** on a read-only
+   connection of its own: `catalog()` (tables, columns, row estimates),
+   `links()` (foreign keys) and `comments()`. On SQL engines that reads no
+   table's contents. On MongoDB it samples documents for their field
+   names, as above, and keeps no value.
+3. **The model's SQL is never run:** it's checked against the schema and
+   returned, for you to run.
+4. **Its lookups (`find_tables`, `describe_table`) answer from that
+   catalog,** never from the tables.
+
+The same gateway runs agents' queries (below), but only for them, never
+for a model's question.
+
+**Tested, on every engine:**
+- `the_catalog_holds_no_row_on_each_engine` (`crates/podelis-core/src/db/tests.rs`)
+  puts a value no schema holds in a table on PostgreSQL, MySQL, SQLite and
+  DuckDB, updates the engine's statistics, and fails if `catalog()`,
+  `links()` or `comments()` returns it.
+- `live_catalog_holds_no_value_mongodb` does the same for MongoDB's
+  sampled documents.
+- `a_model_is_never_sent_a_row_by_any_path` (`src/gateway/tests.rs`, on
+  SQLite) fills every table of a database, has a fake model look up every
+  table in its two rounds and explain a `SELECT *`, records every byte it's
+  sent (and the text in it, escapes undone), and fails if any value is in
+  them; `gateway context`'s output too.
+
+`podelis gateway context <connection> "<question>"` shows you what a model
+would be shown, and sends nothing.
+
+### A model is not an agent
+
+| | A model | An agent (`podelis mcp`) |
+|---|---|---|
+| What it is | The AI Podėlis asks for SQL (`Ctrl+K q`, `podelis ask`) | A program acting by itself, such as Claude Code |
+| Runs SQL? | Never: its SQL lands in your editor | Yes, under the connection's rules |
+| Sees rows? | Never | Yes, the rows of what it queries |
+| Set up in | `config.toml` (`[[models]]`) | Its MCP settings, and each connection's **AI agents** setting |
+
+An agent may pass what it reads to its own model, outside Podėlis. Share
+with it only the connections you'd show that provider, and connect it as
+a database user that reads only what it should. See [AI agents](agents.md).
+
 ## What your team knows: memory
 
 Facts a model can't see in the schema (`status = 3` means cancelled,

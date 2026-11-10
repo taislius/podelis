@@ -7,6 +7,13 @@ gets the schema and runs SQL through the same saved connections, never
 sees a password, can't drop a table, and you can see afterwards everything
 it ran.
 
+> [!IMPORTANT]
+> **An agent sees the rows it queries.** Unlike a model Podėlis asks for
+> SQL, which never sees a row ([why](ai.md#why-a-row-cant-reach-a-model)),
+> an agent runs queries and reads their results, and may pass them to its
+> own model. Share only the connections you'd show it, and connect it as a
+> database user that can read only what it should.
+
 ## Share a connection
 
 Agents see only the connections you share with them. In the connection's

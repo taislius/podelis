@@ -159,12 +159,13 @@ same way tools like `lazygit` do.
   prints it) without running it. What your team knows (`status = 3` means
   cancelled; revenue is net of refunds) goes in the project's memory
   (`podelis memory add …`) and is shown to the model with those tables. Rows never go to
-  the model, and the schema leaves your machine only if you allow it.
+  the model ([why](docs/ai.md#why-a-row-cant-reach-a-model)), and the schema leaves your machine only if you allow it.
   `Ctrl+K y y` has the model **explain** the statement under the cursor in
   plain words (and say what looks wrong in it), without running it
 - **For AI agents:** `podelis mcp` gives your coding agent the connections
   you share with it, in read-only transactions unless you allow writes, with
-  no passwords and nothing destructive. Agent activity shows everything
+  no passwords and nothing destructive. Unlike a model asked for SQL, an
+  agent sees the rows it queries ([models and agents](docs/ai.md#a-model-is-not-an-agent)). Agent activity shows everything
   each agent session ran (which agent, which project folder), and the
   status bar says when an agent was refused or changed data. Or **approve
   each write** yourself: Podėlis shows it with its dry run, `y` runs it
