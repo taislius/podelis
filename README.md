@@ -288,7 +288,7 @@ Copyright (C) 2026 Taislius <taislius@proton.me>.
 
 Licensed under the [GNU Affero General Public License v3.0](LICENSE)
 (`AGPL-3.0-only`). Pull requests aren't accepted, but bug reports and
-ideas are welcome (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+improvement suggestions are welcome (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 Release archives include `THIRD-PARTY-LICENSES.txt` with the licences of
 the bundled crates (`./scripts/third-party-licenses.sh` generates it; needs
