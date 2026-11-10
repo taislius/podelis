@@ -4,6 +4,37 @@ What changed in each release of Podėlis, newest first. Drafted from the
 commits by [git-cliff](https://git-cliff.org) (`cliff.toml`), then edited.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Security
+
+- Agents' dry runs on MySQL: a write to another database's MyISAM or MEMORY table (`UPDATE archive.log …`) stayed while the agent was told nothing changed; only the connection's own database was checked. Now a server with such a table in any database refuses agents' writes, naming the tables. Affected: 0.8.1 and earlier.
+- What a model assumed, and the names check's notes, are kept on one comment line each: a line break in a model's words could end the `--` comment and leave the rest as SQL under the answer (not run until you ran it).
+- Files written atomically (connections, library, history, the ontology to edit) are the user's alone from the moment they're created, not only after.
+
+### Added
+
+- Each database's ontology: its tables, views, columns and keys, with what the project's memory says of them, as one graph. `Ctrl+K y k` on a saved connection shows it by table, column and term, with a model's suggestions and stale facts apart; `a` on a line adds a fact about it.
+- `E` there opens it in your editor (`$VISUAL`, `$EDITOR`, else `vi`) as YAML; when you close it, Podėlis lists what loading it back would change (added, confirmed, moved, forgotten) and changes nothing until you've scrolled through it and pressed `y`. Edits that don't load are kept, to open again.
+- `podelis ontology <connection>` shows it; `turtle` writes it as SKOS Turtle for RDF tools; `export [file]` writes the YAML; `import <file>` loads an edited one back, after asking (`-y` not to).
+- Facts are about one database or every database in the project: added from a connection, about its database; `p` in the window moves one between the two. A model is shown only those about the database it's asked about, and those about every one.
+- Questions in the editor: a comment that starts with `?` (`-- ? revenue per city`, `--?`, or a block `/*? … */` over several lines) is a question. `Ctrl+K q` on it writes the model's SQL right under it, after `-- ↳ <model>`; asked again, that answer is replaced. Elsewhere `Ctrl+K q` starts one. Questions are drawn in the accent colour. On MongoDB they're `// ?` comments.
+- The sandbox and rollback-only refuse a statement that writes a MySQL table a rollback can't undo (MyISAM, MEMORY), naming it: the write would stay. A bare name counts in any database (`USE` may have moved the session); `shop.audit` is that database's alone.
+
+### Changed
+
+- The ask pop-up is gone: questions are asked in the editor.
+- Messages that also show on MongoDB say query, not SQL (tab search, the agents' log, the library's search, diagnostics, editing and following rows, the normal mode's help).
+- The memory window's messages are in Lithuanian too.
+- The review and the sandbox count only your statements, not the `BEGIN` and savepoints Podėlis adds.
+
+### Fixed
+
+- A SQLite file opened from the command line by a relative path is saved with its whole path, so it opens again from another folder.
+- SQLite: a column computed in a query (`sum(total)`) got no type, so exports and charts took it as text; its values now say what it is.
+- Reading a file over HTTPS in DuckDB (`read_csv('https://…')`) that fails on the site's certificate says so, not that the database's own TLS settings are wrong.
+- Clearing the status bar no longer leaves an empty line in MESSAGES.
+
 ## [0.8.1] — 2026-11-09
 
 ### Security
