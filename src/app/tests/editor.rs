@@ -537,6 +537,7 @@ fn space_twice_opens_the_command_menu_when_enabled() {
     assert!(app.popups.palette.is_none());
 }
 
+#[cfg(sql_engine)] // SQL's own: not with MongoDB alone
 #[test]
 fn esc_then_tab_leaves_the_editor_after_a_word() {
     let (mut app, _dir) = test_app();
@@ -561,16 +562,18 @@ fn esc_then_tab_leaves_the_editor_after_a_word() {
     assert_eq!(app.focus, Focus::Editor);
 }
 
+#[cfg(sql_engine)] // SQL's own: not with MongoDB alone
 #[test]
 fn tab_after_a_word_with_nothing_to_complete_moves_on() {
     let (mut app, _dir) = test_app();
     app.screen = Screen::Query;
     // A keyword typed in full: completing it would only give it back.
-    type_text(&mut app, "select 1 order by 1 desc");
+    // (Not `desc`: MySQL's `describe` starts so.)
+    type_text(&mut app, "select 1 limit");
     app.handle_key(key(KeyCode::Tab));
     assert_eq!(app.focus, Focus::Results, "nothing to complete: Tab moves on");
     assert!(app.popups.completion.is_none());
-    assert_eq!(app.tab.editor.text(), "select 1 order by 1 desc");
+    assert_eq!(app.tab.editor.text(), "select 1 limit");
 
     // A word nothing completes.
     app.focus = Focus::Editor;
@@ -674,6 +677,7 @@ fn clearing_the_status_leaves_no_empty_message() {
     assert_eq!(texts, ["Saved"]);
 }
 
+#[cfg(sql_engine)] // SQL's own: not with MongoDB alone
 #[test]
 fn a_question_written_in_the_editor_gets_its_sql_under_it() {
     use crate::app::query_screen::ask::Question;
@@ -713,6 +717,7 @@ fn a_question_written_in_the_editor_gets_its_sql_under_it() {
     assert!(app.tab.editor.text().contains("SELECT 2;"), "{}", app.tab.editor.text());
 }
 
+#[cfg(sql_engine)] // SQL's own: not with MongoDB alone
 #[test]
 fn asking_again_keeps_what_the_user_wrote_right_under_the_answer() {
     use crate::app::query_screen::ask::Question;
@@ -730,6 +735,7 @@ fn asking_again_keeps_what_the_user_wrote_right_under_the_answer() {
     );
 }
 
+#[cfg(sql_engine)] // SQL's own: not with MongoDB alone
 #[test]
 fn a_models_words_stay_inside_their_comments() {
     use crate::app::query_screen::ask::Question;
