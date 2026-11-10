@@ -101,6 +101,26 @@ async fn live_mongodb() {
     assert!(format!("{refused:#}").contains("read-only"), "{refused:#}");
 }
 
+/// The catalog samples documents for their fields: it keeps the field
+/// names and a type each, never a value. (A collection keyed by data
+/// would show those keys: they are its field names.)
+#[tokio::test]
+async fn live_catalog_holds_no_value_mongodb() {
+    const SECRET: &str = "ROW-VALUE-NEVER-IN-CATALOG";
+    let Some((db, _)) = own_live_db("podelis_mongo_no_rows").await else { return };
+    db.run("db.leak_check.drop()", 1).await.unwrap();
+    db.run(&format!("db.leak_check.insertMany([{{note: '{SECRET}', n: 314159}}, {{note: '{SECRET}', tags: ['{SECRET}']}}])"), 1)
+        .await
+        .unwrap();
+    let catalog = format!("{:?}", db.catalog(false).await.unwrap());
+    let comments = format!("{:?}", db.comments().await.unwrap());
+    // Dropped before any check: a failure leaves no values behind.
+    db.run("db.leak_check.drop()", 1).await.unwrap();
+    assert!(catalog.contains("leak_check") && catalog.contains("note") && catalog.contains("tags"), "{catalog}");
+    assert!(!catalog.contains(SECRET) && !catalog.contains("314159"), "{catalog}");
+    assert!(!comments.contains(SECRET), "{comments}");
+}
+
 /// A cancel stops a call that would take long.
 #[tokio::test]
 async fn live_cancel_mongodb() {
