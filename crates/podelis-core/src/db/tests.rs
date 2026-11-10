@@ -465,6 +465,32 @@ async fn comments_on_each_engine() {
     }
 }
 
+/// What the gateway reads to show a model a database (the catalog, the
+/// foreign keys, the comments) holds no row, on each engine: a table with
+/// a value no schema would have, its statistics updated, then all three
+/// read. (MongoDB, which samples documents for its fields: its own test.)
+#[tokio::test]
+async fn the_catalog_holds_no_row_on_each_engine() {
+    const SECRET: &str = "ROW-VALUE-NEVER-IN-CATALOG";
+    for engine in Engine::BUILT {
+        let Some((db, _)) = own_live_db(engine, "podelis_no_rows").await else { continue };
+        db.run("DROP TABLE IF EXISTS leak_check", 1).await.unwrap();
+        db.run("CREATE TABLE leak_check (id INT PRIMARY KEY, note VARCHAR(40))", 1).await.unwrap();
+        db.run(&format!("INSERT INTO leak_check VALUES (1, '{SECRET}'), (2, '{SECRET}')"), 1).await.unwrap();
+        // Statistics too: some engines keep a column's common values there.
+        db.run(&test_sql(engine).analyze.replace("{table}", "leak_check"), 1).await.unwrap();
+        let catalog = format!("{:?}", db.catalog(false).await.unwrap());
+        let links = format!("{:?}", db.links().await.unwrap());
+        let comments = format!("{:?}", db.comments().await.unwrap());
+        // Dropped before any check: a failure leaves no values behind.
+        db.run("DROP TABLE leak_check", 1).await.unwrap();
+        assert!(catalog.contains("leak_check") && catalog.contains("note"), "{engine:?}: the table is listed");
+        for (what, text) in [("catalog", &catalog), ("links", &links), ("comments", &comments)] {
+            assert!(!text.contains(SECRET), "{engine:?}: its {what} holds a row: {text}");
+        }
+    }
+}
+
 /// What a heavy-query guard asks about: the tables a read would read in
 /// full, with about how many rows (the plan's estimate, else the catalog's;
 /// with neither, as SQLite, it can't tell, and says none).

@@ -497,15 +497,7 @@ async fn ask_with_refresh_reads_the_schema_again() {
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn ask_lets_the_model_look_up_a_table_it_was_not_shown() {
-    let lookup = sse(&[
-        json!({"type":"message_start","message":{"model":"claude-opus-5-5","usage":{"input_tokens":100}}}),
-        json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"describe_table","input":{}}}),
-        json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"name\": "}}),
-        json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"audit_log\"}"}}),
-        json!({"type":"content_block_stop","index":0}),
-        json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":10}}),
-        json!({"type":"message_stop"}),
-    ]);
+    let lookup = claude_tool_calls(&[("toolu_1", "describe_table", json!({ "name": "audit_log" }))]);
     let answer = claude_answer("```sql\nSELECT count(*) FROM audit_log\n```\nCounts the audit entries.");
     let (url, server) = fake_model(vec![(200, lookup), (200, answer)]).await;
     let dir = tempfile::tempdir().unwrap();
@@ -533,6 +525,118 @@ async fn ask_lets_the_model_look_up_a_table_it_was_not_shown() {
     let entry: Value =
         log.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).find(|l| l["method"] == "ask").unwrap();
     assert_eq!(entry["looked_up"], json!(1));
+}
+
+/// A model's turn that calls lookup tools, several at once.
+#[cfg(feature = "sqlite")]
+fn claude_tool_calls(calls: &[(&str, &str, Value)]) -> String {
+    let mut events =
+        vec![json!({"type":"message_start","message":{"model":"claude-opus-5-5","usage":{"input_tokens":100}}})];
+    for (index, (id, name, input)) in calls.iter().enumerate() {
+        events.push(json!({"type":"content_block_start","index":index,"content_block":{"type":"tool_use","id":id,"name":name,"input":{}}}));
+        events.push(json!({"type":"content_block_delta","index":index,"delta":{"type":"input_json_delta","partial_json":input.to_string()}}));
+        events.push(json!({"type":"content_block_stop","index":index}));
+    }
+    events.push(json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":10}}));
+    events.push(json!({"type":"message_stop"}));
+    sse(&events)
+}
+
+/// The text a request's JSON body holds, its escapes undone (what the
+/// model reads): every string in it, one after another.
+#[cfg(feature = "sqlite")]
+fn json_strings(sent: &str) -> String {
+    fn strings(v: &Value, out: &mut String) {
+        match v {
+            Value::String(s) => out.push_str(s),
+            Value::Array(a) => a.iter().for_each(|v| strings(v, out)),
+            Value::Object(o) => o.values().for_each(|v| strings(v, out)),
+            _ => {}
+        }
+    }
+    let body = sent.split_once("\r\n\r\n").map_or(sent, |(_, body)| body);
+    let mut out = String::new();
+    if let Ok(v) = serde_json::from_str::<Value>(body) {
+        strings(&v, &mut out);
+    }
+    out
+}
+
+/// Whatever a model is asked, by whichever path, the bytes sent to it hold
+/// no row: not the first prompt, not the answers to its lookups (the
+/// tables it finds and describes), not explain mode, not `context`. Every
+/// table has a value in it no schema would hold.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_model_is_never_sent_a_row_by_any_path() {
+    let dir = tempfile::tempdir().unwrap();
+    saved_shop(dir.path()).await;
+    let db =
+        crate::db::Database::connect(crate::db::tests::file_params(&dir.path().join("shop.db"), false)).await.unwrap();
+    let rows = "insert into orders values (1, 1, 9876.54);
+                insert into products values (1, 'Zebra-Widget-77');
+                insert into order_items values (1, 1, 1, 314159);
+                insert into audit_log values (1, 'PAYLOAD-NEVER-SENT');";
+    db.run(rows, 1).await.unwrap();
+    db.close().await;
+    let secrets = ["secret@example.com", "9876.54", "Zebra-Widget-77", "314159", "PAYLOAD-NEVER-SENT"];
+
+    // A model that looks up the tables itself, in the two rounds it has:
+    // finds them by words, then describes every one, before it answers.
+    let describe = |id: &'static str, table: &str| (id, "describe_table", json!({ "name": table }));
+    let replies = vec![
+        (
+            200,
+            claude_tool_calls(&[
+                ("toolu_f", "find_tables", json!({ "words": "audit payload widget" })),
+                describe("toolu_1", "customers"),
+                describe("toolu_2", "orders"),
+            ]),
+        ),
+        (
+            200,
+            claude_tool_calls(&[
+                describe("toolu_3", "products"),
+                describe("toolu_4", "order_items"),
+                describe("toolu_5", "audit_log"),
+            ]),
+        ),
+        (200, claude_answer("```sql\nSELECT count(*) FROM audit_log\n```\nCounts them.")),
+        // Then explain mode, on SQL that would read them all.
+        (200, claude_answer("It lists every customer and their orders.")),
+    ];
+    let (url, server) = fake_model(replies).await;
+    let config = format!(
+        "[[models]]\nname = \"near\"\napi = \"anthropic\"\nurl = \"{url}\"\nmodel = \"claude-opus-5-5\"\ntools = true\n"
+    );
+    std::fs::write(dir.path().join("config.toml"), config).unwrap();
+    let _gateway = start(dir.path(), None);
+    let mut client = connect(dir.path()).await;
+
+    let ask = json!({ "project": "p", "connection": "shop", "question": "what does the audit log hold" });
+    let answer = client.call("ask", ask).await.unwrap();
+    assert_eq!(answer["looked_at"].as_array().map(Vec::len), Some(5), "{answer}");
+    let explain = json!({ "project": "p", "connection": "shop", "explain": true,
+        "question": "SELECT * FROM customers JOIN orders ON orders.customer_id = customers.id" });
+    client.call("ask", explain).await.unwrap();
+    let context = json!({ "project": "p", "connection": "shop", "question": "customers orders products audit" });
+    let shown = client.call("context", context).await.unwrap().to_string();
+
+    let requests = server.await.unwrap();
+    assert_eq!(requests.len(), 4, "every turn reached the model");
+    // The lookups were answered, with columns only a description holds
+    // (customers' `country` in the first round, order_items' `qty` in the
+    // second): what the test looks for in them reached the model.
+    assert!(!requests[0].contains("country") && !requests[0].contains("qty"), "not in the first prompt already");
+    assert!(requests[1].contains("country") && requests[1].contains("tool_result"), "{}", requests[1]);
+    assert!(requests[2].contains("qty") && requests[2].contains("tool_result"), "{}", requests[2]);
+    for (i, sent) in requests.iter().chain([&shown]).enumerate() {
+        let read = json_strings(sent);
+        assert!(!read.is_empty(), "request {i} is JSON");
+        for secret in secrets {
+            assert!(!sent.contains(secret) && !read.contains(secret), "request {i} holds {secret}: {sent}");
+        }
+    }
 }
 
 #[cfg(feature = "sqlite")]
