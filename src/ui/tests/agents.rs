@@ -68,18 +68,13 @@ fn agent_activity_window() {
 fn asking_in_plain_language_and_sharing_a_schema() {
     let (mut app, _dir) = query_app();
     app.connection.form.name = "prod".into();
-    app.popups.ask_prompt = Some(crate::app::LineInput::new("revenue per country last month"));
-    let screen = render(&mut app, 110, 24);
-    assert!(screen.contains("ASK ABOUT PROD"), "{screen}");
-    assert!(screen.contains("? revenue per country last month"), "{screen}");
-    assert!(screen.contains("it lands in the editor and doesn't run"), "{screen}");
-    app.popups.ask_prompt = None;
     app.popups.confirm = Some(Confirm {
         message: "Send shop's table and column names to the model?".into(),
         details: vec!["project 'shop' shares its schemas only with models on this machine".into()],
         danger: false,
         action: ConfirmAction::ShareSchema {
             question: crate::app::query_screen::ask::Question {
+                at: None,
                 text: "x".into(),
                 tab: 0,
                 connection: "prod".into(),
@@ -108,11 +103,78 @@ fn asking_in_plain_language_and_sharing_a_schema() {
 }
 
 #[test]
+fn on_a_connection_the_memory_window_is_its_databases_ontology() {
+    let (mut app, _dir) = query_app();
+    use crate::app::windows::memory::MemoryLine;
+    use podelis_ai::ontology::outline::SectionKind as K;
+    let header = |kind, subject: &str| MemoryLine::Header { kind, subject: subject.into() };
+    let fact = |id: i64, subject: &str, relation: &str, value: &str, database: &str, section, confirmed: bool| {
+        let source = if confirmed { "user" } else { "model:claude" };
+        let fact = podelis_ai::memory::Fact {
+            id,
+            subject: subject.into(),
+            relation: relation.into(),
+            value: value.into(),
+            source: source.into(),
+            confirmed,
+            at: String::new(),
+            database: database.into(),
+        };
+        MemoryLine::Fact { fact, section: Some(section) }
+    };
+    app.popups.memory_view = Some(crate::app::windows::memory::MemoryView {
+        database: Some("shop".into()),
+        lines: vec![
+            header(K::Table, "orders"),
+            fact(1, "orders", "excluded by default", "status = 3", "shop", K::Table, true),
+            header(K::Column, "orders.status"),
+            fact(2, "orders.status", "means", "3 = cancelled", "", K::Column, true),
+            header(K::Term, "revenue"),
+            fact(3, "revenue", "defined as", "sum(orders.total)", "shop", K::Term, true),
+            header(K::Suggested, ""),
+            fact(4, "orders.total", "is", "with VAT", "shop", K::Suggested, false),
+        ],
+        ..Default::default()
+    });
+    let screen = render(&mut app, 120, 26);
+    assert!(screen.contains("ONTOLOGY · SHOP · shop"), "{screen}");
+    assert!(screen.contains(" table orders"), "{screen}");
+    assert!(screen.contains("     excluded by default status = 3  · user"), "{screen}");
+    assert!(screen.contains("       means 3 = cancelled  · user · every database"), "{screen}");
+    assert!(screen.contains(" term revenue"), "{screen}");
+    assert!(screen.contains("suggested by a model"), "{screen}");
+    assert!(screen.contains("orders.total is with VAT  · model:claude, not confirmed: c"), "{screen}");
+    assert!(screen.contains("p this or every database · E your editor"), "{screen}");
+    // `a` on a header: the fact starts with what it's about.
+    app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+    let typed = app.popups.memory_view.as_ref().unwrap().adding.as_ref().map(|i| i.text().to_string());
+    assert_eq!(typed.as_deref(), Some("orders "));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    // `e` on a header does nothing: it isn't a fact.
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+    assert!(app.popups.memory_view.as_ref().unwrap().adding.is_none());
+}
+
+#[test]
 fn the_memory_window_marks_what_waits_for_the_user() {
     let (mut app, _dir) = query_app();
-    let fact = |id: i64, subject: &str, value: &str, confirmed: bool, source: &str| serde_json::json!({ "id": id, "subject": subject, "relation": "means", "value": value, "confirmed": confirmed, "source": source });
+    let fact = |id: i64, subject: &str, value: &str, confirmed: bool, source: &str| {
+        crate::app::windows::memory::MemoryLine::Fact {
+            fact: podelis_ai::memory::Fact {
+                id,
+                subject: subject.into(),
+                relation: "means".into(),
+                value: value.into(),
+                source: source.into(),
+                confirmed,
+                at: String::new(),
+                database: String::new(),
+            },
+            section: None,
+        }
+    };
     app.popups.memory_view = Some(crate::app::windows::memory::MemoryView {
-        facts: vec![
+        lines: vec![
             fact(1, "orders.status", "3 = cancelled", true, "user"),
             fact(2, "orders.total", "VAT included", false, "model:claude"),
             fact(
@@ -147,4 +209,34 @@ fn the_memory_window_marks_what_waits_for_the_user() {
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     let view = app.popups.memory_view.as_ref().unwrap();
     assert!(view.adding.is_none() && view.editing.is_none());
+}
+
+/// The edits' plan scrolls no further than its end, and `y` waits until
+/// every change has been in sight.
+#[test]
+fn the_edits_plan_scrolls_to_its_end_and_no_further() {
+    let (mut app, dir) = query_app();
+    let file = dir.path().join("edits.yaml");
+    std::fs::write(&file, "database: shop\n").unwrap();
+    let adds: Vec<String> = (0..40).map(|i| format!("orders.c{i} means {i}")).collect();
+    app.popups.memory_view = Some(crate::app::windows::memory::MemoryView {
+        database: Some("shop".into()),
+        plan: Some((serde_json::json!({ "add": adds }), file)),
+        ..Default::default()
+    });
+    let _ = render(&mut app, 100, 20);
+    let shown = app.popups.memory_view.as_ref().unwrap().plan_shown.get();
+    assert!(shown > 0 && shown < 41, "{shown}");
+    // `y` before the end has been seen: said, nothing loaded.
+    app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    assert!(app.popups.memory_view.as_ref().unwrap().plan.is_some());
+    for _ in 0..10 {
+        app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+    }
+    let scroll = app.popups.memory_view.as_ref().unwrap().plan_scroll;
+    assert_eq!(scroll, 41 - shown, "stopped at the end");
+    app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.popups.memory_view.as_ref().unwrap().plan_scroll, scroll - 1, "↑ moves at once");
+    let screen = render(&mut app, 100, 20);
+    assert!(screen.contains("orders.c38 means 38"), "{screen}");
 }

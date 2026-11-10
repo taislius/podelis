@@ -208,8 +208,9 @@ pub trait SqlDialect: Backend {
         None
     }
     /// A query listing the tables a rollback doesn't undo (MySQL's
-    /// non-InnoDB ones), as one text value; `None` where every table rolls
-    /// back.
+    /// non-InnoDB ones): a row each, its schema, its name, and whether
+    /// it's in the session's own database (`1`); `None` where every table
+    /// rolls back.
     fn tables_without_rollback(&self) -> Option<&'static str> {
         None
     }

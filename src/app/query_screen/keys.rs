@@ -62,8 +62,8 @@ impl App {
         }
         // Tab after a partial word completes it; otherwise (or after Esc)
         // it moves focus.
-        if key.code == KeyCode::Tab && !after_esc && self.tab_completes() {
-            return self.open_completion();
+        if key.code == KeyCode::Tab && !after_esc && self.tab_completes() && self.complete_on_tab() {
+            return;
         }
         match action {
             Some(Action::Complete) if self.focus == Focus::Editor && self.editor_inserting() => {
@@ -176,11 +176,6 @@ impl App {
                     input.insert_str(text);
                 }
             }
-            Some(Overlay::AskPrompt) => {
-                if let Some(input) = &mut self.popups.ask_prompt {
-                    input.insert_str(text);
-                }
-            }
             Some(Overlay::Memory) => {
                 if let Some(input) = self.popups.memory_view.as_mut().and_then(|v| v.adding.as_mut()) {
                     input.insert_str(text);
@@ -231,7 +226,6 @@ impl App {
     pub(in crate::app) fn prompt_text(&self) -> Option<String> {
         let text = match self.top_overlay()? {
             Overlay::PipePrompt => self.popups.pipe_prompt.as_ref()?.text(),
-            Overlay::AskPrompt => self.popups.ask_prompt.as_ref()?.text(),
             Overlay::TabPrompt => self.popups.tab_prompt.as_ref()?.text.text(),
             Overlay::Palette => self.popups.palette.as_ref().filter(|p| p.searching())?.query.text(),
             Overlay::Library => self.popups.library_view.as_ref().filter(|v| !v.confirm_delete)?.query.text(),
@@ -390,7 +384,6 @@ impl App {
         match self.top_overlay() {
             Some(Overlay::Menu) => self.handle_menu_key(key),
             Some(Overlay::PipePrompt) => self.handle_pipe_prompt_key(key),
-            Some(Overlay::AskPrompt) => self.handle_ask_prompt_key(key),
             Some(Overlay::Memory) => self.handle_memory_key(key),
             Some(Overlay::RowForm) => self.handle_row_form_key(key),
             Some(Overlay::Palette) => self.handle_palette_key(key),

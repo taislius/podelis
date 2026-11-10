@@ -800,15 +800,33 @@ async fn unrollable(db: &Database) -> Option<String> {
     let dialect = engine.dialect()?;
     let sql = dialect.tables_without_rollback()?;
     // (Not run again on a new session: inside a sandbox that would leave it.)
-    let outcome = match db.run_once(sql, 1).await {
+    let outcome = match db.run_once(sql, 10_000).await {
         Ok(outcome) => outcome,
         Err(e) => {
             return Some(format!("couldn't check that a dry run can be rolled back: {}", crate::db::error_message(&e)));
         }
     };
-    let tables = outcome.rows.first().and_then(|r| r.first().cloned().flatten())?;
+    // Any database's, not only the session's: an agent may name another
+    // (`archive.log`), and its write there would stay while the dry run
+    // says nothing changed.
+    let found: Vec<String> = outcome
+        .rows
+        .iter()
+        .filter_map(|r| {
+            let (schema, table) = (r.first().cloned().flatten()?, r.get(1).cloned().flatten()?);
+            let here = r.get(2).cloned().flatten().as_deref() == Some("1");
+            Some(if here { table } else { format!("{schema}.{table}") })
+        })
+        .collect();
+    if found.is_empty() {
+        return None;
+    }
+    let tables = match found.len() {
+        n if n > 10 => format!("{}, and {} more", found[..10].join(", "), n - 10),
+        _ => found.join(", "),
+    };
     Some(format!(
-        "this database has tables a rollback can't undo ({tables}: not InnoDB), so agents can't write here, \
+        "this server has tables a rollback can't undo ({tables}: not InnoDB), so agents can't write here, \
          not even as a dry run"
     ))
 }

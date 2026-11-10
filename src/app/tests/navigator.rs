@@ -258,9 +258,11 @@ async fn a_far_model_sees_the_schema_once_allowed_and_always_saves_it() {
     let config = "[[models]]\nname = \"far\"\napi = \"openai\"\nurl = \"https://models.invalid/v1\"\nmodel = \"x\"\nkey_command = \"echo sk-x\"\n";
     let mut app = asking_app(dir.path(), config).await;
     let _gateway = crate::gateway::tests::start(dir.path(), None);
+    // A question in the editor: Ctrl+K q starts it, Ctrl+K q on it asks it.
+    app.focus = Focus::Editor;
     app.run_action(Action::Ask);
     type_text(&mut app, "customers by country");
-    app.handle_key(key(KeyCode::Enter));
+    app.run_action(Action::Ask);
     until_answered(&mut app).await;
     let confirm = app.popups.confirm.as_ref().expect("asks whether to send the schema");
     assert!(matches!(confirm.action, ConfirmAction::ShareSchema { .. }));

@@ -35,6 +35,10 @@ pub trait QueryLanguage: Sync {
     fn keywords(&self) -> &'static [&'static str] {
         &[]
     }
+    /// What starts a comment to the end of the line.
+    fn line_comment(&self) -> &'static str {
+        "//"
+    }
     /// Its statement that begins, commits or rolls back a transaction on
     /// the session, as SQL's `BEGIN` / `COMMIT` / `ROLLBACK` (`None`: it
     /// has none). Whether the server takes it is the server's.
@@ -134,6 +138,15 @@ pub enum TokenKind {
 pub struct Token {
     pub kind: TokenKind,
     pub range: Range<usize>,
+}
+
+/// What starts a comment to the end of the line in `engine`'s language:
+/// SQL's `--`, mongosh's `//`.
+pub fn line_comment(engine: Engine) -> &'static str {
+    match engine.backend().language() {
+        Language::Sql(_) => "--",
+        Language::Other(language) => language.line_comment(),
+    }
 }
 
 /// Splits `text` into tokens covering every byte. Token boundaries always

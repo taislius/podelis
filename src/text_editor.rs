@@ -321,6 +321,23 @@ impl TextEditor {
         self.anchor = (start != end).then_some(start);
     }
 
+    /// Rows `rows` replaced by `new` (an empty range inserts before its
+    /// start), the cursor then at `cursor` (row, column in chars): one
+    /// undo takes it all back.
+    pub fn replace_rows(&mut self, rows: std::ops::Range<usize>, new: Vec<String>, cursor: Pos) {
+        let mut lines = self.lines.clone();
+        let rows = rows.start.min(lines.len())..rows.end.min(lines.len());
+        lines.splice(rows, new);
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+        let text = lines.join("\n");
+        let row = cursor.0.min(lines.len() - 1);
+        let before: usize = lines[..row].iter().map(|l| l.len() + 1).sum();
+        let offset = before + char_to_byte_idx(&lines[row], cursor.1);
+        self.replace_text(&text, offset.min(text.len()));
+    }
+
     /// Replaces the whole text (undoable) and puts the cursor at byte
     /// `cursor` of the new text.
     pub fn replace_text(&mut self, text: &str, cursor: usize) {

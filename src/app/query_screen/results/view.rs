@@ -203,6 +203,7 @@ impl App {
 
     pub(in crate::app) fn show_results(&mut self, outcome: QueryOutcome) {
         self.close_cell_popups();
+        let added = std::mem::take(&mut self.tab.run.extra.added_statements);
         let sets = self.tab.grid.show(outcome);
         let Some(outcome) = &self.tab.grid.results else { return };
 
@@ -218,8 +219,9 @@ impl App {
         } else {
             tn!("run.affected_in", outcome.rows_affected.unwrap_or(0), time = elapsed)
         };
-        if outcome.statements > 1 {
-            let _ = write!(status, " · {}", tn!("run.statements", outcome.statements));
+        let statements = outcome.statements.saturating_sub(added);
+        if statements > 1 {
+            let _ = write!(status, " · {}", tn!("run.statements", statements));
         }
         if sets > 1 {
             let _ = write!(status, " · {}", tn!("run.result_sets", sets));

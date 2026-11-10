@@ -41,6 +41,7 @@
 .Ar connection question
 .Nm
 .Op Fl p Ar project
+.Op Fl c Ar connection
 .Cm memory
 .Op Cm list Oo Ar words Oc | Cm add Ar subject what | Cm forget Ar id | Cm confirm Ar id | Cm learn Ar folder | Cm export
 .Nm
@@ -53,6 +54,9 @@
 .Nm
 .Op Fl p Ar project
 .Cm gateway context Ar connection question
+.Nm
+.Op Fl p Ar project
+.Cm ontology Ar connection Op Cm turtle | Cm export Op Ar file | Cm import Ar file
 .Sh DESCRIPTION
 Without
 .Fl e ,
@@ -289,9 +293,14 @@ the project shares it: the first time,
 asks (in a terminal) whether to send it this once or always for the
 project.
 Exit status: 0 with SQL, 1 if none came, 3 if the schema wasn't sent.
-.It Cm memory Oo Fl p Ar project Oc Op Cm list | add | edit | forget | confirm | learn | export
+.It Cm memory Oo Fl p Ar project Oc Oo Fl c Ar connection Oc Op Cm list | add | edit | forget | confirm | learn | export
 What the project's team has said about its data, shown to models when
-they write SQL
+they write SQL.
+With
+.Fl c ,
+about that connection's database (named by its database's name, or its
+file's: the dev and prod connections to it share it); without, about
+every database in the project
 .Pq see Cm ask :
 facts such as
 .Ql podelis memory add orders.status 3 = cancelled
@@ -423,6 +432,30 @@ database's comment matched the question's words, or a foreign key joins it
 to such a table), then their columns, keys, where foreign keys point, and
 the database's comments on them.
 Never rows.
+.It Cm ontology Ar connection Op Cm turtle | Cm export Op Ar file | Cm import Ar file
+Shows the ontology of the saved
+.Ar connection Ns 's
+database: its tables, views and the foreign keys between them, with what
+the project's memory says of them (other names people use, business
+terms and their formulas, rows left out by default, what values mean;
+suggestions not yet confirmed are marked), and the facts naming a table
+or column the database doesn't have (stale).
+With
+.Cm turtle ,
+prints it as SKOS in Turtle, for other tools (confirmed facts only).
+.Cm export
+writes it as YAML (to
+.Ar file ,
+or standard output), to edit;
+.Cm import
+reads such a file back, lists what it changes (facts to add, confirm,
+move between this database and every database, or forget) and asks
+before changing anything
+.Pf ( Fl y :
+without asking; without a terminal and without
+.Fl y ,
+nothing is changed, exit code 3).
+Sends nothing to any model.
 The connection is opened read-only, as
 .Nm
 opens it (the keychain or its password command).

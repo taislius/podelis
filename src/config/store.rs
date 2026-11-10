@@ -49,6 +49,26 @@ pub struct ConnectionProfile {
     pub unknown: Unknown,
 }
 
+impl ConnectionProfile {
+    /// The database it's a connection to, as the project's memory (its
+    /// ontology) names it: the database's name, so dev, staging and prod
+    /// connections to `shop` share what's known of `shop`; for a file
+    /// (SQLite, DuckDB), the file's name without its folder or extension.
+    /// Without either, the connection's own name. Lowercase.
+    pub fn database_key(&self) -> String {
+        let key = if self.engine.is_file_based() {
+            let host = self.host.trim();
+            std::path::Path::new(host)
+                .file_stem()
+                .map_or_else(|| host.to_string(), |s| s.to_string_lossy().into_owned())
+        } else {
+            self.database.trim().to_string()
+        };
+        let key = if key.is_empty() || key == ":memory:" { self.name.trim().to_string() } else { key };
+        key.to_lowercase()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
     /// Stable id: keys the project's keychain entries and history file, so
@@ -449,7 +469,14 @@ pub fn write_atomic(path: &Path, text: &str) -> Result<()> {
         restrict(parent, 0o700);
     }
     let tmp = path.with_extension("tmp");
-    fs::write(&tmp, text)?;
+    // The user's alone from the start, not after it's written.
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let _ = fs::remove_file(&tmp);
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+        file.write_all(text.as_bytes())?;
+    }
     restrict(&tmp, 0o600);
     fs::rename(&tmp, path)?;
     Ok(())
@@ -519,6 +546,25 @@ mod tests {
             password_command: Vec::new(),
             legacy_keychain: false,
         }
+    }
+
+    #[test]
+    fn connections_to_one_database_share_its_key() {
+        let on = |name: &str, host: &str, database: &str| ConnectionProfile {
+            host: host.into(),
+            database: database.into(),
+            ..profile(name)
+        };
+        // dev and prod of `Shop`: one database, whatever the host.
+        assert_eq!(on("dev", "localhost", "Shop").database_key(), "shop");
+        assert_eq!(on("prod", "db.example.com", "shop").database_key(), "shop");
+        // No database named: the connection's own name.
+        assert_eq!(on("Warehouse", "dw", " ").database_key(), "warehouse");
+        // A file: its name, without folder or extension.
+        let file = ConnectionProfile { engine: Engine::Sqlite, ..on("local", "/data/Shop.db", "") };
+        assert_eq!(file.database_key(), "shop");
+        let memory = ConnectionProfile { engine: Engine::Sqlite, ..on("scratch", ":memory:", "") };
+        assert_eq!(memory.database_key(), "scratch");
     }
 
     fn temp_store() -> (ConnectionStore, tempfile::TempDir) {

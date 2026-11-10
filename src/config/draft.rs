@@ -96,6 +96,22 @@ impl ConnectionDraft {
         Ok(draft)
     }
 
+    /// A database file's path made absolute, from the current folder: a
+    /// file opened from the command line is saved as a connection, and a
+    /// relative path would point elsewhere when Podėlis is next started in
+    /// another folder. `:memory:` stays as it is.
+    pub fn with_absolute_file(mut self) -> Self {
+        let host = self.host.trim();
+        if self.engine.is_file_based()
+            && !host.is_empty()
+            && host != ":memory:"
+            && let Ok(path) = std::path::absolute(host)
+        {
+            self.host = path.to_string_lossy().into_owned();
+        }
+        self
+    }
+
     pub fn to_profile(&self) -> ConnectionProfile {
         ConnectionProfile {
             unknown: crate::config::store::Unknown::default(),

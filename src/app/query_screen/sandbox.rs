@@ -142,6 +142,26 @@ fn written_tables(sql: &str, engine: crate::db::Engine) -> Vec<String> {
 }
 
 impl App {
+    /// Why `sql` can't run in the sandbox or rollback-only: it writes a
+    /// table a rollback doesn't undo (MySQL's `MyISAM`, `MEMORY`), so the
+    /// write would stay while nothing should.
+    pub(in crate::app) fn unrollable_refusal(&self, sql: &str) -> Option<String> {
+        let label = match self.connection.tx_mode {
+            TxMode::Sandbox => t!("review.sandbox"),
+            TxMode::RollbackOnly => t!("review.rollback_only"),
+            _ => return None,
+        };
+        if self.connection.unrollable.is_empty() {
+            return None;
+        }
+        let hit: Vec<String> = written_tables(sql, self.engine())
+            .into_iter()
+            .filter(|t| self.connection.unrollable.iter().any(|u| u.is(t)))
+            .collect();
+        let switch = self.keymap.label(crate::config::keys::Action::TxMode);
+        (!hit.is_empty()).then(|| t!("sandbox.unrollable", tables = hit.join(", "), label = label, switch = switch))
+    }
+
     /// Runs `sql` as the sandbox's next step: in its transaction (begun by
     /// the first), after a savepoint of its own.
     pub(super) fn run_sandbox_step(&mut self, sql: &str, offset: usize, filled: Option<Filled>, purpose: RunPurpose) {
@@ -165,7 +185,9 @@ impl App {
             rows: 0,
         };
         self.tab.run.extra.sandbox_step = Some(PendingStep { number, step });
+        let added = usize::from(!begin.is_empty()) + 1;
         self.run_now(wrapped.sql.clone(), offset, infos, purpose, Some(wrapped));
+        self.tab.run.extra.added_statements = added;
     }
 
     /// Whether a sandbox here works on a copy: a SQLite file (not one in

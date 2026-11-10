@@ -78,6 +78,116 @@ pub async fn run(command: GatewayCommand, config_dir: &Path, project: Option<&st
     }
 }
 
+/// `ontology <connection> [turtle | export [<file>] | import <file>]`: the
+/// connection's ontology (its database's catalog and what the project's
+/// memory says of it) as text, as SKOS Turtle, as YAML to edit, or a YAML
+/// file loaded back, saying what changes first. Sends nothing to models.
+pub async fn ontology(config_dir: &Path, project: Option<&str>, words: &[String], yes: bool) -> i32 {
+    let mut client = match started(config_dir, "podelis ontology").await {
+        Ok(client) => client,
+        Err(e) => return fail(&e),
+    };
+    let dir = std::env::current_dir().ok().map(|d| d.display().to_string());
+    let mut params = json!({ "connection": words[0], "dir": dir });
+    if let Some(project) = project {
+        params["project"] = json!(project);
+    }
+    match words.get(1).map(String::as_str) {
+        Some("import") => import_ontology(&mut client, params, &words[2], yes).await,
+        action => show_ontology(&mut client, params, action, words.get(2), &words[0], project).await,
+    }
+}
+
+/// `ontology <connection> [turtle | yaml | export [<file>]]`: as text, SKOS
+/// Turtle or YAML, written out or to `file`.
+async fn show_ontology(
+    client: &mut Client,
+    params: Value,
+    action: Option<&str>,
+    file: Option<&String>,
+    connection: &str,
+    project: Option<&str>,
+) -> i32 {
+    let key = match action {
+        Some("turtle") => "turtle",
+        Some("export" | "yaml") => "yaml",
+        _ => "text",
+    };
+    let mut params = params;
+    params["format"] = json!(key);
+    let built = match client.call("ontology", params).await {
+        Ok(built) => built,
+        Err(e) => return fail(&e),
+    };
+    let text = built[key].as_str().unwrap_or_default();
+    let Some(file) = file else {
+        let _ = write!(std::io::stdout(), "{text}");
+        return 0;
+    };
+    match std::fs::write(file, text) {
+        Ok(()) => {
+            let project = project.map(|p| format!("-p '{p}' ")).unwrap_or_default();
+            let again = format!("podelis ontology {project}{connection} import {file}");
+            say(&format!("Wrote {file}: edit it, then load it back with `{again}`."), 0)
+        }
+        Err(e) => say(&format!("couldn't write {file}: {e}"), 1),
+    }
+}
+
+/// `ontology <connection> import <file>`: what loading the edited file
+/// would change, as the app's `E` shows it; changed so after a yes (or
+/// `-y`).
+async fn import_ontology(client: &mut Client, mut params: Value, file: &str, yes: bool) -> i32 {
+    use std::io::IsTerminal as _;
+    let text = match std::fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(e) => return say(&format!("couldn't read {file}: {e}"), 2),
+    };
+    params["text"] = json!(text);
+    let planned = match client.call("ontology.import", params.clone()).await {
+        Ok(planned) => planned,
+        Err(e) => return fail(&e),
+    };
+    let mut out = std::io::stdout();
+    if let Some(kept) = planned["kept"].as_u64().filter(|n| *n > 0) {
+        let _ = writeln!(out, "Kept: {kept} fact(s) said since the file was exported, though it doesn't have them.");
+    }
+    let lines = super::ontology::plan_lines(&planned);
+    if lines.is_empty() {
+        return say(&format!("Nothing to change: {file} says what the memory does."), 0);
+    }
+    for (heading, line) in lines {
+        let _ = if heading { writeln!(out, "{line}:") } else { writeln!(out, "  {line}") };
+    }
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            return say("Not changed: run it in a terminal to answer, or add -y.", 3);
+        }
+        let _ = write!(out, "Change the memory so? [y/N] ");
+        let _ = out.flush();
+        let mut answer = String::new();
+        let _ = std::io::stdin().read_line(&mut answer);
+        if !answer.trim().eq_ignore_ascii_case("y") {
+            return say("Not changed.", 3);
+        }
+    }
+    params["apply"] = json!(true);
+    match client.call("ontology.import", params).await {
+        Ok(done) => {
+            let n = |k: &str| done[k].as_u64().unwrap_or(0);
+            let said = format!(
+                "Done: {} added, {} confirmed, {} moved, {} forgotten.",
+                n("added"),
+                n("confirmed"),
+                n("moved"),
+                n("forgotten")
+            );
+            say(&said, 0)
+        }
+        Err(e) => fail(&e),
+    }
+}
+
 /// `context <connection> <question…>`: what a model would be shown, and
 /// why each table is there.
 async fn context(config_dir: &Path, project: Option<&str>, words: &[String]) -> i32 {
@@ -111,7 +221,7 @@ async fn context(config_dir: &Path, project: Option<&str>, words: &[String]) -> 
     }
     let stale: Vec<&str> = built["stale_facts"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
     if !stale.is_empty() {
-        let _ = writeln!(out, "Left out, the table they name isn't in this database (stale?):");
+        let _ = writeln!(out, "Left out, the table or column they name isn't in this database (stale?):");
         for f in stale {
             let _ = writeln!(out, "  {f}");
         }
@@ -424,7 +534,7 @@ fn allow(message: &str, data: Option<&Value>) -> Option<()> {
 }
 
 /// `memory [list [words] | add <subject> <what…> | forget <id> | export]`.
-pub async fn memory(config_dir: &Path, project: Option<&str>, words: &[String]) -> i32 {
+pub async fn memory(config_dir: &Path, project: Option<&str>, connection: Option<&str>, words: &[String]) -> i32 {
     let mut client = match started(config_dir, "podelis memory").await {
         Ok(client) => client,
         Err(e) => return fail(&e),
@@ -432,6 +542,10 @@ pub async fn memory(config_dir: &Path, project: Option<&str>, words: &[String]) 
     let mut params = json!({});
     if let Some(project) = project {
         params["project"] = json!(project);
+    }
+    // `-c prod`: about prod's database.
+    if let Some(connection) = connection {
+        params["connection"] = json!(connection);
     }
     let action = words.first().map_or("list", String::as_str);
     let (method, said) = match action {

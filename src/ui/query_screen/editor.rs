@@ -209,14 +209,22 @@ fn editor_lines(app: &App, first: usize, count: usize) -> Vec<Line<'static>> {
     // still see a `(` on the next line (and be coloured as a function).
     let last = (first + count).min(app.tab.editor.lines.len());
     let end = app.tab.editor.lines.iter().take(last + 1).map(|l| l.len() + 1).sum::<usize>().min(text.len());
-    let lines: Vec<Line> = highlighted_rows(&text, end, app.engine(), first, count)
+    // Questions for the model (`-- ? …`): in the accent, not dim comments,
+    // so they read as something Ctrl+K q acts on.
+    let rows = highlighted_rows(&text, end, app.engine(), first, count);
+    let questions = question_rows(&text, &rows, first);
+    let lines: Vec<Line> = rows
         .into_iter()
         .enumerate()
         .map(|(i, frags)| {
             let row = first + i;
+            let question = questions.get(i).copied().unwrap_or(false);
             let mut spans: Vec<Span<'static>> = frags
                 .into_iter()
-                .map(|(range, hl)| Span::styled(text[range].to_string(), highlight_style(hl)))
+                .map(|(range, hl)| {
+                    let style = if question && hl == Highlight::Comment { fg(t.accent) } else { highlight_style(hl) };
+                    Span::styled(text[range].to_string(), style)
+                })
                 .collect();
             for ((r0, c0), (r1, c1), style) in [error, hint].into_iter().flatten().chain(marks.iter().copied()) {
                 if (r0..=r1).contains(&row) {
@@ -259,6 +267,36 @@ struct Highlighted {
 
 thread_local! {
     static HIGHLIGHTED: RefCell<Option<Highlighted>> = const { RefCell::new(None) };
+}
+
+/// Which of the rows drawn (`rows`, from `first`) are (in) questions for
+/// the model, from their comments as highlighting found them: no second
+/// pass over the text. A comment that goes on from above (a block's later
+/// line) is read from its `/*`.
+fn question_rows(text: &str, rows: &[Vec<(Range<usize>, Highlight)>], first: usize) -> Vec<bool> {
+    let continues = |row: usize, at: usize| {
+        HIGHLIGHTED.with_borrow(|c| {
+            c.as_ref().and_then(|c| c.starts.get(row)).is_some_and(|&(start, clean)| start == at && !clean)
+        })
+    };
+    rows.iter()
+        .enumerate()
+        .map(|(i, frags)| {
+            frags.iter().filter(|(_, hl)| *hl == Highlight::Comment).any(|(range, _)| {
+                let opened =
+                    if continues(first + i, range.start) { text[..range.start].rfind("/*") } else { Some(range.start) };
+                let Some(at) = opened else { return false };
+                let rest = &text[at..];
+                let comment = if let Some(inner) = rest.strip_prefix("/*") {
+                    inner.find("*/").map_or(rest, |e| &rest[..e + 4])
+                } else {
+                    rest.split('\n').next().unwrap_or(rest)
+                };
+                let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
+                crate::app::query_screen::ask::asked(comment, text[line_start..at].trim().is_empty()).is_some()
+            })
+        })
+        .collect()
 }
 
 /// Lines of context re-highlighted before an edit: enough for a table name
@@ -674,10 +712,7 @@ fn tx_status(app: &App, width: u16) -> Vec<Span<'static>> {
         // A sandbox: its steps, in orange, and how to see and end it.
         TxnState::Open if app.connection.sandbox.is_some() => {
             let steps = app.connection.sandbox.as_ref().map_or(0, |s| s.steps.len());
-            vec![Span::styled(
-                format!("● {}", t!("tx.sandbox", steps = steps, key = key(Action::TxMode))),
-                bold(t.warn),
-            )]
+            vec![Span::styled(format!("● {}", tn!("tx.sandbox_steps", steps, key = key(Action::TxMode))), bold(t.warn))]
         }
         TxnState::Open => vec![Span::styled(
             format!("● {}", t!("tx.uncommitted", commit = key(Action::Commit), rollback = key(Action::Rollback))),

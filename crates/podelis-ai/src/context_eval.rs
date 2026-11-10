@@ -97,11 +97,12 @@ async fn measure() -> BTreeMap<String, Tally> {
             let dir = tempfile::tempdir().unwrap();
             let mut conn = crate::memory::open(dir.path(), "eval").await.unwrap();
             for (s, r, v) in &case.facts {
-                crate::memory::add(&mut conn, s, r, v, "user", true).await.unwrap();
+                crate::memory::add(&mut conn, s, r, v, "user", true, "").await.unwrap();
             }
-            crate::memory::for_question(&mut conn, &case.question).await.unwrap()
+            crate::memory::for_question(&mut conn, &case.question, None).await.unwrap()
         };
-        let built = super::for_question(schema, &case.question, &memory);
+        let catalog = crate::ontology::Ontology::from_catalog(schema);
+        let built = super::for_question(schema, &catalog, &case.question, &memory);
         let chosen: Vec<String> = built.tables.iter().map(|t| bare(&t.name)).collect();
         let t = out.entry(case.database.clone()).or_default();
         t.questions += 1;

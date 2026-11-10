@@ -164,6 +164,30 @@ impl App {
         (!items.is_empty()).then_some(Completion { items, selected: 0, prefix_len })
     }
 
+    /// Tab after a word: opens its completions, and says whether it did.
+    /// After a word nothing would complete, or one that's whole already
+    /// (`desc`), it doesn't, so Tab moves on: there's nothing to wait for.
+    /// While the schema still loads, it waits (and says so).
+    pub(in crate::app) fn complete_on_tab(&mut self) -> bool {
+        if let Some(completion) = self.compute_completion().filter(|c| !self.completion_is_typed(c)) {
+            self.popups.completion = Some(completion);
+            return true;
+        }
+        if self.connection.schema.as_ref().is_some_and(|s| s.loading) {
+            self.open_completion();
+            return true;
+        }
+        false
+    }
+
+    /// Whether every candidate is just the word already typed.
+    pub(in crate::app) fn completion_is_typed(&self, completion: &Completion) -> bool {
+        let line = &self.tab.editor.lines[self.tab.editor.cursor_row];
+        let col = self.tab.editor.cursor_col;
+        let typed: String = line.chars().take(col).skip(col.saturating_sub(completion.prefix_len)).collect();
+        completion.items.iter().all(|c| c.insert.eq_ignore_ascii_case(&typed))
+    }
+
     pub(in crate::app) fn open_completion(&mut self) {
         self.popups.completion = self.compute_completion();
         if self.popups.completion.is_none() {

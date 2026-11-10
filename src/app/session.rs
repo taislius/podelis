@@ -46,6 +46,34 @@ pub struct Connection {
     pub latency: Option<Duration>,
     /// The sandbox open on it (`TxMode::Sandbox`), while its transaction is.
     pub sandbox: Option<super::Sandbox>,
+    /// Its tables a rollback doesn't undo (MySQL's `MyISAM`, `MEMORY`…),
+    /// read with the catalog: the sandbox and rollback-only refuse to
+    /// write them, since the write would stay.
+    pub unrollable: Vec<Unrollable>,
+}
+
+/// A table a rollback doesn't undo: its schema (database) and name,
+/// lowercased.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unrollable {
+    pub schema: String,
+    pub table: String,
+}
+
+impl Unrollable {
+    /// Whether `name`, as a statement writes it (`audit`, `shop.audit`,
+    /// quoted or not), may be this table. A bare name is, whatever the
+    /// database: which one the session is in can change (`USE`) since the
+    /// list was read, and a write wrongly let through would stay. Named
+    /// with its database, it's that database's alone.
+    pub fn is(&self, name: &str) -> bool {
+        let parts: Vec<String> = name.split('.').map(|p| p.trim().trim_matches(['`', '"']).to_lowercase()).collect();
+        match parts.as_slice() {
+            [table] => *table == self.table,
+            [schema, table] => *schema == self.schema && *table == self.table,
+            _ => false,
+        }
+    }
 }
 
 fn swap_conn(app: &mut App, slot: &mut Connection) {
@@ -590,7 +618,8 @@ impl App {
                     }
                 }
             }
-            address => match ConnectionDraft::from_address(&address).map(ConnectForm::from) {
+            address => match ConnectionDraft::from_address(&address).map(|d| ConnectForm::from(d.with_absolute_file()))
+            {
                 Ok(form) => {
                     self.connection.form = form;
                     self.screen = Screen::Connect;

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn memory_changes_name_the_fact() {
-    use crate::app::windows::memory::GatewayPurpose;
+    use crate::app::windows::memory::{Change, GatewayPurpose};
     let (mut app, _dir) = test_app();
     let project = project_id(&app);
     app.current_project = Some(project.clone());
@@ -10,13 +10,13 @@ fn memory_changes_name_the_fact() {
     // has only its number).
     let shown = Some("orders.total unit euro cents".to_string());
     app.gateway_done(
-        GatewayPurpose::MemoryChanged("Confirmed", project.clone(), shown),
+        GatewayPurpose::MemoryChanged(Change::Confirmed, project.clone(), shown),
         Ok(serde_json::json!({ "id": 8 })),
     );
     assert_eq!(app.notes.status, "Confirmed orders.total unit euro cents");
     // Added: the fact the gateway kept, worded the same way.
     let kept = serde_json::json!({ "id": 9, "subject": "customers.email", "relation": "means", "value": "unique, lower-case" });
-    app.gateway_done(GatewayPurpose::MemoryChanged("Remembered", project, None), Ok(kept));
+    app.gateway_done(GatewayPurpose::MemoryChanged(Change::Remembered, project, None), Ok(kept));
     assert_eq!(app.notes.status, "Remembered customers.email means unique, lower-case");
 }
 
@@ -204,15 +204,19 @@ async fn a_question_puts_the_models_sql_in_the_editor_without_running_it() {
     let mut app = asking_app(dir.path(), &config).await;
     let _gateway = crate::gateway::tests::start(dir.path(), None);
     app.tab.editor.set_text("select 1;");
+    app.focus = Focus::Editor;
+    // Ctrl+K q off a question: a question line to type, under the cursor.
     app.run_action(Action::Ask);
-    assert!(app.popups.ask_prompt.is_some());
+    assert_eq!(app.tab.editor.text(), "select 1;\n-- ? ");
+    assert!(app.ask.asking.is_none(), "nothing asked yet");
     type_text(&mut app, "orders per country");
-    app.handle_key(key(KeyCode::Enter));
+    // Ctrl+K q on it asks it.
+    app.run_action(Action::Ask);
     assert!(app.ask.asking.is_some() && said(&app).starts_with("Asking…"));
     until_answered(&mut app).await;
     assert_eq!(
         app.tab.editor.text(),
-        "select 1;\n\n-- orders per country\n-- Counts orders per country.\n\
+        "select 1;\n-- ? orders per country\n-- ↳ near\n-- Counts orders per country.\n\
          SELECT c.country, count(*) AS orders FROM orders o JOIN customers c ON c.id = o.customer_id GROUP BY c.country;"
     );
     assert!(said(&app).contains("nothing ran"), "{}", said(&app));
@@ -224,9 +228,64 @@ async fn a_question_puts_the_models_sql_in_the_editor_without_running_it() {
 fn asking_needs_a_saved_connection() {
     let (mut app, _dir) = test_app();
     app.screen = Screen::Query;
+    let before = app.tab.editor.text();
     app.run_action(Action::Ask);
-    assert!(app.popups.ask_prompt.is_none());
+    assert_eq!(app.tab.editor.text(), before, "no question line where it can't be asked");
     assert!(said_error(&app), "{}", said(&app));
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn on_a_saved_connection_the_memory_window_is_its_databases_ontology() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = asking_app(dir.path(), "").await;
+    let _gateway = crate::gateway::tests::start(dir.path(), None);
+    let mut conn = podelis_ai::memory::open(dir.path(), &app.project().unwrap().id).await.unwrap();
+    // Every database's, this one's, another database's, and a model's guess.
+    podelis_ai::memory::add(&mut conn, "revenue", "defined as", "sum(x)", "user", true, "").await.unwrap();
+    podelis_ai::memory::add(&mut conn, "orders", "means", "sales", "user", true, "shop").await.unwrap();
+    podelis_ai::memory::add(&mut conn, "events", "means", "clicks", "user", true, "analytics").await.unwrap();
+    podelis_ai::memory::add(&mut conn, "orders", "is", "a guess", "model:near", false, "shop").await.unwrap();
+    drop(conn);
+    app.run_action(Action::Memory);
+    let facts = |app: &App| -> Vec<String> {
+        let view = app.popups.memory_view.as_ref().unwrap();
+        view.facts().iter().map(|f| f.value.clone()).collect()
+    };
+    for _ in 0..50 {
+        if app.popups.memory_view.as_ref().is_some_and(|v| !v.loading && !v.lines.is_empty()) {
+            break;
+        }
+        let event = tokio::time::timeout(Duration::from_secs(10), app.poll_db_event()).await.unwrap().unwrap();
+        app.handle_db_event(event);
+    }
+    let view = app.popups.memory_view.as_ref().unwrap();
+    assert_eq!(view.database.as_deref(), Some("shop"));
+    // The other database's fact isn't here; the rest are, under their lines.
+    assert_eq!(facts(&app), ["sales", "sum(x)", "a guess"], "{:?}", view.lines);
+    // `c` on the guess (found by its line) confirms it, then `p` moves it to every database.
+    let at = view.lines.iter().position(|l| l.fact().is_some_and(|f| f.value == "a guess")).unwrap();
+    app.popups.memory_view.as_mut().unwrap().selected = at;
+    app.handle_key(key(KeyCode::Char('c')));
+    let confirmed = |app: &App| {
+        app.popups.memory_view.as_ref().unwrap().facts().iter().any(|f| f.value == "a guess" && f.confirmed)
+    };
+    for _ in 0..50 {
+        if confirmed(&app) {
+            break;
+        }
+        let event = tokio::time::timeout(Duration::from_secs(10), app.poll_db_event()).await.unwrap().unwrap();
+        app.handle_db_event(event);
+    }
+    assert!(confirmed(&app), "{:?}", app.popups.memory_view.as_ref().unwrap().lines);
+    let mut conn = podelis_ai::memory::open(dir.path(), &app.project().unwrap().id).await.unwrap();
+    let guess = podelis_ai::memory::list(&mut conn, None, None)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|f| f.value == "a guess")
+        .unwrap();
+    assert_eq!(guess.database, "shop");
 }
 
 #[cfg(feature = "sqlite")]
@@ -237,28 +296,30 @@ async fn the_memory_window_adds_confirms_and_forgets_facts() {
     let _gateway = crate::gateway::tests::start(dir.path(), None);
     // A model's guess, waiting.
     let mut conn = podelis_ai::memory::open(dir.path(), &app.project().unwrap().id).await.unwrap();
-    podelis_ai::memory::add(&mut conn, "orders.total", "means", "VAT included", "model:near", false).await.unwrap();
+    podelis_ai::memory::add(&mut conn, "orders.total", "means", "VAT included", "model:near", false, "").await.unwrap();
     drop(conn);
+    // No saved connection on the tab: the project's facts, in a list.
+    app.connection.form.name.clear();
     app.run_action(Action::Memory);
     until_memory_loaded(&mut app, 1).await;
-    assert_eq!(app.popups.memory_view.as_ref().unwrap().facts[0]["confirmed"], serde_json::json!(false));
+    assert!(!app.popups.memory_view.as_ref().unwrap().facts()[0].confirmed);
     // `a`: as `podelis memory add`.
     app.handle_key(key(KeyCode::Char('a')));
     type_text(&mut app, "revenue is orders.total minus refunds");
     app.handle_key(key(KeyCode::Enter));
     until_memory_loaded(&mut app, 2).await;
-    let added = &app.popups.memory_view.as_ref().unwrap().facts[1];
-    assert_eq!((added["relation"].as_str(), added["value"].as_str()), (Some("is"), Some("orders.total minus refunds")));
+    let added = app.popups.memory_view.as_ref().unwrap().facts()[1].clone();
+    assert_eq!((added.relation.as_str(), added.value.as_str()), ("is", "orders.total minus refunds"));
     // `c` on the guess confirms it.
     app.handle_key(key(KeyCode::Char('c')));
     for _ in 0..50 {
-        if app.popups.memory_view.as_ref().unwrap().facts[0]["confirmed"] == serde_json::json!(true) {
+        if app.popups.memory_view.as_ref().unwrap().facts()[0].confirmed {
             break;
         }
         let event = tokio::time::timeout(Duration::from_secs(10), app.poll_db_event()).await.unwrap().unwrap();
         app.handle_db_event(event);
     }
-    assert_eq!(app.popups.memory_view.as_ref().unwrap().facts[0]["confirmed"], serde_json::json!(true));
+    assert!(app.popups.memory_view.as_ref().unwrap().facts()[0].confirmed);
     // `d` forgets the selected one.
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Char('d')));
@@ -274,9 +335,7 @@ async fn allowing_the_schema_asks_again_about_the_tab_it_came_from() {
     let config = "[[models]]\nname = \"far\"\napi = \"openai\"\nurl = \"https://models.invalid/v1\"\nmodel = \"x\"\nkey_command = \"echo sk-x\"\n";
     let mut app = asking_app(dir.path(), config).await;
     let _gateway = crate::gateway::tests::start(dir.path(), None);
-    app.run_action(Action::Ask);
-    type_text(&mut app, "customers by country");
-    app.handle_key(key(KeyCode::Enter));
+    ask_in_editor(&mut app, "customers by country");
     // Another tab meanwhile, not connected.
     app.new_tab(None, "", None);
     app.switch_conn(None);
@@ -299,9 +358,7 @@ async fn the_sharing_question_waits_for_a_confirmation_already_open() {
     let config = "[[models]]\nname = \"far\"\napi = \"openai\"\nurl = \"https://models.invalid/v1\"\nmodel = \"x\"\nkey_command = \"echo sk-x\"\n";
     let mut app = asking_app(dir.path(), config).await;
     let _gateway = crate::gateway::tests::start(dir.path(), None);
-    app.run_action(Action::Ask);
-    type_text(&mut app, "customers by country");
-    app.handle_key(key(KeyCode::Enter));
+    ask_in_editor(&mut app, "customers by country");
     // Meanwhile, the user asks to close the tab (it asks first).
     app.popups.confirm = Some(Confirm {
         message: "Close?".into(),
@@ -327,9 +384,7 @@ async fn esc_while_asking_does_its_own_job_first() {
     )
     .await;
     let _gateway = crate::gateway::tests::start(dir.path(), None);
-    app.run_action(Action::Ask);
-    type_text(&mut app, "customers");
-    app.handle_key(key(KeyCode::Enter));
+    ask_in_editor(&mut app, "customers");
     assert!(app.ask.asking.is_some());
     // A selection in the editor: Esc drops it, the question goes on.
     app.tab.editor.set_text("select 1");
@@ -347,13 +402,13 @@ fn a_late_memory_answer_for_another_project_is_dropped() {
     let (mut app, _dir) = test_app();
     let shown = app.current_project.clone().unwrap();
     app.popups.memory_view = Some(crate::app::windows::memory::MemoryView { project_id: shown, ..Default::default() });
-    let facts = serde_json::json!({ "facts": [{ "id": 1, "subject": "x" }] });
+    let facts = serde_json::json!({ "facts": [{ "id": 1, "subject": "x", "relation": "means", "value": "y" }] });
     let other = crate::app::windows::memory::GatewayPurpose::MemoryList("another-project".into());
     app.gateway_done(other, Ok(facts.clone()));
-    assert!(app.popups.memory_view.as_ref().unwrap().facts.is_empty());
+    assert!(app.popups.memory_view.as_ref().unwrap().lines.is_empty());
     let mine = crate::app::windows::memory::GatewayPurpose::MemoryList(app.current_project.clone().unwrap());
     app.gateway_done(mine, Ok(facts));
-    assert_eq!(app.popups.memory_view.as_ref().unwrap().facts.len(), 1);
+    assert_eq!(app.popups.memory_view.as_ref().unwrap().lines.len(), 1);
 }
 
 #[test]
@@ -385,9 +440,7 @@ async fn closing_another_tab_while_asking_keeps_the_question() {
     app.switch_tab(1);
     app.connection.form.name = "shop".into();
     let _gateway = crate::gateway::tests::start(dir.path(), None);
-    app.run_action(Action::Ask);
-    type_text(&mut app, "customers");
-    app.handle_key(key(KeyCode::Enter));
+    ask_in_editor(&mut app, "customers");
     assert_eq!(app.ask.asking.as_ref().unwrap().question.tab, 1);
     // Tab 0 closes: the question follows its tab to place 0.
     app.switch_tab(0);
@@ -445,4 +498,13 @@ fn an_agents_sandbox_writes_become_a_script() {
     assert!(script.starts_with("-- What claude-code wrote in its sandbox on dev"), "{script}");
     assert!(script.ends_with("insert into t values (1);\nupdate t set x = 2 where id < 3;\n"), "{script}");
     assert_eq!(app.tabs[app.active_tab].name, "Agent sandbox");
+}
+
+/// Asks `question` as a user does: `Ctrl+K q` starts a question line in
+/// the editor, the question is typed, `Ctrl+K q` on it asks it.
+fn ask_in_editor(app: &mut App, question: &str) {
+    app.focus = Focus::Editor;
+    app.run_action(Action::Ask);
+    type_text(app, question);
+    app.run_action(Action::Ask);
 }

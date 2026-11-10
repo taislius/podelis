@@ -541,10 +541,11 @@ fn space_twice_opens_the_command_menu_when_enabled() {
 fn esc_then_tab_leaves_the_editor_after_a_word() {
     let (mut app, _dir) = test_app();
     app.screen = Screen::Query;
-    type_text(&mut app, "select");
+    type_text(&mut app, "sel");
     assert!(app.tab_completes());
     app.handle_key(key(KeyCode::Tab));
-    assert_eq!(app.focus, Focus::Editor, "Tab after a word completes");
+    assert_eq!(app.focus, Focus::Editor, "Tab after a partial word completes");
+    assert!(app.popups.completion.is_some());
     app.popups.completion = None;
 
     app.handle_key(key(KeyCode::Esc));
@@ -555,9 +556,27 @@ fn esc_then_tab_leaves_the_editor_after_a_word() {
     // Any other key in between: Tab completes again.
     app.focus = Focus::Editor;
     app.handle_key(key(KeyCode::Esc));
-    type_text(&mut app, " x");
+    type_text(&mut app, " fro");
     app.handle_key(key(KeyCode::Tab));
     assert_eq!(app.focus, Focus::Editor);
+}
+
+#[test]
+fn tab_after_a_word_with_nothing_to_complete_moves_on() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    // A keyword typed in full: completing it would only give it back.
+    type_text(&mut app, "select 1 order by 1 desc");
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.focus, Focus::Results, "nothing to complete: Tab moves on");
+    assert!(app.popups.completion.is_none());
+    assert_eq!(app.tab.editor.text(), "select 1 order by 1 desc");
+
+    // A word nothing completes.
+    app.focus = Focus::Editor;
+    type_text(&mut app, " zzqx");
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.focus, Focus::Results);
 }
 
 #[test]
@@ -641,4 +660,94 @@ fn ctrl_k_can_wait_quietly_and_ctrl_shift_k_shows_the_menu_at_once() {
     app.help.visible = false;
     app.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::CONTROL | KeyModifiers::SHIFT));
     assert!(app.popups.palette.as_ref().is_some_and(|p| p.menu_shown() && !p.searching()));
+}
+
+#[test]
+fn clearing_the_status_leaves_no_empty_message() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    app.handling_input = true;
+    app.set_status("Saved".into(), false);
+    app.set_status(String::new(), false);
+    app.set_status("  ".into(), false);
+    let texts: Vec<&str> = app.notes.log.iter().map(|m| m.text.as_str()).collect();
+    assert_eq!(texts, ["Saved"]);
+}
+
+#[test]
+fn a_question_written_in_the_editor_gets_its_sql_under_it() {
+    use crate::app::query_screen::ask::Question;
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    app.tab.editor.set_text("-- ? customers per city\nSELECT 'mine';\n\n-- ? something else");
+    let asked =
+        Question { text: "customers per city".into(), tab: 0, connection: "c".into(), explain: false, at: Some(0) };
+    let answer = |sql: &str| serde_json::json!({ "model": "local", "sql": sql, "said": "Counts them." });
+    app.insert_answer(&asked, &answer("SELECT city, COUNT(*) FROM customers\n\nGROUP BY city"));
+    // Under the question, marked, the model's SQL as it wrote it (a blank
+    // line too); the user's own SQL kept, apart.
+    assert_eq!(
+        app.tab.editor.text(),
+        "-- ? customers per city\n-- ↳ local\n-- Counts them.\nSELECT city, COUNT(*) FROM customers\n\nGROUP BY city;\n\nSELECT 'mine';\n\n-- ? something else"
+    );
+    assert_eq!(app.tab.editor.cursor_row, 3, "on the SQL");
+    // Asked again: the answer replaced, not added: to its statement's end,
+    // blank line and all.
+    app.insert_answer(&asked, &answer("SELECT 2"));
+    assert_eq!(
+        app.tab.editor.text(),
+        "-- ? customers per city\n-- ↳ local\n-- Counts them.\nSELECT 2;\n\nSELECT 'mine';\n\n-- ? something else"
+    );
+    // A line added above meanwhile: the question is found where it is now.
+    app.tab.editor.set_text(&format!("SELECT 0;\n{}", app.tab.editor.text()));
+    app.insert_answer(&asked, &answer("SELECT 3"));
+    assert!(
+        app.tab.editor.text().starts_with(
+            "SELECT 0;\n-- ? customers per city\n-- ↳ local\n-- Counts them.\nSELECT 3;\n\nSELECT 'mine';"
+        ),
+        "{}",
+        app.tab.editor.text()
+    );
+    // One undo takes it back.
+    app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+    assert!(app.tab.editor.text().contains("SELECT 2;"), "{}", app.tab.editor.text());
+}
+
+#[test]
+fn asking_again_keeps_what_the_user_wrote_right_under_the_answer() {
+    use crate::app::query_screen::ask::Question;
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    // The user's statement right after the answer, no blank line between.
+    app.tab.editor.set_text("-- ? notes\n-- ↳ local\n-- Old.\nSELECT 1;\nSELECT 'mine';");
+    let asked = Question { text: "notes".into(), tab: 0, connection: "c".into(), explain: false, at: Some(0) };
+    let sql = "INSERT INTO notes VALUES ('line 1\n\nline 3')";
+    app.insert_answer(&asked, &serde_json::json!({ "model": "local", "sql": sql, "said": "New." }));
+    assert_eq!(
+        app.tab.editor.text(),
+        "-- ? notes\n-- ↳ local\n-- New.\nINSERT INTO notes VALUES ('line 1\n\nline 3');\n\nSELECT 'mine';",
+        "the string's blank line kept, and the user's SELECT (set apart)"
+    );
+}
+
+#[test]
+fn a_models_words_stay_inside_their_comments() {
+    use crate::app::query_screen::ask::Question;
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    app.tab.editor.set_text("-- ? anything");
+    let asked = Question { text: "anything".into(), tab: 0, connection: "c".into(), explain: false, at: Some(0) };
+    // A line break in what it assumed would end the `--` comment and make
+    // the rest SQL.
+    let answer = serde_json::json!({
+        "model": "local", "sql": "SELECT 1", "said": "Fine.\rDROP TABLE a;",
+        "suggested": [{ "subject": "t", "relation": "means", "value": "x\r\nDROP TABLE b;" }],
+        "problems": ["no\nDROP TABLE c;"],
+    });
+    app.insert_answer(&asked, &answer);
+    let text = app.tab.editor.text();
+    for line in text.lines().filter(|l| l.contains("DROP")) {
+        assert!(line.starts_with("-- "), "{text}");
+    }
+    assert!(!text.contains('\r'), "{text:?}");
 }

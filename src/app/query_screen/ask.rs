@@ -3,6 +3,13 @@
 //! the tables that matter; the SQL lands at the end of the editor, with
 //! the question above it, and never runs by itself.
 //!
+//! A question can also be written in the editor, among the SQL, as a
+//! comment: `-- ? revenue per city` (or `--?`), or `/*? … */` over several
+//! lines. `Ctrl+K q` with the cursor on it asks it, and the SQL comes right
+//! under it, after a `-- ↳ <model>` line; asking again replaces that answer
+//! (only one that starts so: SQL the user wrote there stays). Being
+//! comments, they're left alone by the server, lint and running.
+//!
 //! A model that isn't on this machine sees the project's schema only if
 //! the project shares it: otherwise the gateway refuses, and a question
 //! asks the user (`y` this once, `a` always for the project).
@@ -37,6 +44,75 @@ pub struct Question {
     pub connection: String,
     /// `text` is SQL to explain in plain words, not a question.
     pub explain: bool,
+    /// Written in the editor: its last line there (the answer goes under
+    /// it), not asked in the pop-up.
+    pub at: Option<usize>,
+}
+
+/// The mark after a question's comment opener on the first line of an
+/// answer written under it: asking again replaces what follows it.
+const ANSWER_MARK: &str = "↳";
+
+/// A question written in the editor: what it asks, and its rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Written {
+    pub text: String,
+    pub rows: std::ops::RangeInclusive<usize>,
+}
+
+/// The questions in `text`, as `engine`'s language reads its comments (so
+/// never inside a string): a line comment alone on its line whose text
+/// starts with `?` (`-- ? …`, `--?`, mongosh's `// ? …`), or a block
+/// comment `/*? … */`, over as many lines as it likes.
+pub(crate) fn questions(text: &str, engine: crate::db::Engine) -> Vec<Written> {
+    use crate::language::TokenKind;
+    let mut found = Vec::new();
+    let (mut row, mut counted) = (0, 0);
+    for token in crate::language::tokenize(text, engine) {
+        if token.kind != TokenKind::Comment {
+            continue;
+        }
+        row += text[counted..token.range.start].matches('\n').count();
+        counted = token.range.start;
+        let comment = &text[token.range.clone()];
+        let last = row + comment.matches('\n').count();
+        let line_start = text[..token.range.start].rfind('\n').map_or(0, |i| i + 1);
+        let alone = text[line_start..token.range.start].trim().is_empty();
+        if let Some(words) = asked(comment, alone) {
+            found.push(Written { text: words, rows: row..=last });
+        }
+    }
+    found
+}
+
+/// What a comment (its whole text, from `--`, `//` or `/*`) asks, if it's
+/// a question: a block comment `/*? … */`, or a line comment `-- ? …`
+/// that's `alone` on its line.
+pub(crate) fn asked(comment: &str, alone: bool) -> Option<String> {
+    let asked = if let Some(inner) = comment.strip_prefix("/*") {
+        inner.strip_suffix("*/").unwrap_or(inner).strip_prefix('?')
+    } else {
+        comment.get(2..).map(str::trim_start).and_then(|c| c.strip_prefix('?')).filter(|_| alone)
+    };
+    Some(asked?.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|words| !words.is_empty())
+}
+
+/// The question at `row`, if the cursor's line is (in) one: its text, and
+/// its last row.
+pub(crate) fn question_at(text: &str, engine: crate::db::Engine, row: usize) -> Option<(String, usize)> {
+    questions(text, engine).into_iter().find(|q| q.rows.contains(&row)).map(|q| (q.text, *q.rows.end()))
+}
+
+/// Which of `rows` are (in) questions, for drawing them.
+#[cfg(test)]
+pub(crate) fn question_rows(text: &str, engine: crate::db::Engine, rows: std::ops::Range<usize>) -> Vec<bool> {
+    let mut marked = vec![false; rows.len()];
+    for q in questions(text, engine) {
+        for row in q.rows.filter(|r| rows.contains(r)) {
+            marked[row - rows.start] = true;
+        }
+    }
+    marked
 }
 
 /// A question on its way to a model.
@@ -59,12 +135,90 @@ pub struct AskFailure {
 }
 
 impl App {
-    /// `Ctrl+K q`: asks for the question, for the tab's saved connection.
+    /// `Ctrl+K q`: on a question written in the editor, asks it; anywhere
+    /// else, starts one there (`-- ? `), to type and ask the same way.
     pub(super) fn open_ask_prompt(&mut self) {
         if let Some(why) = self.why_cant_ask() {
             return self.set_status(why, true);
         }
-        self.popups.ask_prompt = Some(LineInput::new(String::new()));
+        // A question written in the editor, at the cursor: asked as it is.
+        if self.focus == Focus::Editor
+            && let Some((text, at)) = question_at(&self.tab.editor.text(), self.engine(), self.tab.editor.cursor_row)
+        {
+            let connection = self.connection.form.name.clone();
+            let question = Question { text, tab: self.active_tab, connection, explain: false, at: Some(at) };
+            return self.start_ask(question, false);
+        }
+        self.start_question();
+    }
+
+    /// A new question line in the editor, the cursor after its `?`: on
+    /// the cursor's line when it's empty, else under it; at the end, from
+    /// another pane. Then `Ctrl+K q` on it asks it.
+    fn start_question(&mut self) {
+        let marker = format!("{} ? ", self.comment_opener());
+        let editor = &self.tab.editor;
+        let last = editor.lines.len() - 1;
+        let (rows, new, row) = if self.focus == Focus::Editor {
+            let here = editor.cursor_row.min(last);
+            if editor.lines[here].trim().is_empty() {
+                (here..here + 1, vec![marker.clone()], here)
+            } else {
+                (here + 1..here + 1, vec![marker.clone()], here + 1)
+            }
+        } else {
+            // From another pane: after everything, a blank line apart.
+            let keep = editor.lines.iter().rposition(|l| !l.trim().is_empty()).map_or(0, |i| i + 1);
+            let new = if keep == 0 { vec![marker.clone()] } else { vec![String::new(), marker.clone()] };
+            let row = keep + new.len() - 1;
+            (keep..editor.lines.len(), new, row)
+        };
+        self.tab.editor.replace_rows(rows, new, (row, marker.chars().count()));
+        self.edited();
+        self.focus = Focus::Editor;
+        let key = self.keymap.label(crate::config::keys::Action::Ask);
+        self.set_status(t!("ask.type_question", key = key), false);
+    }
+
+    /// The row after an earlier answer under the question ending at `row`
+    /// (`row + 1` if there's none): its mark, the comments after it, and
+    /// the one statement that follows them, to its `;`. What comes after
+    /// that, even with no blank line between, is the user's and stays.
+    fn answer_end(&self, row: usize, written: &[Written]) -> usize {
+        let opener = self.comment_opener();
+        let lines = &self.tab.editor.lines;
+        let mark = format!("{opener} {ANSWER_MARK}");
+        if !lines.get(row + 1).is_some_and(|l| l.trim_start().starts_with(&mark)) {
+            return row + 1;
+        }
+        // The next question isn't part of it, whatever it looks like.
+        let next = written.iter().map(|q| *q.rows.start()).find(|start| *start > row).unwrap_or(lines.len());
+        let mut sql = row + 2;
+        while sql < next.min(lines.len()) && lines[sql].trim_start().starts_with(opener) {
+            sql += 1;
+        }
+        if sql >= next.min(lines.len()) || lines[sql].trim().is_empty() {
+            return sql;
+        }
+        let text = self.tab.editor.text();
+        let start: usize = lines[..sql].iter().map(|l| l.len() + 1).sum();
+        let Some(statement) =
+            crate::language::statement_ranges(&text, self.engine()).into_iter().find(|r| r.end > start)
+        else {
+            return sql;
+        };
+        // On its first line, else it isn't the answer's.
+        if text[start..statement.start].contains('\n') {
+            return sql;
+        }
+        let last = text[..statement.end].matches('\n').count();
+        (last + 1).min(next)
+    }
+
+    /// How a line comment starts in this tab's language: `--` in SQL, `//`
+    /// in mongosh's.
+    fn comment_opener(&self) -> &'static str {
+        crate::language::line_comment(self.engine())
     }
 
     /// `Ctrl+K y y`: the statement at the cursor (or the selection) goes to
@@ -77,8 +231,13 @@ impl App {
         let Some(sql) = self.statement_or_selection() else {
             return self.set_status(t!("editor.no_statement_here").into(), true);
         };
-        let question =
-            Question { text: sql, tab: self.active_tab, connection: self.connection.form.name.clone(), explain: true };
+        let question = Question {
+            text: sql,
+            tab: self.active_tab,
+            connection: self.connection.form.name.clone(),
+            explain: true,
+            at: None,
+        };
         self.start_ask(question, false);
     }
 
@@ -98,26 +257,6 @@ impl App {
             return Some(t!("ask.needs_saved").into());
         }
         None
-    }
-
-    pub(super) fn handle_ask_prompt_key(&mut self, key: KeyEvent) {
-        let Some(input) = &mut self.popups.ask_prompt else { return };
-        match input.handle(key) {
-            InputResult::Cancel => self.popups.ask_prompt = None,
-            InputResult::Submit => {
-                let Some(text) = self.popups.ask_prompt.take().map(|q| q.text().trim().to_string()) else { return };
-                if !text.is_empty() {
-                    let question = Question {
-                        text,
-                        tab: self.active_tab,
-                        connection: self.connection.form.name.clone(),
-                        explain: false,
-                    };
-                    self.start_ask(question, false);
-                }
-            }
-            InputResult::Changed | InputResult::Moved | InputResult::Ignored => {}
-        }
     }
 
     /// Sends `question` to the gateway (started if it isn't running);
@@ -254,7 +393,8 @@ impl App {
                 if asking.question.explain {
                     self.show_explanation(&answer);
                 } else if asking.question.tab < self.tabs.len() {
-                    self.in_tab(asking.question.tab, |app| app.insert_answer(&asking.question.text, &answer));
+                    let question = asking.question;
+                    self.in_tab(question.tab, |app| app.insert_answer(&question, &answer));
                 }
             }
             Err(e) if e.code == Some(code::NOT_SHARED) => {
@@ -348,28 +488,33 @@ impl App {
     }
 
     /// The SQL at the end of the editor, a blank line apart, under the
-    /// question and what the model said, as comments; the cursor on it.
-    fn insert_answer(&mut self, question: &str, answer: &serde_json::Value) {
+    /// question and what the model said, as comments; the cursor on it. A
+    /// question written in the editor gets it right under it instead.
+    pub(in crate::app) fn insert_answer(&mut self, asked: &Question, answer: &serde_json::Value) {
+        let question = asked.text.as_str();
         let model = answer["model"].as_str().unwrap_or(t!("ask.the_model"));
         let said = answer["said"].as_str().unwrap_or_default();
         let Some(sql) = answer["sql"].as_str() else {
             let why = if said.is_empty() { t!("ask.no_sql").to_string() } else { one_line(said) };
             return self.set_status(format!("{model}: {why}"), true);
         };
-        let mut block = format!("-- {}\n", one_line(question));
+        let in_editor = asked.at.is_some();
+        let c = self.comment_opener();
+        let mut block =
+            if in_editor { format!("{c} {ANSWER_MARK} {model}\n") } else { format!("{c} {}\n", one_line(question)) };
         for line in wrap_comment(said, 76) {
-            let _ = writeln!(block, "-- {line}");
+            let _ = writeln!(block, "{c} {line}");
         }
         let problems: Vec<&str> =
             answer["problems"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str).collect();
         if !problems.is_empty() {
-            let _ = writeln!(block, "-- {}: {}", t!("ask.check"), problems.join("; "));
+            let _ = writeln!(block, "{c} {}: {}", t!("ask.check"), one_line(&problems.join("; ")));
         }
         // The tables it looked up itself, beyond those it was shown.
         let looked: Vec<&str> =
             answer["looked_at"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str).collect();
         if !looked.is_empty() {
-            let _ = writeln!(block, "-- {}", t!("ask.looked_at", tables = looked.join(", ")));
+            let _ = writeln!(block, "{c} {}", one_line(&t!("ask.looked_at", tables = looked.join(", "))));
         }
         let assumed: Vec<String> = answer["suggested"]
             .as_array()
@@ -385,10 +530,14 @@ impl App {
             })
             .collect();
         for a in &assumed {
-            let _ = writeln!(block, "-- {}", t!("ask.assumed", fact = a));
+            // The model's words: a line break in them would end the comment.
+            let _ = writeln!(block, "{c} {}", one_line(&t!("ask.assumed", fact = a)));
         }
         block.push_str(&ended(sql.trim_end(), self.engine()));
-        self.append_statement(&block);
+        match asked.at {
+            Some(at) => self.answer_under(question, at, &block),
+            None => self.append_statement(&block),
+        }
         let tokens = &answer["usage"];
         let mut status =
             t!("ask.sql_from", model = model, tokens_in = tokens["input_tokens"], tokens_out = tokens["output_tokens"]);
@@ -400,6 +549,33 @@ impl App {
             status = t!("ask.check_it", model = model, problems = problems.join("; "));
         }
         self.set_status(status, !problems.is_empty());
+    }
+
+    /// `block` right under the question written in the editor (its last
+    /// line `at`, or, if lines moved meanwhile, wherever it is now),
+    /// replacing the answer under it from an earlier ask; at the end of the
+    /// editor if the question isn't there any more. One undo takes it back.
+    fn answer_under(&mut self, question: &str, at: usize, block: &str) {
+        let engine = self.engine();
+        let written = questions(&self.tab.editor.text(), engine);
+        let mine = |q: &&Written| q.text == question;
+        let Some(asked) =
+            written.iter().filter(mine).find(|q| *q.rows.end() == at).or_else(|| written.iter().find(mine))
+        else {
+            return self.append_statement(block);
+        };
+        let row = *asked.rows.end();
+        let opener = self.comment_opener();
+        let after = self.answer_end(row, &written);
+        let mut new: Vec<String> = block.lines().map(str::to_string).collect();
+        let first_sql = row + 1 + new.iter().take_while(|l| l.trim_start().starts_with(opener)).count();
+        // What follows stays apart from the answer.
+        if self.tab.editor.lines.get(after).is_some_and(|l| !l.trim().is_empty()) {
+            new.push(String::new());
+        }
+        self.tab.editor.replace_rows(row + 1..after, new, (first_sql, 0));
+        self.edited();
+        self.focus = Focus::Editor;
     }
 
     /// Adds `text` after everything in the editor, a blank line apart,
@@ -459,6 +635,53 @@ fn wrap_comment(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use crate::db::Engine;
+
+    fn at(text: &str, row: usize) -> Option<(String, usize)> {
+        super::question_at(text, Engine::Postgres, row)
+    }
+
+    #[test]
+    fn a_question_is_a_comment_that_starts_with_a_question_mark() {
+        let editor = "SELECT 1;\n-- ? revenue per city\n--?  top 5 products \n-- a note\n-- ?\n";
+        assert_eq!(at(editor, 1), Some(("revenue per city".into(), 1)));
+        assert_eq!(at(editor, 2), Some(("top 5 products".into(), 2)));
+        assert_eq!(at(editor, 0), None, "SQL");
+        assert_eq!(at(editor, 3), None, "a plain comment");
+        assert_eq!(at(editor, 4), None, "nothing asked");
+        // mongosh's comments.
+        assert_eq!(at("SELECT 1; -- ? after code", 0), None, "not alone on its line");
+        assert_eq!(at("SELECT '-- ? in a string';", 0), None);
+        assert_eq!(at("SELECT '/*? in a string */';", 0), None);
+        assert_eq!(at("/* a note\n-- ? inside it\n*/", 1), None, "inside a block comment");
+        // For drawing: which rows are questions, in one pass.
+        let editor = "SELECT 1;\n-- ? one\n/* plain */\n/*? two\n  lines */\nSELECT 2;";
+        assert_eq!(super::question_rows(editor, Engine::Postgres, 0..6), [false, true, false, true, true, false]);
+        assert_eq!(
+            super::question_rows(editor, Engine::Postgres, 4..6),
+            [true, false],
+            "a block opened above the rows shown"
+        );
+    }
+
+    #[cfg(feature = "mongodb")]
+    #[test]
+    fn a_question_in_mongosh_is_a_slash_comment() {
+        let text = "db.orders.find()\n// ? open orders\n-- ? not a comment here";
+        assert_eq!(super::question_at(text, Engine::MongoDb, 1), Some(("open orders".into(), 1)));
+        assert_eq!(super::question_at(text, Engine::MongoDb, 2), None);
+        assert_eq!(crate::language::line_comment(Engine::MongoDb), "//");
+    }
+
+    #[test]
+    fn a_question_over_several_lines_is_a_block_comment() {
+        let editor = "/* old */\nSELECT 1;\n/*? customers who\n   never ordered,\n   by city */\nSELECT 2;";
+        let asked = Some(("customers who never ordered, by city".into(), 4));
+        assert_eq!(at(editor, 2), asked);
+        assert_eq!(at(editor, 3), asked);
+        assert_eq!(at(editor, 4), asked);
+        assert_eq!(at(editor, 5), None, "after it");
+        assert_eq!(at(editor, 1), None, "after a plain block comment");
+    }
 
     #[test]
     fn a_statement_is_ended_before_a_comment_after_it() {

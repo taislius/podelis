@@ -19,6 +19,18 @@ pub fn is_auth_failure(message: &str) -> bool {
 /// its dialect (`Dialect::connect_hint`; each engine words its own).
 pub fn hint(message: &str) -> Option<&'static str> {
     let m = message.to_lowercase();
+    // Reading a file on the web (DuckDB's `read_csv('https://…')`): about
+    // that site, not the database's own TLS and its SSL mode.
+    if m.contains("http head") || m.contains("http get") || m.contains("http error") {
+        return if m.contains("certificate") {
+            Some(
+                "that web site's certificate isn't in DuckDB's list of authorities (some sites use a newer root \
+                 it lacks): download the file, and read it from disk",
+            )
+        } else {
+            network_hint(&m)
+        };
+    }
     network_hint(&m)
         .or_else(|| Engine::ALL.into_iter().find_map(|e| e.backend().connect_hint(&m)))
         .or_else(|| tls_hint(&m))
@@ -329,6 +341,17 @@ pub fn report(steps: &[Step]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_on_the_web_gets_a_hint_about_that_site() {
+        let cert = "IO Error: SSL peer certificate or SSH remote key was not OK error for HTTP HEAD to 'https://data-api.ecb.europa.eu/x'";
+        let said = hint(cert).unwrap();
+        assert!(said.contains("web site") && !said.contains("SSL mode"), "{said}");
+        // Other web errors: no TLS hint.
+        assert_eq!(hint("HTTP Error: HTTP GET error on 'https://x/y.csv' (HTTP 404 Not Found)"), None);
+        // A database's own TLS keeps its hint.
+        assert!(hint("error: invalid peer certificate: UnknownIssuer").unwrap().contains("SSL mode"));
+    }
 
     #[test]
     fn hints_for_common_errors() {

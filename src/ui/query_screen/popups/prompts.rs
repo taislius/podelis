@@ -61,22 +61,6 @@ pub(super) fn draw_pipe_prompt(f: &mut Frame, command: &LineInput, area: Rect) {
     f.render_widget(Paragraph::new(lines).block(popup(t!("pipe.title"), t.accent)), rect);
 }
 
-/// `Ctrl+K q`: the question for a model, about the tab's connection.
-pub(super) fn draw_ask_prompt(f: &mut Frame, app: &App, area: Rect) {
-    let t = theme();
-    let Some(question) = &app.popups.ask_prompt else { return };
-    let rect = centered_box(area, fit(80, 30, area.width), 6);
-    f.render_widget(Clear, rect);
-    let lines = vec![
-        Line::from([vec![Span::styled(" ? ", bold(t.accent))], input_spans(question, fg(t.text_bright))].concat()),
-        Line::default(),
-        Line::from(Span::styled(format!(" {}", t!("ask.help_1")), dim())),
-        Line::from(Span::styled(format!(" {}", t!("ask.help_2")), dim())),
-    ];
-    let title = t!("ask.title", name = app.connection.form.name.to_uppercase());
-    f.render_widget(Paragraph::new(lines).block(popup(&title, t.accent)), rect);
-}
-
 /// The save-as / rename prompt.
 pub(super) fn draw_tab_prompt(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();

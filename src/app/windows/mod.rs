@@ -8,5 +8,6 @@ pub mod agents;
 pub mod cell;
 pub mod library;
 pub mod memory;
+mod ontology_edit;
 pub mod sandbox;
 pub mod settings;

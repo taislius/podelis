@@ -212,6 +212,8 @@ async fn writes_can_be_reviewed_in_a_transaction() {
     finish(&mut app).await;
     assert_eq!(app.popups.review.as_ref().map(|r| r.rows_affected), Some(1));
     assert_eq!(app.connection.txn, TxnState::Open);
+    // One statement was run: the BEGIN before it isn't counted.
+    assert!(app.notes.status.contains("1 row") && !app.notes.status.contains("statements"), "{}", app.notes.status);
     app.handle_key(key(KeyCode::Char('r')));
     finish(&mut app).await;
     assert_eq!((app.connection.txn, app.notes.status.as_str()), (TxnState::Idle, "Rolled back"));
@@ -489,4 +491,27 @@ async fn a_sqlite_files_sandbox_works_on_a_copy() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(!copy.exists(), "the copy is deleted");
+}
+
+#[test]
+fn the_sandbox_and_rollback_only_refuse_tables_a_rollback_cant_undo() {
+    let (mut app, _dir) = test_app();
+    app.connection.form.engine = crate::db::Engine::MySql;
+    // MySQL's MyISAM table `audit` (from the catalog), InnoDB `orders`.
+    let table =
+        |schema: &str, table: &str| crate::app::session::Unrollable { schema: schema.into(), table: table.into() };
+    app.connection.unrollable = vec![table("shop", "audit"), table("archive", "log")];
+    for mode in [TxMode::Sandbox, TxMode::RollbackOnly] {
+        app.connection.tx_mode = mode;
+        let refused = app.unrollable_refusal("INSERT INTO shop.`Audit` VALUES (1)").unwrap();
+        assert!(refused.contains("Audit") && refused.contains("can't be rolled back"), "{refused}");
+        assert!(app.unrollable_refusal("UPDATE orders SET x = 1 WHERE id = 2").is_none(), "InnoDB is fine");
+        assert!(app.unrollable_refusal("INSERT INTO archive.log VALUES (1)").is_some(), "another database's");
+        // A bare name: whichever database the session is in now (`USE`).
+        assert!(app.unrollable_refusal("INSERT INTO log VALUES (1)").is_some(), "maybe archive's, after USE");
+        assert!(app.unrollable_refusal("INSERT INTO other.audit VALUES (1)").is_none(), "named: another audit");
+    }
+    // Other modes say what they do: a write there is meant to stay.
+    app.connection.tx_mode = TxMode::Manual;
+    assert!(app.unrollable_refusal("INSERT INTO audit VALUES (1)").is_none());
 }
