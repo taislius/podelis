@@ -165,6 +165,26 @@ those from your migrations, are confirmed; only confirmed ones are shown.
 In the app, `Ctrl+K y k` shows them. They're kept per project in `memory/<project-id>.db`, and
 the gateway's log never has their text.
 
+## A database's ontology: `ontology`
+
+What's known of a saved connection's database: its tables and the keys
+between them, with what the project's memory says of them. Each fact is
+about one database (its connections, dev and prod, share it) or about every
+database in the project. Edit it in a proper editor and load it back:
+
+```sh
+podelis ontology prod                      # as text: tables, keys, other names, terms, default filters, stale facts
+podelis ontology prod export prod.yaml     # as YAML, to edit (`every_database:` for facts about every database)
+podelis ontology prod import prod.yaml     # what the file changes, then asks; -y without asking
+podelis ontology prod turtle > prod.ttl    # as SKOS, for other tools (confirmed facts only)
+podelis -c prod memory add orders.status 3 = cancelled   # a fact about prod's database
+```
+
+In the app, `Ctrl+K y k` on a saved connection is the same ontology, by
+table: `a` adds a fact about the selected line, `p` moves one between this
+database and every database, `E` opens it all in `$VISUAL`/`$EDITOR` as
+YAML and shows what loading it back changes before it does.
+
 ## The gateway
 
 The gateway is the background process for what involves AI models:

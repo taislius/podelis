@@ -339,8 +339,11 @@ With a real key (a few cents) and, if you have it, Ollama:
 - [ ] `podelis gateway context prod "…"` on a big schema (TPC-H, IMDb):
   the tables are the ones the question needs, with their joins, in a few
   thousand tokens.
-- [ ] `Ctrl+K q` in the app: the answer's progress in the status bar, the
-  SQL at the end of the editor under the question, not run; `F6` runs it.
+- [ ] `Ctrl+K q` in the app: on an empty line it writes `-- ? `; type a
+  question, `Ctrl+K q` again: the answer's progress in the status bar, the
+  SQL right under the question after `-- ↳ <model>`, not run; `F6` runs it.
+  Ask the same line again: the answer is replaced, SQL of your own under
+  a question isn't.
   `Esc` while asking stops it; switching tabs meanwhile still puts the SQL
   in the tab asked from.
 - [ ] A provider's model with a question the words can't link to a table
