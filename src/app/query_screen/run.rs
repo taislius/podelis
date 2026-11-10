@@ -85,16 +85,10 @@ impl App {
         filled: Option<Filled>,
     ) {
         let infos = statements::analyze(&parse(&sql, self.engine()));
+        if let Some(msg) = self.write_refusal(&sql, &infos, &purpose) {
+            return self.set_status(msg, true);
+        }
         let writes: Vec<&StatementInfo> = infos.iter().filter(|i| i.modifies()).collect();
-        if self.connection.mode == ConnectionMode::ReadOnly
-            && let Some(first) = writes.first()
-        {
-            let msg = t!("run.read_only_refused", what = first.summary);
-            return self.set_status(msg, true);
-        }
-        if let Some(msg) = self.tx_mode_refusal(&infos, &purpose) {
-            return self.set_status(msg, true);
-        }
         let risky: Vec<String> = infos.iter().filter_map(|i| i.risk.map(|r| format!("{r}: {}", i.summary))).collect();
         let production = self.connection.mode == ConnectionMode::Production && !writes.is_empty();
         if production || !risky.is_empty() {
@@ -302,6 +296,7 @@ impl App {
         };
         self.tab.run.extra.deadline = timeout.and_then(|limit| Some((Instant::now().checked_add(limit)?, limit)));
         self.tab.run.extra.offered_cancel = false;
+        self.tab.run.extra.added_statements = 0;
         self.tab.error_marker = None;
         self.tab.run.executing = true;
         self.tab.run.db = Some(db.clone());
@@ -584,6 +579,9 @@ pub(in crate::app) struct RunExtra {
     pub(in crate::app) vertical: bool,
     /// It ran past `long_query`, and the status bar said how to cancel it.
     pub(in crate::app) offered_cancel: bool,
+    /// Statements the run put before yours (a review's `BEGIN`, a sandbox
+    /// step's savepoint): not counted in the result's "n statements".
+    pub(in crate::app) added_statements: usize,
 }
 
 /// What a run's result is for.

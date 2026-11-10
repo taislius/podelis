@@ -187,8 +187,11 @@ impl SqlDialect for MySql {
 
     fn tables_without_rollback(&self) -> Option<&'static str> {
         Some(
-            "SELECT CAST(GROUP_CONCAT(table_name SEPARATOR ', ') AS CHAR) FROM information_schema.tables \
-             WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE' AND engine <> 'InnoDB'",
+            "SELECT CAST(table_schema AS CHAR), CAST(table_name AS CHAR), CAST(table_schema = DATABASE() AS CHAR) \
+             FROM information_schema.tables \
+             WHERE table_type = 'BASE TABLE' AND engine <> 'InnoDB' \
+             AND table_schema NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys') \
+             ORDER BY table_schema, table_name",
         )
     }
 

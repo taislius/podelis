@@ -9,17 +9,19 @@
 //!   stopping when idle, the call log.
 //! - `client`: connecting, and starting the gateway on first use.
 //!
-//! - `models`, `ai`: the models it talks to (Anthropic's API, and OpenAI's
-//!   format for GPT and local servers), and the `models` and `complete`
-//!   methods.
-//!
-//! Context, tools and memory come next.
+//! - `ai`: the models it talks to (Anthropic's API, and OpenAI's format
+//!   for GPT and local servers, in podelis-ai), and the `models`,
+//!   `complete`, `context` and `ask` methods.
+//! - `memory`: a project's facts (`memory.*`); `ontology`: a database's
+//!   ontology, to read, export and load back (`ontology`, `ontology.import`).
 
 mod ai;
 pub mod client;
 pub mod command;
 #[cfg(test)]
 mod eval_snapshots;
+mod memory;
+pub mod ontology;
 pub mod protocol;
 pub mod server;
 #[cfg(test)]

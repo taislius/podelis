@@ -46,15 +46,36 @@ macro_rules! driver {
     () => {
         use futures_util::{StreamExt as _, TryStreamExt as _};
         use sqlx::{
-            AssertSqlSafe, Column as _, Either, Executor as _, Row as _, SqlSafeStr as _, Statement as _, TypeInfo as _,
+            AssertSqlSafe, Column as _, Either, Executor as _, Row as _, SqlSafeStr as _, Statement as _,
+            TypeInfo as _, ValueRef as _,
         };
 
         use super::{DriverConnection, DriverPool, cell};
         use $crate::db::{FetchedRow, Rows, StatementResult};
 
-        /// A row's columns: (name, type name) each.
-        fn columns_of<R: sqlx::Row>(row: &R) -> Vec<(String, String)> {
-            row.columns().iter().map(|c| (c.name().to_string(), c.type_info().name().to_string())).collect()
+        /// A row's columns: (name, type name) each. SQLite declares no type
+        /// for an expression (`sum(total)`), which sqlx calls `NULL`: the
+        /// (first) row's value says what it is instead.
+        fn columns_of<R: sqlx::Row>(row: &R) -> Vec<(String, String)>
+        where
+            usize: sqlx::ColumnIndex<R>,
+        {
+            row.columns()
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let declared = c.type_info();
+                    let ty = if declared.is_null() {
+                        row.try_get_raw(i)
+                            .ok()
+                            .filter(|v| !v.is_null())
+                            .map_or_else(|| declared.name().to_string(), |v| v.type_info().name().to_string())
+                    } else {
+                        declared.name().to_string()
+                    };
+                    (c.name().to_string(), ty)
+                })
+                .collect()
         }
 
         /// A connection of the pool's.

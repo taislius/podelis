@@ -251,7 +251,7 @@ pub(super) async fn until_answered(app: &mut App) {
 /// Handles events until the memory window has its facts again.
 pub(super) async fn until_memory_loaded(app: &mut App, facts: usize) {
     for _ in 0..50 {
-        if app.popups.memory_view.as_ref().is_some_and(|v| !v.loading && v.facts.len() == facts) {
+        if app.popups.memory_view.as_ref().is_some_and(|v| !v.loading && v.lines.len() == facts) {
             return;
         }
         let event = tokio::time::timeout(Duration::from_secs(10), app.poll_db_event()).await.unwrap().unwrap();

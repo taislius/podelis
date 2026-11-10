@@ -195,6 +195,7 @@ impl App {
                 self.popups.cell_view = Some(CellView::new(title, report));
             }
             DbEventKind::PipeDone(command, result) => self.pipe_done(&command, result),
+            DbEventKind::Unrollable(tables) => self.connection.unrollable = tables,
             DbEventKind::Routines(routines) => {
                 if let Some(panel) = &mut self.connection.schema {
                     panel.routines = routines;
@@ -583,6 +584,8 @@ pub(super) enum DbEventKind {
     },
     Catalog(Result<Vec<(TableInfo, Vec<ColumnInfo>)>, String>),
     Routines(Vec<RoutineInfo>),
+    /// The connection's tables a rollback doesn't undo.
+    Unrollable(Vec<super::session::Unrollable>),
     TableDetails {
         schema: String,
         table: String,

@@ -19,12 +19,14 @@ Usage: podelis [OPTIONS] [CONNECTION]
        podelis doctor [-p <project>] [--connections]
        podelis mcp [-p <project>] [--name <label>]
        podelis ask [-p <project>] <connection> <question>
-       podelis memory [-p <project>] [list [<words>] | add <subject> <what> |
+       podelis memory [-p <project>] [-c <connection>] [list [<words>] | add <subject> <what> |
                       edit <id> <subject> <what> | forget <id> | confirm <id> |
                       learn <folder> | export]
        podelis gateway [status | start | stop | models]
        podelis gateway key <model> | test [<model>]
        podelis gateway context [-p <project>] <connection> <question>
+       podelis ontology [-p <project>] <connection> [turtle | export [<file>] |
+                        import <file> [-y]]
 
 CONNECTION is a URL (postgres://…, mysql://…, mongodb://…, sqlite:…, duckdb:…),
 a SQLite or DuckDB file, or
@@ -72,7 +74,9 @@ on this machine is shown a project's schema only once you allow it.
 
 memory is what the project's team has said about its data, shown to
 models when they write SQL: `podelis memory add orders.status 3 =
-cancelled`, `add revenue is orders.total minus refunds`. list shows the
+cancelled`, `add revenue is orders.total minus refunds`. With -c, it's
+about that connection's database (its name: dev and prod connections to
+it share it); without, about every database in the project. list shows the
 facts (or those matching words), edit changes one by its number (it's
 then confirmed), forget removes one by its number,
 confirm makes a model's suggestion count, learn reads a folder of SQL
@@ -116,21 +120,32 @@ pub struct Args {
     pub table: Option<String>,
     /// `--delimiter`: the separator for `--import`.
     pub delimiter: Option<u8>,
-    pub doctor: bool,
-    /// `mcp`: serve the shared connections to an AI agent.
-    pub mcp: bool,
+    /// The subcommand (`doctor`, `mcp`, `memory`, `ask`, `ontology`,
+    /// `gateway`), with its words: one at most.
+    pub subcommand: Option<Subcommand>,
     /// `mcp --name`: what to call the agent in the log.
     pub name: Option<String>,
     /// `doctor --connections`.
     pub test_connections: bool,
-    /// `gateway [status | start | stop]`.
-    pub gateway: Option<GatewayCommand>,
-    /// `ask <connection> <question…>`: the words after `ask`.
-    pub ask: Option<Vec<String>>,
     /// `ask --model`: which model.
     pub model: Option<String>,
+}
+
+/// A word that makes the command line something other than the app, and
+/// the words after it that are its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Subcommand {
+    Doctor,
+    /// Serve the shared connections to an AI agent.
+    Mcp,
     /// `memory …`: the words after `memory`.
-    pub memory: Option<Vec<String>>,
+    Memory(Vec<String>),
+    /// `ask <connection> <question…>`: the words after `ask`.
+    Ask(Vec<String>),
+    /// `ontology …`: the connection, then what to do with its ontology.
+    Ontology(Vec<String>),
+    /// `gateway [status | start | stop | …]`.
+    Gateway(GatewayCommand),
 }
 
 /// What the command line asked for: the TUI, or one of the commands that
@@ -141,6 +156,7 @@ pub enum Command {
     Mcp,
     Memory(Vec<String>),
     Ask(Vec<String>),
+    Ontology(Vec<String>),
     Gateway(GatewayCommand),
     Doctor,
     Test,
@@ -151,16 +167,15 @@ pub enum Command {
 impl Args {
     /// The command these arguments are, the first that applies.
     pub fn command(&self) -> Command {
-        if self.mcp {
-            Command::Mcp
-        } else if let Some(words) = &self.memory {
-            Command::Memory(words.clone())
-        } else if let Some(words) = &self.ask {
-            Command::Ask(words.clone())
-        } else if let Some(command) = &self.gateway {
-            Command::Gateway(command.clone())
-        } else if self.doctor {
-            Command::Doctor
+        if let Some(subcommand) = &self.subcommand {
+            match subcommand.clone() {
+                Subcommand::Mcp => Command::Mcp,
+                Subcommand::Memory(words) => Command::Memory(words),
+                Subcommand::Ask(words) => Command::Ask(words),
+                Subcommand::Ontology(words) => Command::Ontology(words),
+                Subcommand::Gateway(command) => Command::Gateway(command),
+                Subcommand::Doctor => Command::Doctor,
+            }
         } else if self.test {
             Command::Test
         } else if self.import.is_some() {
@@ -227,12 +242,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> ParseOutcome {
                 out.test_connections = true;
                 Ok(())
             }
-            "doctor" if !out.doctor && out.connection.is_none() => {
-                out.doctor = true;
+            "doctor" if out.subcommand.is_none() && out.connection.is_none() => {
+                out.subcommand = Some(Subcommand::Doctor);
                 Ok(())
             }
-            "mcp" if !out.mcp && out.connection.is_none() => {
-                out.mcp = true;
+            "mcp" if out.subcommand.is_none() && out.connection.is_none() => {
+                out.subcommand = Some(Subcommand::Mcp);
                 Ok(())
             }
             "-f" | "--format" => value(&arg).and_then(|v| {
@@ -268,31 +283,50 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> ParseOutcome {
 
 /// What a subcommand still needs after all the words are read.
 fn check_subcommands(out: &Args) -> Result<(), String> {
-    if out.gateway == Some(GatewayCommand::Key(String::new())) {
-        return Err("gateway key needs the model's name (as in config.toml)".into());
-    }
-    if let Some(words) = &out.memory {
-        let enough = match words.first().map(String::as_str) {
-            None | Some("list" | "export") => true,
-            Some("add") => words.len() >= 3,
-            Some("edit") => words.len() >= 4 && words[1].parse::<i64>().is_ok(),
-            Some("forget" | "confirm") => words.get(1).is_some_and(|id| id.parse::<i64>().is_ok()),
-            Some("learn") => words.len() == 2,
-            Some(other) => {
-                return Err(format!("memory: no '{other}' (list, add, edit, forget, confirm, learn, export)"));
-            }
-        };
-        if !enough {
-            return Err("memory add needs a subject and what's said about it; edit, a fact's number, then those; \
-                 forget and confirm, a fact's number; learn, a folder"
-                .into());
+    match &out.subcommand {
+        Some(Subcommand::Gateway(GatewayCommand::Key(name))) if name.is_empty() => {
+            Err("gateway key needs the model's name (as in config.toml)".into())
         }
+        Some(Subcommand::Gateway(GatewayCommand::Context(words))) if words.len() < 2 => {
+            Err("gateway context needs a saved connection's name and a question".into())
+        }
+        Some(Subcommand::Ask(words)) if words.len() < 2 => {
+            Err("ask needs a saved connection's name and a question".into())
+        }
+        Some(Subcommand::Memory(words)) => check_memory(words),
+        Some(Subcommand::Ontology(words)) => {
+            let fits = matches!(
+                words.iter().map(String::as_str).collect::<Vec<_>>().as_slice(),
+                [_] | [_, "turtle" | "yaml" | "export"] | [_, "export" | "import", _]
+            );
+            if fits {
+                Ok(())
+            } else {
+                Err("ontology needs a saved connection's name, then nothing (to show it), turtle, \
+                     export [<file>] or import <file>"
+                    .into())
+            }
+        }
+        _ => Ok(()),
     }
-    if out.ask.as_ref().is_some_and(|words| words.len() < 2) {
-        return Err("ask needs a saved connection's name and a question".into());
-    }
-    if matches!(&out.gateway, Some(GatewayCommand::Context(words)) if words.len() < 2) {
-        return Err("gateway context needs a saved connection's name and a question".into());
+}
+
+/// What `memory`'s words still need.
+fn check_memory(words: &[String]) -> Result<(), String> {
+    let enough = match words.first().map(String::as_str) {
+        None | Some("list" | "export") => true,
+        Some("add") => words.len() >= 3,
+        Some("edit") => words.len() >= 4 && words[1].parse::<i64>().is_ok(),
+        Some("forget" | "confirm") => words.get(1).is_some_and(|id| id.parse::<i64>().is_ok()),
+        Some("learn") => words.len() == 2,
+        Some(other) => {
+            return Err(format!("memory: no '{other}' (list, add, edit, forget, confirm, learn, export)"));
+        }
+    };
+    if !enough {
+        return Err("memory add needs a subject and what's said about it; edit, a fact's number, then those; \
+             forget and confirm, a fact's number; learn, a folder"
+            .into());
     }
     Ok(())
 }
@@ -301,39 +335,42 @@ fn check_subcommands(out: &Args) -> Result<(), String> {
 /// one of them.
 fn gateway_word(out: &mut Args, word: &str) -> bool {
     let positional = !word.starts_with('-');
-    if word == "ask" && out.ask.is_none() && out.memory.is_none() && out.gateway.is_none() && out.connection.is_none() {
-        out.ask = Some(Vec::new());
-        return true;
-    }
-    if word == "memory"
-        && out.memory.is_none()
-        && out.ask.is_none()
-        && out.gateway.is_none()
-        && out.connection.is_none()
-    {
-        out.memory = Some(Vec::new());
-        return true;
-    }
-    if let Some(words) = out.ask.as_mut().or(out.memory.as_mut()) {
-        if positional {
-            words.push(word.to_string());
+    match &mut out.subcommand {
+        // After `ontology`, `ask` or `memory`, every word is theirs: a
+        // connection may be called `memory`, a fact may say `ask`.
+        Some(Subcommand::Ontology(words) | Subcommand::Ask(words) | Subcommand::Memory(words)) => {
+            if positional {
+                words.push(word.to_string());
+            }
+            return positional;
         }
-        return positional;
+        Some(Subcommand::Gateway(command)) => {
+            match (&mut *command, word) {
+                (GatewayCommand::Run, "status") => *command = GatewayCommand::Status,
+                (GatewayCommand::Run, "start") => *command = GatewayCommand::Start,
+                (GatewayCommand::Run, "stop") => *command = GatewayCommand::Stop,
+                (GatewayCommand::Run, "models") => *command = GatewayCommand::Models,
+                (GatewayCommand::Run, "key") => *command = GatewayCommand::Key(String::new()),
+                (GatewayCommand::Run, "test") => *command = GatewayCommand::Test(None),
+                (GatewayCommand::Run, "context") => *command = GatewayCommand::Context(Vec::new()),
+                (GatewayCommand::Key(name), _) if positional && name.is_empty() => *name = word.to_string(),
+                (GatewayCommand::Test(name @ None), _) if positional => *name = Some(word.to_string()),
+                (GatewayCommand::Context(words), _) if positional => words.push(word.to_string()),
+                _ => return false,
+            }
+            return true;
+        }
+        Some(Subcommand::Doctor | Subcommand::Mcp) => return false,
+        None => {}
     }
-    match (&mut out.gateway, word) {
-        (None, "gateway") if out.connection.is_none() => out.gateway = Some(GatewayCommand::Run),
-        (Some(GatewayCommand::Run), "status") => out.gateway = Some(GatewayCommand::Status),
-        (Some(GatewayCommand::Run), "start") => out.gateway = Some(GatewayCommand::Start),
-        (Some(GatewayCommand::Run), "stop") => out.gateway = Some(GatewayCommand::Stop),
-        (Some(GatewayCommand::Run), "models") => out.gateway = Some(GatewayCommand::Models),
-        (Some(GatewayCommand::Run), "key") => out.gateway = Some(GatewayCommand::Key(String::new())),
-        (Some(GatewayCommand::Run), "test") => out.gateway = Some(GatewayCommand::Test(None)),
-        (Some(GatewayCommand::Run), "context") => out.gateway = Some(GatewayCommand::Context(Vec::new())),
-        (Some(GatewayCommand::Key(name)), _) if positional && name.is_empty() => *name = word.to_string(),
-        (Some(GatewayCommand::Test(name @ None)), _) if positional => *name = Some(word.to_string()),
-        (Some(GatewayCommand::Context(words)), _) if positional => words.push(word.to_string()),
+    out.subcommand = Some(match word {
+        "ontology" if out.connection.is_none() => Subcommand::Ontology(Vec::new()),
+        "ask" if out.connection.is_none() => Subcommand::Ask(Vec::new()),
+        // `-c prod memory …`: about prod's database.
+        "memory" => Subcommand::Memory(Vec::new()),
+        "gateway" if out.connection.is_none() => Subcommand::Gateway(GatewayCommand::Run),
         _ => return false,
-    }
+    });
     true
 }
 
@@ -664,36 +701,52 @@ mod tests {
             ParseOutcome::Run(a) => Ok(a),
             ParseOutcome::Exit(code, text) => Err((code, text)),
         };
-        assert_eq!(run(&["gateway"]).unwrap().gateway, Some(GatewayCommand::Run));
-        assert_eq!(run(&["gateway", "stop"]).unwrap().gateway, Some(GatewayCommand::Stop));
+        let gateway = |command| Some(Subcommand::Gateway(command));
+        assert_eq!(run(&["gateway"]).unwrap().subcommand, gateway(GatewayCommand::Run));
+        assert_eq!(run(&["gateway", "stop"]).unwrap().subcommand, gateway(GatewayCommand::Stop));
         assert_eq!(
-            run(&["gateway", "test", "local"]).unwrap().gateway,
-            Some(GatewayCommand::Test(Some("local".into())))
+            run(&["gateway", "test", "local"]).unwrap().subcommand,
+            gateway(GatewayCommand::Test(Some("local".into())))
         );
+        let words = |args: &[&str]| match run(args).unwrap().subcommand {
+            Some(Subcommand::Ontology(words)) => words,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(words(&["-p", "shop", "ontology", "prod"]), ["prod"]);
+        assert_eq!(words(&["ontology", "prod", "import", "shop.yaml", "-y"]), ["prod", "import", "shop.yaml"]);
+        assert_eq!(words(&["ontology", "prod", "export"]), ["prod", "export"]);
+        assert_eq!(run(&["ontology"]).unwrap_err().0, 2, "a connection is needed");
+        assert_eq!(run(&["ontology", "prod", "import"]).unwrap_err().0, 2, "import needs a file");
+        assert_eq!(run(&["ontology", "prod", "json"]).unwrap_err().0, 2);
+        // A connection named as a subcommand is the ontology's connection.
+        assert_eq!(words(&["ontology", "memory", "export"]), ["memory", "export"]);
+        assert_eq!(words(&["ontology", "ask"]), ["ask"]);
         let ctx = run(&["-p", "shop", "gateway", "context", "prod", "orders", "by", "month"]).unwrap();
         assert_eq!(ctx.project.as_deref(), Some("shop"));
         let words = ["prod", "orders", "by", "month"].map(String::from).to_vec();
-        assert_eq!(ctx.gateway, Some(GatewayCommand::Context(words)));
+        assert_eq!(ctx.subcommand, gateway(GatewayCommand::Context(words)));
         let (code, text) = run(&["gateway", "key"]).unwrap_err();
         assert!(code == 2 && text.contains("needs the model's name"));
         assert!(run(&["gateway", "context", "prod"]).unwrap_err().1.contains("and a question"));
         let ask = run(&["-p", "shop", "ask", "prod", "top", "customers"]).unwrap();
-        assert_eq!(ask.ask, Some(["prod", "top", "customers"].map(String::from).to_vec()));
+        assert_eq!(ask.subcommand, Some(Subcommand::Ask(["prod", "top", "customers"].map(String::from).to_vec())));
         assert!(run(&["ask", "prod"]).unwrap_err().1.contains("and a question"));
         let add = run(&["memory", "add", "orders.status", "3", "=", "cancelled"]).unwrap();
-        assert_eq!(add.memory, Some(["add", "orders.status", "3", "=", "cancelled"].map(String::from).to_vec()));
+        assert_eq!(
+            add.subcommand,
+            Some(Subcommand::Memory(["add", "orders.status", "3", "=", "cancelled"].map(String::from).to_vec()))
+        );
         assert!(run(&["memory", "forget", "x"]).is_err() && run(&["memory", "drop"]).is_err());
         assert!(run(&["memory", "edit", "4", "orders.status", "3", "=", "refunded"]).is_ok());
         assert!(run(&["memory", "edit", "x", "orders.status", "means"]).is_err());
         assert!(run(&["memory", "edit", "4", "orders.status"]).is_err());
-        assert_eq!(run(&["memory"]).unwrap().memory, Some(Vec::new()));
+        assert_eq!(run(&["memory"]).unwrap().subcommand, Some(Subcommand::Memory(Vec::new())));
         // Words after `memory` are its own, `ask` and `gateway` too.
         let odd = run(&["memory", "add", "quotes.side", "means", "ask", "gateway"]).unwrap();
-        assert_eq!((odd.ask, odd.gateway), (None, None));
-        assert_eq!(odd.memory.unwrap().len(), 5);
+        assert!(matches!(odd.subcommand, Some(Subcommand::Memory(words)) if words.len() == 5));
         // Without `gateway`, they're connection names as before.
         let plain = run(&["status"]).unwrap();
-        assert_eq!((plain.gateway, plain.connection.as_deref()), (None, Some("status")));
+        assert_eq!((plain.subcommand, plain.connection.as_deref()), (None, Some("status")));
     }
 
     #[test]
@@ -709,6 +762,18 @@ mod tests {
             assert!(man.contains(&flag), "docs/podelis.1 doesn't list {option}");
         }
         assert!(man.contains("Cm doctor"));
+    }
+
+    #[test]
+    fn a_file_opened_from_the_command_line_is_saved_with_its_whole_path() {
+        let form = ConnectionDraft::from_address(&Target::File("data/w.db".into())).unwrap().with_absolute_file();
+        let path = std::path::Path::new(&form.host);
+        assert!(path.is_absolute() && path.ends_with("data/w.db"), "{}", form.host);
+        assert_eq!(form.short_name(), "w.db", "the name stays the file's");
+        let memory = ConnectionDraft::from_address(&Target::File(":memory:".into())).unwrap().with_absolute_file();
+        assert_eq!(memory.host, ":memory:");
+        let whole = ConnectionDraft::from_address(&Target::File("/tmp/x.db".into())).unwrap().with_absolute_file();
+        assert_eq!(whole.host, "/tmp/x.db");
     }
 
     #[test]

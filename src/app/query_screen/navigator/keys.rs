@@ -32,6 +32,22 @@ impl App {
             // Listing routines may need privileges the user lacks: then
             // the section just stays empty.
             send(DbEventKind::Routines(db.routines().await.unwrap_or_default()));
+            // Tables a rollback can't undo (MySQL's MyISAM, MEMORY): on a
+            // connection of its own, as the catalog is read.
+            if let Some(sql) = db.engine().dialect().and_then(crate::db::SqlDialect::tables_without_rollback)
+                && let Ok(Some(found)) = db.run_aside(sql, 100_000).await
+            {
+                let cell = |r: &[Option<String>], i: usize| r.get(i).cloned().flatten().unwrap_or_default();
+                let tables = found
+                    .rows
+                    .iter()
+                    .map(|r| crate::app::session::Unrollable {
+                        schema: cell(r, 0).to_lowercase(),
+                        table: cell(r, 1).to_lowercase(),
+                    })
+                    .collect();
+                send(DbEventKind::Unrollable(tables));
+            }
         });
     }
 

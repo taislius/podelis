@@ -71,13 +71,18 @@ async fn main() -> Result<()> {
     let (store, store_warning) = ConnectionStore::load();
     let config_dir = config::store::config_dir();
     let (project, dir) = (args.project.as_deref(), config_dir.as_path());
-    let code = match args.command() {
+    let command = args.command();
+    say_store_warning(&command, store_warning.as_deref());
+    let code = match command {
         cli::Command::Tui => None,
         cli::Command::Mcp => {
             let name = args.name.clone().or_else(|| std::env::var("PODELIS_AGENT").ok());
             Some(agents::mcp::run(dir, project, name).await)
         }
-        cli::Command::Memory(words) => Some(gateway::command::memory(dir, project, &words).await),
+        cli::Command::Memory(words) => {
+            Some(gateway::command::memory(dir, project, args.connection.as_deref(), &words).await)
+        }
+        cli::Command::Ontology(words) => Some(gateway::command::ontology(dir, project, &words, args.yes).await),
         cli::Command::Ask(words) => Some(gateway::command::ask(dir, project, args.model.as_deref(), &words).await),
         cli::Command::Gateway(command) => Some(gateway::command::run(command, dir, project).await),
         cli::Command::Doctor => {
@@ -143,8 +148,27 @@ async fn main() -> Result<()> {
     app.save_draft();
 
     restore_input_modes(enhanced, mouse);
-    ratatui::restore();
+    restore_terminal();
     result
+}
+
+/// Without the UI to show it, a connections.toml that couldn't be read is
+/// said first: else "no project named …" would be all `-e` says.
+fn say_store_warning(command: &cli::Command, warning: Option<&str>) {
+    if let Some(warning) = warning
+        && matches!(command, cli::Command::Test | cli::Command::Import | cli::Command::Execute)
+    {
+        let _ = writeln!(std::io::stderr(), "podelis: {warning}");
+    }
+}
+
+/// `ratatui::restore`, without its panic: it reports a failed restore with
+/// `eprintln!`, which panics when stderr is gone too (the terminal closed
+/// under Podėlis: a window shut, an SSH session dropped).
+fn restore_terminal() {
+    if let Err(e) = ratatui::try_restore() {
+        let _ = writeln!(std::io::stderr(), "Failed to restore terminal: {e}");
+    }
 }
 
 fn enable_input_modes(enhanced: bool, mouse: bool) -> std::io::Result<()> {
@@ -333,7 +357,7 @@ async fn run(terminal: &mut DefaultTerminal, app: &mut App, enhanced: bool, mut 
             paused.store(true, Ordering::SeqCst);
             std::thread::sleep(Duration::from_millis(250));
             restore_input_modes(enhanced, mouse);
-            ratatui::restore();
+            restore_terminal();
             app.run_external(&external);
             crossterm::terminal::enable_raw_mode()?;
             execute!(stdout(), crossterm::terminal::EnterAlternateScreen)?;

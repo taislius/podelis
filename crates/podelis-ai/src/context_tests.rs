@@ -279,19 +279,28 @@ fn facts_about_missing_tables_are_left_out_as_stale() {
         source: "user".into(),
         confirmed: true,
         at: String::new(),
+        database: String::new(),
     };
     let schema = shop();
     let facts = [
         fact("customers", "excluded by default", "email like '%@test.example'"),
-        fact("orders.status", "means", "3 = cancelled"),
+        fact("orders.total", "is", "with VAT"),
         fact("invoices.state", "means", "2 = paid"),
         fact("revenue", "defined as", "sum(orders.total)"),
+        fact("orders.discount", "means", "percent off"),
+        fact("public.orders", "excluded by default", "status = 3"),
+        fact("public.orders.total", "is", "in euros"),
     ];
-    let built = build(&schema, "orders per customer").with_facts(&facts, &schema);
+    let catalog = crate::ontology::Ontology::from_catalog(&schema);
+    let built = build(&schema, "orders per customer").with_facts(&facts, &catalog);
     assert!(built.text.contains("customers excluded by default email like"), "{}", built.text);
     assert!(built.text.contains("excluded by default W`: leave out"), "the model is told what it means");
-    // `invoices` isn't in this database: left out, said as stale.
-    assert_eq!(built.stale, ["invoices.state means 2 = paid"]);
+    // `invoices` isn't in this database, nor `orders.discount`: left out,
+    // said as stale. `public.orders` is a schema and its table.
+    assert_eq!(built.stale, ["invoices.state means 2 = paid", "orders.discount means percent off"]);
+    assert!(!built.text.contains("discount"));
+    assert!(built.facts.iter().any(|f| f.starts_with("public.orders excluded")), "{:?}", built.facts);
+    assert!(built.facts.iter().any(|f| f.starts_with("public.orders.total is")), "{:?}", built.facts);
     assert!(!built.text.contains("invoices"));
     // A word that names no table (a term) isn't stale.
     assert!(built.facts.iter().any(|f| f.starts_with("revenue defined as")), "{:?}", built.facts);

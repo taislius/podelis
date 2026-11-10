@@ -2,6 +2,9 @@
 //! AI's memory.
 
 use super::*;
+use crate::app::windows::memory::MemoryLine;
+use podelis_ai::memory::Fact;
+use podelis_ai::ontology::outline::SectionKind;
 
 /// The F3 window: search box, then saved queries (★) and history (↺).
 pub(super) fn draw_library(f: &mut Frame, app: &mut App, area: Rect) {
@@ -209,40 +212,79 @@ pub(super) fn draw_activity(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// `Ctrl+K y k`: the project's memory, a fact a line; a model's
-/// suggestions, waiting to be confirmed, in orange.
+/// suggestions, waiting to be confirmed, in orange. On a saved connection,
+/// its database's ontology: a header line per table, column or term, its
+/// facts under it, those about every database marked.
 pub(super) fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
     let Some(view) = &app.popups.memory_view else { return };
     let width = fit(100, 40, area.width.saturating_sub(4));
-    let height = fit(view.facts.len() as u16 + 7, 10, area.height.saturating_sub(2));
+    let rows =
+        view.plan.as_ref().map_or(view.lines.len(), |(plan, _)| crate::gateway::ontology::plan_lines(plan).len());
+    let height = fit(rows as u16 + 7, 10, area.height.saturating_sub(2));
     let rect = centered_box(area, width, height);
     f.render_widget(Clear, rect);
     let room = usize::from(width).saturating_sub(4);
+    let project = app.project().map(|p| p.name.to_uppercase()).unwrap_or_default();
+    let database = view.database.as_ref().map(|d| format!(" · {d}")).unwrap_or_default();
+    if let Some((why, file)) = &view.failed_edit {
+        let lines = vec![
+            Line::from(Span::styled(truncate(&format!(" {why}"), room), fg(t.warn))),
+            Line::default(),
+            Line::from(Span::styled(
+                truncate(&format!(" {}", t!("memory.edit_kept", path = file.display())), room),
+                fg(t.text),
+            )),
+            Line::default(),
+            Line::from(Span::styled(format!(" {}", t!("memory.edit_failed_keys")), dim())),
+        ];
+        let title = format!("{} · {project}{database}", t!("memory.edit_failed_title"));
+        return f.render_widget(Paragraph::new(lines).block(popup(&title, t.warn)), rect);
+    }
+    if let Some((plan, _)) = &view.plan {
+        let all = crate::gateway::ontology::plan_lines(plan);
+        // The keys stay in sight: the changes scroll above them.
+        let room_rows = usize::from(height.saturating_sub(5)).max(1);
+        let first = view.plan_scroll.min(all.len().saturating_sub(room_rows));
+        view.plan_shown.set(room_rows.min(all.len()));
+        let more = first + room_rows < all.len();
+        let mut lines: Vec<Line> = all
+            .into_iter()
+            .skip(first)
+            .take(room_rows)
+            .map(|(head, text)| {
+                if head {
+                    Line::from(Span::styled(format!(" {text}"), bold(t.text_bright)))
+                } else {
+                    Line::from(Span::styled(truncate(&format!("   {text}"), room), fg(t.text)))
+                }
+            })
+            .collect();
+        if more {
+            lines.push(Line::from(Span::styled(format!(" {}", t!("memory.plan_more")), fg(t.warn))));
+        } else {
+            lines.push(Line::default());
+        }
+        lines.push(Line::from(Span::styled(format!(" {}", t!("memory.plan_keys")), dim())));
+        let title = format!("{} · {project}{database}", t!("memory.plan_title"));
+        return f.render_widget(Paragraph::new(lines).block(popup(&title, t.warn)), rect);
+    }
+    let ontology = view.database.is_some();
     let mut lines = Vec::new();
     if view.loading {
         lines.push(Line::from(Span::styled(format!(" {}", t!("navigator.loading_tables")), dim())));
-    } else if view.facts.is_empty() {
+    } else if view.lines.is_empty() {
         lines.push(Line::from(Span::styled(format!(" {}", t!("memory.none")), dim())));
+    } else if ontology && !view.lines.iter().any(|l| l.fact().is_some()) {
+        lines.push(Line::from(Span::styled(format!(" {}", t!("memory.ontology_none")), dim())));
     }
-    let shown = usize::from(height.saturating_sub(6));
+    let shown = usize::from(height.saturating_sub(6)).saturating_sub(lines.len());
     let first = view.selected.saturating_sub(shown.saturating_sub(1));
-    for (i, fact) in view.facts.iter().enumerate().skip(first).take(shown) {
-        let confirmed = fact["confirmed"].as_bool() == Some(true);
-        let text = format!(
-            " {} {} {}",
-            fact["subject"].as_str().unwrap_or("?"),
-            fact["relation"].as_str().unwrap_or("?"),
-            fact["value"].as_str().unwrap_or("?"),
-        );
-        // The fact comes first: a long source (a migrations folder's
-        // path) gets what's left of the row (16 at least), its end kept.
-        let tail = if confirmed { String::new() } else { format!(", {}", t!("memory.not_confirmed")) };
-        let left = room.saturating_sub(text.chars().count() + tail.len() + 4).max(16);
-        let source = truncate_start(fact["source"].as_str().unwrap_or("?"), left);
-        let who = format!("  · {source}{tail}");
-        let text = truncate(&text, room.saturating_sub(who.chars().count()));
-        let style = if confirmed { fg(t.text) } else { fg(t.warn) };
-        let mut line = Line::from(vec![Span::styled(text, style), Span::styled(who, dim())]);
+    for (i, line) in view.lines.iter().enumerate().skip(first).take(shown) {
+        let mut line = match line {
+            MemoryLine::Header { kind, subject } => header_line(*kind, subject, room),
+            MemoryLine::Fact { fact, section } => fact_line(fact, *section, room),
+        };
         if i == view.selected {
             line = line.style(Style::default().bg(t.active));
         }
@@ -258,8 +300,55 @@ pub(super) fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(Span::styled(format!(" {help}"), dim())));
     } else {
         lines.push(Line::from(Span::styled(format!(" {}", t!("memory.shown")), dim())));
-        lines.push(Line::from(Span::styled(format!(" {}", t!("memory.keys")), dim())));
+        let keys = if ontology { t!("memory.ontology_keys") } else { t!("memory.keys") };
+        lines.push(Line::from(Span::styled(format!(" {keys}"), dim())));
     }
-    let project = app.project().map(|p| p.name.to_uppercase()).unwrap_or_default();
-    f.render_widget(Paragraph::new(lines).block(popup(&format!("{} · {project}", t!("memory.title")), t.accent)), rect);
+    let name = if ontology { t!("memory.ontology_title") } else { t!("memory.title") };
+    let title = format!("{name} · {project}{database}");
+    f.render_widget(Paragraph::new(lines).block(popup(&title, t.accent)), rect);
+}
+
+/// A table's, column's or term's line in the ontology, or a group's (the
+/// suggestions, the stale facts).
+fn header_line(kind: SectionKind, subject: &str, room: usize) -> Line<'static> {
+    let t = theme();
+    let text = match kind {
+        SectionKind::Suggested => format!(" {}", t!("memory.suggested")),
+        SectionKind::Stale => format!(" {}", t!("memory.stale")),
+        SectionKind::Column => format!("   {subject}"),
+        _ => format!(" {} {subject}", kind.as_str()),
+    };
+    let style = match kind {
+        SectionKind::Suggested | SectionKind::Stale => bold(t.warn),
+        SectionKind::Column => fg(t.text_bright),
+        _ => bold(t.text_bright),
+    };
+    Line::from(Span::styled(truncate(&text, room), style))
+}
+
+/// A fact's line: in an ontology, under its header (`relation value`, and
+/// whether it's about every database); in the project's list, whole, with
+/// who said it.
+fn fact_line(fact: &Fact, section: Option<SectionKind>, room: usize) -> Line<'static> {
+    let t = theme();
+    let confirmed = fact.confirmed;
+    let ontology = section.is_some();
+    let grouped = section.is_some_and(|s| !matches!(s, SectionKind::Suggested | SectionKind::Stale));
+    let text = if grouped {
+        let indent = if section == Some(SectionKind::Column) { "       " } else { "     " };
+        format!("{indent}{} {}", fact.relation, fact.value)
+    } else {
+        format!("{}{} {} {}", if ontology { "     " } else { " " }, fact.subject, fact.relation, fact.value)
+    };
+    // The fact comes first: a long source (a migrations folder's path)
+    // gets what's left of the row (16 at least), its end kept.
+    let every = ontology && fact.database.is_empty();
+    let tail = if confirmed { String::new() } else { format!(", {}", t!("memory.not_confirmed")) };
+    let scope = if every { format!(" · {}", t!("memory.every_database")) } else { String::new() };
+    let left = room.saturating_sub(text.chars().count() + tail.len() + scope.len() + 4).max(16);
+    let source = truncate_start(&fact.source, left);
+    let who = format!("  · {source}{scope}{tail}");
+    let text = truncate(&text, room.saturating_sub(who.chars().count()));
+    let style = if confirmed { fg(t.text) } else { fg(t.warn) };
+    Line::from(vec![Span::styled(text, style), Span::styled(who, dim())])
 }

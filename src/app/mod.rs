@@ -551,6 +551,11 @@ impl App {
 
     /// Adds a line to the MESSAGES tab (keeps the last 200).
     fn log(&mut self, text: String, is_error: bool) {
+        // Clearing the status (an empty one) isn't a message: else a line
+        // with a time and nothing after it.
+        if text.trim().is_empty() {
+            return;
+        }
         let time = chrono::Local::now().format("%H:%M:%S").to_string();
         self.notes.log.push(Message { time, text, is_error, at: None });
         if self.notes.log.len() > 200 {

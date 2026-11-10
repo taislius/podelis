@@ -474,3 +474,52 @@ fn clicking_the_editor_tabs_focuses_the_editor() {
     app.handle_mouse(click(MouseEventKind::Down(MouseButton::Right), tab, y));
     assert_eq!(app.popups.menu.as_ref().map(|m| m.title), Some("EDITOR"));
 }
+
+/// Questions for the model are drawn in the accent, a block one on every
+/// line it spans, from the highlighting alone; a look-alike in a string,
+/// after code or inside a plain block comment isn't.
+#[test]
+fn questions_in_the_editor_are_drawn_in_the_accent() {
+    let (mut app, _dir) = query_app();
+    app.tab.editor.set_text(
+        "-- ? alpha\nSELECT '-- ? beta';\nSELECT 1; -- ? gamma\n/*? delta\n   epsilon */\n/* plain\n-- ? zeta\n*/",
+    );
+    app.tab.editor.set_cursor((0, 0));
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let accent = crate::ui::theme().accent;
+    let colour_of = |word: &str| {
+        let width = buffer.area.width;
+        let text: Vec<String> = (0..buffer.area.height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect())
+            .collect();
+        let (y, line) = text
+            .iter()
+            .enumerate()
+            .find(|(_, l)| l.contains(word))
+            .unwrap_or_else(|| panic!("{word}: {}", text.join("\n")));
+        let x = line[..line.find(word).unwrap()].chars().count();
+        buffer[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())].fg
+    };
+    for word in ["alpha", "delta", "epsilon"] {
+        assert_eq!(colour_of(word), accent, "{word}");
+    }
+    for word in ["beta", "gamma", "zeta"] {
+        assert_ne!(colour_of(word), accent, "{word}");
+    }
+    // A block question opened above the rows in sight: still one.
+    app.tab.editor.set_text(&format!("/*? a long one\n{}omega */\nSELECT 2;", "more of it\n".repeat(60)));
+    app.tab.editor.set_cursor((61, 0));
+    terminal.draw(|f| draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let at = |word: &str| {
+        (0..buffer.area.height).find_map(|y| {
+            let line: String = (0..buffer.area.width).map(|x| buffer[(x, y)].symbol().to_string()).collect();
+            let x = line.find(word).map(|i| line[..i].chars().count())?;
+            Some(buffer[(u16::try_from(x).unwrap(), y)].fg)
+        })
+    };
+    assert_eq!(at("omega"), Some(accent));
+    assert_ne!(at("SELECT 2"), Some(accent));
+}

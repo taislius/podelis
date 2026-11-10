@@ -14,9 +14,6 @@ pub struct Popups {
     pub menu: Option<super::menu::Menu>,
     /// The command the rows are piped through (`|`), being typed.
     pub pipe_prompt: Option<LineInput>,
-    /// `Ctrl+K q`: the question being typed (the one being answered is
-    /// `App::ask`).
-    pub ask_prompt: Option<LineInput>,
     /// `Ctrl+K y k`: the project's memory.
     pub memory_view: Option<windows::memory::MemoryView>,
     /// The add-row form (`a`).
@@ -51,8 +48,6 @@ pub enum Overlay {
     Confirm,
     Menu,
     PipePrompt,
-    /// The question to ask a model (`Ctrl+K q`).
-    AskPrompt,
     /// The project's memory (`Ctrl+K y k`).
     Memory,
     RowForm,
@@ -82,7 +77,6 @@ impl Overlay {
         matches!(
             self,
             Overlay::PipePrompt
-                | Overlay::AskPrompt
                 | Overlay::Memory
                 | Overlay::RowForm
                 | Overlay::Palette
@@ -100,7 +94,7 @@ impl App {
     /// Each popup and whether it's open, front first. The text view sits
     /// in front of the activity monitor (a session's full query) and
     /// behind the rest.
-    fn overlay_states(&self) -> [(Overlay, bool); 20] {
+    fn overlay_states(&self) -> [(Overlay, bool); 19] {
         // The text view shows a session's query or an agent's call in front
         // of their windows.
         let over_list = self.popups.activity.is_some() || self.agents.view.is_some();
@@ -108,7 +102,6 @@ impl App {
             (Overlay::Confirm, self.popups.confirm.is_some()),
             (Overlay::Menu, self.popups.menu.is_some()),
             (Overlay::PipePrompt, self.popups.pipe_prompt.is_some()),
-            (Overlay::AskPrompt, self.popups.ask_prompt.is_some()),
             (Overlay::Memory, self.popups.memory_view.is_some()),
             (Overlay::RowForm, self.popups.row_form.is_some()),
             (Overlay::Palette, self.popups.palette.is_some()),

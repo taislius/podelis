@@ -37,7 +37,6 @@ pub(super) fn draw_popups(f: &mut Frame, app: &mut App, cursor: Option<(u16, u16
                 let command = app.popups.pipe_prompt.clone().unwrap_or_default();
                 prompts::draw_pipe_prompt(f, &command, area);
             }
-            Overlay::AskPrompt => prompts::draw_ask_prompt(f, app, area),
             Overlay::Memory => windows::draw_memory(f, app, area),
             Overlay::Menu => menus::draw_menu(f, app, area),
             Overlay::Confirm => crate::ui::popups::draw_confirm(f, app, area),

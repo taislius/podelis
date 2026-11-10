@@ -11,11 +11,21 @@ use crate::app::*;
 use crate::config::settings::Viewer;
 use crate::transfer::export;
 
-/// A command run with the terminal handed over (the viewer), then removed.
+/// A command run with the terminal handed over (the viewer, an editor).
 pub struct External {
     pub command: String,
-    /// The temporary file it shows, deleted afterwards.
+    /// The temporary file it shows, deleted afterwards (unless `then`
+    /// reads it back).
     pub file: PathBuf,
+    /// What comes after it exits, with the file.
+    pub then: Option<AfterExternal>,
+}
+
+/// What follows an external program, with its file.
+pub enum AfterExternal {
+    /// The ontology edited in an editor (for project `0`): read back, and
+    /// what it changes shown before anything is changed.
+    OntologyEdited(String),
 }
 
 /// Whether `command` wants JSON rather than TSV (by its program name).
@@ -33,7 +43,7 @@ fn shell(command: &str) -> std::process::Command {
 }
 
 /// Quotes a path for the shell.
-fn shell_quote(path: &str) -> String {
+pub(in crate::app) fn shell_quote(path: &str) -> String {
     format!("'{}'", path.replace('\'', "'\\''"))
 }
 
@@ -124,7 +134,7 @@ impl App {
         let program = viewer.command();
         let command = if program.contains("{}") { program.replace("{}", &path) } else { format!("{program} {path}") };
         if viewer.in_terminal() {
-            self.for_terminal.external = Some(External { command, file });
+            self.for_terminal.external = Some(External { command, file, then: None });
             return;
         }
         if !self.may_reach_outside() {
@@ -161,6 +171,17 @@ impl App {
     /// terminal) and reports how it went.
     pub fn run_external(&mut self, external: &External) {
         let status = shell(&external.command).status();
+        if let Some(AfterExternal::OntologyEdited(project)) = &external.then {
+            return match status {
+                Ok(s) if s.success() => self.ontology_edited(project.clone(), external.file.clone()),
+                Ok(s) => {
+                    self.edit_failed(t!("pipes.exited", command = external.command, status = s), external.file.clone());
+                }
+                Err(e) => {
+                    self.edit_failed(t!("pipes.run_failed", command = external.command, e = e), external.file.clone());
+                }
+            };
+        }
         let _ = std::fs::remove_file(&external.file);
         match status {
             Ok(s) if s.success() => self.set_status(String::new(), false),

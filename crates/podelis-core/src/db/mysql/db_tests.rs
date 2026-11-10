@@ -41,6 +41,12 @@ async fn live_mysql() {
     let Some(db) = live_db(Engine::MySql).await else { return };
     db.run("CREATE DATABASE IF NOT EXISTS podelis_test; USE podelis_test", DEFAULT_ROW_LIMIT).await.unwrap();
     live_common(&db).await;
+    // Tables a rollback can't undo: by schema, this database's marked.
+    db.run("DROP TABLE IF EXISTS unrolled; CREATE TABLE unrolled (x int) ENGINE=MyISAM", DEFAULT_ROW_LIMIT).await.unwrap();
+    let sql = db.engine().dialect().and_then(crate::db::SqlDialect::tables_without_rollback).unwrap();
+    let o = db.run(sql, DEFAULT_ROW_LIMIT).await.unwrap();
+    assert!(cells(&o).contains(&vec![Some("podelis_test"), Some("unrolled"), Some("1")]), "{:?}", cells(&o));
+    db.run("DROP TABLE unrolled", DEFAULT_ROW_LIMIT).await.unwrap();
     let o = db
         .run(
             "SELECT CAST(1.50 AS DECIMAL(5,2)) d, DATE '2024-02-29' dt, \

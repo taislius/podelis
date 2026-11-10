@@ -40,6 +40,21 @@ async fn a_sqlite_path_keeps_its_brackets() {
     assert!(path.exists() && !dir.path().join("data].db").exists());
 }
 
+#[tokio::test]
+async fn an_expression_column_has_its_values_type() {
+    // SQLite declares no type for an expression: sqlx says NULL, the value
+    // says what it is. A declared column keeps its own.
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::connect(file_params(&dir.path().join("t.db"), false)).await.unwrap();
+    db.run("CREATE TABLE t (x REAL, n text); INSERT INTO t VALUES (1.5, 'a'), (2, 'b')", 1).await.unwrap();
+    let o = db.run("SELECT sum(x), count(*), max(n), n FROM t", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert_eq!(o.column_types, ["REAL", "INTEGER", "TEXT", "TEXT"]);
+    // No value to go by: as before.
+    let o = db.run("SELECT sum(x) FROM t WHERE x > 9", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert_eq!(o.column_types, ["NULL"]);
+    db.close().await;
+}
+
 /// SQLite needs no server, so this always runs.
 #[tokio::test]
 async fn live_sqlite() {

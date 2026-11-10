@@ -16,6 +16,8 @@ futures-util.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# The ontology as YAML, to edit in an editor and load back (pure Rust).
+serde-saphyr = "=2.0.0"
 # A project's memory is a SQLite file (with an FTS5 index).
 sqlx.workspace = true
 # A model's SQL, parsed to check its names.

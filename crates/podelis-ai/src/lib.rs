@@ -2,7 +2,8 @@
 //! app's crate): the models (`models`: `[[models]]` entries, their keys,
 //! the Anthropic and OpenAI clients), what a model is shown of a database
 //! for a question (`context`), a project's facts (`memory`), migrations read
-//! into facts (`migrations`), and a model's SQL checked against the schema
+//! into facts (`migrations`), the database's ontology (`ontology`: the
+//! catalog and the facts as one typed graph), and a model's SQL checked against the schema
 //! (`names`), and what it says to models (`prompts`, from `prompts/`). Below the app: it knows the databases (`podelis-core`), never
 //! the app, its config files or the gateway's protocol.
 
@@ -14,6 +15,7 @@ pub mod memory;
 pub mod migrations;
 pub mod models;
 pub mod names;
+pub mod ontology;
 pub mod prompts;
 
 /// Snapshot tests keep their `.snap` files in the crate's

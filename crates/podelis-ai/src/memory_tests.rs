@@ -1,4 +1,37 @@
 use super::*;
+use crate::ontology::Ontology;
+
+/// A shop's catalog, as an ontology: which tables facts are about.
+fn shop() -> Ontology {
+    use crate::db::{ColumnInfo, TableInfo};
+    let table = |name: &str, columns: &[&str]| {
+        let info = TableInfo {
+            schema: "public".into(),
+            name: name.into(),
+            is_view: false,
+            rows: None,
+            bytes: None,
+            system: false,
+            partition_of: None,
+        };
+        let columns = columns
+            .iter()
+            .map(|c| ColumnInfo { name: (*c).into(), data_type: "text".into(), nullable: true, primary_key: false })
+            .collect();
+        (info, columns)
+    };
+    Ontology::from_catalog(&crate::context::Schema {
+        engine: "PostgreSQL".into(),
+        dialect: crate::db::Engine::Postgres,
+        tables: vec![
+            table("orders", &["id", "status", "total"]),
+            table("customers", &["id", "tier"]),
+            table("warehouses", &["id"]),
+        ],
+        links: Vec::new(),
+        comments: Vec::new(),
+    })
+}
 
 #[tokio::test]
 async fn facts_are_kept_found_and_forgotten() {
@@ -7,33 +40,33 @@ async fn facts_are_kept_found_and_forgotten() {
     use std::os::unix::fs::PermissionsExt;
     let mode = std::fs::metadata(path(dir.path(), "p1")).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
-    let status = add(&mut conn, "orders.status", "", "3 = cancelled", "user", true).await.unwrap();
+    let status = add(&mut conn, "orders.status", "", "3 = cancelled", "user", true, "").await.unwrap();
     assert_eq!((status.relation.as_str(), status.confirmed), ("means", true));
-    add(&mut conn, "revenue", "is", "orders.total minus refunds", "user", true).await.unwrap();
+    add(&mut conn, "revenue", "is", "orders.total minus refunds", "user", true, "").await.unwrap();
     let guess =
-        add(&mut conn, "customers.tier", "means", "gold spends over 1000", "model:claude", false).await.unwrap();
-    add(&mut conn, "warehouses", "are", "only in Lithuania", "user", true).await.unwrap();
-    assert!(add(&mut conn, " ", "means", "x", "user", true).await.is_err());
+        add(&mut conn, "customers.tier", "means", "gold spends over 1000", "model:claude", false, "").await.unwrap();
+    add(&mut conn, "warehouses", "are", "only in Lithuania", "user", true, "").await.unwrap();
+    assert!(add(&mut conn, " ", "means", "x", "user", true, "").await.is_err());
 
     // About the tables the question needs, then matching its words; only
     // confirmed ones.
     let tables = ["public.orders".to_string(), "public.customers".to_string()];
-    let shown = relevant(&mut conn, &tables, "monthly revenue by tier").await.unwrap();
+    let shown = relevant(&mut conn, &shop(), &tables, "monthly revenue by tier").await.unwrap();
     let lines: Vec<String> = shown.iter().map(Fact::line).collect();
     assert_eq!(lines, ["orders.status means 3 = cancelled", "revenue is orders.total minus refunds"]);
     // Confirmed, it's shown too.
     assert!(confirm(&mut conn, guess.id).await.unwrap());
-    let shown = relevant(&mut conn, &tables, "x").await.unwrap();
+    let shown = relevant(&mut conn, &shop(), &tables, "x").await.unwrap();
     assert!(shown.iter().any(|f| f.subject == "customers.tier"));
 
     // Search, with words that would be FTS syntax taken as words.
-    let found = list(&mut conn, Some("refunds AND \"NEAR(")).await.unwrap();
+    let found = list(&mut conn, Some("refunds AND \"NEAR("), None).await.unwrap();
     assert_eq!(found.len(), 1);
     assert!(forget(&mut conn, status.id).await.unwrap());
     assert!(!forget(&mut conn, status.id).await.unwrap());
-    assert!(list(&mut conn, Some("cancelled")).await.unwrap().is_empty(), "the index follows");
+    assert!(list(&mut conn, Some("cancelled"), None).await.unwrap().is_empty(), "the index follows");
 
-    let text = export("shop", &list(&mut conn, None).await.unwrap());
+    let text = export("shop", &list(&mut conn, None, None).await.unwrap());
     assert!(text.starts_with("# Podėlis memory · project shop"));
     assert!(text.contains("\nrevenue | is | orders.total minus refunds | user · "), "{text}");
 }
@@ -66,43 +99,24 @@ fn facts_are_read_as_typed() {
     assert_eq!(fact("lonely"), None);
 }
 
-#[test]
-fn a_fact_is_about_a_table_its_schema_or_columns_name() {
-    let fact = |subject: &str| Fact {
-        id: 1,
-        subject: subject.into(),
-        relation: "means".into(),
-        value: "x".into(),
-        source: "user".into(),
-        confirmed: true,
-        at: String::new(),
-    };
-    for subject in ["orders", "Orders.status", "public.orders", "public.orders.status"] {
-        assert!(fact(subject).is_about("public.orders"), "{subject}");
-    }
-    assert!(fact("orders.status").is_about("orders"));
-    assert!(!fact("order_items").is_about("public.orders"));
-    assert!(!fact("public").is_about("public.orders"));
-}
-
 #[tokio::test]
 async fn a_folder_with_odd_characters_keeps_its_memory() {
     let dir = tempfile::tempdir().unwrap();
     let odd = dir.path().join("a%20b?c");
     let mut conn = open(&odd, "p1").await.unwrap();
-    add(&mut conn, "t", "means", "x", "user", true).await.unwrap();
+    add(&mut conn, "t", "means", "x", "user", true, "").await.unwrap();
     drop(conn);
     assert!(path(&odd, "p1").exists(), "the file is where its path says");
     let mut conn = open(&odd, "p1").await.unwrap();
-    assert_eq!(list(&mut conn, None).await.unwrap().len(), 1);
+    assert_eq!(list(&mut conn, None, None).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
 async fn a_forgotten_suggestion_is_remembered_as_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let mut conn = open(dir.path(), "p1").await.unwrap();
-    let guess = add(&mut conn, "orders.status", "means", "3 = cancelled", "model:near", false).await.unwrap();
-    let mine = add(&mut conn, "orders.total", "means", "VAT included", "user", true).await.unwrap();
+    let guess = add(&mut conn, "orders.status", "means", "3 = cancelled", "model:near", false, "").await.unwrap();
+    let mine = add(&mut conn, "orders.total", "means", "VAT included", "user", true, "").await.unwrap();
     forget(&mut conn, guess.id).await.unwrap();
     forget(&mut conn, mine.id).await.unwrap();
     assert!(rejected(&mut conn, "Orders.Status", "3 = CANCELLED").await.unwrap());
@@ -114,14 +128,16 @@ async fn a_forgotten_suggestion_is_remembered_as_rejected() {
 async fn a_questions_facts_give_words_for_choosing_tables_not_histories() {
     let dir = tempfile::tempdir().unwrap();
     let mut conn = open(dir.path(), "p1").await.unwrap();
-    add(&mut conn, "revenue", "is", "payment.amount", "user", true).await.unwrap();
-    add(&mut conn, "revenue_report", "history", "created 2024-01-02; joins audit_log", "file:db", true).await.unwrap();
-    add(&mut conn, "revenue", "means", "net of refunds", "model:claude", false).await.unwrap();
-    let memory = for_question(&mut conn, "revenue per category").await.unwrap();
+    add(&mut conn, "revenue", "is", "payment.amount", "user", true, "").await.unwrap();
+    add(&mut conn, "revenue_report", "history", "created 2024-01-02; joins audit_log", "file:db", true, "")
+        .await
+        .unwrap();
+    add(&mut conn, "revenue", "means", "net of refunds", "model:claude", false, "").await.unwrap();
+    let memory = for_question(&mut conn, "revenue per category", None).await.unwrap();
     // The confirmed fact's words; not the history's, not the unconfirmed one's.
     assert_eq!(memory.words(), " revenue payment.amount");
     // All matching ones are still shown, the history last.
-    let lines: Vec<String> = memory.about(&[]).iter().map(Fact::line).collect();
+    let lines: Vec<String> = memory.about(&shop(), &[]).iter().map(Fact::line).collect();
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(lines[1].starts_with("revenue_report history"), "{lines:?}");
 }
@@ -130,13 +146,13 @@ async fn a_questions_facts_give_words_for_choosing_tables_not_histories() {
 async fn another_name_and_a_defined_term_bring_their_tables() {
     let dir = tempfile::tempdir().unwrap();
     let mut conn = open(dir.path(), "p1").await.unwrap();
-    add(&mut conn, "customer", ALSO_CALLED, "client", "user", true).await.unwrap();
-    add(&mut conn, "revenue", DEFINED_AS, "sum(payment.amount)", "user", true).await.unwrap();
+    add(&mut conn, "customer", ALSO_CALLED, "client", "user", true, "").await.unwrap();
+    add(&mut conn, "revenue", DEFINED_AS, "sum(payment.amount)", "user", true, "").await.unwrap();
     // "clients": the stem finds the other name, and its table's name comes
     // with it for choosing tables.
-    let memory = for_question(&mut conn, "how many clients rented").await.unwrap();
+    let memory = for_question(&mut conn, "how many clients rented", None).await.unwrap();
     assert_eq!(memory.words(), " customer client");
-    let memory = for_question(&mut conn, "revenue per store").await.unwrap();
+    let memory = for_question(&mut conn, "revenue per store", None).await.unwrap();
     assert_eq!(memory.words(), " revenue sum(payment.amount)");
 }
 
@@ -144,18 +160,18 @@ async fn another_name_and_a_defined_term_bring_their_tables() {
 async fn a_fact_is_changed_and_found_by_its_new_words() {
     let dir = tempfile::tempdir().unwrap();
     let mut conn = open(dir.path(), "p1").await.unwrap();
-    let guess = add(&mut conn, "orders.status", "means", "3 = cancelled", "model:claude", false).await.unwrap();
+    let guess = add(&mut conn, "orders.status", "means", "3 = cancelled", "model:claude", false, "").await.unwrap();
     let changed = update(&mut conn, guess.id, "orders.status means 3 = refunded").await.unwrap().unwrap();
     // The user's word now: confirmed, theirs.
     assert_eq!((changed.value.as_str(), changed.confirmed, changed.source.as_str()), ("3 = refunded", true, "user"));
     // The model's guess, corrected, isn't suggested again.
     assert!(rejected(&mut conn, "orders.status", "3 = cancelled").await.unwrap());
     // The search index follows the edit: the new words find it, the old don't.
-    assert_eq!(list(&mut conn, Some("refunded")).await.unwrap().len(), 1);
-    assert!(list(&mut conn, Some("cancelled")).await.unwrap().is_empty());
+    assert_eq!(list(&mut conn, Some("refunded"), None).await.unwrap().len(), 1);
+    assert!(list(&mut conn, Some("cancelled"), None).await.unwrap().is_empty());
     // Forgetting it after an edit leaves the index clean too.
     assert!(forget(&mut conn, guess.id).await.unwrap());
-    assert!(list(&mut conn, Some("refunded")).await.unwrap().is_empty());
+    assert!(list(&mut conn, Some("refunded"), None).await.unwrap().is_empty());
     assert!(update(&mut conn, 999, "x means y").await.unwrap().is_none());
 }
 
@@ -168,22 +184,79 @@ async fn an_edit_keeps_the_facts_own_relation_and_outlives_learning_again() {
         relation: "history".into(),
         value: "created in 001".into(),
     }];
-    replace_source(&mut conn, "file:/db/migrations", &learned).await.unwrap();
-    let id = list(&mut conn, None).await.unwrap()[0].id;
+    replace_source(&mut conn, "file:/db/migrations", &learned, "").await.unwrap();
+    let id = list(&mut conn, None, None).await.unwrap()[0].id;
     // A relation adding doesn't know (`history`) stays what it was.
     let changed = update(&mut conn, id, "orders history created in 001, renamed in 004").await.unwrap().unwrap();
     assert_eq!((changed.relation.as_str(), changed.value.as_str()), ("history", "created in 001, renamed in 004"));
     // A value that only starts like another relation isn't read as one.
-    let fact = add(&mut conn, "revenue", "means", "defined as gross", "user", true).await.unwrap();
+    let fact = add(&mut conn, "revenue", "means", "defined as gross", "user", true, "").await.unwrap();
     let changed = update(&mut conn, fact.id, "revenue means defined as net").await.unwrap().unwrap();
     assert_eq!((changed.relation.as_str(), changed.value.as_str()), ("means", "defined as net"));
     // Changing the relation itself works as when adding.
     let changed = update(&mut conn, fact.id, "revenue defined as sum(payment.amount)").await.unwrap().unwrap();
     assert_eq!((changed.relation.as_str(), changed.value.as_str()), ("defined as", "sum(payment.amount)"));
     // Learning the folder again doesn't delete the user's edit.
-    replace_source(&mut conn, "file:/db/migrations", &learned).await.unwrap();
-    let facts = list(&mut conn, None).await.unwrap();
+    replace_source(&mut conn, "file:/db/migrations", &learned, "").await.unwrap();
+    let facts = list(&mut conn, None, None).await.unwrap();
     assert!(facts.iter().any(|f| f.value == "created in 001, renamed in 004" && f.source == "user"), "{facts:?}");
     // No value: an error, nothing changed.
     assert!(update(&mut conn, fact.id, "revenue").await.is_err());
+}
+
+#[tokio::test]
+async fn facts_are_about_one_database_or_every_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut conn = open(dir.path(), "p1").await.unwrap();
+    add(&mut conn, "orders.status", "means", "3 = cancelled", "user", true, "Shop").await.unwrap();
+    add(&mut conn, "events", "means", "clicks", "user", true, "analytics").await.unwrap();
+    add(&mut conn, "revenue", "means", "net of refunds", "user", true, "").await.unwrap();
+    let subjects = |facts: Vec<Fact>| facts.into_iter().map(|f| f.subject).collect::<Vec<_>>();
+    // Kept lowercased; a database's facts, and those about every database.
+    assert_eq!(subjects(list(&mut conn, None, Some("SHOP")).await.unwrap()), ["orders.status", "revenue"]);
+    assert_eq!(subjects(list(&mut conn, None, Some("analytics")).await.unwrap()), ["events", "revenue"]);
+    assert_eq!(list(&mut conn, None, None).await.unwrap().len(), 3, "no database: all of them");
+    let memory = for_question(&mut conn, "cancelled orders", Some("analytics")).await.unwrap();
+    assert!(memory.about(&shop(), &["orders".into()]).is_empty(), "another database's facts aren't shown");
+}
+
+#[tokio::test]
+async fn a_memory_from_before_databases_keeps_its_facts_for_every_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = path(dir.path(), "p1");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    {
+        let options = SqliteConnectOptions::new().filename(&file).create_if_missing(true);
+        let mut old = SqliteConnection::connect_with(&options).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE facts (id INTEGER PRIMARY KEY, subject TEXT NOT NULL, relation TEXT NOT NULL,
+             value TEXT NOT NULL, source TEXT NOT NULL, confirmed INTEGER NOT NULL DEFAULT 0, at TEXT NOT NULL)",
+        )
+        .execute(&mut old)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO facts VALUES (1, 'orders.status', 'means', '3 = cancelled', 'user', 1, 'then')")
+            .execute(&mut old)
+            .await
+            .unwrap();
+    }
+    let mut conn = open(dir.path(), "p1").await.unwrap();
+    let facts = list(&mut conn, None, Some("shop")).await.unwrap();
+    assert_eq!((facts.len(), facts[0].database.as_str()), (1, ""));
+}
+
+#[tokio::test]
+async fn learning_a_folder_again_in_another_scope_replaces_what_it_taught() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut conn = open(dir.path(), "p1").await.unwrap();
+    let learned = vec![crate::migrations::Learned {
+        subject: "orders".into(),
+        relation: "history".into(),
+        value: "created in 001".into(),
+    }];
+    replace_source(&mut conn, "file:/db/migrations", &learned, "").await.unwrap();
+    replace_source(&mut conn, "file:/db/migrations", &learned, "shop").await.unwrap();
+    let facts = list(&mut conn, None, None).await.unwrap();
+    assert_eq!(facts.len(), 1, "{facts:?}");
+    assert_eq!(facts[0].database, "shop");
 }

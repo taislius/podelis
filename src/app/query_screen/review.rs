@@ -44,6 +44,7 @@ impl App {
             self.tab.run.extra.reviewing = true;
         }
         self.run_now(wrapped.sql.clone(), offset, infos, purpose, Some(wrapped));
+        self.tab.run.extra.added_statements = 1;
     }
 
     /// Runs a checked (and confirmed) script: writes go through a transaction
@@ -75,8 +76,20 @@ impl App {
         }
     }
 
+    /// Why `sql` (its statements `infos`) can't run as it would write:
+    /// the connection is read-only, the write mode can't hold it, or it
+    /// writes a table a rollback doesn't undo where nothing should stay.
+    /// `None`: it can run.
+    pub(super) fn write_refusal(&self, sql: &str, infos: &[StatementInfo], purpose: &RunPurpose) -> Option<String> {
+        let first = infos.iter().find(|i| i.modifies())?;
+        if self.connection.mode == ConnectionMode::ReadOnly {
+            return Some(t!("run.read_only_refused", what = first.summary));
+        }
+        self.tx_mode_refusal(infos, purpose).or_else(|| self.unrollable_refusal(sql))
+    }
+
     /// Why the write mode can't run `infos` (None: it can).
-    pub(super) fn tx_mode_refusal(&self, infos: &[StatementInfo], purpose: &RunPurpose) -> Option<String> {
+    fn tx_mode_refusal(&self, infos: &[StatementInfo], purpose: &RunPurpose) -> Option<String> {
         let mode = self.connection.tx_mode;
         // (A sandbox's transaction is its own: its rules hold while it's open.)
         if mode == TxMode::AutoCommit

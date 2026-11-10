@@ -3,7 +3,10 @@
 //! each with who said it, when, and whether it's confirmed.
 //!
 //! One SQLite file per project (`memory/<project-id>.db` in the config
-//! folder), owned by the gateway. Only confirmed facts are shown to
+//! folder), owned by the gateway. Each fact is about one database of the
+//! project (`database`: its name, as connections to it share it, so dev
+//! and prod have one memory), or, with none, about every database in the
+//! project (as all facts were before). Only confirmed facts are shown to
 //! models: a fact the user adds is confirmed (they said it); one a model
 //! suggests waits for the user. A fact is shown when it's about a table
 //! the question needs, or matches the question's words (full-text search).
@@ -31,6 +34,9 @@ pub struct Fact {
     pub confirmed: bool,
     /// When it was said (RFC 3339, local time).
     pub at: String,
+    /// The database it's about (its key: `shop`), or "" for every
+    /// database in the project.
+    pub database: String,
 }
 
 impl Fact {
@@ -43,32 +49,28 @@ impl Fact {
             "source": self.source,
             "confirmed": self.confirmed,
             "at": self.at,
+            "database": self.database,
+        })
+    }
+
+    /// As [`to_json`](Self::to_json) wrote it (what the gateway sends).
+    pub fn from_json(v: &Value) -> Option<Self> {
+        let text = |k: &str| v[k].as_str().map(str::to_string);
+        Some(Fact {
+            id: v["id"].as_i64()?,
+            subject: text("subject")?,
+            relation: text("relation")?,
+            value: text("value")?,
+            source: text("source").unwrap_or_default(),
+            confirmed: v["confirmed"].as_bool().unwrap_or(false),
+            at: text("at").unwrap_or_default(),
+            database: text("database").unwrap_or_default(),
         })
     }
 
     /// As a model is shown it: one line.
     pub fn line(&self) -> String {
         format!("{} {} {}", self.subject, self.relation, self.value)
-    }
-
-    /// The table it names, if its subject is a column (`table.column`,
-    /// `schema.table.column`): what can go missing from a schema.
-    pub fn table_named(&self) -> Option<&str> {
-        let parts: Vec<&str> = self.subject.trim().split('.').collect();
-        match parts.as_slice() {
-            [table, _] | [_, table, _] if !table.is_empty() => Some(table),
-            _ => None,
-        }
-    }
-
-    /// Whether it's about `table` (as the context names it, `schema.table`
-    /// or `table`) or one of its columns: `orders`, `orders.status`,
-    /// `public.orders`, `public.orders.status`.
-    fn is_about(&self, table: &str) -> bool {
-        let subject = self.subject.trim().to_lowercase();
-        let table = table.to_lowercase();
-        let bare = table.rsplit('.').next().unwrap_or(&table).to_string();
-        [table, bare].iter().any(|t| subject == *t || subject.starts_with(&format!("{t}.")))
     }
 }
 
@@ -132,6 +134,17 @@ pub async fn open(config_dir: &Path, project_id: &str) -> Result<SqliteConnectio
     for statement in SCHEMA.iter().copied() {
         sqlx::query(statement).execute(&mut conn).await.map_err(|e| format!("memory: {e}"))?;
     }
+    // A memory from before facts had a database: theirs is every database.
+    let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('facts')")
+        .fetch_all(&mut conn)
+        .await
+        .map_err(|e| format!("memory: {e}"))?;
+    if !columns.iter().any(|c| c == "database") {
+        sqlx::query("ALTER TABLE facts ADD COLUMN database TEXT NOT NULL DEFAULT ''")
+            .execute(&mut conn)
+            .await
+            .map_err(|e| format!("memory: {e}"))?;
+    }
     Ok(conn)
 }
 
@@ -149,7 +162,8 @@ const SCHEMA: &[&str] = &[
         value TEXT NOT NULL,
         source TEXT NOT NULL,
         confirmed INTEGER NOT NULL DEFAULT 0,
-        at TEXT NOT NULL
+        at TEXT NOT NULL,
+        database TEXT NOT NULL DEFAULT ''
     )",
     "CREATE VIRTUAL TABLE IF NOT EXISTS facts_text
         USING fts5(subject, relation, value, content='facts', content_rowid='id')",
@@ -179,6 +193,7 @@ fn row(r: &sqlx::sqlite::SqliteRow) -> Fact {
         source: r.get("source"),
         confirmed: r.get::<i64, _>("confirmed") != 0,
         at: r.get("at"),
+        database: r.get("database"),
     }
 }
 
@@ -190,6 +205,7 @@ pub async fn add(
     value: &str,
     source: &str,
     confirmed: bool,
+    database: &str,
 ) -> Result<Fact, String> {
     let (subject, relation, value) = (subject.trim(), relation.trim(), value.trim());
     if subject.is_empty() || value.is_empty() {
@@ -198,8 +214,8 @@ pub async fn add(
     let relation = if relation.is_empty() { "means" } else { relation };
     let at = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
     let r = sqlx::query(
-        "INSERT INTO facts (subject, relation, value, source, confirmed, at) VALUES (?, ?, ?, ?, ?, ?)
-         RETURNING id, subject, relation, value, source, confirmed, at",
+        "INSERT INTO facts (subject, relation, value, source, confirmed, at, database) VALUES (?, ?, ?, ?, ?, ?, ?)
+         RETURNING *",
     )
     .bind(subject)
     .bind(relation)
@@ -207,46 +223,71 @@ pub async fn add(
     .bind(source)
     .bind(i64::from(confirmed))
     .bind(at)
+    .bind(database.trim().to_lowercase())
     .fetch_one(&mut *conn)
     .await
     .map_err(|e| format!("memory: {e}"))?;
     Ok(row(&r))
 }
 
-/// Every fact, oldest first; with `text`, those matching it.
-pub async fn list(conn: &mut SqliteConnection, text: Option<&str>) -> Result<Vec<Fact>, String> {
-    let rows =
-        match text.map(fts_query).filter(|q| !q.is_empty()) {
-            Some(q) => sqlx::query(
-                "SELECT f.* FROM facts f JOIN facts_text t ON t.rowid = f.id WHERE facts_text MATCH ? ORDER BY f.id",
+/// Every fact, oldest first; with `text`, those matching it. With a
+/// `database`, only those about it and those about every database.
+pub async fn list(
+    conn: &mut SqliteConnection,
+    text: Option<&str>,
+    database: Option<&str>,
+) -> Result<Vec<Fact>, String> {
+    // A database's facts and those about every database; all of them for
+    // none (`?1` NULL).
+    let database = database.map(|d| d.trim().to_lowercase());
+    let rows = match text.map(fts_query).filter(|q| !q.is_empty()) {
+        Some(q) => {
+            sqlx::query(
+                "SELECT f.* FROM facts f JOIN facts_text t ON t.rowid = f.id WHERE facts_text MATCH ?2 \
+             AND (?1 IS NULL OR f.database = '' OR f.database = ?1) ORDER BY f.id",
             )
+            .bind(database)
             .bind(q)
             .fetch_all(&mut *conn)
-            .await,
-            None => sqlx::query("SELECT * FROM facts ORDER BY id").fetch_all(&mut *conn).await,
-        };
+            .await
+        }
+        None => {
+            sqlx::query("SELECT * FROM facts WHERE (?1 IS NULL OR database = '' OR database = ?1) ORDER BY id")
+                .bind(database)
+                .fetch_all(&mut *conn)
+                .await
+        }
+    };
     Ok(rows.map_err(|e| format!("memory: {e}"))?.iter().map(row).collect())
 }
 
-/// Replaces what was learned from `source` (a folder of migrations) with
-/// `facts`, all confirmed (the team wrote them), in one transaction.
+/// Replaces what was learned from `source` (a folder of migrations), in
+/// whatever scope, with `facts` about `database` ("" for every one), all
+/// confirmed (the team wrote them), in one transaction.
 /// Returns how many there are now.
 pub async fn replace_source(
     conn: &mut SqliteConnection,
     source: &str,
     facts: &[super::migrations::Learned],
+    database: &str,
 ) -> Result<usize, String> {
     let failed = |e: sqlx::Error| format!("memory: {e}");
+    let database = database.trim().to_lowercase();
     let mut tx = conn.begin().await.map_err(failed)?;
+    // What the folder taught before, in any scope: learning it again (for
+    // this database or every one) replaces it, rather than adding a copy.
     sqlx::query("DELETE FROM facts WHERE source = ?").bind(source).execute(&mut *tx).await.map_err(failed)?;
     let at = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
     for f in facts {
-        sqlx::query("INSERT INTO facts (subject, relation, value, source, confirmed, at) VALUES (?, ?, ?, ?, 1, ?)")
-            .bind(&f.subject)
-            .bind(&f.relation)
-            .bind(&f.value)
-            .bind(source)
-            .bind(&at)
+        sqlx::query(
+            "INSERT INTO facts (subject, relation, value, source, confirmed, at, database) VALUES (?, ?, ?, ?, 1, ?, ?)",
+        )
+        .bind(&f.subject)
+        .bind(&f.relation)
+        .bind(&f.value)
+        .bind(source)
+        .bind(&at)
+        .bind(&database)
             .execute(&mut *tx)
             .await
             .map_err(failed)?;
@@ -331,7 +372,7 @@ pub async fn update(conn: &mut SqliteConnection, id: i64, text: &str) -> Result<
     let at = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
     let r = sqlx::query(
         "UPDATE facts SET subject = ?, relation = ?, value = ?, source = 'user', confirmed = 1, at = ? WHERE id = ?
-         RETURNING id, subject, relation, value, source, confirmed, at",
+         RETURNING *",
     )
     .bind(subject)
     .bind(relation)
@@ -342,6 +383,18 @@ pub async fn update(conn: &mut SqliteConnection, id: i64, text: &str) -> Result<
     .await
     .map_err(failed)?;
     Ok(r.as_ref().map(row))
+}
+
+/// Moves a fact to `database` (its key), or with "" to every database in
+/// the project. False if there's no such fact.
+pub async fn set_database(conn: &mut SqliteConnection, id: i64, database: &str) -> Result<bool, String> {
+    let done = sqlx::query("UPDATE facts SET database = ? WHERE id = ?")
+        .bind(database.trim().to_lowercase())
+        .bind(id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| format!("memory: {e}"))?;
+    Ok(done.rows_affected() > 0)
 }
 
 /// Marks a fact confirmed (one a model suggested, now the user's).
@@ -390,9 +443,17 @@ pub struct ForQuestion {
     matched: Vec<Fact>,
 }
 
-pub async fn for_question(conn: &mut SqliteConnection, question: &str) -> Result<ForQuestion, String> {
+/// For a question about `database` (its key; `None`: every fact).
+pub async fn for_question(
+    conn: &mut SqliteConnection,
+    question: &str,
+    database: Option<&str>,
+) -> Result<ForQuestion, String> {
     let confirmed = |facts: Vec<Fact>| facts.into_iter().filter(|f| f.confirmed).collect();
-    Ok(ForQuestion { all: confirmed(list(conn, None).await?), matched: confirmed(list(conn, Some(question)).await?) })
+    Ok(ForQuestion {
+        all: confirmed(list(conn, None, database).await?),
+        matched: confirmed(list(conn, Some(question), database).await?),
+    })
 }
 
 impl ForQuestion {
@@ -408,9 +469,17 @@ impl ForQuestion {
     }
 
     /// Those to show a model, about `tables` (names, as the context chose
-    /// them) first, then those matching the question.
-    pub fn about(&self, tables: &[String]) -> Vec<Fact> {
-        let mut shown: Vec<Fact> = self.all.iter().filter(|f| tables.iter().any(|t| f.is_about(t))).cloned().collect();
+    /// them) or their columns first, as `ontology` reads their subjects
+    /// (`orders`, `Orders.status`, `public.orders` are one table), then
+    /// those matching the question.
+    pub fn about(&self, ontology: &crate::ontology::Ontology, tables: &[String]) -> Vec<Fact> {
+        let chosen: Vec<_> = tables.iter().filter_map(|t| ontology.table_of(t)).collect();
+        let mut shown: Vec<Fact> = self
+            .all
+            .iter()
+            .filter(|f| ontology.table_of(&f.subject).is_some_and(|t| chosen.contains(&t)))
+            .cloned()
+            .collect();
         for f in &self.matched {
             if !shown.iter().any(|s| s.id == f.id) {
                 shown.push(f.clone());
@@ -432,8 +501,13 @@ impl ForQuestion {
 /// (names, as the context chose them): those about the tables first,
 /// then those matching the question's words.
 #[cfg(test)]
-pub async fn relevant(conn: &mut SqliteConnection, tables: &[String], question: &str) -> Result<Vec<Fact>, String> {
-    Ok(for_question(conn, question).await?.about(tables))
+pub async fn relevant(
+    conn: &mut SqliteConnection,
+    ontology: &crate::ontology::Ontology,
+    tables: &[String],
+    question: &str,
+) -> Result<Vec<Fact>, String> {
+    Ok(for_question(conn, question, None).await?.about(ontology, tables))
 }
 
 /// The facts as a text file, to read, fix, or keep in git: a line each,

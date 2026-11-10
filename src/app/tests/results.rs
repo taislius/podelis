@@ -1295,7 +1295,7 @@ async fn editing_is_refused_when_rows_cant_be_identified() {
     for (select, col, why) in [
         ("select name from people", 0, "primary key column id"),
         ("select id, upper(name) as name from people", 1, "computed"),
-        ("select p.id, q.name from people p join people q on q.id = p.id", 1, "plain SELECT"),
+        ("select p.id, q.name from people p join people q on q.id = p.id", 1, "SELECT without joins"),
     ] {
         let (app, _dir) = Box::pin(edit_cell(ConnectionMode::Normal, select, col)).await;
         assert!(app.cell_edit.is_none(), "{select}");

@@ -61,20 +61,22 @@ pub struct Context {
     pub left_out: usize,
     /// The team's facts it shows (their lines).
     pub facts: Vec<String>,
-    /// Facts left out because the table they name isn't in this database
-    /// (dropped or renamed since: stale?), their lines.
+    /// Facts left out because the table or column they name isn't in this
+    /// database (dropped or renamed since: stale?), their lines.
     pub stale: Vec<String>,
 }
 
 impl Context {
     /// Adds what the team has said about these tables (confirmed facts),
     /// as long as they fit the budget.
-    pub fn with_facts(mut self, facts: &[super::memory::Fact], schema: &Schema) -> Self {
-        // A fact about a column of a table this database doesn't have: not
-        // shown, said as maybe stale.
-        let known = |table: &str| schema.tables.iter().any(|(t, _)| t.name.eq_ignore_ascii_case(table));
+    pub fn with_facts(mut self, facts: &[super::memory::Fact], ontology: &crate::ontology::Ontology) -> Self {
+        // A fact about a table or column this database doesn't have
+        // (dropped or renamed since): not shown, said as maybe stale.
+        if facts.is_empty() {
+            return self;
+        }
         let (facts, stale): (Vec<&super::memory::Fact>, Vec<&super::memory::Fact>) =
-            facts.iter().partition(|f| f.table_named().is_none_or(known));
+            facts.iter().partition(|f| ontology.resolve(&f.subject) != crate::ontology::Resolved::Missing);
         self.stale = stale.iter().map(|f| f.line()).collect();
         if facts.is_empty() || self.tables.is_empty() {
             return self;
@@ -162,7 +164,7 @@ fn question_words(question: &str) -> BTreeSet<String> {
 }
 
 /// `customers` → customer, `categories` → category, `addresses` → address.
-fn singular(w: &str) -> Option<String> {
+pub(crate) fn singular(w: &str) -> Option<String> {
     if w.len() > 4 && w.ends_with("ies") {
         return Some(format!("{}y", &w[..w.len() - 3]));
     }
@@ -634,12 +636,19 @@ fn cut(text: &str) -> String {
 }
 
 /// The context for `question` once memory's been read: what `ask` builds,
-/// and what the retrieval eval (`context_eval.rs`) measures.
-pub fn for_question(schema: &Schema, question: &str, memory: &crate::memory::ForQuestion) -> Context {
+/// and what the retrieval eval (`context_eval.rs`) measures. `catalog` is
+/// the schema's ontology (`Ontology::from_catalog`), built once per
+/// schema, not per question.
+pub fn for_question(
+    schema: &Schema,
+    catalog: &crate::ontology::Ontology,
+    question: &str,
+    memory: &crate::memory::ForQuestion,
+) -> Context {
     let built = build(schema, &format!("{question}{}", memory.words()));
     let tables: Vec<String> = built.tables.iter().map(|t| t.name.clone()).collect();
-    let facts = memory.about(&tables);
-    built.with_facts(&facts, schema)
+    let facts = memory.about(catalog, &tables);
+    built.with_facts(&facts, catalog)
 }
 
 #[cfg(test)]

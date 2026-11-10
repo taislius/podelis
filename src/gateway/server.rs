@@ -348,6 +348,18 @@ async fn handle(line: &[u8], client: &mut Option<String>, shared: &Shared, write
                 about = log;
                 outcome
             }
+            "ontology" => {
+                let (outcome, log) =
+                    super::ontology::ontology(&shared.config_dir, &shared.caches, &incoming.params).await;
+                about = log;
+                outcome
+            }
+            "ontology.import" => {
+                let (outcome, log) =
+                    super::ontology::ontology_import(&shared.config_dir, &shared.caches, &incoming.params).await;
+                about = log;
+                outcome
+            }
             "ask" => {
                 let id = incoming.id.clone().unwrap_or(Value::Null);
                 let (outcome, log) =
@@ -368,7 +380,7 @@ async fn handle(line: &[u8], client: &mut Option<String>, shared: &Shared, write
             }
             method if method.starts_with("memory.") => {
                 let (outcome, log) =
-                    super::ai::memory(&shared.config_dir, &shared.caches, method, &incoming.params).await;
+                    super::memory::memory(&shared.config_dir, &shared.caches, method, &incoming.params).await;
                 about = log;
                 outcome
             }

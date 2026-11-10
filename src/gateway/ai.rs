@@ -194,7 +194,7 @@ const KEY_TTL: std::time::Duration = std::time::Duration::from_mins(15);
 
 impl Caches {
     /// The project's memory: opened (and set up) once, then kept.
-    async fn memory(&self, config_dir: &Path, project_id: &str) -> Result<Memory, String> {
+    pub(super) async fn memory(&self, config_dir: &Path, project_id: &str) -> Result<Memory, String> {
         if let Some(conn) = self.memories.lock().await.get(project_id) {
             return Ok(std::sync::Arc::clone(conn));
         }
@@ -207,7 +207,7 @@ impl Caches {
     }
 
     /// After a failure: the next call opens the memory again.
-    async fn forget_memory(&self, project_id: &str) {
+    pub(super) async fn forget_memory(&self, project_id: &str) {
         self.memories.lock().await.remove(project_id);
     }
 
@@ -225,6 +225,8 @@ struct Loaded {
     profile: crate::config::store::ConnectionProfile,
     at: std::time::Instant,
     schema: std::sync::Arc<Schema>,
+    /// The schema's ontology, built once with it.
+    catalog: std::sync::Arc<podelis_ai::ontology::Ontology>,
 }
 
 /// `context`: `{ connection, question, project?, refresh? }`. The tables
@@ -242,8 +244,8 @@ pub async fn context(config_dir: &Path, caches: &Caches, params: &Value) -> (Res
         Ok(source) => source,
         Err(e) => return (Err(RpcError::new(code::DATABASE, e)), about),
     };
+    let built = built_for(config_dir, caches, &source, question).await;
     let schema = source.schema;
-    let built = built_for(config_dir, caches, &source.project_id, &schema, question).await;
     let tables: Vec<Value> = built.tables.iter().map(|t| json!({ "name": t.name, "why": t.why })).collect();
     let about = json!({ "connection": connection, "tables": tables.len() });
     let result = json!({
@@ -290,34 +292,37 @@ pub(crate) fn find_project(config_dir: &Path, name: Option<&str>) -> Result<crat
 async fn built_for(
     config_dir: &Path,
     caches: &Caches,
-    project_id: &str,
-    schema: &Schema,
+    source: &Source,
     question: &str,
 ) -> podelis_ai::context::Context {
     let found = async {
-        let conn = caches.memory(config_dir, project_id).await?;
+        let conn = caches.memory(config_dir, &source.project_id).await?;
         let mut conn = conn.lock().await;
-        podelis_ai::memory::for_question(&mut conn, question).await
+        podelis_ai::memory::for_question(&mut conn, question, Some(&source.database)).await
     };
     let memory = found.await.unwrap_or_else(|e| {
         tracing::warn!(error = %e, "gateway: the project's memory couldn't be read");
         podelis_ai::memory::ForQuestion::default()
     });
-    podelis_ai::context::for_question(schema, question, &memory)
+    podelis_ai::context::for_question(&source.schema, &source.catalog, question, &memory)
 }
 
 /// A connection's schema, and its project's name and setting for
 /// sharing schemas with models.
-struct Source {
-    schema: std::sync::Arc<Schema>,
-    project: String,
-    project_id: String,
-    share: crate::config::store::ShareSchema,
+pub(super) struct Source {
+    pub(super) schema: std::sync::Arc<Schema>,
+    pub(super) catalog: std::sync::Arc<podelis_ai::ontology::Ontology>,
+    pub(super) project: String,
+    pub(super) project_id: String,
+    pub(super) share: crate::config::store::ShareSchema,
+    /// The database it's a connection to, as the memory names it (its
+    /// facts are about it, or about every database).
+    pub(super) database: String,
 }
 
 /// The connection's schema: cached, or loaded through a read-only
 /// connection opened as the app opens it (keychain, password command).
-async fn load(
+pub(super) async fn load(
     config_dir: &Path,
     caches: &Caches,
     project: Option<&str>,
@@ -336,11 +341,14 @@ async fn load(
     };
     // A relative SQLite file is the asker's, from its folder.
     let profile = crate::config::store::opened_from(saved, dir);
-    let source = |schema: std::sync::Arc<Schema>| Source {
+    let database = saved.database_key();
+    let source = |schema: std::sync::Arc<Schema>, catalog: std::sync::Arc<podelis_ai::ontology::Ontology>| Source {
         schema,
+        catalog,
         project: project.name.clone(),
         project_id: project.id.clone(),
         share: project.share_schema,
+        database: database.clone(),
     };
     let key = (project.id.clone(), profile.name.clone());
     if !refresh
@@ -348,7 +356,7 @@ async fn load(
         && loaded.profile == profile
         && loaded.at.elapsed() < SCHEMA_TTL
     {
-        return Ok(source(std::sync::Arc::clone(&loaded.schema)));
+        return Ok(source(std::sync::Arc::clone(&loaded.schema), std::sync::Arc::clone(&loaded.catalog)));
     }
     let project_id = project.id.clone();
     let for_password = profile.clone();
@@ -371,9 +379,15 @@ async fn load(
         links: db.links().await.map_err(said)?,
         comments: db.comments().await.map_err(said)?,
     });
-    let loaded = Loaded { profile, at: std::time::Instant::now(), schema: std::sync::Arc::clone(&schema) };
+    let catalog = std::sync::Arc::new(podelis_ai::ontology::Ontology::from_catalog(&schema));
+    let loaded = Loaded {
+        profile,
+        at: std::time::Instant::now(),
+        schema: std::sync::Arc::clone(&schema),
+        catalog: std::sync::Arc::clone(&catalog),
+    };
     caches.schemas.lock().await.insert(key, loaded);
-    Ok(source(schema))
+    Ok(source(schema, catalog))
 }
 
 /// Times a model's SQL with unknown names goes back to it.
@@ -536,7 +550,7 @@ pub async fn ask(
         Ok(source) => source,
         Err(e) => return (Err(RpcError::new(code::DATABASE, e)), about),
     };
-    let built = built_for(config_dir, caches, &source.project_id, &source.schema, question).await;
+    let built = built_for(config_dir, caches, &source, question).await;
     if built.tables.is_empty() {
         return (Err(RpcError::new(code::DATABASE, built.text.trim().to_string())), about);
     }
@@ -603,7 +617,8 @@ pub async fn ask(
     about["facts"] = json!(built.facts.len());
     // (An explanation's words are kept whole: it suggests no facts.)
     let (said, suggested) = if explain { (said, Vec::new()) } else { suggestions(&said) };
-    let suggested = keep_suggestions(config_dir, caches, &source.project_id, &config.name, &suggested).await;
+    let suggested =
+        keep_suggestions(config_dir, caches, &source.project_id, &source.database, &config.name, &suggested).await;
     about["suggested"] = json!(suggested.len());
     let result = json!({
         "sql": sql,
@@ -654,6 +669,7 @@ async fn keep_suggestions(
     config_dir: &Path,
     caches: &Caches,
     project_id: &str,
+    database: &str,
     model: &str,
     facts: &[(String, String, String)],
 ) -> Vec<podelis_ai::memory::Fact> {
@@ -663,7 +679,7 @@ async fn keep_suggestions(
     let kept = async {
         let conn = caches.memory(config_dir, project_id).await?;
         let mut conn = conn.lock().await;
-        let known = podelis_ai::memory::list(&mut conn, None).await?;
+        let known = podelis_ai::memory::list(&mut conn, None, Some(database)).await?;
         let mut kept = Vec::new();
         for (subject, relation, value) in facts {
             let same = |f: &podelis_ai::memory::Fact| {
@@ -679,7 +695,7 @@ async fn keep_suggestions(
                 continue;
             }
             let source = format!("model:{model}");
-            kept.push(podelis_ai::memory::add(&mut conn, subject, relation, value, &source, false).await?);
+            kept.push(podelis_ai::memory::add(&mut conn, subject, relation, value, &source, false, database).await?);
         }
         Ok::<_, String>(kept)
     };
@@ -687,112 +703,6 @@ async fn keep_suggestions(
         tracing::warn!(error = %e, "gateway: couldn't keep a model's suggested facts");
         Vec::new()
     })
-}
-
-/// `memory.add` / `memory.list` / `memory.forget` / `memory.confirm` /
-/// `memory.export`, each with `project?`. Returns what the log may keep
-/// (the project, never a fact's text).
-pub async fn memory(
-    config_dir: &Path,
-    caches: &Caches,
-    method: &str,
-    params: &Value,
-) -> (Result<Value, RpcError>, Value) {
-    use podelis_ai::memory as mem;
-    let text = |key: &str| params.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
-    let project = match find_project(config_dir, text("project")) {
-        Ok(p) => p,
-        Err(e) => return (Err(RpcError::new(code::DATABASE, e)), Value::Null),
-    };
-    let about = json!({ "project": project.name });
-    let conn = match caches.memory(config_dir, &project.id).await {
-        Ok(conn) => conn,
-        Err(e) => return (Err(RpcError::new(code::MEMORY, e)), about),
-    };
-    let mut conn = conn.lock().await;
-    let id = params.get("id").and_then(Value::as_i64);
-    let failed = |e: String| RpcError::new(code::MEMORY, e);
-    let outcome = match method {
-        "memory.add" => {
-            // The user's own word: confirmed. (A model's suggestion would
-            // come with `source` and wait to be confirmed.)
-            // As typed (`text`), read here so the app and the command line
-            // read it alike; or already apart.
-            let parsed = text("text").and_then(mem::parse_fact);
-            let (subject, relation, value) = match (&parsed, text("subject"), text("value")) {
-                (Some((s, r, v)), _, _) => (s.as_str(), r.as_str(), v.as_str()),
-                (None, Some(s), Some(v)) => (s, text("relation").unwrap_or("means"), v),
-                _ => {
-                    let needs = "memory.add needs the fact: what it's about, then what's said (`text`)";
-                    return (Err(RpcError::new(code::INVALID_PARAMS, needs)), about);
-                }
-            };
-            mem::add(&mut conn, subject, relation, value, "user", true)
-                .await
-                .map(|f| f.to_json())
-                .map_err(failed)
-        }
-        "memory.update" => {
-            let (Some(id), Some(text)) = (id, text("text").filter(|t| !t.trim().is_empty())) else {
-                let needs = "memory.update needs the fact's `id` and what it says now (`text`)";
-                return (Err(RpcError::new(code::INVALID_PARAMS, needs)), about);
-            };
-            match mem::update(&mut conn, id, text).await {
-                Ok(Some(f)) => Ok(f.to_json()),
-                Ok(None) => Err(RpcError::new(code::MEMORY, format!("no fact {id} in project '{}'", project.name))),
-                Err(e) => Err(failed(e)),
-            }
-        }
-        "memory.list" => mem::list(&mut conn, text("search"))
-            .await
-            .map(|facts| json!({ "project": project.name, "facts": facts.iter().map(mem::Fact::to_json).collect::<Vec<_>>() }))
-            .map_err(failed),
-        "memory.forget" | "memory.confirm" => {
-            let Some(id) = id else {
-                return (Err(RpcError::new(code::INVALID_PARAMS, format!("{method} needs the fact's `id`"))), about);
-            };
-            let done = if method == "memory.forget" { mem::forget(&mut conn, id).await } else { mem::confirm(&mut conn, id).await };
-            match done {
-                Ok(true) => Ok(json!({ "id": id })),
-                Ok(false) => Err(RpcError::new(code::MEMORY, format!("no fact {id} in project '{}'", project.name))),
-                Err(e) => Err(failed(e)),
-            }
-        }
-        "memory.learn" => {
-            let Some(folder) = text("folder") else {
-                return (Err(RpcError::new(code::INVALID_PARAMS, "memory.learn needs the `folder`")), about);
-            };
-            let folder = crate::config::settings::expand_home(folder);
-            let reading = folder.clone();
-            let files = tokio::task::spawn_blocking(move || podelis_ai::migrations::read_folder(&reading)).await;
-            match files {
-                Ok(Ok(files)) => {
-                    let engine = podelis_ai::migrations::engine_of(project.connections.iter().map(|c| c.engine));
-                    let learned = podelis_ai::migrations::learn(&files, engine);
-                    let source = format!("file:{}", folder.display());
-                    mem::replace_source(&mut conn, &source, &learned)
-                        .await
-                        .map(|n| json!({ "files": files.len(), "facts": n, "folder": folder.display().to_string() }))
-                        .map_err(failed)
-                }
-                Ok(Err(e)) => Err(RpcError::new(code::MEMORY, e)),
-                Err(e) => Err(failed(e.to_string())),
-            }
-        }
-        "memory.export" => mem::list(&mut conn, None)
-            .await
-            .map(|facts| json!({ "text": mem::export(&project.name, &facts), "facts": facts.len() }))
-            .map_err(failed),
-        _ => Err(RpcError::new(code::METHOD_NOT_FOUND, format!("no method `{method}`"))),
-    };
-    // Only after the database failed (its errors start "memory:"), not a
-    // wrong fact number or folder.
-    if outcome.as_ref().is_err_and(|e| e.code == code::MEMORY && e.message.starts_with("memory:")) {
-        // Open again next time: the file may have been moved or replaced.
-        drop(conn);
-        caches.forget_memory(&project.id).await;
-    }
-    (outcome, about)
 }
 
 #[cfg(test)]
