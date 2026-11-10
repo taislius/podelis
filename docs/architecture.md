@@ -483,8 +483,11 @@ src/gateway/
   client.rs     connect and say hello, call, and start the gateway when
                 none answers (`connect_or_start`, `spawn_gateway`)
   command.rs    `podelis gateway [status | start | stop | models | key | test]`
-  ai.rs         the `models`, `complete`, `context`, `ask` and `memory.*`
-                methods
+  ai.rs         the `models`, `complete`, `context` and `ask` methods, and
+                the schemas kept (each with its catalog's ontology)
+  memory.rs     the `memory.*` methods: a project's facts
+  ontology.rs   `ontology` and `ontology.import`: a database's ontology to
+                read or export, and an edited file loaded back
   eval_snapshots.rs  the eval's schema snapshots, made from live databases
 crates/podelis-ai/
   prompts/      what models are told, a Markdown file each (system prompts,
@@ -494,8 +497,13 @@ crates/podelis-ai/
 crates/podelis-ai/src/
   memory.rs     a project's facts ("thing, relation, value", who said it,
                 confirmed or not) in `memory/<project-id>.db`, with an FTS5
-                index; `relevant` picks those about the question's tables
-                or matching its words
+                index and a database each (or every database); those about
+                the question's tables (as the ontology reads their subjects)
+                or matching its words are shown
+  ontology/     a database's ontology (mod.rs: concepts, labels, relations,
+                assertions, from the catalog and the facts; SKOS Turtle);
+                file.rs the YAML file to edit, plan.rs what loading it back
+                changes, outline.rs the app's browser's sections
   migrations.rs a folder of SQL migrations read into facts, without a model:
                 each table's history, comments above statements, COMMENT ON
   names.rs      a model's SQL checked against the schema: tables (CTE-aware,
@@ -533,11 +541,13 @@ schemas, each project's memory connection (opened and set up once,
 reopened after an error), and what models' `key_command`s printed (15
 minutes; a key the provider refuses is dropped at once).
 
-The app asks through the gateway too (`app/query_screen/ask.rs`): `Ctrl+K q` opens a
-prompt, a task connects (starting the gateway if needed) and calls `ask`,
-passing `ask.delta` notifications on as progress events; the SQL goes to
-the end of the tab's editor (`append_statement`, which ends a last
-statement left without `;`), and a refusal to share the schema becomes a
+The app asks through the gateway too (`app/query_screen/ask.rs`): `Ctrl+K q` on a `-- ?`
+comment in the editor (`question_at`) asks it, and elsewhere writes one to
+type into; a task connects (starting the gateway if needed) and calls `ask`,
+passing `ask.delta` notifications on as progress events; the SQL goes under
+the question (`answer_under`, replacing an earlier `-- ↳` answer), or to the
+end of the tab's editor when the question was deleted meanwhile
+(`append_statement`, which ends a last statement left without `;`), and a refusal to share the schema becomes a
 question (`ConfirmAction::ShareSchema`: `y` once, `a` always). The memory
 window (`app/memory_view.rs`, `Ctrl+K y k`) lists, adds, confirms and
 forgets facts through the same kind of gateway call.

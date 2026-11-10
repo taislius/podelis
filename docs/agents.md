@@ -35,8 +35,9 @@ new one.
 
 A rolled-back transaction doesn't undo everything: sequences a write
 advanced stay advanced, and MySQL's MyISAM and MEMORY tables don't roll
-back at all, so on a MySQL database that has any, agents can't write
-even as a dry run. Calls that reach past the data are refused too, each
+back at all, so on a MySQL server that has any, in any database (an
+agent may name another database's table), agents can't write even as a
+dry run. Calls that reach past the data are refused too, each
 engine by its own list: files on the server (MySQL's `INTO OUTFILE`,
 PostgreSQL's `pg_read_file` and `lo_export`, SQLite's `ATTACH`), other
 sessions (`pg_terminate_backend`), locks that outlive the transaction,

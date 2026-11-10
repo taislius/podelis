@@ -41,10 +41,21 @@ Configuration](configuration.md#ai-models).
 
 ## Ask
 
-- **In the app:** `Ctrl+K q`, type the question about the tab's
-  connection, `Enter`. The SQL comes to the end of the editor under the
-  question and the model's note, as comments; `F6` runs it once you've
-  read it. Details in [the query screen](query-screen.md).
+- **In the app, in the editor among your SQL:** write the question as a
+  comment that starts with `?` (or press `Ctrl+K q` on any other line:
+  it starts one there), then `Ctrl+K q` with the cursor on it:
+
+  ```sql
+  -- ? revenue per city last month
+  ```
+
+  The SQL comes right under it, after a `-- ↳ <model>` line and the
+  model's notes, and isn't run (`F6` runs it). Ask again, after changing
+  the question, and that answer is replaced; SQL you wrote under a
+  question yourself is never replaced. `--?` works too, and `/*? … */`
+  holds a question over several lines. Being comments, questions are left
+  alone by the server, lint and running, so a file of questions and their
+  SQL is still SQL: save it to the library, keep it in git.
 - **AI explain:** `Ctrl+K y y` on a statement: the model says in plain
   words what it does, in a pop-over, shown the same tables and facts as
   a question about it would be.
@@ -111,7 +122,7 @@ A fact whose words match a question brings in the tables it names, so
 clients" finds `customer` through the other name (words match by their
 stems: "clients" finds "client"). A model that had to define a term, read
 another name or leave rows out suggests such a fact itself, for you to
-confirm. A fact about a column of a table the database doesn't have (since
+confirm. A fact about a table or column the database doesn't have (since
 dropped or renamed) isn't shown to the model; `podelis gateway context`
 lists such facts as maybe stale, to fix or forget.
 

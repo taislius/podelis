@@ -61,7 +61,7 @@ Keys that work directly:
 | One at a time | A connection's session runs one query at a time (its transaction, `SET` and temporary tables are that session's). Running another while one runs, in this tab or another on the same connection, says so, which tab runs it, and how to stop it |
 | `Esc` | Cancel the running query, in its own tab (on the connection it runs on). In another tab `Esc` doesn't stop it: it says which tab, on which connection, is running it (`Tab “Query 1” on prod is running a query: Alt+1 goes to it`). The results pane's title counts how long it has run (`running… 12 s`). When the server can't be reached to be told (a VPN or network that dropped), it says so in orange, the status bar shows *connection lost*, and `Esc` again stops waiting: the next run opens a new session (a read runs on it; anything else isn't run and says so, since a transaction that was open is gone — run it again). A cancel the server refuses (a missing privilege) is only said |
 | `Ctrl+P` / `Ctrl+N` | Previous / next query from history |
-| `Tab` / `Shift+Tab` | Cycle focus: editor → results → schema (`Tab` right after a word completes it instead; `Esc` then `Tab` still moves on) |
+| `Tab` / `Shift+Tab` | Cycle focus: editor → results → schema (`Tab` right after a word completes it instead, when something would; `Esc` then `Tab` still moves on) |
 | `Ctrl+↑` / `Ctrl+↓` | Move the border between the editor and the results up / down |
 | `Ctrl+←` / `Ctrl+→` | Move the navigator's border left / right (from the navigator or the results; in the editor they move by word) |
 | `Ctrl+Q` | Quit (`Ctrl+C` copies on this screen: see the editor and results keys) |
@@ -141,7 +141,7 @@ When focused:
 | `Ctrl+C` / `Ctrl+X` | Copy / cut the selection; with nothing selected, `Ctrl+C` copies the cursor's line |
 | `Ctrl+V` | Paste from the system clipboard (`pbpaste`, `wl-paste`, `xclip` or `xsel`), for terminals where `Ctrl+V` doesn't paste; the terminal's own paste (`Cmd+V` on macOS) works too |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
-| `Tab` (after a word) / `Ctrl+Space` | Autocomplete; typing `.` after a table, alias or schema opens it too |
+| `Tab` (after a word) / `Ctrl+Space` | Autocomplete; typing `.` after a table, alias or schema opens it too. After a word nothing would complete, or one typed in full (`desc`), `Tab` moves to the next pane (while the schema still loads, it waits for it) |
 | `Esc`, then `Tab` | Next pane, even right after a word (the status bar hint says `ESC TAB` when plain Tab would complete) |
 | `Space` `Space` | The `Ctrl+K` menu, when `leader_double_space = true`: two quick Spaces, and the first is taken back |
 | `Ctrl+F` | Find and replace: `Enter`/`↓` next, `↑` previous, `Tab` to the replacement, `Enter` replaces, `Ctrl+A` replaces all |
@@ -257,6 +257,12 @@ back vacuum). The keys:
 
 MySQL saves schema changes at once (they commit the transaction), so in a
 sandbox there it runs data changes only and refuses DDL with the reason.
+Tables a rollback can't undo (MyISAM, MEMORY: not InnoDB) keep a write at
+once, so the sandbox and rollback-only refuse a statement that writes one,
+naming it. A bare name counts in whichever database has such a table (the
+session may have changed database since, with `USE`); `shop.audit` is that
+database's alone, so naming the database gets past a namesake elsewhere.
+The tables are read with the catalog, every database's, again after DDL.
 On a SQLite file the sandbox works on a copy of it (`VACUUM INTO`, made at
 its first write, in the config folder's `sandbox/`): the original isn't
 touched or locked meanwhile, schema changes are allowed, and the copy is
@@ -281,11 +287,15 @@ selection) to a model with the tables it uses, as asking does; what it
 says the statement does, step by step, and what looks wrong in it (with
 the query it would write instead) shows in a pop-over. Nothing runs.
 
-**Asking in plain language.** `Ctrl+K q` asks for a question about the
-tab's connection ("revenue per country last month"); a model you've set
-up ([AI models](configuration.md#ai-models)) writes the SQL, and it lands
-at the end of the editor under the question and what the model said about
-it, as comments. **It doesn't run**: read it, then `F6` runs it. The status
+**Asking in plain language.** A question about the tab's connection is a
+comment in the editor that starts with `?`: `-- ? revenue per country
+last month` (`--?`, `/*? … */` over several lines, `// ?` on MongoDB).
+`Ctrl+K q` on it asks it; on any other line it starts one there (`-- ? `,
+the cursor after it; from another pane, at the end). A model you've set up
+([AI models](configuration.md#ai-models)) writes the SQL, and it lands
+right under the question, after a `-- ↳ <model>` line and what the model
+said about it, as comments; asking the same line again replaces that
+answer (only one so marked: SQL you wrote there stays). **It doesn't run**: read it, then `F6` runs it. The status
 bar shows the answer coming (`Esc` stops waiting, once it has nothing
 else to do: a running query, a filter, a selection or vim's mode come
 first; stopping also stops the model's work), and how many tokens it
