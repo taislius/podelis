@@ -1,0 +1,30 @@
+name: Close pull requests
+
+# Podėlis doesn't accept pull requests (CONTRIBUTING.md): one opened by
+# anyone but the owner is closed at once, with a note pointing to issues.
+# `pull_request_target` runs here, in this repository, with its token;
+# the pull request's code is never checked out or run.
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+# The token may comment on and close pull requests, nothing more.
+permissions:
+  pull-requests: write
+
+jobs:
+  close:
+    name: Close
+    if: github.event.pull_request.author_association != 'OWNER'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Close with a note
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr close "$NUMBER" --repo "$REPO" --comment "Thanks for taking the time. Podėlis doesn't accept pull requests, so this one is closed automatically, without review (see [CONTRIBUTING.md](https://github.com/$REPO/blob/master/CONTRIBUTING.md)).
+
+          Bug reports and improvement suggestions are very welcome as issues: describe the problem or the change you have in mind, and it may well be built."
