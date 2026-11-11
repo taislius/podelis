@@ -489,7 +489,8 @@ fn answer(app: &mut App, letter: char) {
 #[cfg(feature = "sqlite")]
 fn estimated(app: &mut App, rows: Option<f64>) {
     let run = app.tab.run.id;
-    app.exports.estimating = Some(crate::app::query_screen::results::export::EstimateRequest { id: 7, run });
+    app.exports.estimating =
+        Some(crate::app::query_screen::results::export::EstimateRequest { id: 7, run, name: None });
     app.export_estimated(7, Format::Csv, rows, 100.0);
 }
 
@@ -543,7 +544,7 @@ async fn an_estimates_answer_only_counts_for_what_it_was_asked_about() {
         assert!(export_files(dir.path()).is_empty());
     };
     // An older request's answer, or one stopped with Esc, starts nothing.
-    app.exports.estimating = Some(EstimateRequest { id: 8, run: this_run });
+    app.exports.estimating = Some(EstimateRequest { id: 8, run: this_run, name: None });
     app.export_estimated(7, Format::Csv, Some(1.0), 1.0);
     nothing_happened(&app);
     assert!(app.exports.estimating.is_some(), "still waiting for its own");
@@ -554,7 +555,7 @@ async fn an_estimates_answer_only_counts_for_what_it_was_asked_about() {
     nothing_happened(&app);
 
     // Another run's rows by now (another query, or another tab): not those.
-    app.exports.estimating = Some(EstimateRequest { id: 9, run: this_run + 1 });
+    app.exports.estimating = Some(EstimateRequest { id: 9, run: this_run + 1, name: None });
     app.export_estimated(9, Format::Csv, Some(1.0), 1.0);
     nothing_happened(&app);
     assert!(app.notes.status_is_error && app.notes.status.contains("aren't the ones shown"), "{}", app.notes.status);
@@ -574,7 +575,7 @@ async fn an_estimates_answer_only_counts_for_what_it_was_asked_about() {
 
     // A page on its way would go to the grid, not the file.
     app.tab.run.fetching_more = true;
-    app.start_export_all(Format::Csv, 0);
+    app.start_export_all(Format::Csv, 0, None);
     nothing_happened(&app);
     assert!(app.notes.status_is_error, "{}", app.notes.status);
     app.tab.run.fetching_more = false;
@@ -582,7 +583,7 @@ async fn an_estimates_answer_only_counts_for_what_it_was_asked_about() {
     // The stream gone meanwhile: it says so.
     app.close_stream();
     app.notes.status.clear();
-    app.start_export_all(Format::Csv, 0);
+    app.start_export_all(Format::Csv, 0, None);
     nothing_happened(&app);
     assert!(app.notes.status.contains("aren't the ones shown"), "{}", app.notes.status);
 }
@@ -772,7 +773,7 @@ async fn a_servers_plan_warns_before_a_big_export() {
         }
         let confirm = app.popups.confirm.as_ref().unwrap_or_else(|| panic!("{engine:?}: {}", said(&app)));
         assert!(confirm.message.contains("by the plan") && confirm.message.contains("2.0k"), "{}", confirm.message);
-        assert!(matches!(confirm.action, ConfirmAction::ExportAll(Format::Csv, ..)));
+        assert!(matches!(confirm.action, ConfirmAction::ExportAll { format: Format::Csv, .. }));
         // Yes: every row, in full, the stream having waited.
         app.exports.asked = None;
         app.handle_key(key(KeyCode::Char('y')));
@@ -815,7 +816,7 @@ async fn a_long_wait_at_keep_going_loses_no_rows_already_written() {
         }
         run_sql(&mut app, "select * from export_wait").await;
         app.focus = Focus::Results;
-        app.start_export_all(Format::Csv, 0);
+        app.start_export_all(Format::Csv, 0, None);
         let wait = Duration::from_secs(90);
         while app.popups.confirm.is_none() && app.exports.task.is_some() {
             let event = tokio::time::timeout(wait, app.poll_db_event()).await.expect("to the question").unwrap();
@@ -996,7 +997,7 @@ async fn what_ends_an_agreed_export_is_said_and_its_file_stays() {
         };
         run_sql(&mut app, sql).await;
         app.focus = Focus::Results;
-        app.start_export_all(Format::Csv, 0);
+        app.start_export_all(Format::Csv, 0, None);
         let mut pauses = 0;
         while app.exports.task.is_some() {
             if app.popups.confirm.is_some() {
@@ -1659,4 +1660,51 @@ async fn a_failure_leads_to_its_place_in_the_editor() {
     assert_eq!(app.tab.error_marker, Some(marker));
     assert_eq!(app.tab.editor.cursor(), marker.1);
     assert_eq!(app.tab.editor.cursor().0, 1, "on the second line");
+}
+
+/// The export form's name goes with an export of every row to when it
+/// starts (after its size is worked out, or asked about), and isn't left
+/// for a later export to take; a relative `export_dir` is shown whole, not
+/// joined twice (from a review, 2026-11-11).
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn the_export_forms_name_goes_with_its_export_only() {
+    use crate::app::export_form::ExportLine;
+    let (mut app, dir) = connected_app(ConnectionMode::Normal).await;
+    app.settings.row_limit = 10;
+    app.settings.export_dir = Some(dir.path().to_string_lossy().into_owned());
+    let many = "WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 500) SELECT n FROM s";
+    run_sql(&mut app, many).await;
+    app.focus = Focus::Results;
+    app.open_export_form();
+    let form = app.popups.export_form.as_mut().unwrap();
+    form.choice.every = true;
+    form.line = ExportLine::Name;
+    form.name.set("every.csv");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.exports.name.is_none(), "not left for another export");
+    while app.exports.task.is_some() || app.exports.estimating.is_some() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    let text = std::fs::read_to_string(dir.path().join("every.csv")).expect("written to the name given");
+    assert_eq!(text.lines().count(), 501);
+    // A later export, not through the form: a new name of its own.
+    run_sql(&mut app, "select 1 as x").await;
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Char('J')));
+    let json: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == "json"))
+        .collect();
+    assert_eq!(json.len(), 1, "{json:?}");
+    assert_eq!(std::fs::read_to_string(dir.path().join("every.csv")).unwrap(), text, "left alone");
+
+    // A relative folder: the name shown is whole, and used as shown.
+    app.settings.export_dir = Some("exports-rel".into());
+    app.open_export_form();
+    let shown = app.popups.export_form.as_ref().unwrap().name.text().to_string();
+    assert!(std::path::Path::new(&shown).is_absolute(), "{shown}");
+    assert_eq!(shown.matches("exports-rel").count(), 1, "{shown}");
 }

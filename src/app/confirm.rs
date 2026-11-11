@@ -21,7 +21,13 @@ pub enum ConfirmAction {
     },
     /// An export that may be big: start it; it asks next after this size.
     /// Of these rows: a run's id, as they may have changed by the answer.
-    ExportAll(Format, u64, u64),
+    /// The file is the export form's `name`, else a new one.
+    ExportAll {
+        format: Format,
+        agreed: u64,
+        run: u64,
+        name: Option<std::path::PathBuf>,
+    },
     /// An export that grew to a size to ask about: go on (else it stops).
     KeepExporting,
     Disconnect,
@@ -71,7 +77,7 @@ impl App {
             matches!(key.code, KeyCode::Char('y' | 'Y')) || (quit_key && matches!(confirm.action, ConfirmAction::Quit));
         // An export's size is asked about by itself, maybe while typing, and
         // no would throw its file away: only y, or n / Esc, and not at once.
-        if matches!(confirm.action, ConfirmAction::KeepExporting | ConfirmAction::ExportAll(..)) {
+        if matches!(confirm.action, ConfirmAction::KeepExporting | ConfirmAction::ExportAll { .. }) {
             // Ctrl+Q quits, not held up by it (Ctrl+C, which copies, mustn't:
             // it comes by itself, maybe while copying). Kept from quitting, a
             // paused export asks again: it's still waiting.
@@ -141,9 +147,9 @@ impl App {
             ConfirmAction::RunHeavy { sql, offset, infos, filled } => {
                 self.run_writes(sql, offset, infos, RunPurpose::Query, filled);
             }
-            ConfirmAction::ExportAll(format, agreed, run) => {
+            ConfirmAction::ExportAll { format, agreed, run, name } => {
                 if run == self.tab.run.id {
-                    self.start_export_all(format, agreed);
+                    self.start_export_all(format, agreed, name);
                 } else {
                     self.set_status(t!("export.other_tab").to_string(), true);
                 }

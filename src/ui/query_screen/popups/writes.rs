@@ -34,15 +34,18 @@ pub(super) fn draw_export_form(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
     let Some(form) = &app.popups.export_form else { return };
     let (choice, current) = (form.choice, form.line);
-    let width = fit(60, 30, area.width);
-    let room = usize::from(width.saturating_sub(13));
+    // Wide enough for the whole name, as far as the screen goes.
+    let name_w = u16::try_from(form.name.text().chars().count()).unwrap_or(u16::MAX).saturating_add(16);
+    let width = fit(name_w.clamp(60, 120), 30, area.width.saturating_sub(4).max(30));
+    let room = usize::from(width.saturating_sub(15));
     let shown = t!("export_form.shown", n = app.tab.grid.view.len());
     // A line: its label, then pieces of text, some to click.
-    type Piece = (String, bool, Option<Click>);
+    type Piece = (Vec<Span<'static>>, bool, Option<Click>);
+    let text = |s: String| vec![Span::raw(s)];
     let radio = |on: bool, label: String, click: Click| -> Piece {
-        (format!("{} {label}", if on { "●" } else { "○" }), on, Some(click))
+        (text(format!("{} {label}", if on { "●" } else { "○" })), on, Some(click))
     };
-    let gap = || -> Piece { ("   ".to_string(), false, None) };
+    let gap = || -> Piece { (text("   ".to_string()), false, None) };
     let mut lines: Vec<(&str, Option<Part>, Vec<Piece>)> = vec![
         (
             t!("export_form.to"),
@@ -56,13 +59,13 @@ pub(super) fn draw_export_form(f: &mut Frame, app: &mut App, area: Rect) {
         (
             t!("export_form.format"),
             Some(Part::Format),
-            vec![(format!("‹ {} ›", choice.format.name()), true, Some(Click::NextFormat))],
+            vec![(text(format!("‹ {} ›", choice.format.name())), true, Some(Click::NextFormat))],
         ),
     ];
     if choice.to == To::Clipboard {
         let marked = app.tab.grid.marked.len();
         let which = if marked > 0 { t!("export_form.marked", n = marked) } else { shown };
-        lines.push((t!("export_form.rows"), None, vec![(which, false, None)]));
+        lines.push((t!("export_form.rows"), None, vec![(text(which), false, None)]));
     } else {
         if app.export_every_offered() {
             lines.push((
@@ -75,10 +78,19 @@ pub(super) fn draw_export_form(f: &mut Frame, app: &mut App, area: Rect) {
                 ],
             ));
         } else {
-            lines.push((t!("export_form.rows"), None, vec![(shown, false, None)]));
+            lines.push((t!("export_form.rows"), None, vec![(text(shown), false, None)]));
         }
-        let path = truncate_start(&app.export_path_shown(choice.format), room);
-        lines.push((t!("export_form.file_name"), None, vec![(path, false, None)]));
+        // Being edited: the cursor in it; otherwise its end, where the
+        // name is.
+        let name = if current == Part::Name {
+            input_window(&form.name, room, fg(t.text_bright))
+        } else {
+            text(truncate_start(form.name.text(), room))
+        };
+        lines.push((t!("export_form.file_name"), Some(Part::Name), vec![(name, false, Some(Click::Name))]));
+        if let Some(error) = &form.error {
+            lines.push(("", None, vec![(vec![Span::styled(error.clone(), fg(t.warn))], false, None)]));
+        }
     }
     let run = if choice.to == To::File { t!("export_form.run_file") } else { t!("export_form.run_clipboard") };
     let height = lines.len() as u16 + 4;
@@ -91,21 +103,20 @@ pub(super) fn draw_export_form(f: &mut Frame, app: &mut App, area: Rect) {
         let label_style = if here { bold(t.accent) } else { muted() };
         let mut spans = vec![Span::styled(format!(" {label:<9}  "), label_style)];
         let mut left = rect.x + 1 + spans[0].width() as u16;
-        for (text, on, click) in pieces {
+        for (piece, on, click) in pieces {
             let style = if on && here {
                 bold(t.text_bright).bg(t.active)
-            } else if on || click.is_none() {
+            } else if on || click.is_none() || click == Some(Click::Name) {
                 fg(t.text)
             } else {
                 muted()
             };
-            let span = Span::styled(text, style);
-            let wide = span.width() as u16;
+            let wide: u16 = piece.iter().map(|s| s.width() as u16).sum();
             if let Some(click) = click {
                 spots.push((Rect { x: left, y: top, width: wide, height: 1 }, click));
             }
             left += wide;
-            spans.push(span);
+            spans.extend(piece.into_iter().map(|s| s.patch_style(style)));
         }
         drawn.push(Line::from(spans));
     }

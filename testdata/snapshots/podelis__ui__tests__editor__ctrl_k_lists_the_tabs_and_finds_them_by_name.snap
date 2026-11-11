@@ -41,4 +41,4 @@ expression: screen
 "│                            ││                                                                    │"
 "│                            ││                                                                    │"
 "└────────────────────────────┘└────────────────────────────────────────────────────────────────────┘"
-" ● prod  db.internal:3306 · MySQL   AI off                F1  all keys                ^K  commands  "
+" ● prod  db.internal:3306 · MySQL   AI off                             F1  all keys   ^K  commands  "

@@ -191,6 +191,91 @@ fn the_navigators_filter_picks_opens_and_takes_a_paste() {
     assert!(panel.tables[t].expanded, "Enter opened the one picked");
 }
 
+/// Tab stops the filter's typing, so d and s act on the one picked; a
+/// cleared filter keeps it picked (found by hand, 2026-11-11).
+#[test]
+fn tab_in_the_navigators_filter_hands_the_keys_to_the_one_picked() {
+    let (mut app, _dir) = test_app();
+    let table = |name: &str| SchemaTable {
+        info: crate::db::TableInfo {
+            schema: "main".into(),
+            name: name.into(),
+            is_view: false,
+            rows: None,
+            bytes: None,
+            system: false,
+            partition_of: None,
+        },
+        expanded: false,
+        columns: Vec::new(),
+        details: Some(crate::db::TableDetails::default()),
+        details_loading: false,
+    };
+    let tables = vec![table("accounts"), table("orders"), table("users")];
+    app.screen = Screen::Query;
+    app.connection.schema = Some(SchemaPanel { tables, selected: 1, ..SchemaPanel::default() });
+    app.focus = Focus::Schema;
+    app.handle_key(key(KeyCode::Char('/')));
+    for c in "use".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Tab));
+    let panel = app.connection.schema.as_ref().unwrap();
+    assert!(!panel.filter_editing && panel.filter.text() == "use", "typing stopped, the filter kept");
+    assert_eq!(app.focus, Focus::Schema);
+    app.handle_key(key(KeyCode::Char('d')));
+    assert_eq!(app.popups.cell_view.as_ref().map(|v| v.title.as_str()), Some("TABLE users"));
+    app.handle_key(key(KeyCode::Esc));
+    // Esc clears the filter; users stays picked, among all of them.
+    app.handle_key(key(KeyCode::Esc));
+    let panel = app.connection.schema.as_ref().unwrap();
+    assert!(panel.filter.is_empty());
+    let t = panel.nodes()[panel.selected].table().unwrap();
+    assert_eq!(panel.tables[t].info.name, "users");
+}
+
+/// `d` lists a table's foreign keys on their own, under its columns.
+#[test]
+fn a_definition_lists_the_foreign_keys() {
+    let (mut app, _dir) = test_app();
+    let details = crate::db::TableDetails {
+        foreign_keys: vec![crate::db::ForeignKey {
+            column: "user_id".into(),
+            target: "users.id".into(),
+            target_schema: "public".into(),
+            target_table: "users".into(),
+            target_column: Some("id".into()),
+        }],
+        ..crate::db::TableDetails::default()
+    };
+    let col = |name: &str| crate::db::ColumnInfo {
+        name: name.into(),
+        data_type: "integer".into(),
+        nullable: false,
+        primary_key: name == "id",
+    };
+    let orders = SchemaTable {
+        info: crate::db::TableInfo {
+            schema: "public".into(),
+            name: "orders".into(),
+            is_view: false,
+            rows: None,
+            bytes: None,
+            system: false,
+            partition_of: None,
+        },
+        expanded: false,
+        columns: vec![col("id"), col("user_id")],
+        details: Some(details),
+        details_loading: false,
+    };
+    app.connection.schema = Some(SchemaPanel { tables: vec![orders], selected: 1, ..SchemaPanel::default() });
+    app.focus = Focus::Schema;
+    app.handle_schema_key(key(KeyCode::Char('d')));
+    let text = &app.popups.cell_view.as_ref().expect("definition").text;
+    assert!(text.contains("-- foreign keys") && text.contains("user_id  → users.id"), "{text}");
+}
+
 #[test]
 fn arrows_in_a_definition_go_to_the_next_table() {
     let (mut app, _dir) = test_app();

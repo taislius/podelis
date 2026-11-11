@@ -370,13 +370,14 @@ fn draw_plan_source(f: &mut Frame, app: &mut App, area: Rect) -> Rect {
     let place = format!("  {place}");
     let room =
         usize::from(area.width).saturating_sub(kind.chars().count() + place.chars().count() + when.chars().count() + 1);
-    let spans = vec![
-        Span::styled(kind, bold(t.on_accent).bg(if source.analyzed { t.warn } else { t.accent })),
-        Span::styled(format!(" {}", truncate(&one_line(&source.sql), room)), fg(t.text_bright)),
+    let mut spans =
+        vec![Span::styled(kind, bold(t.on_accent).bg(if source.analyzed { t.warn } else { t.accent })), Span::raw(" ")];
+    spans.extend(fading(&one_line(&source.sql), room, |t| t.text_bright));
+    spans.extend([
         Span::styled("  ", Style::default()),
         Span::styled(place.trim_start().to_string(), place_style),
         Span::styled(when, dim()),
-    ];
+    ]);
     f.render_widget(Paragraph::new(Line::from(spans)), line);
     if found {
         app.hits.plan_source = line;
@@ -393,9 +394,9 @@ fn source_place(app: &App, source: &crate::app::PlanSource) -> (String, Style, b
     let lines = |first: usize| {
         let last = first + source.sql.matches('\n').count();
         if last > first {
-            t!("results.lines", first = first + 1, last = last + 1)
+            t!("results.lines_short", first = first + 1, last = last + 1)
         } else {
-            t!("results.line", line = first + 1)
+            t!("results.line_short", line = first + 1)
         }
     };
     match source.find_in_editor(&app.tab.editor) {
@@ -430,7 +431,7 @@ fn draw_run_source(f: &mut Frame, app: &mut App, area: Rect) -> Rect {
             let pin = if run.pinned { format!("  {}", t!("results.pinned")) } else { String::new() };
             let room = usize::from(line.width)
                 .saturating_sub(1 + place.chars().count() + when.chars().count() + pin.chars().count() + 3);
-            spans.push(Span::styled(truncate(&one_line(&source.sql), room), fg(t.text)));
+            spans.extend(fading(&one_line(&source.sql), room, |t| t.text));
             spans.push(Span::raw("  "));
             spans.push(Span::styled(place, place_style));
             spans.push(Span::styled(when, dim()));

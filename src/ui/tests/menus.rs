@@ -38,6 +38,14 @@ fn the_export_menu_opens_with_a_key() {
     let (mut app, _dir) = query_app();
     app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Char('E')));
+    // The name has the time in it: one that stays put, for the picture.
+    let name = &mut app.popups.export_form.as_mut().unwrap().name;
+    // The whole path of a new name, in the current folder here.
+    let path = std::path::Path::new(name.text());
+    let file = path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+    let csv = path.extension().is_some_and(|e| e == "csv");
+    assert!(path.is_absolute() && file.starts_with("podelis-export-") && csv, "{}", name.text());
+    name.set("podelis-export-20261111-120000.csv");
     assert_snapshot!(render(&mut app, 90, 24));
 }
 
@@ -58,7 +66,7 @@ fn the_export_form_offers_only_what_can_be_done() {
 
     // To a file there's a name; every format a file takes goes round.
     let screen = render(&mut app, 100, 30);
-    assert!(screen.contains("podelis-export-….csv") && screen.contains("every row"), "{screen}");
+    assert!(screen.contains("podelis-export-") && screen.contains(".csv") && screen.contains("every row"), "{screen}");
     app.handle_key(key(KeyCode::Down));
     let mut seen = vec![];
     for _ in 0..5 {
@@ -124,6 +132,50 @@ fn the_export_form_runs_what_it_says_and_starts_there_next_time() {
     assert_eq!(export_choice(&app).format, crate::app::Format::Json);
     app.handle_key(key(KeyCode::Enter));
     assert!(files(dir.path())[0].contains(".json"));
+}
+
+/// The file's name can be edited, follows the format until it is, and
+/// isn't written over a file that's there (found by hand, 2026-11-11).
+#[test]
+fn the_export_forms_file_name_is_edited() {
+    let (mut app, dir) = query_app();
+    app.settings.export_dir = Some(dir.path().to_string_lossy().into_owned());
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Char('E')));
+    let name = |app: &App| app.popups.export_form.as_ref().unwrap().name.text().to_string();
+    let ext = |app: &App| std::path::Path::new(&name(app)).extension().map(|e| e.to_string_lossy().into_owned());
+    assert_eq!(ext(&app).as_deref(), Some("csv"), "{}", name(&app));
+    // The format changes the fresh name's extension.
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(ext(&app).as_deref(), Some("json"), "{}", name(&app));
+    // To the name's line (the last), cleared and typed.
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!(app.popups.export_form.as_ref().unwrap().line, crate::app::export_form::ExportLine::Name);
+    assert!(app.typing(), "the name takes the keys");
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    app.handle_paste("users");
+    assert_eq!(name(&app), "users");
+    // Enter: in the export folder, the format's extension added.
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.popups.export_form.is_none());
+    assert!(dir.path().join("users.json").exists());
+    // Not over it again: the form stays and says why.
+    app.handle_key(key(KeyCode::Char('E')));
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    for c in "users.json".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    let form = app.popups.export_form.as_ref().expect("still open");
+    assert!(form.error.is_some());
+    // Edited, a format's change swaps only its extension.
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Left));
+    assert!(name(&app).starts_with("users.") && ext(&app).as_deref() != Some("json"), "{}", name(&app));
 }
 
 #[test]

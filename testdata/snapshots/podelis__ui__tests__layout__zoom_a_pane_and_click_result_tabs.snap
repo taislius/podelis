@@ -17,4 +17,4 @@ expression: screen
 "│                                                                                        │"
 "│ Zoomed: Tab moves between panes; Ctrl+K z · F12 or Esc returns                         │"
 "└────────────────────────────────────────────────────────────────────────────────────────┘"
-" ● prod  db.internal:3306 · MySQL   AI off     z  unzoom   ?  all keys      ^K  commands  "
+" ● prod  db.internal:3306 · MySQL   AI off        z  unzoom   ?  all keys   ^K  commands  "

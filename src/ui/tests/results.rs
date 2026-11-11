@@ -173,7 +173,7 @@ fn kept_results_and_the_statement_above_a_result() {
     let lines: Vec<&str> = screen.lines().collect();
     let at = lines
         .iter()
-        .position(|l| l.contains(" select id, email, note from users where id < 4;  lines 2–4"))
+        .position(|l| l.contains(" select id, email, note from users where id < 4;  l: 2–4"))
         .expect(&screen);
     assert!(lines[at + 1].contains(" #1  #2 "), "{screen}");
     // A click on #1 shows it; on the lines, its statement in the editor.
@@ -187,7 +187,7 @@ fn kept_results_and_the_statement_above_a_result() {
     app.handle_mouse(click(x0 + 1, app.hits.run_tabs_y.unwrap()));
     assert_eq!((i, app.tab.run_at), (0, 0));
     let screen = render(&mut app, 140, 22);
-    assert!(screen.contains("select 1;  line 1"), "{screen}");
+    assert!(screen.contains("select 1;  l: 1"), "{screen}");
     let source = app.hits.run_source;
     app.handle_mouse(click(source.x + source.width - 30, source.y));
     assert_eq!((app.focus, app.tab.editor.selected_text().as_deref()), (Focus::Editor, Some("select 1;")));
@@ -244,10 +244,10 @@ fn a_scripts_result_set_shows_the_statement_that_made_it() {
             .to_string()
     };
     let shown = header(&mut app);
-    assert!(shown.contains("select 3 as c ") && shown.contains("line 3") && !shown.contains("select 1"), "{shown}");
+    assert!(shown.contains("select 3 as c ") && shown.contains("l: 3") && !shown.contains("select 1"), "{shown}");
     app.handle_key(KeyEvent::new(KeyCode::Char('<'), KeyModifiers::NONE));
     let shown = header(&mut app);
-    assert!(shown.contains("select 2 as b ") && shown.contains("line 2"), "{shown}");
+    assert!(shown.contains("select 2 as b ") && shown.contains("l: 2"), "{shown}");
     // A click on it selects that statement in the editor, not the script.
     let source = app.hits.run_source;
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
@@ -264,5 +264,5 @@ fn a_scripts_result_set_shows_the_statement_that_made_it() {
     app.focus = Focus::Results;
     app.show_results_for_tests(QueryOutcome { statements: 4, ..set(3, "c") });
     let shown = header(&mut app);
-    assert!(shown.contains("select 1 as a") && shown.contains("lines 1–3"), "{shown}");
+    assert!(shown.contains("select 1 as a") && shown.contains("l: 1–3"), "{shown}");
 }

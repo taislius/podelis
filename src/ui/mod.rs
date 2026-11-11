@@ -75,6 +75,43 @@ pub(super) fn input_spans(input: &LineInput, style: Style) -> Vec<Span<'_>> {
     vec![Span::styled(before, style), cursor, Span::styled(rest.as_str(), style)]
 }
 
+/// `input_spans` in `room` chars: when it's longer, the part around the
+/// cursor, `…` where it's cut.
+pub(super) fn input_window(input: &LineInput, room: usize, style: Style) -> Vec<Span<'static>> {
+    let (before, after) = input.split();
+    let (before, after): (Vec<char>, Vec<char>) = (before.chars().collect(), after.chars().collect());
+    // The cursor takes a cell of its own at the end.
+    let total = before.len() + after.len().max(1);
+    if total <= room || room < 3 {
+        return input_spans(input, style).into_iter().map(|s| Span::styled(s.content.into_owned(), s.style)).collect();
+    }
+    // As much before the cursor as fits with it, and a few after it.
+    let after_kept = after.len().min((room / 4).max(1));
+    let start = before.len().saturating_sub(room.saturating_sub(after_kept + 1));
+    let cut_start = start > 0;
+    let mut spans = Vec::new();
+    if cut_start {
+        spans.push(Span::styled("…", style));
+    }
+    let shown_before: String = before[start + usize::from(cut_start)..].iter().collect();
+    spans.push(Span::styled(shown_before, style));
+    let used = spans.iter().map(|s| s.content.chars().count()).sum::<usize>();
+    let left = room.saturating_sub(used);
+    match after.first() {
+        Some(c) => spans.push(Span::styled(c.to_string(), style.add_modifier(Modifier::REVERSED))),
+        None => spans.push(Span::styled("█", style)),
+    }
+    let rest: Vec<char> = after.iter().skip(1).copied().collect();
+    let fits = left.saturating_sub(1);
+    if rest.len() > fits {
+        let shown: String = rest[..fits.saturating_sub(1)].iter().collect();
+        spans.push(Span::styled(shown + "…", style));
+    } else {
+        spans.push(Span::styled(rest.into_iter().collect::<String>(), style));
+    }
+    spans
+}
+
 /// `value` raised to `min`, then capped at `max` (which wins when the
 /// terminal is smaller than `min`; `u16::clamp` would panic instead).
 pub(super) fn fit(value: u16, min: u16, max: u16) -> u16 {
@@ -168,6 +205,31 @@ pub(super) fn truncate(s: &str, max: usize) -> String {
     } else {
         s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
     }
+}
+
+/// `s` in `max` chars, in `color`: whole if it fits, else cut with its
+/// last few chars fading into the pane's background before the `…`, so
+/// the cut reads as "more here" rather than as the statement's end.
+pub(super) fn fading(
+    s: &str,
+    max: usize,
+    color: fn(&crate::config::theme::Theme) -> ratatui::style::Color,
+) -> Vec<Span<'static>> {
+    const STEPS: usize = 6;
+    let t = theme();
+    if s.chars().count() <= max {
+        return vec![Span::styled(s.to_string(), fg(color(t)))];
+    }
+    let kept: Vec<char> = s.chars().take(max.saturating_sub(1)).collect();
+    let steps = STEPS.min(kept.len() / 3);
+    let (plain, faded) = kept.split_at(kept.len() - steps);
+    let mut spans = vec![Span::styled(plain.iter().collect::<String>(), fg(color(t)))];
+    let colors = crate::config::theme::fade(color, |t| t.panel, steps + 1);
+    spans.extend(faded.iter().zip(&colors).map(|(c, &shade)| Span::styled(c.to_string(), fg(shade))));
+    if max > 0 {
+        spans.push(Span::styled("…", fg(colors.last().copied().unwrap_or(t.dim))));
+    }
+    spans
 }
 
 /// Shortens `s` to `cols` screen columns with an ellipsis (wide

@@ -11,9 +11,8 @@ impl App {
         self.focus = Focus::Schema;
         if hits.schema_filter_clear.is_some_and(|r| inside(r, x, y)) {
             if let Some(panel) = &mut self.connection.schema {
-                panel.filter.clear();
                 panel.filter_editing = false;
-                panel.selected = super::step_selectable(&panel.nodes(), 0, 1);
+                panel.clear_filter();
             }
             return;
         }
