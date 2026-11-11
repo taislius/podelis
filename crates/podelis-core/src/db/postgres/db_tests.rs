@@ -181,3 +181,14 @@ async fn live_postgres_partitions_name_their_parent() {
     }
     db.run("DROP TABLE parted_reviews", DEFAULT_ROW_LIMIT).await.unwrap();
 }
+
+#[tokio::test]
+async fn live_own_session_postgres() {
+    crate::db::tests::live_own_session(Engine::Postgres, "SELECT pg_sleep(2)", "SELECT pg_terminate_backend({pid})").await;
+}
+
+
+#[tokio::test]
+async fn live_dead_link_postgres() {
+    crate::db::tests::live_dead_link(Engine::Postgres, "SELECT generate_series(1, 1000000)").await;
+}

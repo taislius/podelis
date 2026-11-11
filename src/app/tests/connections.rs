@@ -1231,3 +1231,51 @@ async fn the_servers_load_is_shown() {
     assert!(view.text.contains("Size (bytes)") && view.text.contains("Journal mode"), "{}", view.text);
     assert!(!view.text.contains("not readable"), "{}", view.text);
 }
+
+/// While a query runs, the server's word on its session: gone, or waiting
+/// for a statement a while, is said, and Esc then stops waiting at once
+/// (the next run reconnects); not stopped by itself, as a pooler may run
+/// it on another session. Busy leaves it; an error reading the sessions
+/// isn't a lost link (found by hand, 2026-11-11: a dropped link left a
+/// SELECT waiting with nothing said).
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn the_running_querys_session_is_watched_on_the_server() {
+    use crate::app::SessionSeen;
+    use crate::db::OwnSession;
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    let start = |app: &mut App| {
+        app.tab.run.executing = true;
+        app.tab.run.since = Some(Instant::now());
+        app.tab.run.extra.on_session = true;
+        app.tab.run.cancel_failed = false;
+        app.tab.run.db = app.connection.database.clone();
+        app.tab.run.task = Some(tokio::spawn(std::future::pending::<()>()));
+        app.keepalive.connection_lost = false;
+    };
+    start(&mut app);
+    app.session_seen(SessionSeen::Said(Some(OwnSession::Busy)));
+    app.session_seen(SessionSeen::Said(Some(OwnSession::Idle(3))));
+    app.session_seen(SessionSeen::Failed("access denied".into()));
+    assert!(app.tab.run.executing && !app.keepalive.connection_lost && !app.tab.run.cancel_failed);
+    assert!(!app.tab.run.extra.on_session, "not asked again after an error");
+
+    for seen in [
+        SessionSeen::Said(Some(OwnSession::Idle(45))),
+        SessionSeen::Said(Some(OwnSession::Gone)),
+        SessionSeen::NoAnswer,
+    ] {
+        start(&mut app);
+        let what = format!("{seen:?}");
+        app.session_seen(seen);
+        assert!(app.tab.run.executing && app.keepalive.connection_lost && app.tab.run.cancel_failed, "{what}");
+        let last = app.notes.log.last().map(|m| m.text.clone()).unwrap_or_default();
+        assert!(last.contains("Esc stops waiting"), "{what}: {last}");
+        // Esc: stops waiting, the session given up on.
+        let task = app.tab.run.task.as_ref().unwrap().abort_handle();
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.tab.run.executing, "{what}");
+        tokio::task::yield_now().await;
+        assert!(task.is_finished(), "{what}: the wait is stopped");
+    }
+}

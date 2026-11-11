@@ -4,6 +4,26 @@
 
 use super::*;
 
+/// A query running this long has its session looked at on the server…
+const SESSION_WATCH_AFTER: Duration = Duration::from_secs(20);
+/// …this often…
+const SESSION_WATCH_EVERY: Duration = Duration::from_secs(20);
+/// …with this long for an answer: longer than a connection of the pool
+/// may take to come free (its acquire timeout, 10 s), so a busy pool isn't
+/// a server that doesn't answer.
+const SESSION_WATCH_WITHIN: Duration = Duration::from_secs(15);
+/// A session waiting for a statement this long (seconds) while its query
+/// runs here never got it, or its answer never got back.
+const SESSION_IDLE_LOST: i64 = 10;
+
+/// What the server said of a running query's session.
+#[derive(Debug)]
+pub(in crate::app) enum SessionSeen {
+    Said(Option<crate::db::OwnSession>),
+    Failed(String),
+    NoAnswer,
+}
+
 impl App {
     /// Called every second while a query runs: enforces the connection's
     /// timeout and notices background tasks that panicked.
@@ -39,6 +59,93 @@ impl App {
             self.cancel_query();
         }
         self.offer_cancel_tick();
+        self.watch_session_tick();
+    }
+
+    /// A query that's run a while: the server is asked (on a connection of
+    /// the pool) whether its session still runs it, every so often. A
+    /// session that's gone, or that's waited for a statement all along,
+    /// means the link dropped without a word (a VPN, a laptop's sleep, a
+    /// firewall's idle timeout): the run would otherwise wait for good
+    /// (found by hand, 2026-11-11). PostgreSQL and MySQL, which list their
+    /// sessions.
+    fn watch_session_tick(&mut self) {
+        let extra = &self.tab.run.extra;
+        let ran = self.tab.run.since.map_or(Duration::ZERO, |s| s.elapsed());
+        if !self.tab.run.executing
+            || !extra.on_session
+            || extra.session_asking
+            || ran < SESSION_WATCH_AFTER
+            || extra.session_asked.is_some_and(|at| at.elapsed() < SESSION_WATCH_EVERY)
+        {
+            return;
+        }
+        let Some(db) = self.tab.run.db.clone().filter(|db| db.engine().capabilities().activity) else { return };
+        self.tab.run.extra.session_asked = Some(Instant::now());
+        self.tab.run.extra.session_asking = true;
+        let send = self.run_sender();
+        tokio::spawn(async move {
+            let seen = match tokio::time::timeout(SESSION_WATCH_WITHIN, db.own_session()).await {
+                Ok(Ok(seen)) => SessionSeen::Said(seen),
+                Ok(Err(e)) => SessionSeen::Failed(crate::db::error_message(&e)),
+                Err(_) => SessionSeen::NoAnswer,
+            };
+            send(DbEventKind::SessionSeen(seen));
+        });
+    }
+
+    /// The server's word on the running query's session (in its tab).
+    pub(in crate::app) fn session_seen(&mut self, seen: SessionSeen) {
+        self.tab.run.extra.session_asking = false;
+        if !self.tab.run.executing {
+            return;
+        }
+        let said = match seen {
+            SessionSeen::Said(Some(crate::db::OwnSession::Gone)) => t!("run.session_gone").to_string(),
+            SessionSeen::Said(Some(crate::db::OwnSession::Idle(secs))) if secs >= SESSION_IDLE_LOST => {
+                t!("run.session_idle", s = secs)
+            }
+            SessionSeen::Said(_) => return,
+            // The server answered, with an error (sessions it won't list,
+            // say): no word on the link. Not asked again for this run.
+            SessionSeen::Failed(e) => {
+                tracing::debug!(error = e, "the server's sessions couldn't be read");
+                self.tab.run.extra.on_session = false;
+                return;
+            }
+            // Not even on a new connection: the server can't be reached.
+            SessionSeen::NoAnswer => {
+                t!("run.server_silent", why = t!("info.no_answer", s = SESSION_WATCH_WITHIN.as_secs()))
+            }
+        };
+        // Said once (the top bar keeps "connection lost"), and Esc stops
+        // waiting at once, giving the session up (the next run reconnects).
+        // Not stopped here: behind a pooler that hands each transaction
+        // another server connection (PgBouncer's transaction mode), the
+        // session the server lists may not be the one running this.
+        self.tab.run.extra.on_session = false;
+        self.tab.run.cancel_failed = true;
+        if self.hidden_tab.is_none() {
+            self.keepalive.connection_lost = true;
+        }
+        self.log(said.clone(), true);
+        self.set_status(said, true);
+    }
+
+    /// The check before this run found its session doesn't answer: the
+    /// run goes on reconnecting, said, and Esc stops waiting at once (a
+    /// session held by something else still stuck can't be taken over).
+    pub(in crate::app) fn session_replaced(&mut self, why: &str) {
+        if !self.tab.run.executing {
+            return;
+        }
+        self.tab.run.cancel_failed = true;
+        if self.hidden_tab.is_none() {
+            self.keepalive.connection_lost = true;
+        }
+        let said = t!("run.session_replaced", why = one_line(why));
+        self.log(said.clone(), false);
+        self.set_result_status(said, false);
     }
 
     /// A query running past `long_query` says, once, how to cancel it: in

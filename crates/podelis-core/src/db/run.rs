@@ -1,5 +1,9 @@
 use super::*;
 
+/// How long a check before a run waits for the session to be free before
+/// it's taken for one stuck (see [`Database::answers_within`]).
+const SESSION_HELD: Duration = Duration::from_secs(30);
+
 /// Reads up to `n` more rows; `true` once the rows have run out.
 async fn read_rows(
     stream: &mut Rows<'_>,
@@ -339,14 +343,29 @@ impl Database {
     /// answer counts (an error too: the run decides what it means, with its
     /// own rules for reconnecting). Nothing is reopened or retried here (an
     /// open transaction would be lost without a word). The time counts
-    /// from when the session is free: one busy elsewhere (a schema load)
-    /// isn't a dead one, and the run waits its turn.
+    /// from when the session is free: one busy elsewhere (a schema load,
+    /// an earlier result's rows being stopped) isn't a dead one, and the
+    /// run waits its turn; but not for ever: a session held for
+    /// `SESSION_HELD` is one stuck on a link that's gone (found by hand,
+    /// 2026-11-11: an earlier result's rows, stopped on a dead link, kept
+    /// it while the check let the run go on to wait for good).
     pub async fn answers_within(&self, limit: Duration) -> Result<()> {
         // A file always answers.
         if self.0.engine.capabilities().file_based {
             return Ok(());
         }
-        let Ok(mut session) = tokio::time::timeout(limit, self.0.session.lock()).await else { return Ok(()) };
+        let Ok(mut session) = tokio::time::timeout(SESSION_HELD.max(limit), self.0.session.lock()).await else {
+            // Held by a result's rows still being stopped: they're stuck on
+            // the link, and given up on with the session. Held by anything
+            // else, it's left be (it may be in an open transaction): the
+            // run waits its turn, and Esc can stop the wait.
+            let streaming = self.0.stream_task.lock().is_ok_and(|t| t.as_ref().is_some_and(|t| !t.is_finished()));
+            if streaming {
+                self.abandon_session();
+            }
+            let said = anyhow::anyhow!("the session was held for {} s", SESSION_HELD.as_secs());
+            return Err(said.context(errors::NoAnswer));
+        };
         if self.0.stale.load(Ordering::SeqCst) {
             return Ok(());
         }

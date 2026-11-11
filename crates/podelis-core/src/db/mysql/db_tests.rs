@@ -195,3 +195,14 @@ async fn a_mysql_server_that_is_down_says_why_at_once() {
     assert!(crate::db::is_unreachable(&err));
 }
 
+
+#[tokio::test]
+async fn live_own_session_mysql() {
+    crate::db::tests::live_own_session(Engine::MySql, "SELECT SLEEP(2)", "KILL {pid}").await;
+}
+
+#[tokio::test]
+async fn live_dead_link_mysql() {
+    let big = "SELECT a.column_name FROM information_schema.columns a, information_schema.columns b";
+    crate::db::tests::live_dead_link(Engine::MySql, big).await;
+}

@@ -373,6 +373,106 @@ pub(in crate::db) async fn live_reconnect(db: &Database, other: &Database, pid_s
     assert!(db.run(pid_sql, 10).await.is_ok());
 }
 
+/// A TCP proxy to `target` on a port of its own: once `freeze` is set,
+/// the connections it already has stop forwarding (what's sent is
+/// dropped, nothing closes), as a link that died without a word does
+/// (a VPN, a laptop's sleep, a NAT's timeout); new ones work.
+async fn freezing_proxy(target: (String, u16), freeze: Arc<AtomicBool>) -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((client, _)) = listener.accept().await {
+            let Ok(server) = tokio::net::TcpStream::connect((target.0.as_str(), target.1)).await else { continue };
+            // Born frozen-free: frozen only by a freeze after it opened.
+            let born_frozen = freeze.load(Ordering::SeqCst);
+            let freeze = Arc::clone(&freeze);
+            tokio::spawn(async move {
+                let (cr, cw) = client.into_split();
+                let (sr, sw) = server.into_split();
+                let back = Arc::clone(&freeze);
+                tokio::join!(forward(cr, sw, freeze, born_frozen), forward(sr, cw, back, born_frozen));
+            });
+        }
+    });
+    port
+}
+
+/// One way of `freezing_proxy`'s connection.
+async fn forward(
+    mut from: tokio::net::tcp::OwnedReadHalf,
+    mut to: tokio::net::tcp::OwnedWriteHalf,
+    freeze: Arc<AtomicBool>,
+    born_frozen: bool,
+) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let mut buf = vec![0u8; 65536];
+    loop {
+        let n = match from.read(&mut buf).await {
+            Ok(0) | Err(_) => return,
+            Ok(n) => n,
+        };
+        if (born_frozen || !freeze.load(Ordering::SeqCst)) && to.write_all(&buf[..n]).await.is_err() {
+            return;
+        }
+    }
+}
+
+/// A link that dies without a word while a result's rows are still open
+/// (found by hand, 2026-11-11: the next SELECT waited for good, until a
+/// restart). The check before a run waits for the session (the rows'
+/// cancel holds it, itself on a dead connection of the pool) and finds
+/// it doesn't answer; the server still answers on a new connection; and
+/// the run opens a new session and answers, saying it reconnected.
+pub(in crate::db) async fn live_dead_link(engine: Engine, big: &str) {
+    let Some(mut params) = live_params(engine) else { return };
+    let freeze = Arc::new(AtomicBool::new(false));
+    params.port = freezing_proxy((params.host.clone(), params.port), Arc::clone(&freeze)).await;
+    params.host = "127.0.0.1".into();
+    let db = Database::connect(params).await.expect("connect");
+    db.run("SELECT 1", 10).await.unwrap();
+    // A connection of the pool's, idle in it from here on (as after `d`).
+    db.activity().await.unwrap();
+    let (_, rows) = db.run_streaming(big, 100).await.unwrap();
+    assert!(rows.is_some(), "rows left to stream");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    freeze.store(true, Ordering::SeqCst);
+    drop(rows);
+    let check = tokio::time::timeout(Duration::from_secs(60), db.answers_within(Duration::from_secs(5))).await;
+    let err = check.expect("the check ends").expect_err("a dead session doesn't answer");
+    assert!(crate::db::is_unreachable(&err) || format!("{err:#}").contains("doesn't answer"), "{err:#}");
+    // The server answers about it on a new connection: waiting for a
+    // statement (PostgreSQL, whose cancel got through), or still sending
+    // the rows nobody reads (MySQL, whose cancel went through the frozen
+    // one).
+    let seen = tokio::time::timeout(Duration::from_secs(15), db.own_session()).await.expect("an answer");
+    assert!(matches!(seen.unwrap(), Some(OwnSession::Idle(_) | OwnSession::Busy)));
+    let run = tokio::time::timeout(Duration::from_secs(60), db.run("SELECT 42", 10)).await.expect("not for good");
+    let outcome = run.expect("a read runs on a new session");
+    assert!(outcome.reconnected);
+    assert_eq!(outcome.rows[0][0].as_deref(), Some("42"));
+}
+
+/// What the server says of the session's own state, which a run that
+/// seems to hang is checked by: busy while it runs, waiting when it's
+/// done, gone once the server ends it (found by hand, 2026-11-11: a
+/// dropped link left a run waiting for good).
+pub(in crate::db) async fn live_own_session(engine: Engine, slow: &str, kill: &str) {
+    let Some(db) = live_db(engine).await else { return };
+    let other = live_db(engine).await.unwrap();
+    let runner = db.clone();
+    let slow_sql = slow.to_string();
+    let handle = tokio::spawn(async move { runner.run(&slow_sql, 10).await });
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert_eq!(db.own_session().await.unwrap(), Some(OwnSession::Busy));
+    handle.await.unwrap().unwrap();
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert!(matches!(db.own_session().await.unwrap(), Some(OwnSession::Idle(s)) if s >= 1));
+    let pid = db.session_id().to_string();
+    other.run(&kill.replace("{pid}", &pid), 10).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(db.own_session().await.unwrap(), Some(OwnSession::Gone));
+}
+
 /// The activity view sees another session's running query, and can cancel
 /// it; EXPLAIN ANALYZE shows actual numbers.
 pub(in crate::db) async fn live_activity(engine: Engine, slow: &str, cancelled_is_an_error: bool) {
