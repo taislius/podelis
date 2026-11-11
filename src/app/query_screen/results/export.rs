@@ -11,6 +11,12 @@ impl App {
         self.export_dir().join(format!("podelis-export-{}.{ext}", chrono::Local::now().format("%Y%m%d-%H%M%S")))
     }
 
+    /// Where an export goes: the export form's name, while the form runs
+    /// it, else a new name.
+    fn export_target(&self, format: Format) -> PathBuf {
+        self.exports.name.clone().unwrap_or_else(|| self.export_path(format))
+    }
+
     /// `export_dir`, or the current folder.
     pub(in crate::app) fn export_dir(&self) -> PathBuf {
         match self.settings.export_dir.as_deref() {
@@ -91,7 +97,7 @@ impl App {
             }
             return;
         }
-        let path = self.export_path(format);
+        let path = self.export_target(format);
         let Some(text) = self.rows_text(format, rows) else { return };
         if !self.export_fits(text.len() as u64, false) {
             return;
@@ -107,7 +113,7 @@ impl App {
         if self.exports.task.is_some() {
             return self.set_status(t!("export.already_running").to_string(), true);
         }
-        let path = self.export_path(Format::Parquet);
+        let path = self.export_target(Format::Parquet);
         let engine = self.engine();
         let Some(results) = &self.tab.grid.results else { return };
         let shown = crate::db::QueryOutcome {
@@ -226,15 +232,17 @@ impl App {
                 && self.connection.txn == TxnState::Idle
                 && crate::sql::params::find(explain, engine).is_empty()
         });
+        // The form's name goes with it, to when it starts.
+        let name = self.exports.name.clone();
         let (Some((dialect, explain)), Some(db)) = (plan, self.connection.database.clone()) else {
-            return self.start_export_all(format, 0);
+            return self.start_export_all(format, 0, name);
         };
         let row_bytes = self.export_row_bytes(format);
         let send = self.sender();
         // Answers only this request, about these rows: what else may have
         // happened by then is checked when it comes.
         let request = self.next_run_id();
-        self.exports.estimating = Some(EstimateRequest { id: request, run: self.tab.run.id });
+        self.exports.estimating = Some(EstimateRequest { id: request, run: self.tab.run.id, name });
         self.set_status(t!("export.estimating").to_string(), false);
         tokio::spawn(async move {
             let plan = tokio::time::timeout(WAIT, db.run_aside(&explain, 10_000)).await;
@@ -269,8 +277,7 @@ impl App {
     /// What the plan said: an export big enough asks first.
     pub(in crate::app) fn export_estimated(&mut self, request: u64, format: Format, rows: Option<f64>, row_bytes: f64) {
         // One stopped, and asked again since: the answer of an old one.
-        let Some(asked) = self.exports.estimating.filter(|asked| asked.id == request) else { return };
-        self.exports.estimating = None;
+        let Some(asked) = self.exports.estimating.take_if(|asked| asked.id == request) else { return };
         self.clear_export_note();
         // The run ids are unique across tabs: the same rows, here, still open.
         if asked.run != self.tab.run.id || self.tab.run.stream.is_none() {
@@ -287,14 +294,14 @@ impl App {
         let over = limits.max > 0 && size >= limits.max;
         let free = self.export_free();
         if !big && !over {
-            return self.start_export_all(format, 0);
+            return self.start_export_all(format, 0, asked.name);
         }
         let shown_rows = crate::db::human_rows(rows.unwrap_or(0.0));
         let message = t!("export.ask_about", size = human_bytes(size), rows = shown_rows);
         let mut details = export_ask_details(&limits, size, free);
         details.push(t!("export.ask_waiting").to_string());
         // Agreed to about this much: it asks next after that.
-        let action = ConfirmAction::ExportAll(format, size, self.tab.run.id);
+        let action = ConfirmAction::ExportAll { format, agreed: size, run: self.tab.run.id, name: asked.name };
         self.exports.asked = Some(Instant::now());
         self.popups.confirm = Some(Confirm { message, details, danger: false, action, offer_transaction: false });
     }
@@ -355,7 +362,8 @@ impl App {
     }
 
     /// Writes every row, page by page. `agreed`: the size already agreed to.
-    pub(in crate::app) fn start_export_all(&mut self, format: Format, agreed: u64) {
+    /// `name`: the export form's, else a new one.
+    pub(in crate::app) fn start_export_all(&mut self, format: Format, agreed: u64, name: Option<PathBuf>) {
         if self.exports.task.is_some() {
             return self.set_status(t!("export.already_running").to_string(), true);
         }
@@ -382,8 +390,8 @@ impl App {
         let Some(stream) = self.tab.run.stream.take() else { return };
         // The stream holds its session until the export ends.
         let conn = self.tabs.get(self.active_tab).and_then(|t| t.conn);
-        let path = self.export_path(format);
         let (columns, types, loaded) = (results.columns.clone(), results.column_types.clone(), results.rows.clone());
+        let path = name.unwrap_or_else(|| self.export_path(format));
         let send = self.sender();
         let target = path.clone();
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -418,11 +426,12 @@ impl App {
 }
 
 /// A size being worked out: the request's number, and the run whose rows
-/// are to be exported.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// are to be exported, and the file the export form named for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EstimateRequest {
     pub id: u64,
     pub run: u64,
+    pub name: Option<PathBuf>,
 }
 
 /// An export being written, with all that's about it: what stops it, its
@@ -915,4 +924,7 @@ pub(in crate::app) struct Exports {
     pub(in crate::app) asked: Option<std::time::Instant>,
     /// What the export form was last run with, where it starts next time.
     pub(in crate::app) choice: super::export_form::ExportChoice,
+    /// The file the export form named, while the form runs its export
+    /// (what goes on after, the size's question, carries it itself).
+    pub(in crate::app) name: Option<PathBuf>,
 }

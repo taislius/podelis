@@ -43,11 +43,19 @@ pub enum ExportLine {
     To,
     Format,
     Rows,
+    /// The file's name, to edit.
+    Name,
 }
 
 pub struct ExportForm {
     pub choice: ExportChoice,
     pub line: ExportLine,
+    /// Where the file goes: a new name with its time to start with, which
+    /// follows the format until it's edited.
+    pub name: LineInput,
+    pub name_edited: bool,
+    /// Why the name can't be used (a file that's there already).
+    pub error: Option<String>,
 }
 
 /// A place to click in the form.
@@ -56,6 +64,7 @@ pub enum ExportClick {
     To(ExportTo),
     Every(bool),
     NextFormat,
+    Name,
     Run,
 }
 
@@ -96,24 +105,68 @@ impl App {
         if choice.to == ExportTo::File && self.export_every_offered() {
             lines.push(ExportLine::Rows);
         }
+        if choice.to == ExportTo::File {
+            lines.push(ExportLine::Name);
+        }
         lines
     }
 
     pub(in crate::app) fn open_export_form(&mut self) {
         let choice = self.export_fit(self.exports.choice);
         self.popups.completion = None;
-        self.popups.export_form = Some(ExportForm { choice, line: ExportLine::To });
+        let name = LineInput::new(self.export_name_shown(choice.format));
+        self.popups.export_form =
+            Some(ExportForm { choice, line: ExportLine::To, name, name_edited: false, error: None });
     }
 
     fn set_export_choice(&mut self, choice: ExportChoice) {
         let choice = self.export_fit(choice);
         let lines = self.export_lines(choice);
+        let fresh = self.export_name_shown(choice.format);
         if let Some(form) = &mut self.popups.export_form {
+            // The name follows the format: a new one until it's edited,
+            // then just its extension, if it's the format's.
+            if form.choice.format != choice.format {
+                if !form.name_edited {
+                    form.name.set(fresh);
+                } else if let Some(stem) = form.name.text().strip_suffix(&format!(".{}", form.choice.format.ext())) {
+                    let renamed = format!("{stem}.{}", choice.format.ext());
+                    form.name.set(renamed);
+                }
+            }
             form.choice = choice;
             if !lines.contains(&form.line) {
                 form.line = ExportLine::To;
             }
         }
+    }
+
+    /// A new name, as the form shows it: the whole path (a relative
+    /// `export_dir` from the current folder), so what's typed over it
+    /// isn't joined to `export_dir` again.
+    fn export_name_shown(&self, format: Format) -> String {
+        let path = self.export_path(format);
+        let path =
+            if path.is_absolute() { path } else { std::env::current_dir().map(|d| d.join(&path)).unwrap_or(path) };
+        path.display().to_string()
+    }
+
+    /// The file the form's name stands for: `~/` is the home folder, a name
+    /// without a folder goes where exports go, one without an extension
+    /// gets the format's.
+    fn export_form_path(&self, name: &str, format: Format) -> PathBuf {
+        let name = name.trim();
+        let mut path = if name.starts_with("~/") {
+            crate::config::settings::expand_home(name)
+        } else if std::path::Path::new(name).is_absolute() {
+            PathBuf::from(name)
+        } else {
+            self.export_dir().join(name)
+        };
+        if path.extension().is_none() {
+            path.set_extension(format.ext());
+        }
+        path
     }
 
     /// ←/→ on the current line.
@@ -125,6 +178,7 @@ impl App {
                 choice.to = if choice.to == ExportTo::File { ExportTo::Clipboard } else { ExportTo::File };
             }
             ExportLine::Rows => choice.every = !choice.every,
+            ExportLine::Name => {}
             ExportLine::Format => {
                 let formats = self.export_formats(choice);
                 let at = formats.iter().position(|f| *f == choice.format).unwrap_or(0);
@@ -138,15 +192,59 @@ impl App {
     }
 
     fn run_export_form(&mut self) {
-        let Some(form) = self.popups.export_form.take() else { return };
-        self.exports.choice = form.choice;
-        self.run_command(Command::Rows { to: form.choice.dest(), format: form.choice.format });
+        let Some(form) = &mut self.popups.export_form else { return };
+        let choice = form.choice;
+        if choice.to == ExportTo::File {
+            if form.name.text().trim().is_empty() {
+                form.line = ExportLine::Name;
+                form.error = Some(t!("export_form.no_name").to_string());
+                return;
+            }
+            let name = form.name.text().to_string();
+            let path = self.export_form_path(&name, choice.format);
+            // Not over a file that's there: a new name for it is the
+            // user's to give.
+            if path.exists() {
+                let Some(form) = &mut self.popups.export_form else { return };
+                form.line = ExportLine::Name;
+                form.error = Some(t!("export_form.exists").to_string());
+                return;
+            }
+            self.exports.name = Some(path);
+        }
+        self.popups.export_form = None;
+        self.exports.choice = choice;
+        self.run_command(Command::Rows { to: choice.dest(), format: choice.format });
+        // Taken by the export (every row's carries it on), or refused.
+        self.exports.name = None;
     }
 
     pub(in crate::app) fn handle_export_form_key(&mut self, key: KeyEvent) {
-        let Some(form) = &self.popups.export_form else { return };
-        let lines = self.export_lines(form.choice);
-        let at = lines.iter().position(|l| *l == form.line).unwrap_or(0);
+        let Some(form) = &mut self.popups.export_form else { return };
+        // The name's line takes what's typed; ↑↓, Tab, Enter and Esc as on
+        // the others.
+        let moves = matches!(key.code, KeyCode::Up | KeyCode::Down | KeyCode::Tab | KeyCode::BackTab);
+        if form.line == ExportLine::Name && !moves {
+            if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                return match crate::system::clipboard::read() {
+                    Ok(text) => self.paste_into_export_form(&text),
+                    Err(e) => self.set_status(crate::system::clipboard::read_failed(&e), true),
+                };
+            }
+            match form.name.handle(key) {
+                InputResult::Submit => return self.run_export_form(),
+                InputResult::Cancel => self.popups.export_form = None,
+                InputResult::Changed => {
+                    form.name_edited = true;
+                    form.error = None;
+                }
+                InputResult::Moved | InputResult::Ignored => {}
+            }
+            return;
+        }
+        let (choice, current) = (form.choice, form.line);
+        let lines = self.export_lines(choice);
+        let at = lines.iter().position(|l| *l == current).unwrap_or(0);
         let line = match key.code {
             KeyCode::Esc => {
                 self.popups.export_form = None;
@@ -178,6 +276,12 @@ impl App {
         };
         match *click {
             ExportClick::Run => return self.run_export_form(),
+            ExportClick::Name => {
+                if let Some(form) = &mut self.popups.export_form {
+                    form.line = ExportLine::Name;
+                }
+                return;
+            }
             ExportClick::To(to) => choice.to = to,
             ExportClick::Every(every) => choice.every = every,
             ExportClick::NextFormat => {
@@ -190,9 +294,13 @@ impl App {
         self.set_export_choice(choice);
     }
 
-    /// Where a file of `format` would go: the name without its time.
-    pub fn export_path_shown(&self, format: Format) -> String {
-        let dir = self.export_dir();
-        dir.join(format!("podelis-export-….{}", format.ext())).display().to_string()
+    /// A paste into the form: into the name, on its line.
+    pub(in crate::app) fn paste_into_export_form(&mut self, text: &str) {
+        let Some(form) = &mut self.popups.export_form else { return };
+        if form.line == ExportLine::Name {
+            form.name.insert_str(text.lines().next().unwrap_or_default().trim());
+            form.name_edited = true;
+            form.error = None;
+        }
     }
 }

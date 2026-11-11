@@ -192,10 +192,11 @@ pub(super) fn draw_status_bar(f: &mut Frame, app: &mut App, area: Rect) {
     app.hits.connection = Rect { x: l.x + mode_w, width: l.width.saturating_sub(mode_w), ..l };
     app.hits.agent_note = if right_w > 0 { r } else { Rect::default() };
 
-    // A message takes the middle; otherwise key hints. A run's outcome is
-    // in the results pane, unless that's hidden (another pane zoomed).
+    // A message takes the middle; otherwise key hints, at the right with
+    // Ctrl+K's, so every key is in one place. A run's outcome is in the
+    // results pane, unless that's hidden (another pane zoomed).
     let middle = if quiet {
-        Line::from(key_hints(app, mid.width)).alignment(Alignment::Center)
+        Line::from(key_hints(app, mid.width)).alignment(Alignment::Right)
     } else {
         Line::from(Span::styled(
             truncate(&one_line(&app.notes.status), mid.width as usize),

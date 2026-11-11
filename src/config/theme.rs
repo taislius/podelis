@@ -131,6 +131,34 @@ pub fn theme() -> &'static Theme {
     THEMES.get().map_or(&DARK, |themes| &themes[CURRENT.load(Ordering::Relaxed)])
 }
 
+/// `steps` colours from role `from` towards role `to` of the theme in use,
+/// the first nearest `from`, none of them `to` itself: text fading into a
+/// background. Blended in 24-bit colour, then shown as the terminal can
+/// (the nearest of 256).
+pub fn fade(from: fn(&Theme) -> Color, to: fn(&Theme) -> Color, steps: usize) -> Vec<Color> {
+    let palette = if CURRENT.load(Ordering::Relaxed) == 1 { &LIGHT } else { &DARK };
+    let (Color::Rgb(r0, g0, b0), Color::Rgb(r1, g1, b1)) = (from(palette), to(palette)) else {
+        return vec![from(theme()); steps];
+    };
+    let true_color = THEMES.get().is_none_or(|t| matches!(t[0].canvas, Color::Rgb(..)));
+    (1..=steps)
+        .map(|i| {
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss,
+                reason = "between two u8s, a few steps"
+            )]
+            let mix = |a: u8, b: u8| {
+                let k = i as f32 / (steps + 1) as f32;
+                (f32::from(a) + (f32::from(b) - f32::from(a)) * k).round() as u8
+            };
+            let (r, g, b) = (mix(r0, r1), mix(g0, g1), mix(b0, b1));
+            if true_color { Color::Rgb(r, g, b) } else { Color::Indexed(nearest_256(r, g, b)) }
+        })
+        .collect()
+}
+
 /// Whether the terminal shows 24-bit colour. Terminals that don't (e.g.
 /// macOS Terminal.app) get the nearest of the 256 standard colours.
 fn supports_truecolor() -> bool {

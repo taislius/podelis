@@ -88,15 +88,12 @@ fn a_plan_says_what_it_is_for_and_how_old_it_is() {
     app.tab.plan_source = Some(source);
     app.tab.result_tab = crate::app::ResultTab::Plan;
     let screen = render(&mut app, 100, 30);
-    assert!(
-        screen.contains(" EXPLAIN  from users where id < 4  lines 2–3") && screen.contains("3 min ago"),
-        "{screen}"
-    );
+    assert!(screen.contains(" EXPLAIN  from users where id < 4  l: 2–3") && screen.contains("3 min ago"), "{screen}");
     assert!(!screen.contains("edited since"), "{screen}");
     // Lines added above it: it's found where it is now, and a click there
     // puts the cursor on it.
     app.tab.editor.set_text("-- one\n-- two\nselect id, email, note\nfrom users\nwhere id < 4;");
-    assert!(render(&mut app, 100, 30).contains("lines 4–5"));
+    assert!(render(&mut app, 100, 30).contains("l: 4–5"));
     let at = app.hits.plan_source;
     app.handle_mouse(crossterm::event::MouseEvent {
         kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
@@ -110,7 +107,7 @@ fn a_plan_says_what_it_is_for_and_how_old_it_is() {
     app.tab.editor.set_text("select 1");
     app.tab.result_tab = crate::app::ResultTab::Plan;
     let screen = render(&mut app, 100, 30);
-    assert!(screen.contains("was lines 2–3 · edited since"), "{screen}");
+    assert!(screen.contains("was l: 2–3 · edited since"), "{screen}");
 }
 
 #[test]

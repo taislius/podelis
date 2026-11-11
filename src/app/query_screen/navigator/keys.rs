@@ -64,9 +64,12 @@ impl App {
         let Some(panel) = &mut self.connection.schema else { return };
         if panel.filter_editing {
             // While typing: the arrows pick among what's left, Enter opens
-            // the one picked (the filter stays), Ctrl+V pastes.
+            // the one picked (the filter stays), Ctrl+V pastes, and Tab
+            // stops typing, the filter and the one picked kept, so the
+            // pane's keys (d, s, a, f…) act on it straight away.
             let nodes = panel.nodes();
             match key.code {
+                KeyCode::Tab | KeyCode::BackTab => return panel.filter_editing = false,
                 KeyCode::Down => return panel.selected = step_selectable(&nodes, panel.selected + 1, 1),
                 KeyCode::Up => {
                     return panel.selected = step_selectable(&nodes, panel.selected.saturating_sub(1), -1);
@@ -81,7 +84,7 @@ impl App {
                 }
                 InputResult::Cancel => {
                     panel.filter_editing = false;
-                    panel.filter.clear();
+                    return panel.clear_filter();
                 }
                 InputResult::Changed => {}
                 InputResult::Moved | InputResult::Ignored => return,
@@ -90,9 +93,7 @@ impl App {
             return;
         }
         if key.code == KeyCode::Esc && !panel.filter.is_empty() {
-            panel.filter.clear();
-            panel.selected = step_selectable(&panel.nodes(), 0, 1);
-            return;
+            return panel.clear_filter();
         }
         if let Some(command) = self.pane_command(key) {
             return self.run_command(command);

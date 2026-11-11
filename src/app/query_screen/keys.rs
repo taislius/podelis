@@ -115,6 +115,8 @@ impl App {
             KeyCode::Esc if self.busy_conn_tab().is_some() && !self.esc_has_a_job() => {
                 return self.set_status(self.running_elsewhere(t!("run.esc_there")), false);
             }
+            // (Typing the navigator's filter, Tab stops the typing there.)
+            KeyCode::Tab | KeyCode::BackTab if self.focus == Focus::Schema && self.schema_filter_typed() => {}
             KeyCode::Tab => return self.cycle_focus(true),
             KeyCode::BackTab => return self.cycle_focus(false),
             _ => {}
@@ -205,6 +207,7 @@ impl App {
             Some(Overlay::ParamForm) => self.paste_param(text),
             Some(Overlay::Settings) => self.paste_setting(text),
             Some(Overlay::RowForm) => self.paste_row_form(text),
+            Some(Overlay::ExportForm) => self.paste_into_export_form(text),
             // Popups without text to type into.
             Some(
                 Overlay::Confirm
@@ -213,7 +216,6 @@ impl App {
                 | Overlay::Activity
                 | Overlay::Agents
                 | Overlay::TxPicker
-                | Overlay::ExportForm
                 | Overlay::Sandbox
                 | Overlay::Review,
             ) => {}
@@ -316,6 +318,11 @@ impl App {
             SchemaNode::Routine(r) => (panel.routines.get(r)?.name.clone(), t!("kind.routine")),
             SchemaNode::Section(_) => return None,
         })
+    }
+
+    /// The navigator's filter is being typed.
+    fn schema_filter_typed(&self) -> bool {
+        self.connection.schema.as_ref().is_some_and(|s| s.filter_editing)
     }
 
     /// Pastes the system clipboard (Ctrl+V, or the editor's menu).

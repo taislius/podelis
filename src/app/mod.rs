@@ -573,6 +573,10 @@ impl App {
             Screen::Connections => false,
             Screen::Connect => true,
             Screen::Query => match self.top_overlay() {
+                // The export form's name, on its line.
+                Some(Overlay::ExportForm) => {
+                    self.popups.export_form.as_ref().is_some_and(|f| f.line == export_form::ExportLine::Name)
+                }
                 Some(overlay) => overlay.takes_text(),
                 None => {
                     self.focus == Focus::Editor

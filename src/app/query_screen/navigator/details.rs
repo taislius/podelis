@@ -127,8 +127,20 @@ fn table_definition(engine: Engine, table: &SchemaTable) -> String {
         if info.is_view && !def.trim_start().to_ascii_uppercase().starts_with("CREATE") {
             return format!("CREATE VIEW {qualified} AS\n{def}");
         }
-        if info.is_view || engine.capabilities().stores_create_sql {
+        if info.is_view {
             return def.clone();
+        }
+        // The CREATE statement as stored, its foreign keys listed after it
+        // too (in comments, so it stays one to run).
+        if engine.capabilities().stores_create_sql {
+            let mut out = def.trim_end().to_string();
+            if !details.foreign_keys.is_empty() {
+                let _ = write!(out, "\n\n-- {}\n", t!("schema.foreign_keys"));
+                for fk in &details.foreign_keys {
+                    let _ = writeln!(out, "-- {} → {}", fk.column, fk.target);
+                }
+            }
+            return out;
         }
     }
     let mut out = format!("-- {qualified}\n");
@@ -145,6 +157,15 @@ fn table_definition(engine: Engine, table: &SchemaTable) -> String {
             let _ = write!(out, " → {target}");
         }
         out.push('\n');
+    }
+    // Each in a list of their own too: what the arrows above point at,
+    // read at a glance.
+    if !details.foreign_keys.is_empty() {
+        let _ = write!(out, "\n-- {}\n", t!("schema.foreign_keys"));
+        let w = details.foreign_keys.iter().map(|f| f.column.chars().count()).max().unwrap_or(0);
+        for fk in &details.foreign_keys {
+            let _ = writeln!(out, "{:<w$}  → {}", fk.column, fk.target);
+        }
     }
     if !details.indexes.is_empty() {
         let _ = write!(out, "\n-- {}\n", t!("schema.indexes"));
@@ -272,6 +293,16 @@ pub struct SchemaPanel {
 }
 
 impl SchemaPanel {
+    /// Clears the filter, the one picked staying picked (now among all),
+    /// so what's acted on next is what was looked for.
+    pub(in crate::app) fn clear_filter(&mut self) {
+        let picked = self.nodes().get(self.selected).copied();
+        self.filter.clear();
+        let nodes = self.nodes();
+        let at = picked.and_then(|p| nodes.iter().position(|n| *n == p)).unwrap_or(0);
+        self.selected = crate::app::query_screen::navigator::step_selectable(&nodes, at, 1);
+    }
+
     /// Scrolls so the selected row shows, with an expanded table's
     /// columns and indexes as far as they fit (the table stays on screen),
     /// for `height` rows. Returns the first row to show.

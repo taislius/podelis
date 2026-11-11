@@ -47,6 +47,15 @@ pub(in crate::ui) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
         let at = Rect { x: filter.right() - width, width, ..filter };
         f.render_widget(Paragraph::new(Span::styled(clear, dim())).style(Style::default().bg(t.inset)), at);
         app.hits.schema_filter_clear = Some(at);
+        // While it's typed: Tab stops typing, so d, s… act on the one picked.
+        let typed = app.connection.schema.as_ref().map_or(0, |s| s.filter.text().chars().count());
+        let tab = format!("{} ", t!("navigator.filter_tab"));
+        let tab_w = tab.chars().count() as u16;
+        let editing = app.connection.schema.as_ref().is_some_and(|s| s.filter_editing);
+        if editing && filter.width > width + tab_w + typed as u16 + 6 {
+            let at = Rect { x: at.x - tab_w, width: tab_w, ..filter };
+            f.render_widget(Paragraph::new(Span::styled(tab, dim())).style(Style::default().bg(t.inset)), at);
+        }
     }
 
     let Some(panel) = &app.connection.schema else { return };
