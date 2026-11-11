@@ -36,7 +36,7 @@ mod types;
 #[cfg(feature = "via-sqlx")]
 mod via_sqlx;
 
-pub use activity::Activity;
+pub use activity::{Activity, OwnSession};
 pub use backend::{Backend, Capabilities, ContainerLogin, ContainerSecret, Transactions};
 pub use details::{Comment, ForeignKey, IndexInfo, Link, RoutineInfo, TableDetails};
 pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint};
@@ -59,6 +59,9 @@ pub use types::{TypeKind, same_type, translate_type};
 pub const DEFAULT_ROW_LIMIT: usize = 1000;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a connection of the pool's (not the session's) waits in it
+/// before it's closed.
+const POOL_IDLE: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct Database(Arc<Inner>);

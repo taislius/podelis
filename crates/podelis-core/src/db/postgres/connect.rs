@@ -31,6 +31,10 @@ pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, port: u16
     let pool = PgPoolOptions::new()
         .max_connections(3)
         .acquire_timeout(CONNECT_TIMEOUT)
+        // Not kept idle long: a link that died while one waited in the pool
+        // (a VPN, a laptop's sleep, a NAT's timeout) would hold up a `d` or a
+        // cancel until the acquire timed out; a new one is quick to open.
+        .idle_timeout(POOL_IDLE)
         .connect_with(opts)
         .await
         .context("failed to connect to database")?;

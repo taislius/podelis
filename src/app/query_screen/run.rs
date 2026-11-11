@@ -120,6 +120,7 @@ impl App {
             // Running, as far as the rest of the app goes: nothing else
             // starts, and Esc stops it.
             self.tab.run.executing = true;
+            self.tab.run.extra.on_session = false;
             self.tab.run.since = Some(Instant::now());
             self.tab.run.holds_tabs = true;
             let send = self.sender();
@@ -297,6 +298,9 @@ impl App {
         self.tab.run.extra.deadline = timeout.and_then(|limit| Some((Instant::now().checked_add(limit)?, limit)));
         self.tab.run.extra.offered_cancel = false;
         self.tab.run.extra.added_statements = 0;
+        self.tab.run.extra.session_asked = None;
+        self.tab.run.extra.session_asking = false;
+        self.tab.run.extra.on_session = true;
         self.tab.error_marker = None;
         self.tab.run.executing = true;
         self.tab.run.db = Some(db.clone());
@@ -317,13 +321,12 @@ impl App {
         tracing::debug!(statements = self.tab.run.infos.len(), stream, row_limit, "run");
         let sql = if self.tab.run.extra.vertical { sql::without_vertical(&sql, self.engine()) } else { sql };
         self.tab.run.task = Some(tokio::spawn(async move {
+            // A session that didn't answer is given up on: the run then
+            // opens a new one (a read runs on it and says it reconnected;
+            // anything else isn't run, and says so), or says the server
+            // can't be reached. Not a wait for good on a dead link.
             if check_first && let Err(e) = db.answers_within(ANSWER_WITHIN).await {
-                return send(DbEventKind::QueryFailed {
-                    message: crate::db::error_message(&e),
-                    position: None,
-                    txn: None,
-                    missing_feature: false,
-                });
+                send(DbEventKind::SessionReplaced(crate::db::error_message(&e)));
             }
             if stream {
                 // No transaction probe: the open stream holds the session,
@@ -582,6 +585,13 @@ pub(in crate::app) struct RunExtra {
     /// Statements the run put before yours (a review's `BEGIN`, a sandbox
     /// step's savepoint): not counted in the result's "n statements".
     pub(in crate::app) added_statements: usize,
+    /// When the server was last asked whether it still runs this, and
+    /// whether its answer is on its way (`App::watch_session_tick`).
+    pub(in crate::app) session_asked: Option<Instant>,
+    pub(in crate::app) session_asking: bool,
+    /// What runs is a statement on the session, which the server can say
+    /// it's running (not a plan checked first on another connection).
+    pub(in crate::app) on_session: bool,
 }
 
 /// What a run's result is for.

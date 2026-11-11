@@ -50,6 +50,7 @@ mod session;
 #[cfg(test)]
 mod tests;
 mod tick;
+pub(in crate::app) use tick::SessionSeen;
 pub mod windows;
 
 pub use query_screen::results::export_form;

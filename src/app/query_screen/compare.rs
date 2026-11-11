@@ -231,6 +231,8 @@ impl App {
         let Some((there, other)) = self.compare_target(id) else { return };
         self.tab.run.set_stream(None);
         self.tab.run.executing = true;
+        // Two servers' sessions at once: not one to watch.
+        self.tab.run.extra.on_session = false;
         self.tab.run.since = Some(Instant::now());
         self.tab.run.holds_tabs = true;
         self.set_result_status(t!("compare.running_both", name = other.name), false);

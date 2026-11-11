@@ -187,6 +187,8 @@ impl App {
             }
             DbEventKind::Catalog(result) => self.apply_catalog(result),
             DbEventKind::Pinged(result) => self.pinged(result),
+            DbEventKind::SessionSeen(seen) => self.session_seen(seen),
+            DbEventKind::SessionReplaced(why) => self.session_replaced(&why),
             DbEventKind::SandboxCopied(copied) => self.sandbox_copied(copied),
             DbEventKind::ActivityLoaded(result) => self.activity_loaded(result),
             DbEventKind::SessionStopped(result) => self.session_stopped(result),
@@ -599,6 +601,12 @@ pub(super) enum DbEventKind {
     /// A connection check: its latency and whether it reconnected, or why
     /// not and whether it got no answer at all (`Ping::NoAnswer`).
     Pinged(Result<(Duration, bool), (String, Ping)>),
+    /// What the server said of the running query's session, for its tab
+    /// (`App::watch_session_tick`).
+    SessionSeen(SessionSeen),
+    /// The check before a run found the session doesn't answer: the run
+    /// goes on, on a new one (`run.rs`).
+    SessionReplaced(String),
     /// A connection test's report.
     Diagnosed {
         title: String,
