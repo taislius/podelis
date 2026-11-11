@@ -20,6 +20,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Facts are about one database or every database in the project: added from a connection, about its database; `p` in the window moves one between the two. A model is shown only those about the database it's asked about, and those about every one.
 - Questions in the editor: a comment that starts with `?` (`-- ? revenue per city`, `--?`, or a block `/*? … */` over several lines) is a question. `Ctrl+K q` on it writes the model's SQL right under it, after `-- ↳ <model>`; asked again, that answer is replaced. Elsewhere `Ctrl+K q` starts one. Questions are drawn in the accent colour. On MongoDB they're `// ?` comments.
 - The sandbox and rollback-only refuse a statement that writes a MySQL table a rollback can't undo (MyISAM, MEMORY), naming it: the write would stay. A bare name counts in any database (`USE` may have moved the session); `shop.audit` is that database's alone.
+- The export form's file name can be edited: it starts as the whole path of a new name (with its time), follows the format until you change it, takes a paste, and goes where exports go if it has no folder (`~/` is your home). The form widens to show it whole; a file that's there already isn't written over.
+- `d` on a table lists its foreign keys on their own (column → table.column), as well as by the arrows beside the columns; after a stored `CREATE TABLE` too, in comments.
+- While a query has run 20 s, PostgreSQL and MySQL are asked now and then whether its session still runs it. A session that's gone, or that has waited for a statement all along, means the link dropped without a word; so does a server that doesn't answer at all. It's said (with the top bar's "connection lost"), and Esc then stops waiting at once, the next run reconnecting. It isn't stopped by itself: behind a pooler in transaction mode the session the server lists may not be the one running it.
 
 ### Changed
 
@@ -27,6 +30,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Messages that also show on MongoDB say query, not SQL (tab search, the agents' log, the library's search, diagnostics, editing and following rows, the normal mode's help).
 - The memory window's messages are in Lithuanian too.
 - The review and the sandbox count only your statements, not the `BEGIN` and savepoints Podėlis adds.
+- The footer's keys are at its right edge, with `^K commands`, rather than in the middle.
+- A result's statement row says `l: 8–14` for its lines (it was `lines 8–14`), and a statement too long for the row fades into the background before its `…`.
+- In the navigator's filter, Tab stops the typing and keeps the filter and the table picked, so `d`, `s`, `a` and `f` act on it at once; clearing the filter keeps the table picked rather than going back to the top.
 
 ### Fixed
 
@@ -34,6 +40,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - SQLite: a column computed in a query (`sum(total)`) got no type, so exports and charts took it as text; its values now say what it is.
 - Reading a file over HTTPS in DuckDB (`read_csv('https://…')`) that fails on the site's certificate says so, not that the database's own TLS settings are wrong.
 - Clearing the status bar no longer leaves an empty line in MESSAGES.
+- After a link dropped silently (a VPN, a laptop's sleep, a firewall's idle timeout), a run could wait for good, with nothing said, until Podėlis was restarted. It happened when an earlier result still had rows to stream: stopping them held the session past the check before the run, which then let the run go on. The check now waits for the session (up to 30 s); a session that doesn't answer is replaced, which is said while it reconnects (Esc stops waiting), and a read runs on the new one, saying it reconnected (a write isn't run, and says so). A session held past the 30 s by anything but a result's rows (maybe in an open transaction) isn't given up on. Connections waiting in the pool are closed after a minute idle, so `d` after a break doesn't wait on a dead one.
+
 
 ## [0.8.1] — 2026-11-09
 
