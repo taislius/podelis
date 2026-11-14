@@ -489,9 +489,9 @@ fn answer(app: &mut App, letter: char) {
 #[cfg(feature = "sqlite")]
 fn estimated(app: &mut App, rows: Option<f64>) {
     let run = app.tab.run.id;
-    app.exports.estimating =
-        Some(crate::app::query_screen::results::export::EstimateRequest { id: 7, run, name: None });
-    app.export_estimated(7, Format::Csv, rows, 100.0);
+    let id = crate::app::query_screen::results::export::ExportRequestId::from_test_id(7);
+    app.exports.estimating = Some(crate::app::query_screen::results::export::EstimateRequest { id, run, name: None });
+    app.export_estimated(id, Format::Csv, rows, 100.0);
 }
 
 const COUNT_25000: &str =
@@ -544,19 +544,23 @@ async fn an_estimates_answer_only_counts_for_what_it_was_asked_about() {
         assert!(export_files(dir.path()).is_empty());
     };
     // An older request's answer, or one stopped with Esc, starts nothing.
-    app.exports.estimating = Some(EstimateRequest { id: 8, run: this_run, name: None });
-    app.export_estimated(7, Format::Csv, Some(1.0), 1.0);
+    let request_7 = crate::app::query_screen::results::export::ExportRequestId::from_test_id(7);
+    let request_8 = crate::app::query_screen::results::export::ExportRequestId::from_test_id(8);
+    let request_9 = crate::app::query_screen::results::export::ExportRequestId::from_test_id(9);
+    app.exports.estimating = Some(EstimateRequest { id: request_8, run: this_run, name: None });
+    app.export_estimated(request_7, Format::Csv, Some(1.0), 1.0);
     nothing_happened(&app);
     assert!(app.exports.estimating.is_some(), "still waiting for its own");
     app.handle_key(key(KeyCode::Esc));
     assert!(app.exports.estimating.is_none());
     assert!(said(&app).contains("not started") && !said(&app).contains("file"), "{}", said(&app));
-    app.export_estimated(8, Format::Csv, Some(1.0), 1.0);
+    app.export_estimated(request_8, Format::Csv, Some(1.0), 1.0);
     nothing_happened(&app);
 
     // Another run's rows by now (another query, or another tab): not those.
-    app.exports.estimating = Some(EstimateRequest { id: 9, run: this_run + 1, name: None });
-    app.export_estimated(9, Format::Csv, Some(1.0), 1.0);
+    let another_run = app.next_run_id();
+    app.exports.estimating = Some(EstimateRequest { id: request_9, run: another_run, name: None });
+    app.export_estimated(request_9, Format::Csv, Some(1.0), 1.0);
     nothing_happened(&app);
     assert!(app.notes.status_is_error && app.notes.status.contains("aren't the ones shown"), "{}", app.notes.status);
 
@@ -940,7 +944,7 @@ async fn a_size_question_is_about_the_rows_it_was_asked_of() {
     let details = app.popups.confirm.as_ref().expect("the question").details.join(" / ");
     assert!(details.contains("net_write_timeout"), "it can cost the query too: {details}");
     // Watch mode ran it again meanwhile.
-    app.tab.run.id += 1;
+    app.tab.run.id = app.next_run_id();
     answer(&mut app, 'y');
     assert!(app.exports.task.is_none() && export_files(dir.path()).is_empty());
     assert!(app.notes.status_is_error || said_error(&app), "{}", said(&app));
@@ -1154,7 +1158,7 @@ async fn export_all_rows_of_a_streamed_result() {
     // The export cleans up, then says it's done (and that's ignored).
     loop {
         let event = app.poll_db_event().await.unwrap();
-        let done = matches!(event.kind, DbEventKind::Background(Background::ExportDone(..)));
+        let done = matches!(event.as_connection_kind(), Some(DbEventKind::Background(Background::ExportDone(..))));
         app.handle_db_event(event);
         if done {
             break;
@@ -1608,12 +1612,10 @@ fn a_tabular_plan_takes_the_results_keys() {
     assert!(app.tab.plan_swapped);
     // A query's outcome arriving meanwhile goes to the result, not the plan,
     // which stays in view (the RESULT tab was shown as the query started).
-    let generation = app.generation;
-    app.handle_db_event(DbEvent {
-        generation,
-        run: None,
-        kind: DbEventKind::QueryDone(outcome(&["n"], &[&[Some("9")]]), None, None),
-    });
+    app.handle_db_event(DbEvent::run(
+        app.tab.run.id,
+        RunEvent::QueryDone(outcome(&["n"], &[&[Some("9")]]), None, None),
+    ));
     assert_eq!(app.tab.result_tab, ResultTab::Plan);
     assert!(app.tab.plan_swapped);
     assert_eq!(app.tab.grid.results.as_ref().unwrap().columns.len(), 5);

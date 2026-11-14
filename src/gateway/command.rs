@@ -78,6 +78,53 @@ pub async fn run(command: GatewayCommand, config_dir: &Path, project: Option<&st
     }
 }
 
+/// `podelis mcp`: bridge the agent's stdio to the gateway's MCP session.
+/// The gateway hosts the agent service; this command owns the client side.
+pub async fn mcp(config_dir: &Path, project: Option<&str>, name: Option<String>) -> i32 {
+    let mut client = match connect_or_start(config_dir, "podelis mcp", || spawn_gateway(config_dir)).await {
+        Ok(client) => client,
+        Err(e) => {
+            let _ = eprintln_safe(&format!("podelis mcp: {e}"));
+            return 1;
+        }
+    };
+    let dir = std::env::current_dir().ok().map(|d| d.display().to_string());
+    let open = json!({ "project": project, "name": name, "dir": dir });
+    match client.call("mcp.open", open).await {
+        Ok(_) => {}
+        Err(CallError::Rpc(e)) => {
+            let _ = eprintln_safe(&format!("podelis mcp: {}", e.message));
+            return 2;
+        }
+        Err(e) => {
+            let _ = eprintln_safe(&format!("podelis mcp: {e}"));
+            return 1;
+        }
+    }
+    let (mut from_gateway, mut to_gateway) = client.into_stream();
+    let to = async {
+        let _ = tokio::io::copy(&mut tokio::io::stdin(), &mut to_gateway).await;
+        let _ = tokio::io::AsyncWriteExt::shutdown(&mut to_gateway).await;
+    };
+    let from = async {
+        let _ = tokio::io::copy(&mut from_gateway, &mut tokio::io::stdout()).await;
+    };
+    tokio::pin!(to, from);
+    tokio::select! {
+        () = &mut from => {
+            let _ = eprintln_safe("podelis mcp: the gateway closed the session");
+            return 1;
+        }
+        () = &mut to => from.await,
+    }
+    0
+}
+
+/// A message on stderr (stdout carries the protocol).
+fn eprintln_safe(message: &str) -> std::io::Result<()> {
+    writeln!(std::io::stderr(), "{message}")
+}
+
 /// `ontology <connection> [turtle | export [<file>] | import <file>]`: the
 /// connection's ontology (its database's catalog and what the project's
 /// memory says of it) as text, as SKOS Turtle, as YAML to edit, or a YAML

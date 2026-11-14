@@ -98,8 +98,7 @@ pub(super) fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
     let inner = usize::from(width.saturating_sub(2));
     let col = inner / 2;
     let dimmed = |a: Action| {
-        (app.focus != Focus::Editor && a.is_editor_action())
-            || (app.focus == Focus::Schema && a == Action::TxMode)
+        (app.focus == Focus::Schema && a == Action::TxMode)
             || matches!(app.can(crate::app::commands::Command::Action(a)), crate::app::commands::Can::No { .. })
     };
     let group_open = app.popups.palette.as_ref().and_then(crate::app::query_screen::palette::Palette::group);

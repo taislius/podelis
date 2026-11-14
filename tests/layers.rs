@@ -27,7 +27,9 @@ const RULES: &[(&str, &[&str])] = &[
     ("config", &["system", "transfer", "agents", "gateway", "app", "ui", "cli"]),
     ("system", &["transfer", "agents", "gateway", "app", "ui", "cli"]),
     ("transfer", &["agents", "gateway", "app", "ui", "cli"]),
-    ("agents", &["app", "ui", "cli"]),
+    // The gateway hosts agent MCP sessions; the stdio bridge belongs to
+    // gateway::command, so agent code has no reverse dependency.
+    ("agents", &["gateway", "app", "ui", "cli"]),
     ("gateway", &["app", "ui", "cli"]),
     ("app", &["ui", "cli"]),
     ("ui", &["cli"]),

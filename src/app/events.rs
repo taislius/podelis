@@ -6,36 +6,34 @@ use crate::config::keys::Action;
 
 impl App {
     pub fn handle_db_event(&mut self, event: DbEvent) {
-        let kind = match event.kind {
-            DbEventKind::Background(background) => return self.apply_background(background),
-            kind => kind,
-        };
-        match event.run {
-            // A run's outcome: for the tab it ran in (by its run id, unique
-            // across the tabs), even if another is shown; none for a run
-            // stopped since.
-            Some(run) => {
-                let Some(tab) = (0..self.tabs.len()).find(|&i| self.tab_run(i).is_some_and(|r| r.id == run)) else {
+        match event.payload {
+            // Background work has its own identity and is never dropped for
+            // a connection change.
+            DbEventPayload::Connection { kind: DbEventKind::Background(background), .. } => {
+                self.apply_background(background);
+            }
+            // A run-owned result: for its tab by run id, even if another is
+            // shown; none for a run stopped or superseded since.
+            DbEventPayload::Run { id, kind } => {
+                let Some(tab) = (0..self.tabs.len()).find(|&i| self.tab_run(i).is_some_and(|r| r.id == id)) else {
                     return;
                 };
-                return self.apply_in_tab(tab, kind);
+                self.apply_in_tab(tab, |app| app.apply_run_shown(kind));
             }
-            None if event.generation != self.generation => {
+            DbEventPayload::Connection { generation, kind } if generation != self.generation => {
                 // A connection that finished after being cancelled is still open.
                 if let DbEventKind::Connected(db) = kind {
                     tokio::spawn(async move { db.close().await });
                 }
-                return;
             }
-            None => {}
+            DbEventPayload::Connection { kind, .. } => {
+                if let DbEventKind::PlanAside { tab, .. } = &kind {
+                    let Some(index) = self.tabs.iter().position(|meta| meta.id == *tab) else { return };
+                    return self.apply_in_tab(index, |app| app.apply_shown(kind));
+                }
+                self.apply_shown(kind);
+            }
         }
-        // A plan made beside a running query: for the tab it was asked in.
-        if let DbEventKind::PlanAside { tab, .. } = &kind
-            && *tab < self.tabs.len()
-        {
-            return self.apply_in_tab(*tab, kind);
-        }
-        self.apply_shown(kind);
     }
 
     /// See [`Background`]: each kind finds what it's for on its own.
@@ -72,15 +70,46 @@ impl App {
         self.sync_plan_grid();
     }
 
+    fn apply_run_shown(&mut self, kind: RunEvent) {
+        self.unswap_plan_grid();
+        self.apply_run_event(kind);
+        self.sync_plan_grid();
+    }
+
+    fn apply_run_event(&mut self, event: RunEvent) {
+        match event {
+            RunEvent::QueryDone(outcome, txn, stream) => {
+                self.on_query_done(outcome, txn, stream);
+                self.run_queued_plan();
+            }
+            RunEvent::QueryFailed { message, position, txn, missing_feature } => {
+                self.tab.run.missing_feature = missing_feature;
+                self.on_query_failed(&message, position, txn);
+                self.drop_queued_plan();
+            }
+            RunEvent::MoreRows { page, shown } => self.append_rows(page, shown),
+            RunEvent::MoreFailed(err) => {
+                self.tab.run.fetching_more = false;
+                self.tab.run.set_stream(None);
+                let status = t!("run.load_more_failed", err = one_line(&err));
+                self.log(status.clone(), true);
+                self.set_status(status, true);
+            }
+            RunEvent::CancelFailed { message, unreachable } => self.cancel_failed_with(&message, unreachable),
+            RunEvent::SessionSeen(seen) => self.session_seen(seen),
+            RunEvent::SessionReplaced(why) => self.session_replaced(&why),
+        }
+    }
+
     /// Applies `kind` to tab `i`; when that's not the one shown, what it says
     /// goes to the status bar, with the tab's name.
-    fn apply_in_tab(&mut self, i: usize, kind: DbEventKind) {
+    fn apply_in_tab(&mut self, i: usize, apply: impl FnOnce(&mut Self)) {
         if i == self.active_tab {
-            return self.apply_shown(kind);
+            return apply(self);
         }
         let before = self.notes.status.clone();
         self.hidden_tab = Some(i);
-        self.in_tab(i, |app| app.apply_shown(kind));
+        self.in_tab(i, apply);
         self.hidden_tab = None;
         if self.notes.status != before && !self.notes.status.is_empty() {
             self.notes.status = format!("{}: {}", self.tabs[i].name, self.notes.status);
@@ -157,28 +186,9 @@ impl App {
                     form.error = Some(form.connect_failure(&crate::db::with_hint(&err)));
                 }
             }
-            DbEventKind::QueryDone(outcome, txn, stream) => {
-                self.on_query_done(outcome, txn, stream);
-                self.run_queued_plan();
-            }
-            DbEventKind::QueryFailed { message, position, txn, missing_feature } => {
-                self.tab.run.missing_feature = missing_feature;
-                self.on_query_failed(&message, position, txn);
-                self.drop_queued_plan();
-            }
             DbEventKind::PlanAside { stmt, line, plan, .. } => self.plan_aside(stmt, line, plan),
-            DbEventKind::MoreRows { page, shown } => self.append_rows(page, shown),
             // `handle_db_event` gives these to `apply_background` first.
             DbEventKind::Background(_) => {}
-            DbEventKind::MoreFailed(err) => {
-                self.tab.run.fetching_more = false;
-                // (set_stream below forgets a waiting `M`.)
-                self.tab.run.set_stream(None);
-                let status = t!("run.load_more_failed", err = one_line(&err));
-                self.log(status.clone(), true);
-                self.set_status(status, true);
-            }
-            DbEventKind::CancelFailed { message, unreachable } => self.cancel_failed_with(&message, unreachable),
             DbEventKind::SyntaxChecked { text, hint } => {
                 // Ignore results for text that has since changed.
                 if text == self.tab.editor.text() && self.editing.lint_due.is_none() {
@@ -187,8 +197,6 @@ impl App {
             }
             DbEventKind::Catalog(result) => self.apply_catalog(result),
             DbEventKind::Pinged(result) => self.pinged(result),
-            DbEventKind::SessionSeen(seen) => self.session_seen(seen),
-            DbEventKind::SessionReplaced(why) => self.session_replaced(&why),
             DbEventKind::SandboxCopied(copied) => self.sandbox_copied(copied),
             DbEventKind::ActivityLoaded(result) => self.activity_loaded(result),
             DbEventKind::SessionStopped(result) => self.session_stopped(result),
@@ -407,7 +415,7 @@ impl App {
         let mut failed_at = None;
         let mut place = None;
         if let Some(marker) = position.and_then(|p| self.locate_error(&p)) {
-            place = Some((self.active_tab, marker.0, marker.1));
+            place = Some((self.tabs[self.active_tab].id, marker.0, marker.1));
             let (row, col) = marker.0;
             let _ = write!(status, " ({})", t!("run.at_line_col", line = row + 1, col = col + 1));
             failed_at = Some(self.tab.editor.offset_of(marker.0));
@@ -545,11 +553,42 @@ pub enum Ping {
 }
 
 pub struct DbEvent {
-    pub(in crate::app) generation: u64,
-    /// A run's outcome, by its id: it outlives connection switches (another
-    /// tab shown meanwhile), not a disconnect.
-    pub(in crate::app) run: Option<u64>,
-    pub(in crate::app) kind: DbEventKind,
+    payload: DbEventPayload,
+}
+
+impl DbEvent {
+    pub(in crate::app) fn connection(generation: ConnectionGeneration, kind: DbEventKind) -> Self {
+        Self { payload: DbEventPayload::Connection { generation, kind } }
+    }
+
+    pub(in crate::app) fn run(id: RunId, kind: RunEvent) -> Self {
+        Self { payload: DbEventPayload::Run { id, kind } }
+    }
+
+    #[cfg(test)]
+    pub(in crate::app) fn as_connection_kind(&self) -> Option<&DbEventKind> {
+        match &self.payload {
+            DbEventPayload::Connection { kind, .. } => Some(kind),
+            DbEventPayload::Run { .. } => None,
+        }
+    }
+}
+
+enum DbEventPayload {
+    /// A result about the active connection. Old generations are discarded.
+    Connection { generation: ConnectionGeneration, kind: DbEventKind },
+    /// A result owned by one query run, routed to the tab that started it.
+    Run { id: RunId, kind: RunEvent },
+}
+
+pub(super) enum RunEvent {
+    QueryDone(QueryOutcome, Option<TxnState>, Option<RowStream>),
+    MoreRows { page: Page, shown: bool },
+    MoreFailed(String),
+    QueryFailed { message: String, position: Option<ErrorPos>, txn: Option<TxnState>, missing_feature: bool },
+    CancelFailed { message: String, unreachable: bool },
+    SessionSeen(SessionSeen),
+    SessionReplaced(String),
 }
 
 pub(super) enum DbEventKind {
@@ -562,28 +601,6 @@ pub(super) enum DbEventKind {
     },
     Connected(Database),
     ConnectFailed(String),
-    /// A finished run, with a stream of further rows if it was streamed.
-    QueryDone(QueryOutcome, Option<TxnState>, Option<RowStream>),
-    /// Another page of a streamed result; `shown` when `M` asked for it
-    /// (the first of its rows gets selected, so they're seen arriving).
-    MoreRows {
-        page: Page,
-        shown: bool,
-    },
-    MoreFailed(String),
-    /// Why, where, the transaction after it, and whether it's a syntax
-    /// error or unknown function (maybe a feature the server lacks).
-    QueryFailed {
-        message: String,
-        position: Option<ErrorPos>,
-        txn: Option<TxnState>,
-        missing_feature: bool,
-    },
-    /// Why not, and whether the server couldn't be reached at all.
-    CancelFailed {
-        message: String,
-        unreachable: bool,
-    },
     Catalog(Result<Vec<(TableInfo, Vec<ColumnInfo>)>, String>),
     Routines(Vec<RoutineInfo>),
     /// The connection's tables a rollback doesn't undo.
@@ -601,12 +618,6 @@ pub(super) enum DbEventKind {
     /// A connection check: its latency and whether it reconnected, or why
     /// not and whether it got no answer at all (`Ping::NoAnswer`).
     Pinged(Result<(Duration, bool), (String, Ping)>),
-    /// What the server said of the running query's session, for its tab
-    /// (`App::watch_session_tick`).
-    SessionSeen(SessionSeen),
-    /// The check before a run found the session doesn't answer: the run
-    /// goes on, on a new one (`run.rs`).
-    SessionReplaced(String),
     /// A connection test's report.
     Diagnosed {
         title: String,
@@ -647,7 +658,7 @@ pub(super) enum DbEventKind {
     /// A plan made on a connection of its own while a query ran: the
     /// statement, its line, and the plan (`None`: it couldn't be made there).
     PlanAside {
-        tab: usize,
+        tab: TabId,
         stmt: String,
         line: usize,
         plan: Option<QueryOutcome>,
@@ -672,7 +683,7 @@ pub(super) enum DbEventKind {
 
 /// Events that go on while other tabs and connections are used: reopening
 /// the session's connections (matched by name), container searches (by
-/// their own number), an export, a question to the gateway, the sandbox's
+/// their own request id), an export, a question to the gateway, the sandbox's
 /// locks. None is dropped for a newer generation.
 pub(super) enum Background {
     /// Rows written so far by "export all rows", its size on disk, and
@@ -680,7 +691,12 @@ pub(super) enum Background {
     ExportProgress { rows: u64, size: u64, free: Option<u64> },
     /// About how big "export all rows" would be, if that can be told: the
     /// request it answers, its rows by the plan, and bytes a row.
-    ExportEstimated { request: u64, format: Format, rows: Option<f64>, row_bytes: f64 },
+    ExportEstimated {
+        request: query_screen::results::export::ExportRequestId,
+        format: Format,
+        rows: Option<f64>,
+        row_bytes: f64,
+    },
     /// "Export all rows" reached a size to ask about, and waits.
     ExportAsk { rows: u64, size: u64, free: Option<u64> },
     /// "Export all rows" finished: the file, and how many rows (or why not).
@@ -691,16 +707,16 @@ pub(super) enum Background {
     /// A connection reopened at startup.
     Restored { project_id: String, form: Box<ConnectForm>, result: Result<Database, String> },
     /// The running database containers, or why they couldn't be listed.
-    ContainersFound(u64, Result<Vec<crate::system::containers::Container>, String>),
+    ContainersFound(ContainerRequestId, Result<Vec<crate::system::containers::Container>, String>),
     /// Characters of an answer being written, for ask `n`.
-    AskProgress(u64, usize),
+    AskProgress(query_screen::ask::AskId, usize),
     /// Ask `n`'s key is slow to come: the keychain (or a password
     /// manager) is asking the user.
-    AskWaitingKey(u64),
+    AskWaitingKey(query_screen::ask::AskId),
     /// The locks a sandbox's session holds (or why that can't be seen).
     SandboxLocks(String),
     /// Ask `n`'s answer: the SQL and what the model said, or why not.
-    AskDone(u64, Box<Result<serde_json::Value, query_screen::ask::AskFailure>>),
+    AskDone(query_screen::ask::AskId, Box<Result<serde_json::Value, query_screen::ask::AskFailure>>),
     /// A gateway call's answer (the memory window's).
     GatewayDone(windows::memory::GatewayPurpose, Box<Result<serde_json::Value, query_screen::ask::AskFailure>>),
 }
@@ -708,5 +724,32 @@ pub(super) enum Background {
 impl From<Background> for DbEventKind {
     fn from(event: Background) -> Self {
         DbEventKind::Background(event)
+    }
+}
+
+#[cfg(test)]
+mod event_identity_tests {
+    use super::{DbEvent, DbEventKind, RunEvent};
+    use crate::app::{ConnectionGeneration, RunId};
+
+    #[test]
+    fn connection_and_run_events_keep_distinct_payloads() {
+        let connection = DbEvent::connection(ConnectionGeneration::default(), DbEventKind::Routines(vec![]));
+        let run = DbEvent::run(
+            RunId::default(),
+            RunEvent::QueryFailed { message: "failed".into(), position: None, txn: None, missing_feature: false },
+        );
+
+        assert!(connection.as_connection_kind().is_some());
+        assert!(run.as_connection_kind().is_none());
+    }
+
+    #[test]
+    fn run_ids_advance_without_using_a_raw_counter() {
+        let mut id = RunId::default();
+        let first = id.next();
+        let second = id.next();
+
+        assert_ne!(first, second);
     }
 }

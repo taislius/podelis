@@ -18,6 +18,17 @@ use crate::app::*;
 use crate::gateway::client::{CallError, connect_or_start, spawn_gateway};
 use crate::gateway::protocol::code;
 
+/// Identity of one replaceable question sent to the gateway.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::app) struct AskId(u64);
+
+impl AskId {
+    fn next(&mut self) -> Self {
+        self.0 += 1;
+        *self
+    }
+}
+
 /// What `Ctrl+K q` keeps besides its prompt (a popup).
 #[derive(Default)]
 pub struct AskState {
@@ -29,7 +40,7 @@ pub struct AskState {
     /// (`load_catalog`: after DDL, `r` in the navigator).
     pub(super) gateway_current: bool,
     /// Numbers the asks, so a stopped one's answer is dropped.
-    pub(super) count: u64,
+    pub(super) count: AskId,
     /// The sharing question, waiting while another confirmation is open.
     pub(super) pending_share: Option<Confirm>,
 }
@@ -40,7 +51,7 @@ pub struct AskState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Question {
     pub text: String,
-    pub tab: usize,
+    pub tab: TabId,
     pub connection: String,
     /// `text` is SQL to explain in plain words, not a question.
     pub explain: bool,
@@ -118,7 +129,7 @@ pub(crate) fn question_rows(text: &str, engine: crate::db::Engine, rows: std::op
 /// A question on its way to a model.
 pub struct Asking {
     /// Which ask this is: events of an earlier one are ignored.
-    pub id: u64,
+    id: AskId,
     pub question: Question,
     /// How much of the answer has come.
     pub chars: usize,
@@ -146,7 +157,8 @@ impl App {
             && let Some((text, at)) = question_at(&self.tab.editor.text(), self.engine(), self.tab.editor.cursor_row)
         {
             let connection = self.connection.form.name.clone();
-            let question = Question { text, tab: self.active_tab, connection, explain: false, at: Some(at) };
+            let question =
+                Question { text, tab: self.tabs[self.active_tab].id, connection, explain: false, at: Some(at) };
             return self.start_ask(question, false);
         }
         self.start_question();
@@ -233,7 +245,7 @@ impl App {
         };
         let question = Question {
             text: sql,
-            tab: self.active_tab,
+            tab: self.tabs[self.active_tab].id,
             connection: self.connection.form.name.clone(),
             explain: true,
             at: None,
@@ -262,19 +274,18 @@ impl App {
     /// Sends `question` to the gateway (started if it isn't running);
     /// `share_once`: the user allowed the schema to go to the model.
     fn start_ask(&mut self, question: Question, share_once: bool) {
-        if question.tab >= self.tabs.len() && !question.explain {
+        if !question.explain && !self.tabs.iter().any(|tab| tab.id == question.tab) {
             return self.set_status(t!("ask.tab_closed").into(), true);
         }
         // By id: two projects' names may differ only in case.
         let project = self.current_project.as_ref().map(|id| format!("id:{id}")).unwrap_or_default();
         let connection = question.connection.clone();
         let config_dir = self.data_dir.clone().unwrap_or_else(crate::config::store::config_dir);
-        self.ask.count += 1;
-        let id = self.ask.count;
+        let id = self.ask.count.next();
         let tx = self.db_tx.clone();
         let generation = self.generation;
         let send = move |kind| {
-            let _ = tx.send(DbEvent { generation, run: None, kind });
+            let _ = tx.send(DbEvent::connection(generation, kind));
         };
         // Where the app runs: a relative SQLite path is from here.
         let dir = std::env::current_dir().ok().map(|d| d.display().to_string());
@@ -329,25 +340,14 @@ impl App {
         self.notes.status_in_results = false;
     }
 
-    /// Tab `closing` is about to close: a question asked from it stops,
-    /// and one asked from a tab after it follows that tab's new place.
+    /// Tab `closing` is about to close: a question asked from it stops.
     pub(super) fn tab_closing(&mut self, closing: usize) {
+        let closing = self.tabs[closing].id;
         // (An explanation goes to a pop-over, not the tab: it goes on.)
         if self.ask.asking.as_ref().is_some_and(|a| a.question.tab == closing && !a.question.explain)
             || matches!(&self.ask.pending_share, Some(Confirm { action: ConfirmAction::ShareSchema { question, .. }, .. }) if question.tab == closing)
         {
-            return self.stop_asking();
-        }
-        let shift = |tab: &mut usize| {
-            if *tab > closing {
-                *tab -= 1;
-            }
-        };
-        if let Some(asking) = &mut self.ask.asking {
-            shift(&mut asking.question.tab);
-        }
-        if let Some(Confirm { action: ConfirmAction::ShareSchema { question, .. }, .. }) = &mut self.ask.pending_share {
-            shift(&mut question.tab);
+            self.stop_asking();
         }
     }
 
@@ -366,13 +366,13 @@ impl App {
     }
 
     /// The key for the model is slow: most likely a dialog to answer.
-    pub(in crate::app) fn ask_waiting_key(&mut self, id: u64) {
+    pub(in crate::app) fn ask_waiting_key(&mut self, id: AskId) {
         if self.ask.asking.as_ref().is_some_and(|a| a.id == id) {
             self.say_asking(t!("ask.waiting_key").to_string());
         }
     }
 
-    pub(in crate::app) fn ask_progress(&mut self, id: u64, chars: usize) {
+    pub(in crate::app) fn ask_progress(&mut self, id: AskId, chars: usize) {
         let Some(asking) = self.ask.asking.as_mut().filter(|a| a.id == id) else { return };
         asking.chars += chars;
         let secs = asking.started.elapsed().as_secs();
@@ -380,7 +380,7 @@ impl App {
         self.say_asking(status);
     }
 
-    pub(in crate::app) fn ask_done(&mut self, id: u64, result: Result<serde_json::Value, AskFailure>) {
+    pub(in crate::app) fn ask_done(&mut self, id: AskId, result: Result<serde_json::Value, AskFailure>) {
         if self.ask.asking.as_ref().is_none_or(|a| a.id != id) {
             return;
         }
@@ -392,9 +392,9 @@ impl App {
                 // tab is still the one asked from.
                 if asking.question.explain {
                     self.show_explanation(&answer);
-                } else if asking.question.tab < self.tabs.len() {
+                } else if let Some(tab) = self.tabs.iter().position(|meta| meta.id == asking.question.tab) {
                     let question = asking.question;
-                    self.in_tab(question.tab, |app| app.insert_answer(&question, &answer));
+                    self.in_tab(tab, |app| app.insert_answer(&question, &answer));
                 }
             }
             Err(e) if e.code == Some(code::NOT_SHARED) => {
@@ -635,6 +635,13 @@ fn wrap_comment(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use crate::db::Engine;
+
+    #[test]
+    fn ask_ids_advance_independently() {
+        let mut id = super::AskId::default();
+        assert_eq!(id.next(), super::AskId(1));
+        assert_eq!(id.next(), super::AskId(2));
+    }
 
     fn at(text: &str, row: usize) -> Option<(String, usize)> {
         super::question_at(text, Engine::Postgres, row)

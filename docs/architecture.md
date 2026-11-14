@@ -10,6 +10,9 @@ agents). The root crate re-exports the core's modules (`use podelis_core::{db,
 lang, sql}` in `main.rs`), so its code says `crate::db::…` as before; the
 AI crate it names as `podelis_ai::…`.
 
+For proposed incremental improvements to these boundaries, see
+[architecture-roadmap.md](architecture-roadmap.md).
+
 ```
 crates/podelis-core/
   build.rs               finds the engines (see "Databases")
@@ -76,8 +79,11 @@ test`. Inside the core, `sql` and `db` use each other (`Engine` and the
 lexer rules one way, statement analysis the other); being one crate,
 that's allowed. The core's items the app uses are `pub`, so rustc can't
 tell when the app stops using one: dead code there goes unnoticed (the
-price of a library crate). `agents` and `gateway` share a level: the
-gateway serves agents' MCP sessions, and `podelis mcp` starts the gateway.
+price of a library crate). `agents` and `gateway` share a level, with a
+one-way integration: the gateway serves agent MCP sessions through
+`agents::mcp::serve_on`, and `gateway::command` owns the `podelis mcp` stdio
+bridge that starts and connects to it. Agent production code does not depend
+on gateway code.
 
 Whoever connects (the app, `-e`, the gateway, agents) turns a saved
 profile into `ConnectParams` through `config::draft::ConnectionDraft`;
@@ -94,11 +100,11 @@ generation so results from a superseded connection are ignored.
 `App` holds the app's state, much of it in parts that change together:
 `tab` (the shown tab, `TabState`), `connection` (the shown tab's
 connection, `Connection`: parked per tab and swapped in, like tabs), `run`
-(the query running), `notes` (what's said), `panes` (the layout),
+(the active query and one-shot options for the next run), `notes` (what's
+said), `panes` (the layout),
 `manager` (the projects and connections screen), `agents` (the agents
 view), `popups` (each popup's state), `ask` (a question being answered),
-`next_run` (what applies to the run starting now only), `keepalive`
-(checking an idle connection), `editing` (the editor's find bar, vim, the
+`keepalive` (checking an idle connection), `editing` (the editor's find bar, vim, the
 checks' timer), `exports` (an export of every row running, its size being
 worked out), `sandbox_flow`, `help` (every key's window), `for_terminal`
 (what the main loop does outside the screen: the clipboard, a
@@ -118,7 +124,8 @@ out as the screen is:
 app/manager/        the projects and connections screens
 app/windows/        the windows over the query screen (memory, settings, agents, library…)
 app/query_screen/   its keys and mouse, popups (overlay.rs), layout (panes.rs),
-                    running (run.rs), parameters, watch mode, tabs (tabs.rs);
+                    running decisions (run.rs) and database tasks (run/effects.rs),
+                    parameters, watch mode, tabs (tabs.rs);
                     Ctrl+K (palette.rs) and the menus (menu.rs), writes
                     reviewed (review.rs) or in a sandbox (sandbox.rs), asking
                     the AI (ask.rs), comparing, pipes, the connection's info
@@ -156,7 +163,11 @@ everywhere:
   about. Help (`ui/help.rs`) and the palette list from these, so a command
   with a key can't be left out; a test checks. A new command is a variant, its
   `label` and `run_command` arm (the compiler asks), and a line in a table or
-  a menu if it has a key or a place there.
+  a menu if it has a key or a place there. `Action::scope` declares whether an
+  action is available in any pane or only while the editor is focused. Key
+  dispatch filters out-of-scope actions before dispatching, leaving the
+  focused pane's own key handler a chance to handle the same key; `App::can`
+  applies the same rule to menus, palette commands and direct dispatch.
 - **Menus** (`query_screen/menu.rs`): each is data, groups of `Command`s; `show_menu` asks
   each its label, key and whether it's dimmed. `ui/query_screen/popups/menus.rs` draws them, and
   notes which item each row holds (`hits.menu_rows`) for clicks, as separators
@@ -170,7 +181,12 @@ everywhere:
 - **Tabs** (`query_screen/tabs.rs`): the active tab's state is `App::tab`, a `TabState`
   with the editor, the last run and a `ResultGrid` (`results/grid.rs`: the result
   sets, filter, sort, marks, selection and scroll). Switching tabs swaps
-  the whole struct with a parked one, so nothing can leak between tabs.
+  the whole struct with a parked one, so nothing can leak between tabs. Each
+  `TabMeta` has a stable `TabId`; plan and foreign-key results resolve that ID
+  when they return, and message locations keep it, so closing an earlier tab
+  cannot retarget work or navigation to its replacement. Questions awaiting a
+  model answer keep the same ID, without shifting their tab reference when
+  earlier tabs close.
 - **Kept results** (`results/runs.rs`): each query run opens a `KeptRun` in the
   tab's `runs`. The one shown lives in the tab (`grid`, `last_sql`, its
   infos and parameters, its error), so every key works on it unchanged;
@@ -186,8 +202,14 @@ everywhere:
   Key handling, drawing (back to front), mouse blocking and "is the user
   typing" all read it, so a new popup is a field there and a line in
   `overlay_states`.
-- **Background events** (`events.rs`): a task's outcome is a `DbEvent`,
-  dropped when its generation is old, or found its tab by run id. What
+- **Background events** (`events.rs`): `DbEvent` is either connection-owned
+  (`ConnectionGeneration`) or run-owned (`RunId`); the event kind is part of
+  that variant, so a connection event cannot carry a query outcome. Old
+  connection generations are dropped; run outcomes find their tab even after
+  another tab is shown. Tab-specific connection work uses `TabId` and is
+  dropped if its tab closed. Container searches, ask progress and export size
+  estimates use `ContainerRequestId`, `AskId` and `ExportRequestId`, with
+  counters owned by the components that replace those requests. What
   isn't about the connection shown (reopening the session, container
   searches, exports, the gateway's answers, a sandbox's locks) is a
   `Background` event instead, applied wherever it is and never dropped:

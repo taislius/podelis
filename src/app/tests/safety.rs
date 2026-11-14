@@ -335,7 +335,7 @@ async fn a_connection_starts_in_its_transaction_mode() {
     app.connection.form.transaction = Some(TxMode::RollbackOnly);
     let db = Database::connect(app.connection.form.params().unwrap()).await.unwrap();
     let generation = app.generation;
-    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
+    app.handle_db_event(DbEvent::connection(generation, DbEventKind::Connected(db)));
     assert_eq!(app.connection.tx_mode, TxMode::RollbackOnly);
 }
 

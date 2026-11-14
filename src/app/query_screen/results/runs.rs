@@ -16,18 +16,6 @@ pub const KEEP: usize = 10;
 /// may hold together: past it, the oldest go first.
 pub const KEEP_ROWS: usize = 200_000;
 
-/// What's said about the run starting now, and only that one.
-#[derive(Default)]
-pub struct NextRun {
-    /// It's watch mode's (others stop it).
-    pub(in crate::app) watch: bool,
-    /// It's the shown result's again (`M`, after a row change): it
-    /// replaces that result instead of keeping a new one.
-    pub(in crate::app) same_result: bool,
-    /// Its row limit, instead of the setting's.
-    pub(in crate::app) row_limit: Option<usize>,
-}
-
 /// A run's result, and what ran.
 #[derive(Default)]
 pub struct KeptRun {
@@ -189,7 +177,7 @@ impl App {
     /// replaces that result instead of keeping a new one.
     pub(in crate::app) fn rerun_shown(&mut self, sql: String, offset: usize, infos: Vec<StatementInfo>) {
         let filled = self.tab.last_filled.clone();
-        self.next_run.same_result = true;
+        self.tab.run.next.same_result = true;
         self.run_now(sql, offset, infos, RunPurpose::Query, filled);
     }
 

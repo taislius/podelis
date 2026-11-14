@@ -241,7 +241,7 @@ impl App {
         let send = self.sender();
         // Answers only this request, about these rows: what else may have
         // happened by then is checked when it comes.
-        let request = self.next_run_id();
+        let request = self.exports.next_request_id();
         self.exports.estimating = Some(EstimateRequest { id: request, run: self.tab.run.id, name });
         self.set_status(t!("export.estimating").to_string(), false);
         tokio::spawn(async move {
@@ -275,7 +275,13 @@ impl App {
     }
 
     /// What the plan said: an export big enough asks first.
-    pub(in crate::app) fn export_estimated(&mut self, request: u64, format: Format, rows: Option<f64>, row_bytes: f64) {
+    pub(in crate::app) fn export_estimated(
+        &mut self,
+        request: ExportRequestId,
+        format: Format,
+        rows: Option<f64>,
+        row_bytes: f64,
+    ) {
         // One stopped, and asked again since: the answer of an old one.
         let Some(asked) = self.exports.estimating.take_if(|asked| asked.id == request) else { return };
         self.clear_export_note();
@@ -429,9 +435,25 @@ impl App {
 /// are to be exported, and the file the export form named for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EstimateRequest {
-    pub id: u64,
-    pub run: u64,
+    pub id: ExportRequestId,
+    pub run: RunId,
     pub name: Option<PathBuf>,
+}
+
+/// Identity of one export size estimate, independent of query run ids.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExportRequestId(u64);
+
+impl ExportRequestId {
+    fn next(&mut self) -> Self {
+        self.0 += 1;
+        *self
+    }
+
+    #[cfg(test)]
+    pub(in crate::app) const fn from_test_id(id: u64) -> Self {
+        Self(id)
+    }
 }
 
 /// An export being written, with all that's about it: what stops it, its
@@ -904,6 +926,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn estimate_request_ids_advance_independently() {
+        let mut exports = Exports::default();
+        let first = exports.next_request_id();
+        let second = exports.next_request_id();
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
     fn a_partial_file_says_so_and_keeps_its_type() {
         let partial = partial_path(std::path::Path::new("/x/podelis-export-1.csv"));
         assert_eq!(partial, PathBuf::from("/x/podelis-export-1.partial.csv"));
@@ -913,6 +944,8 @@ mod tests {
 /// Exports of every row.
 #[derive(Default)]
 pub(in crate::app) struct Exports {
+    /// Request ids for size estimates, independent from query run ids.
+    request_ids: ExportRequestId,
     /// "Export all rows" in progress: what stops it, and the file it writes.
     pub(in crate::app) task: Option<ExportRun>,
     /// Limits small enough to reach in a test (the settings are in GB).
@@ -927,4 +960,10 @@ pub(in crate::app) struct Exports {
     /// The file the export form named, while the form runs its export
     /// (what goes on after, the size's question, carries it itself).
     pub(in crate::app) name: Option<PathBuf>,
+}
+
+impl Exports {
+    fn next_request_id(&mut self) -> ExportRequestId {
+        self.request_ids.next()
+    }
 }

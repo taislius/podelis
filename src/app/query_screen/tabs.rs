@@ -160,6 +160,7 @@ fn swap_tab(app: &mut App, state: &mut TabState) {
 /// A tab's name and the saved query it belongs to, if any.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TabMeta {
+    pub(in crate::app) id: TabId,
     pub name: String,
     pub saved_id: Option<String>,
     /// The tab's connection (an id into the app's connections).
@@ -287,7 +288,8 @@ impl App {
         for (i, tab) in saved.tabs.into_iter().enumerate() {
             // Links to saved queries that were deleted elsewhere are dropped.
             let saved_id = tab.saved_id.filter(|id| self.library.get(id).is_some());
-            self.tabs.push(TabMeta { name: tab.name, saved_id, conn: None });
+            let id = self.next_tab_id();
+            self.tabs.push(TabMeta { id, name: tab.name, saved_id, conn: None });
             self.conns.tab_connections.push(tab.connection);
             let mut editor = TextEditor::with_text(&tab.sql);
             editor.restore_cursor(tab.cursor, tab.scroll);
@@ -430,6 +432,11 @@ impl App {
         }
     }
 
+    /// A fresh id, not reused if the tab is removed or the project changes.
+    pub(in crate::app) fn next_tab_id(&mut self) -> TabId {
+        self.tab_ids.next()
+    }
+
     /// "Query N" with the smallest N not in use (one of the first
     /// `tabs.len() + 1` numbers is always free).
     fn unused_tab_name(&self) -> String {
@@ -446,7 +453,8 @@ impl App {
         }
         let name = name.unwrap_or_else(|| self.unused_tab_name());
         // A new tab shares the current tab's connection.
-        self.tabs.push(TabMeta { name, saved_id, conn: self.conns.active });
+        let id = self.next_tab_id();
+        self.tabs.push(TabMeta { id, name, saved_id, conn: self.conns.active });
         self.parked.push(Some(TabState { editor: TextEditor::with_text(sql), ..TabState::default() }));
         self.switch_tab(self.tabs.len() - 1);
         self.save_draft();
@@ -459,7 +467,8 @@ impl App {
             return self.set_status(t!("tabs.wait_open").into(), true);
         }
         let name = self.unused_tab_name();
-        self.tabs.push(TabMeta { name, saved_id: None, conn: Some(conn) });
+        let id = self.next_tab_id();
+        self.tabs.push(TabMeta { id, name, saved_id: None, conn: Some(conn) });
         self.parked.push(Some(TabState { editor: TextEditor::with_text(sql), ..TabState::default() }));
         self.switch_tab(self.tabs.len() - 1);
         self.save_draft();
@@ -491,7 +500,8 @@ impl App {
         self.tab_closing(closing);
         if self.tabs.len() == 1 {
             // Keep one (empty) tab.
-            self.tabs[0] = TabMeta { name: default_tab_name(1), saved_id: None, conn: self.tabs[0].conn };
+            self.tabs[0] =
+                TabMeta { id: self.tabs[0].id, name: default_tab_name(1), saved_id: None, conn: self.tabs[0].conn };
             let mut fresh = TabState::default();
             swap_tab(self, &mut fresh);
             self.tab.run.set_stream(None);
@@ -703,9 +713,8 @@ impl App {
     }
 
     /// A fresh run id, unique across the tabs (events find their tab by it).
-    pub(in crate::app) fn next_run_id(&mut self) -> u64 {
-        self.run_ids += 1;
-        self.run_ids
+    pub(in crate::app) fn next_run_id(&mut self) -> RunId {
+        self.run_ids.next()
     }
 
     /// Stops every tab's query (the project's tabs are being replaced):

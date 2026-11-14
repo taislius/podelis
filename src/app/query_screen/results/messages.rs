@@ -36,8 +36,9 @@ impl App {
     /// editor, selected and underlined again.
     pub(in crate::app) fn go_to_message_place(&mut self) {
         let place = self.notes.selected.and_then(|i| self.notes.log.get(i)).and_then(|m| m.at);
-        let Some((tab, start, end)) = place else { return };
-        if tab != self.active_tab && tab < self.tabs.len() {
+        let Some((id, start, end)) = place else { return };
+        let Some(tab) = self.tabs.iter().position(|meta| meta.id == id) else { return };
+        if tab != self.active_tab {
             self.switch_tab(tab);
         }
         self.show_error_place(start, end);

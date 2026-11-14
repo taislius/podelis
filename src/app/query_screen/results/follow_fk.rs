@@ -12,7 +12,7 @@ pub(in crate::app) struct Followed {
     pub tab_name: String,
     pub sql: String,
     /// The tab that asked, on its connection then: the row is for it only.
-    pub asked_from: (usize, Option<u64>),
+    pub asked_from: (TabId, Option<u64>),
 }
 
 /// The most rows a lookup shows (a key that isn't unique may match more).
@@ -56,7 +56,7 @@ impl App {
     pub(in crate::app) fn followed(&mut self, found: Followed, result: Result<QueryOutcome, String>) {
         // Another tab (or connection) since: its pop-over, and `e` there,
         // would be for the wrong database.
-        if found.asked_from != (self.active_tab, self.tabs[self.active_tab].conn) {
+        if found.asked_from != (self.tabs[self.active_tab].id, self.tabs[self.active_tab].conn) {
             return;
         }
         let outcome = match result {
@@ -192,7 +192,7 @@ impl App {
             title: format!("{} · {target_column} = {}", fk.target_table, truncate_value(&value)),
             tab_name: format!("→ {}", fk.target_table),
             sql,
-            asked_from: (self.active_tab, self.tabs[self.active_tab].conn),
+            asked_from: (self.tabs[self.active_tab].id, self.tabs[self.active_tab].conn),
         }))
     }
 }

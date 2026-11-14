@@ -15,6 +15,8 @@ pub struct KeepAlive {
     pub(super) last_activity: Instant,
     /// A check is running.
     pub(super) pinging: bool,
+    /// The user explicitly asked to check a lost connection.
+    pub(super) reconnect_requested: bool,
     /// The last check of the connection failed (shown in the top bar).
     pub connection_lost: bool,
     /// The heartbeat interval to go back to when it's switched on again.
@@ -23,7 +25,13 @@ pub struct KeepAlive {
 
 impl Default for KeepAlive {
     fn default() -> Self {
-        Self { last_activity: Instant::now(), pinging: false, connection_lost: false, heartbeat_secs: 30 }
+        Self {
+            last_activity: Instant::now(),
+            pinging: false,
+            reconnect_requested: false,
+            connection_lost: false,
+            heartbeat_secs: 30,
+        }
     }
 }
 
@@ -260,7 +268,7 @@ impl App {
         // apply; restart what was cut short.
         // (A check on its way is for the connection before: see `pinging`.)
         self.keepalive.pinging = false;
-        self.generation += 1;
+        self.generation.bump();
         self.tab.syntax_hint = None;
         match &mut self.connection.schema {
             Some(panel) if panel.loading => self.load_catalog(),

@@ -83,6 +83,13 @@ fn a_missing_keychain_is_blamed_only_without_another_password() {
     assert_eq!(form.connect_failure("denied"), "denied");
 }
 
+#[test]
+fn container_search_request_ids_advance_per_search() {
+    let mut request = ContainerRequestId::default();
+    assert_eq!(request.next(), ContainerRequestId::from_test_id(1));
+    assert_eq!(request.next(), ContainerRequestId::from_test_id(2));
+}
+
 #[tokio::test]
 async fn picking_a_database_container_fills_in_a_new_connection() {
     let (mut app, _dir) = test_app();
@@ -119,7 +126,7 @@ async fn picking_a_database_container_fills_in_a_new_connection() {
         image: "postgres:17".into(),
         profile: Some(profile),
     };
-    app.containers_found(1, Ok(vec![unpublished, shop]));
+    app.containers_found(ContainerRequestId::from_test_id(1), Ok(vec![unpublished, shop]));
     // Not published: nothing to connect to.
     app.handle_key(key(KeyCode::Enter));
     assert!(app.manager.containers.as_ref().and_then(|p| p.note.as_deref()).is_some_and(|m| m.contains("-p")));
@@ -136,9 +143,9 @@ async fn picking_a_database_container_fills_in_a_new_connection() {
     app.screen = Screen::Connections;
     app.handle_key(key(KeyCode::Char('c')));
     // A late result of the earlier search is dropped.
-    app.containers_found(1, Err("stale".into()));
+    app.containers_found(ContainerRequestId::from_test_id(1), Err("stale".into()));
     assert!(app.manager.containers.as_ref().is_some_and(|p| p.loading && p.error.is_none()));
-    app.containers_found(2, Err("docker isn't running".into()));
+    app.containers_found(ContainerRequestId::from_test_id(2), Err("docker isn't running".into()));
     assert_eq!(app.manager.containers.as_ref().and_then(|p| p.error.as_deref()), Some("docker isn't running"));
     app.handle_key(key(KeyCode::Esc));
     assert!(app.manager.containers.is_none());
@@ -151,7 +158,7 @@ async fn picking_a_database_container_fills_in_a_new_connection() {
         image: "postgres:17".into(),
         profile: Some(saved),
     };
-    app.containers_found(3, Ok(vec![again]));
+    app.containers_found(ContainerRequestId::from_test_id(3), Ok(vec![again]));
     app.handle_key(key(KeyCode::Enter));
     // Opened as `e` would: its saved password is read first.
     assert!(app.manager.loading_profile);
@@ -172,7 +179,7 @@ async fn picking_a_database_container_fills_in_a_new_connection() {
         image: "postgres:17".into(),
         profile: Some(ConnectionProfile { ssh: String::new(), ..app.profiles()[0].clone() }),
     };
-    app.containers_found(4, Ok(vec![local]));
+    app.containers_found(ContainerRequestId::from_test_id(4), Ok(vec![local]));
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(
         (app.connection.form.original_name.as_deref(), app.connection.form.name.as_str()),
@@ -324,7 +331,7 @@ fn a_rejected_password_is_ready_to_type_again() {
     let failed = |app: &mut App, err: &str| {
         app.connection.form.connecting = true;
         let generation = app.generation;
-        app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::ConnectFailed(err.to_string()) });
+        app.handle_db_event(DbEvent::connection(generation, DbEventKind::ConnectFailed(err.to_string())));
     };
     failed(&mut app, "password authentication failed for user \"app\"");
     let form = &app.connection.form;
@@ -378,20 +385,17 @@ async fn a_cancel_the_server_cant_be_told_lets_esc_stop_waiting() {
     app.tab.run.task = Some(tokio::spawn(std::future::pending()));
     app.handle_key(key(KeyCode::Esc));
     assert!(app.tab.run.cancelling);
-    let generation = app.generation;
     // A server that answers and refuses (no privilege): just said.
-    let refused = DbEventKind::CancelFailed {
-        message: "Access denied; you need the PROCESS privilege".into(),
-        unreachable: false,
-    };
-    app.handle_db_event(DbEvent { generation, run: None, kind: refused });
+    let refused =
+        RunEvent::CancelFailed { message: "Access denied; you need the PROCESS privilege".into(), unreachable: false };
+    app.handle_db_event(DbEvent::run(app.tab.run.id, refused));
     assert!(!app.tab.run.cancel_failed && !app.keepalive.connection_lost && app.tab.run.executing);
     app.handle_key(key(KeyCode::Esc));
-    let failed = DbEventKind::CancelFailed {
+    let failed = RunEvent::CancelFailed {
         message: "pool timed out while waiting for an open connection".into(),
         unreachable: true,
     };
-    app.handle_db_event(DbEvent { generation, run: None, kind: failed });
+    app.handle_db_event(DbEvent::run(app.tab.run.id, failed));
     assert!(app.tab.run.cancel_failed && app.keepalive.connection_lost && app.tab.run.executing);
     assert!(said(&app).starts_with("Couldn't cancel: Esc again stops waiting"), "{}", said(&app));
     // Esc again: no longer waiting; the next run checks the server first.
@@ -406,8 +410,8 @@ async fn a_cancel_the_server_cant_be_told_lets_esc_stop_waiting() {
     app.tab.run.executing = true;
     app.tab.run.task = Some(tokio::spawn(std::future::pending()));
     app.handle_key(key(KeyCode::Esc));
-    let failed = DbEventKind::CancelFailed { message: "pool timed out".into(), unreachable: true };
-    app.handle_db_event(DbEvent { generation: app.generation, run: None, kind: failed });
+    let failed = RunEvent::CancelFailed { message: "pool timed out".into(), unreachable: true };
+    app.handle_db_event(DbEvent::run(app.tab.run.id, failed));
     app.tab.run.task = None;
     app.tab.run.executing = false;
     run_sql(&mut app, "select 8").await;
@@ -430,6 +434,51 @@ async fn a_lost_connection_is_checked_again_and_said_when_back() {
     }
     assert!(!app.keepalive.connection_lost && !app.wants_ticks());
     assert_eq!(said(&app), "The connection is back");
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_connection_can_be_checked_and_reconnected_from_the_results_pane() {
+    use crate::app::commands::{Can, Command};
+
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    app.focus = Focus::Results;
+    app.keepalive.last_activity = Instant::now();
+    assert!(matches!(app.can(Command::Reconnect), Can::Yes));
+
+    app.handle_key(key(KeyCode::Char('R')));
+    assert!(app.keepalive.pinging);
+    while app.keepalive.pinging {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+
+    assert!(!app.keepalive.connection_lost);
+    assert_eq!(said(&app), "The server is responding");
+
+    app.keepalive.connection_lost = true;
+    app.keepalive.last_activity = Instant::now();
+    assert!(matches!(app.can(Command::Reconnect), Can::Yes));
+    app.handle_key(key(KeyCode::Char('R')));
+    assert!(app.keepalive.pinging);
+    while app.keepalive.pinging {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    assert!(!app.keepalive.connection_lost);
+    assert_eq!(said(&app), "The connection is back");
+
+    // The palette routes the same command into Results before it runs.
+    app.keepalive.connection_lost = true;
+    app.focus = Focus::Editor;
+    app.run_command_for_tests(Command::Reconnect);
+    assert_eq!(app.focus, Focus::Results);
+    assert!(app.keepalive.pinging);
+    while app.keepalive.pinging {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    assert!(!app.keepalive.connection_lost);
 }
 
 /// A SQLite connection's timeout stops a query that runs too long.
@@ -1081,7 +1130,7 @@ async fn a_new_connection_is_kept_once_it_works() {
         app.connection.form.name = name.into();
         let db = Database::connect(app.connection.form.params().unwrap()).await.unwrap();
         let generation = app.generation;
-        app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
+        app.handle_db_event(DbEvent::connection(generation, DbEventKind::Connected(db)));
     };
     // Unnamed: named after the file, and saved in the project.
     connect(&mut app, "").await;
@@ -1101,7 +1150,7 @@ async fn a_new_connection_is_kept_once_it_works() {
     app.connection.form = ConnectForm::from_profile(&profile, String::new());
     let db = Database::connect(app.connection.form.params().unwrap()).await.unwrap();
     let generation = app.generation;
-    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
+    app.handle_db_event(DbEvent::connection(generation, DbEventKind::Connected(db)));
     assert_eq!(saved(&app).len(), 2);
 }
 

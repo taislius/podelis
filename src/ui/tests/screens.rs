@@ -73,7 +73,8 @@ fn status_bar_shows_the_connection_heartbeat_and_lost_connection() {
     // The top bar no longer repeats it.
     assert!(!render(&mut app, 120, 12).lines().next().unwrap().contains("prod /"));
     app.keepalive.connection_lost = true;
-    assert!(status_bar(&mut app).contains("connection lost"));
+    let lost = status_bar(&mut app);
+    assert!(lost.contains("× prod") && lost.contains("connection lost"), "{lost}");
 }
 
 #[test]

@@ -57,7 +57,7 @@ pub use query_screen::results::export_form;
 
 use crate::config::draft::{ConnectionDraft, looks_like_url};
 pub use confirm::{Confirm, ConfirmAction};
-use events::{Background, DbEventKind};
+use events::{Background, DbEventKind, RunEvent};
 pub use events::{DbEvent, Ping};
 pub use manager::connections::{ConnectField, ConnectForm, fields_for};
 pub use query_screen::navigator::details::{SchemaNode, SchemaPanel, SchemaSection, SchemaSort, SchemaTable};
@@ -87,11 +87,60 @@ pub enum Focus {
     Schema,
 }
 
+/// Identity of a query run, unique across the app's open tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RunId(u64);
+
+impl RunId {
+    pub(in crate::app) fn next(&mut self) -> Self {
+        self.0 += 1;
+        *self
+    }
+}
+
+/// Identity of an open tab, stable when tabs before it are closed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TabId(u64);
+
+impl TabId {
+    pub(in crate::app) fn next(&mut self) -> Self {
+        self.0 += 1;
+        *self
+    }
+}
+
+/// Identity of the active connection state, incremented to invalidate its
+/// in-flight background work when the connection changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::app) struct ConnectionGeneration(u64);
+
+impl ConnectionGeneration {
+    pub(in crate::app) fn bump(&mut self) {
+        self.0 += 1;
+    }
+}
+
+/// Identity of a replaceable database-container search.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::app) struct ContainerRequestId(u64);
+
+impl ContainerRequestId {
+    pub(in crate::app) fn next(&mut self) -> Self {
+        self.0 += 1;
+        *self
+    }
+
+    #[cfg(test)]
+    pub(in crate::app) fn from_test_id(id: u64) -> Self {
+        Self(id)
+    }
+}
+
 /// The database containers found by `c` in the connections, to pick one.
 #[derive(Default)]
 pub struct ContainerPicker {
     /// Which search this is: a result for an earlier, closed one is dropped.
-    pub request: u64,
+    pub(in crate::app) request: ContainerRequestId,
     pub loading: bool,
     pub found: Vec<crate::system::containers::Container>,
     pub selected: usize,
@@ -138,7 +187,7 @@ pub struct Message {
     pub is_error: bool,
     /// Where a failure was in the editor (its tab, and the range then):
     /// `g` in MESSAGES goes there.
-    pub at: Option<(usize, Pos, Pos)>,
+    pub at: Option<(TabId, Pos, Pos)>,
 }
 
 /// Outcome of checking the editor text with the server.
@@ -163,8 +212,6 @@ pub struct App {
     pub popups: query_screen::overlay::Popups,
     /// `Ctrl+K q`'s question being answered, and what goes with it.
     pub ask: query_screen::ask::AskState,
-    /// What's said about the run starting now.
-    next_run: query_screen::results::runs::NextRun,
     /// Keeping the connection alive.
     pub keepalive: session::KeepAlive,
     /// What's said to the user.
@@ -229,7 +276,9 @@ pub struct App {
     /// the form's last choice.
     exports: query_screen::results::export::Exports,
     /// The last run id handed out ([`App::next_run_id`]).
-    run_ids: u64,
+    run_ids: RunId,
+    /// The last tab id handed out. IDs are not reused while the app lives.
+    tab_ids: TabId,
     /// While a hidden tab's event is applied (`apply_in_tab`): that tab,
     /// whose run ending is announced even with the terminal in front.
     hidden_tab: Option<usize>,
@@ -246,7 +295,7 @@ pub struct App {
     terminal_focused: Option<bool>,
     /// Bumped whenever in-flight work should be ignored (disconnect, cancelled
     /// connect). Every task's event carries the value it was started under.
-    generation: u64,
+    generation: ConnectionGeneration,
     db_tx: mpsc::UnboundedSender<DbEvent>,
     db_rx: mpsc::UnboundedReceiver<DbEvent>,
 }
@@ -290,7 +339,6 @@ impl App {
         Self {
             popups: query_screen::overlay::Popups::default(),
             ask: query_screen::ask::AskState::default(),
-            next_run: query_screen::results::runs::NextRun::default(),
             keepalive: session::KeepAlive::default(),
             screen: Screen::Projects,
             store,
@@ -313,14 +361,20 @@ impl App {
             connect_started: None,
             cell_edit: None,
             conns: session::Conns::default(),
-            tabs: vec![TabMeta { name: query_screen::tabs::default_tab_name(1), saved_id: None, conn: None }],
+            tabs: vec![TabMeta {
+                id: TabId(1),
+                name: query_screen::tabs::default_tab_name(1),
+                saved_id: None,
+                conn: None,
+            }],
             tab: TabState::default(),
             parked: vec![None],
             active_tab: 0,
+            tab_ids: TabId(1),
             library: crate::config::library::Library::load_from(None),
             watch: None,
             exports: query_screen::results::export::Exports::default(),
-            run_ids: 0,
+            run_ids: RunId::default(),
             hidden_tab: None,
             hits: Hits::default(),
             pending_follow: false,
@@ -328,7 +382,7 @@ impl App {
             should_quit: false,
             for_terminal: ForTerminal::default(),
             terminal_focused: None,
-            generation: 0,
+            generation: ConnectionGeneration::default(),
             notes: query_screen::results::messages::Notes::default(),
             panes: query_screen::panes::Panes {
                 editor_percent: 40,
@@ -501,16 +555,16 @@ impl App {
         let tx = self.db_tx.clone();
         let generation = self.generation;
         move |kind| {
-            let _ = tx.send(DbEvent { generation, run: None, kind });
+            let _ = tx.send(DbEvent::connection(generation, kind));
         }
     }
 
-    /// For the running query's outcome (see [`DbEvent::run`]).
-    fn run_sender(&self) -> impl Fn(DbEventKind) + Send + 'static {
+    /// For the running query's outcome, applied to its tab by run id.
+    fn run_sender(&self) -> impl Fn(RunEvent) + Send + 'static {
         let tx = self.db_tx.clone();
-        let (generation, run) = (self.generation, Some(self.tab.run.id));
+        let run = self.tab.run.id;
         move |kind| {
-            let _ = tx.send(DbEvent { generation, run, kind });
+            let _ = tx.send(DbEvent::run(run, kind));
         }
     }
 
@@ -519,7 +573,7 @@ impl App {
         // A check on its way is for the connection before: its answer will
         // be dropped (another generation), so it's no longer awaited.
         self.keepalive.pinging = false;
-        self.generation += 1;
+        self.generation.bump();
         self.tab.run.id = self.next_run_id();
         self.tab.run.queued_plan = None;
         if let Some(task) = self.tab.run.task.take() {

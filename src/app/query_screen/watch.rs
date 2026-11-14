@@ -17,8 +17,8 @@ pub struct Watch {
     /// What's watched: the query, in which tab, on which connection (by
     /// the app's generation). Anything else stops it.
     sql: String,
-    tab: usize,
-    generation: u64,
+    tab: TabId,
+    generation: ConnectionGeneration,
 }
 
 /// The intervals offered in the command palette, in seconds.
@@ -77,7 +77,7 @@ impl App {
             runs: 0,
             previous: None,
             sql,
-            tab: self.active_tab,
+            tab: self.tabs[self.active_tab].id,
             generation: self.generation,
         });
         self.watch_tick();
@@ -102,14 +102,14 @@ impl App {
         let same = self
             .watch
             .as_ref()
-            .is_some_and(|w| w.sql == sql && w.tab == self.active_tab && w.generation == self.generation);
+            .is_some_and(|w| w.sql == sql && w.tab == self.tabs[self.active_tab].id && w.generation == self.generation);
         if !same || !infos.iter().all(|i| i.kind == Kind::Read) {
             return self.stop_watch(&format!(": {}", t!("watch.changed_query")));
         }
         let filled = self.tab.last_filled.clone();
-        self.next_run.watch = true;
+        self.tab.run.next.watch = true;
         self.run_now(sql, offset, infos, RunPurpose::Query, filled);
-        self.next_run.watch = false;
+        self.tab.run.next.watch = false;
     }
 
     /// After a watched run: marks what changed, keeps the place in the grid,

@@ -25,7 +25,7 @@ pub enum ConfirmAction {
     ExportAll {
         format: Format,
         agreed: u64,
-        run: u64,
+        run: RunId,
         name: Option<std::path::PathBuf>,
     },
     /// An export that grew to a size to ask about: go on (else it stops).

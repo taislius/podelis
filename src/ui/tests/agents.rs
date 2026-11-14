@@ -76,7 +76,7 @@ fn asking_in_plain_language_and_sharing_a_schema() {
             question: crate::app::query_screen::ask::Question {
                 at: None,
                 text: "x".into(),
-                tab: 0,
+                tab: crate::app::TabId::default(),
                 connection: "prod".into(),
                 explain: false,
             },

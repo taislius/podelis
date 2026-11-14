@@ -345,7 +345,7 @@ async fn allowing_the_schema_asks_again_about_the_tab_it_came_from() {
     settle(&mut app);
     app.handle_key(key(KeyCode::Char('y')));
     let asking = app.ask.asking.as_ref().expect("asked again");
-    assert_eq!((asking.question.tab, asking.question.connection.as_str()), (0, "shop"));
+    assert_eq!((asking.question.tab, asking.question.connection.as_str()), (app.tabs[0].id, "shop"));
     // Leaving the project stops it: no answer for a tab of another one.
     app.leave_project();
     assert!(app.ask.asking.is_none());
@@ -438,14 +438,15 @@ async fn closing_another_tab_while_asking_keeps_the_question() {
     app.new_tab(None, "", None);
     app.new_tab(None, "", None);
     app.switch_tab(1);
+    let asked_tab = app.tabs[1].id;
     app.connection.form.name = "shop".into();
     let _gateway = crate::gateway::tests::start(dir.path(), None);
     ask_in_editor(&mut app, "customers");
-    assert_eq!(app.ask.asking.as_ref().unwrap().question.tab, 1);
-    // Tab 0 closes: the question follows its tab to place 0.
+    assert_eq!(app.ask.asking.as_ref().unwrap().question.tab, asked_tab);
+    // Tab 0 closes: the question keeps the same identity.
     app.switch_tab(0);
     app.close_tab();
-    assert_eq!(app.ask.asking.as_ref().map(|a| a.question.tab), Some(0));
+    assert_eq!(app.ask.asking.as_ref().map(|a| a.question.tab), Some(asked_tab));
     // Its own tab closes: it stops.
     app.switch_tab(0);
     app.close_tab();

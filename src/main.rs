@@ -77,7 +77,7 @@ async fn main() -> Result<()> {
         cli::Command::Tui => None,
         cli::Command::Mcp => {
             let name = args.name.clone().or_else(|| std::env::var("PODELIS_AGENT").ok());
-            Some(agents::mcp::run(dir, project, name).await)
+            Some(gateway::command::mcp(dir, project, name).await)
         }
         cli::Command::Memory(words) => {
             Some(gateway::command::memory(dir, project, args.connection.as_deref(), &words).await)

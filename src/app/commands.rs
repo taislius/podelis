@@ -50,6 +50,8 @@ pub enum Command {
     ShowRows,
     ShowMessages,
     ShowPlan,
+    /// Recheck a lost connection; the backend reconnects its session if needed.
+    Reconnect,
     WholeMessage,
     /// Where the selected message's failure is, in the editor.
     GoToError,
@@ -143,6 +145,7 @@ const RESULTS_KEYS: Keys = &[
     (KeyCode::Char('1'), Command::ShowRows),
     (KeyCode::Char('2'), Command::ShowMessages),
     (KeyCode::Char('3'), Command::ShowPlan),
+    (KeyCode::Char('R'), Command::Reconnect),
     (KeyCode::Char('m'), Command::Action(Action::Menu)),
     (KeyCode::Char(','), Command::EarlierResult),
     (KeyCode::Char('.'), Command::LaterResult),
@@ -393,6 +396,7 @@ impl Command {
             Command::ShowRows,
             Command::ShowMessages,
             Command::ShowPlan,
+            Command::Reconnect,
             Command::WholeMessage,
             Command::GoToError,
             Command::CopyMessage,
@@ -459,6 +463,7 @@ impl Command {
             Command::ShowRows => t!("menu.show_rows"),
             Command::ShowMessages => t!("menu.show_messages"),
             Command::ShowPlan => t!("menu.show_plan"),
+            Command::Reconnect => t!("menu.reconnect"),
             Command::WholeMessage => t!("menu.whole_message"),
             Command::GoToError => t!("menu.go_to_error"),
             Command::CopyMessage => t!("menu.copy_message"),
@@ -525,6 +530,7 @@ impl Command {
             Command::PipeRows => t!("palette.pipe").to_string(),
             Command::OpenRows => t!("palette.open_rows").to_string(),
             Command::RefreshSchema => t!("palette.refresh").to_string(),
+            Command::Reconnect => t!("palette.reconnect").to_string(),
             Command::Definition => t!("palette.definition").to_string(),
             Command::Related => t!("palette.related").to_string(),
             Command::CopyName => t!("palette.copy_name").to_string(),
@@ -680,6 +686,12 @@ impl App {
         let no = |cannot: bool, why: &str| if cannot { Can::not_now(why) } else { Can::Yes };
         let not_for_plan = || Can::refused(t!("results.not_for_plan"));
         match command {
+            C::Action(action) if !action.scope().allows(self.focus == Focus::Editor) => {
+                Can::not_now(t!("commands.editor_focus"))
+            }
+            C::Reconnect if self.connection.database.is_none() => Can::not_now(t!("info.not_connected")),
+            C::Reconnect if self.conn_busy() => Can::not_now(t!("info.stop_query_first")),
+            C::Reconnect if self.keepalive.pinging => Can::not_now(t!("info.reconnecting")),
             C::EditCell | C::AddRow | C::DeleteRows | C::Follow | C::LoadMore | C::NextSet | C::PrevSet if plan => {
                 not_for_plan()
             }
@@ -794,7 +806,9 @@ impl App {
         use Command as C;
         match command {
             // Not the rows' tab: it's for what's kept, seen from any of them.
-            C::OtherResults | C::ShowRows | C::ShowMessages | C::ShowPlan => self.focus = Focus::Results,
+            C::OtherResults | C::ShowRows | C::ShowMessages | C::ShowPlan | C::Reconnect => {
+                self.focus = Focus::Results;
+            }
             C::FilterRows
             | C::Sort
             | C::MarkRow
@@ -844,6 +858,7 @@ impl App {
     }
 
     /// What every key, menu item and palette entry ends in.
+    #[expect(clippy::too_many_lines, reason = "One exhaustive dispatch keeps command effects easy to audit.")]
     pub(super) fn run_command(&mut self, command: Command) {
         use Command as C;
         // A row to act on, from the start.
@@ -858,6 +873,7 @@ impl App {
         self.go_to_pane(command);
         match command {
             C::Action(a) => self.run_action(a),
+            C::Reconnect => self.reconnect_now(),
             C::FullValue => self.open_cell_view(),
             C::RecordView => self.open_record_view(),
             C::Vertical => self.toggle_vertical(),

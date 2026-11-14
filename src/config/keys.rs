@@ -66,6 +66,21 @@ pub enum Action {
     AiExplain,
 }
 
+/// Where a bound action is allowed to act on the query screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActionScope {
+    /// The action does not read or change a particular pane's contents.
+    AnyPane,
+    /// The action reads or changes the query editor's text or cursor.
+    Editor,
+}
+
+impl ActionScope {
+    pub const fn allows(self, editor_focused: bool) -> bool {
+        matches!(self, Self::AnyPane) || editor_focused
+    }
+}
+
 impl Action {
     /// What the action does, for the command palette.
     pub fn describe(self) -> &'static str {
@@ -162,24 +177,31 @@ impl Action {
         ACTIONS.iter().map(|(a, _, _)| *a)
     }
 
-    /// About the editor's text (its statement, lines or cursor) or its tab:
-    /// the Ctrl+K menu dims them unless the editor has the keys.
-    pub fn is_editor_action(self) -> bool {
-        matches!(
-            self,
+    /// The pane context in which this action may run.
+    pub const fn scope(self) -> ActionScope {
+        match self {
             Action::RenameTab
-                | Action::Explain
-                | Action::ExplainAnalyze
-                | Action::Comment
-                | Action::Format
-                | Action::InsertSnippet
-                | Action::NextWarning
-                | Action::SelectStatement
-                | Action::SelectWord
-                | Action::ZoomStatement
-                | Action::SaveStatement
-                | Action::AiExplain
-        )
+            | Action::Run
+            | Action::RunStatement
+            | Action::Explain
+            | Action::ExplainAnalyze
+            | Action::Complete
+            | Action::HistoryPrev
+            | Action::HistoryNext
+            | Action::Undo
+            | Action::Redo
+            | Action::Find
+            | Action::Comment
+            | Action::Format
+            | Action::InsertSnippet
+            | Action::NextWarning
+            | Action::SelectStatement
+            | Action::SelectWord
+            | Action::ZoomStatement
+            | Action::SaveStatement
+            | Action::AiExplain => ActionScope::Editor,
+            _ => ActionScope::AnyPane,
+        }
     }
 
     /// Tab and library actions work from every pane and over popups.

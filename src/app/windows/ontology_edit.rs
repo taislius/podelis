@@ -142,6 +142,33 @@ impl App {
 }
 
 /// How many lines the plan takes.
-fn plan_len(plan: &Value) -> usize {
-    crate::gateway::ontology::plan_lines(plan).len()
+pub(super) fn plan_len(plan: &Value) -> usize {
+    ["add", "confirm", "move", "forget"]
+        .into_iter()
+        .map(|key| plan[key].as_array().map_or(0, |items| items.len() + usize::from(!items.is_empty())))
+        .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plan_len;
+    use serde_json::json;
+
+    #[test]
+    fn plan_len_counts_items_and_one_heading_per_nonempty_section() {
+        let plan = json!({
+            "add": [{}, {}],
+            "confirm": [],
+            "move": [{}],
+            "forget": [{}]
+        });
+
+        assert_eq!(plan_len(&plan), 7);
+    }
+
+    #[test]
+    fn plan_len_ignores_empty_or_missing_sections() {
+        assert_eq!(plan_len(&json!({ "add": [], "move": [{}] })), 2);
+        assert_eq!(plan_len(&json!({})), 0);
+    }
 }

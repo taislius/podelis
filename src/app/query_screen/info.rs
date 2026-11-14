@@ -10,6 +10,32 @@ const LOST_RECHECK_AFTER_INPUT: Duration = Duration::from_secs(2);
 const PING_WITHIN: Duration = Duration::from_secs(5);
 
 impl App {
+    fn connection_check_status(&mut self, message: String, is_error: bool, manual: bool) {
+        if manual && self.focus == Focus::Results {
+            self.notes.results_note = None;
+            self.set_result_status(message, is_error);
+        } else {
+            self.set_status(message, is_error);
+        }
+    }
+
+    /// Explicitly checks a lost connection now; a successful backend ping
+    /// opens a replacement session when the old one has gone away.
+    pub(in crate::app) fn reconnect_now(&mut self) {
+        if self.connection.database.is_none() {
+            return self.set_status(t!("info.not_connected").to_string(), true);
+        }
+        if self.conn_busy() {
+            return self.set_status(t!("info.stop_query_first").to_string(), true);
+        }
+        if self.keepalive.pinging {
+            return self.set_status(t!("info.reconnecting").to_string(), false);
+        }
+        self.keepalive.reconnect_requested = true;
+        self.set_status(t!("info.reconnecting").to_string(), false);
+        self.ping();
+    }
+
     /// Shows who and where the open connection is: user, database,
     /// settings, TLS, latency.
     pub(in crate::app) fn show_connection_info(&mut self) {
@@ -201,6 +227,7 @@ impl App {
 
     pub(in crate::app) fn pinged(&mut self, result: Result<(Duration, bool), (String, Ping)>) {
         self.keepalive.pinging = false;
+        let reconnect_requested = std::mem::take(&mut self.keepalive.reconnect_requested);
         let was_lost = std::mem::replace(&mut self.keepalive.connection_lost, result.is_err());
         // No answer while rechecking a lost connection: the session is
         // given up (the next check opens a new one rather than waiting on
@@ -219,23 +246,25 @@ impl App {
         match result {
             Ok((latency, reconnected)) => {
                 self.connection.latency = Some(latency);
-                if was_lost && !reconnected {
-                    self.log(t!("info.back").to_string(), false);
-                    self.set_status(t!("info.back").to_string(), false);
+                if (was_lost || reconnect_requested) && !reconnected {
+                    let message = if was_lost { t!("info.back") } else { t!("info.check_ok") }.to_string();
+                    self.log(message.clone(), false);
+                    self.connection_check_status(message, false, reconnect_requested);
                 }
                 if reconnected {
                     self.connection.txn = TxnState::Idle;
+                    let message = format!("{}: {}", t!("info.reconnected"), t!("info.settings_reset"));
                     self.log(t!("info.reconnected").to_string(), true);
-                    self.set_status(format!("{}: {}", t!("info.reconnected"), t!("info.settings_reset")), true);
+                    self.connection_check_status(message, true, reconnect_requested);
                 }
             }
             // Said once: while it stays lost, the checks every few seconds
             // keep quiet (the status bar says "connection lost").
-            Err(_) if was_lost => {}
+            Err(_) if was_lost && !reconnect_requested => {}
             Err(e) => {
                 let msg = t!("info.check_failed", e = crate::db::with_hint(&e).replace('\n', " · "));
                 self.log(msg.clone(), true);
-                self.set_status(msg, true);
+                self.connection_check_status(msg, true, reconnect_requested);
             }
         }
     }

@@ -38,7 +38,7 @@ impl App {
             Some(db) => {
                 let send = self.sender();
                 let limit = self.settings.row_limit;
-                let tab = self.active_tab;
+                let tab = self.tabs[self.active_tab].id;
                 tokio::spawn(async move {
                     let plan = db.run_aside(&explain, limit).await.ok().flatten();
                     send(DbEventKind::PlanAside { tab, stmt, line, plan });

@@ -4,6 +4,10 @@
 use crate::app::*;
 use crate::language::statements;
 
+mod effects;
+
+use effects::{cancel_on_server, check_guarded_read, fetch_page, run_query};
+
 /// A run after this long without one first checks the server answers.
 const CHECK_AFTER_IDLE: Duration = Duration::from_secs(60);
 
@@ -124,10 +128,7 @@ impl App {
             self.tab.run.since = Some(Instant::now());
             self.tab.run.holds_tabs = true;
             let send = self.sender();
-            tokio::spawn(async move {
-                let scans = db.full_scans(&sql).await.unwrap_or_default();
-                send(DbEventKind::Guarded { sql, offset, infos, filled, scans });
-            });
+            tokio::spawn(check_guarded_read(db, sql, offset, infos, filled, send));
             return;
         }
         self.run_writes(sql, offset, infos, purpose, filled);
@@ -188,7 +189,7 @@ impl App {
             return self.set_status(t!("run.reads_only_more").to_string(), true);
         }
         let Some((sql, offset)) = self.tab.last_sql.clone() else { return };
-        self.next_run.row_limit = Some((results.rows.len() * 10).min(MAX_ROW_LIMIT));
+        self.tab.run.next.row_limit = Some((results.rows.len() * 10).min(MAX_ROW_LIMIT));
         let infos = self.tab.last_query_infos.clone();
         self.rerun_shown(sql, offset, infos);
     }
@@ -235,10 +236,10 @@ impl App {
     ) {
         // A query's own result, unless it's the shown one run again.
         // (Taken whatever runs, so it can't outlive the run it was for.)
-        let same_result = std::mem::take(&mut self.next_run.same_result);
-        let new_result = matches!(purpose, RunPurpose::Query) && !self.next_run.watch && !same_result;
+        let same_result = std::mem::take(&mut self.tab.run.next.same_result);
+        let new_result = matches!(purpose, RunPurpose::Query) && !self.tab.run.next.watch && !same_result;
         // Anything else run stops watch mode.
-        if !self.next_run.watch {
+        if !self.tab.run.next.watch {
             self.stop_watch(&format!(": {}", t!("run.another_query")));
             // The tab for what's coming, while it runs.
             match purpose {
@@ -317,51 +318,22 @@ impl App {
         self.tab.run.holds_tabs = !free;
         self.set_result_status(t!("tabs.running").to_string(), false);
         let send = self.run_sender();
-        let row_limit = self.next_run.row_limit.take().unwrap_or(self.settings.row_limit);
+        let row_limit = self.tab.run.next.row_limit.take().unwrap_or(self.settings.row_limit);
         tracing::debug!(statements = self.tab.run.infos.len(), stream, row_limit, "run");
         let sql = if self.tab.run.extra.vertical { sql::without_vertical(&sql, self.engine()) } else { sql };
-        self.tab.run.task = Some(tokio::spawn(async move {
-            // A session that didn't answer is given up on: the run then
-            // opens a new one (a read runs on it and says it reconnected;
-            // anything else isn't run, and says so), or says the server
-            // can't be reached. Not a wait for good on a dead link.
-            if check_first && let Err(e) = db.answers_within(ANSWER_WITHIN).await {
-                send(DbEventKind::SessionReplaced(crate::db::error_message(&e)));
-            }
-            if stream {
-                // No transaction probe: the open stream holds the session,
-                // and a single read can't change the transaction state.
-                match db.run_streaming(&sql, row_limit).await {
-                    Ok((outcome, rows)) => send(DbEventKind::QueryDone(outcome, None, rows)),
-                    Err(e) => send(failed(&e, db.engine(), after_error(&db, &e).await)),
-                }
-                return;
-            }
-            match db.run(&sql, row_limit).await {
-                Ok(outcome) => {
-                    let txn = db.transaction_state().await;
-                    send(DbEventKind::QueryDone(outcome, txn, None));
-                }
-                Err(e) => send(failed(&e, db.engine(), after_error(&db, &e).await)),
-            }
-        }));
+        self.tab.run.task = Some(tokio::spawn(run_query(db, sql, row_limit, stream, check_first, send)));
     }
 
     /// Asks the open stream for `rows` more rows (once at a time).
-    /// `shown`: asked for with `M` (see [`DbEventKind::MoreRows`]).
+    /// `shown`: asked for with `M` (see [`RunEvent::MoreRows`]).
     pub(in crate::app) fn fetch_more(&mut self, rows: usize, shown: bool) {
         let Some(stream) = self.tab.run.stream.clone() else { return };
         if self.tab.run.fetching_more {
             return;
         }
         self.tab.run.fetching_more = true;
-        let send = self.sender();
-        tokio::spawn(async move {
-            match stream.next_page(rows).await {
-                Ok(page) => send(DbEventKind::MoreRows { page, shown }),
-                Err(e) => send(DbEventKind::MoreFailed(e)),
-            }
-        });
+        let send = self.run_sender();
+        tokio::spawn(fetch_page(stream, rows, shown, send));
     }
 
     /// Adds a fetched page to the results, keeping the selection.
@@ -430,15 +402,8 @@ impl App {
         self.tab.run.cancelling = true;
         self.tab.run.queued_plan = None;
         self.set_result_status("Cancelling...".to_string(), false);
-        let send = self.sender();
-        tokio::spawn(async move {
-            if let Err(e) = db.cancel().await {
-                send(DbEventKind::CancelFailed {
-                    message: crate::db::error_message(&e),
-                    unreachable: crate::db::is_unreachable(&e),
-                });
-            }
-        });
+        let send = self.run_sender();
+        tokio::spawn(cancel_on_server(db, send));
     }
 
     /// Gives up on the running query without the server's word: its task is
@@ -486,22 +451,6 @@ impl App {
     }
 }
 
-/// A run's failure as the app is told it: what, where, the transaction
-/// after it, and whether it's a syntax error or unknown function.
-fn failed(e: &anyhow::Error, engine: crate::db::Engine, txn: Option<TxnState>) -> DbEventKind {
-    let message = crate::db::error_message(e);
-    // Where the server says, else where its message says (SQLite's
-    // `near "x"`), as the syntax check finds it.
-    let position = crate::db::error_position(e).or_else(|| engine.backend().position_in_message(&message));
-    DbEventKind::QueryFailed { message, position, txn, missing_feature: crate::db::missing_feature(e) }
-}
-
-/// The transaction state after a failed run: none once the session was
-/// reopened, otherwise what the server says.
-async fn after_error(db: &Database, err: &anyhow::Error) -> Option<TxnState> {
-    if crate::db::is_reconnected(err) { Some(TxnState::Idle) } else { db.transaction_state().await }
-}
-
 impl Run {
     /// A new stream of rows, or none: an `M` waiting for the old one's
     /// page is forgotten with it.
@@ -515,10 +464,12 @@ impl Run {
 /// which connection, since when, and what it's for.
 #[derive(Default)]
 pub struct Run {
+    /// One-shot options consumed by the next run.
+    pub(in crate::app) next: NextRun,
     /// A query (or check, or comparison) is running.
     pub executing: bool,
     /// Which run the events in flight are for.
-    pub(in crate::app) id: u64,
+    pub(in crate::app) id: RunId,
     /// When the running query (or check, or comparison) started.
     pub(in crate::app) since: Option<Instant>,
     /// A write, a check or a comparison: every tab stays where it is until
@@ -559,6 +510,18 @@ pub struct Run {
     pub(in crate::app) plan_request: Option<(String, bool, usize)>,
     /// F7 while a query ran: the statement to plan (and its line) next.
     pub(in crate::app) queued_plan: Option<(String, usize)>,
+}
+
+/// Options consumed by the next query run only.
+#[derive(Default)]
+pub(in crate::app) struct NextRun {
+    /// It's watch mode's (others stop it).
+    pub(in crate::app) watch: bool,
+    /// It's the shown result's again (`M`, after a row change): it
+    /// replaces that result instead of keeping a new one.
+    pub(in crate::app) same_result: bool,
+    /// Its row limit, instead of the setting's.
+    pub(in crate::app) row_limit: Option<usize>,
 }
 
 /// Extra state of the running query.

@@ -236,8 +236,7 @@ impl App {
     /// `docker`), to pick one.
     fn find_containers(&mut self) {
         self.manager.connection_message = None;
-        self.manager.containers_request += 1;
-        let request = self.manager.containers_request;
+        let request = self.manager.containers_request.next();
         self.manager.containers =
             Some(Box::new(ContainerPicker { request, loading: true, ..ContainerPicker::default() }));
         let send = self.sender();
@@ -249,9 +248,9 @@ impl App {
         }
     }
 
-    pub(crate) fn containers_found(
+    pub(in crate::app) fn containers_found(
         &mut self,
-        request: u64,
+        request: ContainerRequestId,
         result: Result<Vec<crate::system::containers::Container>, String>,
     ) {
         let Some(picker) = self.manager.containers.as_mut().filter(|p| p.request == request) else { return };

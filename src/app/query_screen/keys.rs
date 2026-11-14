@@ -42,7 +42,7 @@ impl App {
             return self.handle_find_key(key);
         }
         let action = self.keymap.action(key);
-        if let Some(a) = action.filter(|a| a.is_tab_action()) {
+        if let Some(a) = action.filter(|a| a.is_tab_action() && a.scope().allows(self.focus == Focus::Editor)) {
             return self.run_action(a);
         }
         if self.handle_tab_key(key) {
@@ -65,6 +65,9 @@ impl App {
         if key.code == KeyCode::Tab && !after_esc && self.tab_completes() && self.complete_on_tab() {
             return;
         }
+        // A pane-scoped binding is considered only in its owner pane. When
+        // it's out of scope, the key can still belong to the focused pane.
+        let action = action.filter(|action| action.scope().allows(self.focus == Focus::Editor));
         match action {
             Some(Action::Complete) if self.focus == Focus::Editor && self.editor_inserting() => {
                 return self.open_completion();

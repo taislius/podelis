@@ -37,7 +37,7 @@ pub struct Manager {
     /// (Boxed: `App` is part of every async test's future.)
     pub containers: Option<Box<ContainerPicker>>,
     /// The number of the last container search started.
-    pub(in crate::app) containers_request: u64,
+    pub(in crate::app) containers_request: ContainerRequestId,
     /// The projects and connections panes were opened over the work (so
     /// leaving the project from them reopens it on its tabs next time).
     pub(in crate::app) from_query: bool,

@@ -369,7 +369,7 @@ async fn following_a_foreign_key_shows_the_referenced_row() {
         title: "parent · id = 2".into(),
         tab_name: "→ parent".into(),
         sql: "SELECT 1".into(),
-        asked_from: (app.active_tab + 1, None),
+        asked_from: (TabId::default(), None),
     };
     app.followed(found, Ok(outcome(&["id"], &[&[Some("2")]])));
     assert!(app.popups.cell_view.is_none());
@@ -684,8 +684,13 @@ fn a_question_written_in_the_editor_gets_its_sql_under_it() {
     let (mut app, _dir) = test_app();
     app.screen = Screen::Query;
     app.tab.editor.set_text("-- ? customers per city\nSELECT 'mine';\n\n-- ? something else");
-    let asked =
-        Question { text: "customers per city".into(), tab: 0, connection: "c".into(), explain: false, at: Some(0) };
+    let asked = Question {
+        text: "customers per city".into(),
+        tab: app.tabs[0].id,
+        connection: "c".into(),
+        explain: false,
+        at: Some(0),
+    };
     let answer = |sql: &str| serde_json::json!({ "model": "local", "sql": sql, "said": "Counts them." });
     app.insert_answer(&asked, &answer("SELECT city, COUNT(*) FROM customers\n\nGROUP BY city"));
     // Under the question, marked, the model's SQL as it wrote it (a blank
@@ -725,7 +730,8 @@ fn asking_again_keeps_what_the_user_wrote_right_under_the_answer() {
     app.screen = Screen::Query;
     // The user's statement right after the answer, no blank line between.
     app.tab.editor.set_text("-- ? notes\n-- ↳ local\n-- Old.\nSELECT 1;\nSELECT 'mine';");
-    let asked = Question { text: "notes".into(), tab: 0, connection: "c".into(), explain: false, at: Some(0) };
+    let asked =
+        Question { text: "notes".into(), tab: app.tabs[0].id, connection: "c".into(), explain: false, at: Some(0) };
     let sql = "INSERT INTO notes VALUES ('line 1\n\nline 3')";
     app.insert_answer(&asked, &serde_json::json!({ "model": "local", "sql": sql, "said": "New." }));
     assert_eq!(
@@ -742,7 +748,8 @@ fn a_models_words_stay_inside_their_comments() {
     let (mut app, _dir) = test_app();
     app.screen = Screen::Query;
     app.tab.editor.set_text("-- ? anything");
-    let asked = Question { text: "anything".into(), tab: 0, connection: "c".into(), explain: false, at: Some(0) };
+    let asked =
+        Question { text: "anything".into(), tab: app.tabs[0].id, connection: "c".into(), explain: false, at: Some(0) };
     // A line break in what it assumed would end the `--` comment and make
     // the rest SQL.
     let answer = serde_json::json!({

@@ -90,7 +90,7 @@ impl App {
                 Ok(Err(e)) => SessionSeen::Failed(crate::db::error_message(&e)),
                 Err(_) => SessionSeen::NoAnswer,
             };
-            send(DbEventKind::SessionSeen(seen));
+            send(RunEvent::SessionSeen(seen));
         });
     }
 

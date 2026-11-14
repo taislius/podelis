@@ -22,15 +22,86 @@ fn stale_events_are_ignored() {
     let (mut app, _dir) = test_app();
     app.screen = Screen::Query;
     app.tab.run.executing = true;
-    let stale_generation = app.generation;
+    let stale_run = app.tab.run.id;
     app.disconnect();
     assert!(!app.tab.run.executing);
-    app.handle_db_event(DbEvent {
-        generation: stale_generation,
-        run: None,
-        kind: DbEventKind::QueryDone(outcome(&["a"], &[&[Some("1")]]), None, None),
-    });
+    app.handle_db_event(DbEvent::run(stale_run, RunEvent::QueryDone(outcome(&["a"], &[&[Some("1")]]), None, None)));
     assert!(app.tab.grid.results.is_none());
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn editor_actions_do_not_run_from_the_navigator() {
+    use crate::app::commands::{Can, Command};
+
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    app.tab.editor.set_text("select 1");
+    app.focus = Focus::Schema;
+
+    for (key_code, action) in
+        [(KeyCode::F(5), Action::Run), (KeyCode::F(6), Action::RunStatement), (KeyCode::F(7), Action::Explain)]
+    {
+        app.handle_key(key(key_code));
+        assert!(!app.tab.run.executing);
+        assert!(app.tab.grid.results.is_none());
+        assert!(matches!(app.can(Command::Action(action)), Can::No { .. }));
+    }
+    for action in [
+        Action::Complete,
+        Action::HistoryPrev,
+        Action::HistoryNext,
+        Action::Undo,
+        Action::Redo,
+        Action::Find,
+        Action::RenameTab,
+    ] {
+        assert!(matches!(app.can(Command::Action(action)), Can::No { .. }), "{action:?}");
+    }
+
+    // The same actions must fall through to the focused pane on the real key
+    // path; none may edit the SQL or open an editor popup from the Navigator.
+    for key_event in [ctrl(' '), ctrl('p'), ctrl('n'), ctrl('z'), ctrl('y'), ctrl('f'), key(KeyCode::F(4))] {
+        app.handle_key(key_event);
+        assert_eq!(app.tab.editor.text(), "select 1");
+        assert!(app.editing.find.is_none());
+        assert!(app.popups.completion.is_none());
+        assert!(app.popups.tab_prompt.is_none());
+    }
+
+    app.focus = Focus::Editor;
+    app.handle_key(key(KeyCode::F(6)));
+    finish(&mut app).await;
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("1".into())]]);
+}
+
+#[test]
+fn a_plan_for_a_closed_tab_is_dropped() {
+    let (mut app, _dir) = test_app();
+    let closed = app.next_tab_id();
+    app.handle_db_event(DbEvent::connection(
+        app.generation,
+        DbEventKind::PlanAside { tab: closed, stmt: "select 1".into(), line: 0, plan: Some(outcome(&["plan"], &[])) },
+    ));
+
+    assert!(app.tab.plan.is_none());
+    assert_eq!(app.tab.result_tab, ResultTab::Rows);
+}
+
+#[test]
+fn an_error_place_for_a_closed_tab_is_not_shown_in_the_current_tab() {
+    let (mut app, _dir) = test_app();
+    let closed = app.next_tab_id();
+    app.notes.log.push(Message {
+        time: String::new(),
+        text: "stale error".into(),
+        is_error: true,
+        at: Some((closed, (0, 0), (0, 1))),
+    });
+    app.notes.selected = Some(0);
+
+    app.go_to_message_place();
+
+    assert!(app.tab.error_marker.is_none());
 }
 
 /// Statements that set a password aren't kept in the history.
@@ -196,6 +267,7 @@ async fn watch_mode_marks_what_changed() {
     app.start_watch(2);
     finish(&mut app).await;
     app.tab.grid.filter.set("queued");
+    app.focus = Focus::Results;
     app.handle_key(key(KeyCode::Esc));
     assert!(app.watch.is_some(), "the filter went, not the watch");
     // The palette stops it from anywhere.

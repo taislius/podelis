@@ -263,7 +263,7 @@ impl App {
                 let _ = std::fs::remove_file(&file);
             }
             (GatewayPurpose::OntologyPlan(_, file), Ok(plan)) => {
-                if crate::gateway::ontology::plan_lines(&plan).is_empty() {
+                if super::ontology_edit::plan_len(&plan) == 0 {
                     let _ = std::fs::remove_file(&file);
                     return self.set_status(t!("memory.plan_nothing").into(), false);
                 }

@@ -69,13 +69,14 @@ pub(super) async fn connected_app(mode: ConnectionMode) -> (App, tempfile::TempD
     app.connection.form.mode = mode;
     let db = Database::connect(app.connection.form.params().unwrap()).await.unwrap();
     let generation = app.generation;
-    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
+    app.handle_db_event(DbEvent::connection(generation, DbEventKind::Connected(db)));
     assert!(matches!(app.screen, Screen::Query));
     (app, dir)
 }
 
 /// Runs `sql` through the normal key path and waits for the result.
 pub(super) async fn run_sql(app: &mut App, sql: &str) {
+    app.focus = Focus::Editor;
     app.tab.editor.set_text(sql);
     app.handle_key(key(KeyCode::F(5)));
     finish(app).await;
@@ -97,7 +98,7 @@ pub(super) async fn check_syntax_now(app: &mut App) {
     app.tick();
     loop {
         let event = app.poll_db_event().await.unwrap();
-        let done = matches!(event.kind, DbEventKind::SyntaxChecked { .. });
+        let done = matches!(event.as_connection_kind(), Some(DbEventKind::SyntaxChecked { .. }));
         app.handle_db_event(event);
         if done {
             break;
@@ -160,7 +161,7 @@ pub(super) async fn connect_profile(app: &mut App, profile: &ConnectionProfile) 
     app.connection.form = ConnectForm::from_profile(profile, String::new());
     let db = Database::connect(app.connection.form.params().unwrap()).await.unwrap();
     let generation = app.generation;
-    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
+    app.handle_db_event(DbEvent::connection(generation, DbEventKind::Connected(db)));
     finish_catalog(app).await;
 }
 
@@ -179,7 +180,7 @@ pub(super) fn table_names(app: &App) -> Vec<String> {
 pub(super) async fn until_event(app: &mut App, done: fn(&DbEventKind) -> bool) {
     loop {
         let event = app.poll_db_event().await.unwrap();
-        let last = done(&event.kind);
+        let last = event.as_connection_kind().is_some_and(done);
         app.handle_db_event(event);
         if last {
             return;
@@ -200,7 +201,7 @@ pub(super) async fn live_app(engine: Engine, name: &str) -> Option<(App, tempfil
     form.password = params.password;
     form.database = params.database;
     let generation = app.generation;
-    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
+    app.handle_db_event(DbEvent::connection(generation, DbEventKind::Connected(db)));
     Some((app, dir))
 }
 
@@ -229,7 +230,7 @@ pub(super) async fn asking_app(dir: &std::path::Path, config: &str) -> App {
     app.connection.form.name = "shop".into();
     let db = Database::connect(app.connection.form.params().unwrap()).await.unwrap();
     let generation = app.generation;
-    app.handle_db_event(DbEvent { generation, run: None, kind: DbEventKind::Connected(db) });
+    app.handle_db_event(DbEvent::connection(generation, DbEventKind::Connected(db)));
     app.connection.form.name = "shop".into();
     app
 }

@@ -678,6 +678,7 @@ async fn a_panes_command_from_the_editor_goes_to_its_pane_or_is_done_at_once() {
                 | C::SystemTables
                 | C::RefreshSchema
                 | C::AnalyzeTable
+                | C::Reconnect
                 | C::Action(_)
         )
     };
