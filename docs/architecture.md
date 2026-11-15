@@ -193,6 +193,15 @@ everywhere:
   state between `App::connection` and the parked map; draining a project
   clears both in one operation. `App::switch_conn` remains the coordinator
   for the generation bump, keep-alive reset and catalog reload that follow.
+  `KeepAlive` owns health transitions; the last-known health remains separate
+  from whether a check is in progress.
+  The optional heartbeat (`settings.keepalive`, off by default) checks idle
+  connections and updates the status bar; `Reconnect` runs that check on
+  demand. Query failures also mark an unreachable connection, and a later
+  successful check or query clears the lost state. With the heartbeat off,
+  the status bar can only learn about a loss when an operation checks the
+  server. Connection generations discard heartbeat replies from a connection
+  that is no longer shown.
 - **Kept results** (`results/runs.rs`): each query run opens a `KeptRun` in the
   tab's `runs`. The one shown lives in the tab (`grid`, `last_sql`, its
   infos and parameters, its error), so every key works on it unchanged;

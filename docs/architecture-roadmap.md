@@ -109,6 +109,13 @@ valid boundaries when they express the design clearly.
   for direct app/UI access, while `switch_conn` coordinates generation
   invalidation, keep-alive state and catalog effects after a successful slot
   transition.
+- **Connection health:** the optional heartbeat, manual `Reconnect` command,
+  query failure handling and status bar already share the lost-connection
+  signal, with `KeepAlive` owning health and check transitions. Keep the
+  heartbeat off by default (`keepalive = 0`); while disabled,
+  detection is demand-driven by a query or manual check. Generation-tagged
+  events prevent a late check for a switched-away connection from changing the
+  shown connection's status.
 - **Crate split:** defer it. Current evidence supports stronger module
   boundaries and typed event identities, but does not yet show a stable
   independent interface that needs a separate crate.

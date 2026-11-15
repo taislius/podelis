@@ -572,7 +572,7 @@ impl App {
         self.tab.run.db = None;
         // A check on its way is for the connection before: its answer will
         // be dropped (another generation), so it's no longer awaited.
-        self.keepalive.pinging = false;
+        self.keepalive.cancel_check();
         self.generation.bump();
         self.tab.run.id = self.next_run_id();
         self.tab.run.queued_plan = None;

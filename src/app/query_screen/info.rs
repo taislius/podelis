@@ -28,10 +28,10 @@ impl App {
         if self.conn_busy() {
             return self.set_status(t!("info.stop_query_first").to_string(), true);
         }
-        if self.keepalive.pinging {
+        if self.keepalive.pinging() {
             return self.set_status(t!("info.reconnecting").to_string(), false);
         }
-        self.keepalive.reconnect_requested = true;
+        self.keepalive.begin_reconnect();
         self.set_status(t!("info.reconnecting").to_string(), false);
         self.ping();
     }
@@ -143,7 +143,7 @@ impl App {
             || self.connection.sandbox.is_some()
             || (self.settings.keepalive > 0 && self.connection.database.is_some())
             // A lost connection, checked again until it's back.
-            || (self.keepalive.connection_lost && self.connection.database.is_some())
+            || (self.keepalive.connection_lost() && self.connection.database.is_some())
             // A plan's age, kept current.
             || (self.tab.result_tab == ResultTab::Plan && self.tab.plan_source.is_some())
             // What agents did, for the status bar's note.
@@ -160,10 +160,10 @@ impl App {
         // A lost connection is checked again every few seconds, heartbeat
         // or not, so it's said as soon as it's back (and reconnected).
         let every =
-            if self.keepalive.connection_lost { LOST_RECHECK } else { Duration::from_secs(self.settings.keepalive) };
+            if self.keepalive.connection_lost() { LOST_RECHECK } else { Duration::from_secs(self.settings.keepalive) };
         if every.is_zero()
             || self.conn_busy()
-            || self.keepalive.pinging
+            || self.keepalive.pinging()
             || self.keepalive.last_activity.elapsed() < every
         {
             return;
@@ -174,9 +174,9 @@ impl App {
     /// Something done while the connection is lost (a key, a click):
     /// checks it again now rather than at the next tick, once in a while.
     pub(in crate::app) fn recheck_lost_connection(&mut self) {
-        if self.keepalive.connection_lost
+        if self.keepalive.connection_lost()
             && !self.conn_busy()
-            && !self.keepalive.pinging
+            && !self.keepalive.pinging()
             && self.keepalive.last_activity.elapsed() >= LOST_RECHECK_AFTER_INPUT
         {
             self.ping();
@@ -188,7 +188,7 @@ impl App {
     /// session is given up for it is `pinged`'s to decide.
     fn ping(&mut self) {
         let Some(db) = self.connection.database.clone() else { return };
-        self.keepalive.pinging = true;
+        self.keepalive.begin_check();
         self.keepalive.last_activity = Instant::now();
         let send = self.sender();
         tokio::spawn(async move {
@@ -226,9 +226,7 @@ impl App {
     }
 
     pub(in crate::app) fn pinged(&mut self, result: Result<(Duration, bool), (String, Ping)>) {
-        self.keepalive.pinging = false;
-        let reconnect_requested = std::mem::take(&mut self.keepalive.reconnect_requested);
-        let was_lost = std::mem::replace(&mut self.keepalive.connection_lost, result.is_err());
+        let (was_lost, reconnect_requested) = self.keepalive.finish_check(result.is_ok());
         // No answer while rechecking a lost connection: the session is
         // given up (the next check opens a new one rather than waiting on
         // a dead link), unless a query now runs on it or a transaction is

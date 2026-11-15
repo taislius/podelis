@@ -14,13 +14,66 @@ pub struct KeepAlive {
     /// When the connection was last used.
     pub(super) last_activity: Instant,
     /// A check is running.
-    pub(super) pinging: bool,
+    pinging: bool,
     /// The user explicitly asked to check a lost connection.
-    pub(super) reconnect_requested: bool,
+    reconnect_requested: bool,
     /// The last check of the connection failed (shown in the top bar).
-    pub connection_lost: bool,
+    connection_lost: bool,
     /// The heartbeat interval to go back to when it's switched on again.
     pub(super) heartbeat_secs: u64,
+}
+
+impl KeepAlive {
+    pub fn connection_lost(&self) -> bool {
+        self.connection_lost
+    }
+
+    pub(super) fn pinging(&self) -> bool {
+        self.pinging
+    }
+
+    pub(super) fn mark_lost(&mut self) {
+        self.connection_lost = true;
+    }
+
+    #[cfg(test)]
+    pub fn mark_lost_for_tests(&mut self) {
+        self.mark_lost();
+    }
+
+    pub(super) fn mark_healthy(&mut self) {
+        self.connection_lost = false;
+    }
+
+    pub(super) fn begin_check(&mut self) {
+        self.pinging = true;
+    }
+
+    pub(super) fn cancel_check(&mut self) {
+        self.pinging = false;
+        self.reconnect_requested = false;
+    }
+
+    pub(super) fn begin_reconnect(&mut self) {
+        self.reconnect_requested = true;
+    }
+
+    /// Completes a check and returns the health and intent that preceded it.
+    pub(super) fn finish_check(&mut self, succeeded: bool) -> (bool, bool) {
+        self.pinging = false;
+        let was_lost = self.connection_lost;
+        let reconnect_requested = std::mem::take(&mut self.reconnect_requested);
+        self.connection_lost = !succeeded;
+        (was_lost, reconnect_requested)
+    }
+
+    /// A check belongs to the previous connection after a switch; forget its
+    /// pending state as well as the previous connection's health.
+    pub(super) fn reset_for_connection(&mut self) {
+        self.connection_lost = false;
+        self.pinging = false;
+        self.reconnect_requested = false;
+    }
 }
 
 impl Default for KeepAlive {
@@ -299,11 +352,10 @@ impl App {
         if !self.conns.switch_active(&mut self.connection, target) {
             return;
         }
-        self.keepalive.connection_lost = false;
+        self.keepalive.reset_for_connection();
         // Events from the other connection's background work no longer
         // apply; restart what was cut short.
         // (A check on its way is for the connection before: see `pinging`.)
-        self.keepalive.pinging = false;
         self.generation.bump();
         self.tab.syntax_hint = None;
         match &mut self.connection.schema {
@@ -441,7 +493,7 @@ impl App {
         }
         if self.conns.active == Some(id) {
             self.switch_conn(None);
-            self.keepalive.connection_lost = false;
+            self.keepalive.mark_healthy();
         }
         self.release_unused_conns();
         self.save_draft();
@@ -884,5 +936,42 @@ mod conns_tests {
         assert_eq!(slots.len(), 2);
         assert!(conns.active.is_none() && conns.parked.is_empty());
         assert_eq!(active.summary, "");
+    }
+}
+
+#[cfg(test)]
+mod keepalive_tests {
+    use super::*;
+
+    #[test]
+    fn checks_keep_last_health_and_check_in_progress_separate() {
+        let mut keepalive = KeepAlive::default();
+        keepalive.mark_lost();
+        keepalive.begin_check();
+        keepalive.begin_reconnect();
+
+        assert!(keepalive.pinging());
+        assert!(keepalive.connection_lost());
+        assert_eq!(keepalive.finish_check(false), (true, true));
+        assert!(!keepalive.pinging());
+        assert!(keepalive.connection_lost());
+
+        keepalive.begin_check();
+        assert_eq!(keepalive.finish_check(true), (true, false));
+        assert!(!keepalive.connection_lost());
+    }
+
+    #[test]
+    fn switching_connections_clears_pending_check_and_reconnect_intent() {
+        let mut keepalive = KeepAlive::default();
+        keepalive.mark_lost();
+        keepalive.begin_check();
+        keepalive.begin_reconnect();
+
+        keepalive.reset_for_connection();
+
+        assert!(!keepalive.connection_lost());
+        assert!(!keepalive.pinging());
+        assert_eq!(keepalive.finish_check(true), (false, false));
     }
 }
