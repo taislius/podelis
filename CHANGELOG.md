@@ -14,6 +14,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `R` in the results checks the connection at once and reconnects a lost one; a lost connection shows `×` in the status bar.
 - Each database's ontology: its tables, views, columns and keys, with what the project's memory says of them, as one graph. `Ctrl+K y k` on a saved connection shows it by table, column and term, with a model's suggestions and stale facts apart; `a` on a line adds a fact about it.
 - `E` there opens it in your editor (`$VISUAL`, `$EDITOR`, else `vi`) as YAML; when you close it, Podėlis lists what loading it back would change (added, confirmed, moved, forgotten) and changes nothing until you've scrolled through it and pressed `y`. Edits that don't load are kept, to open again.
 - `podelis ontology <connection>` shows it; `turtle` writes it as SKOS Turtle for RDF tools; `export [file]` writes the YAML; `import <file>` loads an edited one back, after asking (`-y` not to).
@@ -26,6 +27,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `F5`, `F6`, `F7`, undo, redo, find, the history and completion work while the editor has the keys only: in the navigator or the results they no longer act on the editor's text.
+- A saved query that changed is shown by its name underlined in orange (and *edited* in `Ctrl+K`'s tabs), not a `!`.
 - The ask pop-up is gone: questions are asked in the editor.
 - Messages that also show on MongoDB say query, not SQL (tab search, the agents' log, the library's search, diagnostics, editing and following rows, the normal mode's help).
 - The memory window's messages are in Lithuanian too.
@@ -36,6 +39,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A connection lost in a hidden tab is marked on that tab's connection (it wasn't marked at all), and switching tabs no longer clears another connection's *connection lost*.
+- A foreign-key list, plan or error place coming back after its tab was closed is dropped, not shown in the tab that took its place.
 - A SQLite file opened from the command line by a relative path is saved with its whole path, so it opens again from another folder.
 - SQLite: a column computed in a query (`sum(total)`) got no type, so exports and charts took it as text; its values now say what it is.
 - Reading a file over HTTPS in DuckDB (`read_csv('https://…')`) that fails on the site's certificate says so, not that the database's own TLS settings are wrong.

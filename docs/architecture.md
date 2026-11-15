@@ -10,9 +10,6 @@ agents). The root crate re-exports the core's modules (`use podelis_core::{db,
 lang, sql}` in `main.rs`), so its code says `crate::db::…` as before; the
 AI crate it names as `podelis_ai::…`.
 
-For proposed incremental improvements to these boundaries, see
-[architecture-roadmap.md](architecture-roadmap.md).
-
 ```
 crates/podelis-core/
   build.rs               finds the engines (see "Databases")

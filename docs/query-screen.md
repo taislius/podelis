@@ -53,7 +53,7 @@ Keys that work directly:
 
 | Key | Action |
 |---|---|
-| `F5` / `Ctrl+Enter`¹ / `Alt+Enter` | Run the selection, or everything in the editor. In a tab whose connection couldn't be opened again when Podėlis started (the server was down, the VPN off), `F5`, `F6` and `F7` try it again first and go ahead once it's open (or click **▶ F5 Run** right of the tabs; *Statement* and *Explain* are there too). The results pane switches to RESULT as it starts, with a result of its own (the one before stays: `,` in the results) |
+| `F5` / `Ctrl+Enter`¹ / `Alt+Enter` | Run the selection, or everything in the editor. Like `F6`, `F7`, undo, find and the history, it works while the editor has the keys, not in the navigator or the results (`Tab` goes back). In a tab whose connection couldn't be opened again when Podėlis started (the server was down, the VPN off), `F5`, `F6` and `F7` try it again first and go ahead once it's open (or click **▶ F5 Run** right of the tabs; *Statement* and *Explain* are there too). The results pane switches to RESULT as it starts, with a result of its own (the one before stays: `,` in the results) |
 | `F6` | Run the selection, or the statement under the cursor. With several statements in the editor, its footer says which one that is (`stmt 2/3`) |
 | `F7` | Show the plan for the selection / statement under the cursor (not executed), switching to QUERY PLAN as it starts. Pressed while a query runs, PostgreSQL and MySQL make it at once on a connection of their own; where that would see something else (SQLite, an open transaction, after `USE` or `SET`, `:parameters`) it follows when the query finishes, and if that fails its error stays in view instead (`Esc` stops both). MySQL and MariaDB show the classic `EXPLAIN` table, as a grid (`possible_keys`, `key_len`…), its notes above and each note's number on its row in the `◀` column |
 | `Shift+F7` | `EXPLAIN ANALYZE`: runs the statement and shows actual times and rows (writes ask first and are rolled back). MySQL needs 8.0.18+, and runs only reads and UPDATE/DELETE of several tables this way (for the rest it shows the plan, `F7`'s); MariaDB runs `ANALYZE` |
@@ -91,8 +91,9 @@ From any pane:
 | `Ctrl+K Space` | Every message whole, the newest first (`y` copies them). A message in a pane's footer is cut off with `…` to fit, beside the transaction modes in the editor's; clicking it opens this too |
 
 A tab's `SQL` label is orange while the tab isn't saved to the library
-(its text is still kept as a draft), and a `!` on a saved query's tab means
-its text has changed since it was saved. Tabs, their
+(its text is still kept as a draft), and a saved query's name underlined in
+orange means its text has changed since it was saved (*edited* in `Ctrl+K`'s
+list of tabs). Tabs, their
 connections and cursors come back after a restart (unless
 `restore_session = false`); results don't, press `F5` to re-run. The active
 tab shows its whole name (up to 40 characters) and the others share what's
@@ -201,6 +202,7 @@ When focused:
 | Big exports | No export of *every row* leaves less than `export_min_free_gb` free on its disk (5 GB): one that would doesn't start, and one that gets there stops and removes its file; it's checked about every 32 MB written (rows come in pages of about that size). The rows shown only have to fit, as does every row of a result that's all loaded. While an export of every row reads, no query runs on its connection's session (it runs one at a time); Esc cancels a query running here first, then stops the export. Gigabytes here are 1024³ bytes, as sizes are shown. *Every row* first asks if the plan says it would reach `export_ask_gb` (1 GB; from the rows the plan expects, on a server, and the size of those loaded, so it's rough), and asks again at each multiple of it as it's written, and nothing reads the rows meanwhile: PostgreSQL waits, but MySQL drops the query after `net_write_timeout` (a minute by default), and a proxy may too. What's written is then kept as `podelis-export-….partial.csv`, as is what's written when anything else ends an export after a question was answered, with what ended it said. The question waits until it's answered, and comes back if another one was open; Ctrl+Q still quits. `export_max_gb` stops a file at a size without asking (off by default). The progress says the size and what's free. Where free space can't be read (not allowed there, or a mount that doesn't say) it says so and goes on without that check, and a full disk stops the export with the write's own error, removing its file. A file named `.parquet.rows` beside a Parquet export is its scratch file, counted too |
 | `M` | Load 10× more rows (streamed results fetch the next pages; scripts are re-run with a bigger limit, read-only ones only); the first of the new rows is selected, so they're in sight (sorted or filtered, the first place one of them is). Pressed while a page is still coming, its rows follow that page |
 | `[` / `]`, `1` `2` `3` (or click a tab) | Switch between the RESULT, MESSAGES and QUERY PLAN tabs (`F7` opens the plan with the results focused; `1` goes back) |
+| `R` | Check the connection now; one that's lost reconnects (not while a query runs on it) |
 | `,` / `.` (or click `#2`) | Show the result of an earlier / later run: each query you run keeps its own (see *Earlier results* below) |
 | `p` | Pin the result shown, so it's kept however many queries run after it (again unpins) |
 | `↑`/`↓`/`PageUp`/`PageDown`, `Home` / `End` | In MESSAGES: select a message (or click it). `Enter` shows all of it (or double-click), `y` / `Ctrl+C` copies it, `Y` copies every message, `Esc` clears the selection |
@@ -412,13 +414,15 @@ an idle connection regularly, so a drop is noticed (and reconnected) before
 your next query: switch it on or off from the palette ("Connection
 heartbeat", or bind `heartbeat`), with `keepalive = 60` in `config.toml`
 as the interval and default (0 = off). While it runs, the status bar
-shows `♥` before the connection; a failed check turns it red with
-**connection lost** until the next successful check or query. Without
+shows `♥` before the connection; a failed check turns it red, with `×`
+and **connection lost**, until the next successful check or query. Without
 it, a run after a minute with none (or after *connection lost*) first
 checks that the server answers: a link that died meanwhile fails in 5 s,
 with nothing run, instead of leaving the query waiting. Once it's
 *connection lost*, Podėlis checks again every few seconds (and when you
-do something), heartbeat or not, and says when the connection is back. "Copy diagnostics" in the palette
+do something), heartbeat or not, and says when the connection is back;
+`R` in the results checks at once. Each connection keeps its own state:
+a tab on another connection isn't marked lost by this one. "Copy diagnostics" in the palette
 copies versions, terminal and settings for a bug report — no hosts, users
 or SQL.
 
