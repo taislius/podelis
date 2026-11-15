@@ -684,6 +684,11 @@ table = "lentelė"
 view = "rodinys"
 
 [library]
+other_shape = "Išsaugotų užklausų failas ({path}) yra šiai versijai neskaitomo pavidalo ({e}): paliekamas kaip yra, įrašyti į biblioteką išjungta."
+unreadable = "Nepavyko nuskaityti išsaugotų užklausų ({path}): {e}. Įrašyti į biblioteką išjungta, kad failas nebūtų perrašytas."
+moved_aside = "Išsaugotų užklausų failas buvo netinkamas ({e}): perkeltas į {backup}"
+invalid_kept = "Išsaugotų užklausų failas netinkamas ({e}) ir jo nepavyko perkelti ({err}): įrašyti į biblioteką išjungta."
+save_blocked = "Biblioteka neįrašoma: jos failo nepavyko nuskaityti, o įrašant jis būtų perrašytas"
 no_name = "Pavadinkite užklausą"
 gone = "Išsaugotos užklausos nebėra"
 save_failed = "Nepavyko išsaugoti: {e}"

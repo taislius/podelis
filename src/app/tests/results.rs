@@ -1540,7 +1540,7 @@ async fn add_mark_delete_and_copy_rows() {
 fn snippets_complete_by_name_and_insert() {
     let (mut app, dir) = test_app();
     app.screen = Screen::Query;
-    app.library = crate::config::library::Library::load_from(Some(dir.path().join("q.json")));
+    app.library = crate::config::library::Library::load_from(Some(dir.path().join("q.json"))).0;
     app.library.add("snippets/recent", "select *\nfrom orders\nwhere placed_at > now() - interval '7 days'").unwrap();
     app.library.add("reports/churn", "select 1").unwrap();
     app.tab.editor.set_text("rec");

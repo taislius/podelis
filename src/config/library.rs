@@ -28,7 +28,12 @@ pub struct SavedQuery {
 impl SavedQuery {
     /// "group/name", or just "name".
     pub fn path(&self) -> String {
-        if self.group.is_empty() { self.name.clone() } else { format!("{}/{}", self.group, self.name) }
+        join(&self.group, &self.name)
+    }
+
+    /// In the group autocomplete offers as snippets (in any case).
+    pub fn is_snippet(&self) -> bool {
+        self.group.eq_ignore_ascii_case(SNIPPETS)
     }
 }
 
@@ -50,21 +55,80 @@ pub fn matches(query: &str, fields: &[&str]) -> bool {
 pub struct Library {
     path: Option<PathBuf>,
     pub queries: Vec<SavedQuery>,
+    /// The file is there but couldn't be read or moved aside: writing
+    /// would lose what's in it.
+    save_blocked: bool,
+    /// What was in the file isn't here (it couldn't be read, or was moved
+    /// aside): a tab's link to a saved query that's missing is kept.
+    incomplete: bool,
 }
 
 impl Library {
-    pub fn load_from(path: Option<PathBuf>) -> Self {
-        let queries = path
-            .as_ref()
-            .and_then(|p| fs::read_to_string(p).ok())
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default();
-        Self { path, queries }
+    /// The saved queries in `path` (none without a path), and a warning to
+    /// show when its file couldn't be read. A file that can't be read, or
+    /// is JSON of another shape (another version's, perhaps), is left as it
+    /// is and saving is refused; one that isn't JSON at all is moved aside
+    /// (`….json.bak-<time>`) rather than overwritten by the next save.
+    pub fn load_from(path: Option<PathBuf>) -> (Self, Option<String>) {
+        let library = |path, queries, save_blocked, incomplete| Self { path, queries, save_blocked, incomplete };
+        let Some(file) = path.clone() else { return (library(None, Vec::new(), false, false), None) };
+        let text = match fs::read_to_string(&file) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return (library(path, Vec::new(), false, false), None);
+            }
+            Err(e) => {
+                let warning = t!("library.unreadable", path = file.display(), e = e);
+                return (library(path, Vec::new(), true, true), Some(warning));
+            }
+        };
+        match serde_json::from_str(&text) {
+            Ok(queries) => (library(path, queries, false, false), None),
+            Err(e) if serde_json::from_str::<serde_json::Value>(&text).is_ok() => {
+                let warning = t!("library.other_shape", path = file.display(), e = e);
+                (library(path, Vec::new(), true, true), Some(warning))
+            }
+            Err(e) => {
+                let backup = backup_path(&file);
+                match fs::rename(&file, &backup) {
+                    Ok(()) => {
+                        let warning = t!("library.moved_aside", e = e, backup = backup.display());
+                        (library(path, Vec::new(), false, true), Some(warning))
+                    }
+                    Err(rename) => {
+                        let warning = t!("library.invalid_kept", e = e, err = rename);
+                        (library(path, Vec::new(), true, true), Some(warning))
+                    }
+                }
+            }
+        }
     }
 
-    fn save(&self) -> anyhow::Result<()> {
-        let Some(path) = &self.path else { return Ok(()) };
-        write_atomic(path, &serde_json::to_string_pretty(&self.queries)?)
+    /// Writes `queries` and, once they're written, keeps them: a save that
+    /// fails leaves the library as it was.
+    fn commit(&mut self, mut queries: Vec<SavedQuery>) -> Result<(), String> {
+        sort(&mut queries);
+        if let Some(path) = &self.path {
+            if self.save_blocked {
+                return Err(t!("library.save_blocked").to_string());
+            }
+            let text = serde_json::to_string_pretty(&queries).map_err(|e| e.to_string());
+            text.and_then(|text| write_atomic(path, &text).map_err(|e| format!("{e:#}")))
+                .map_err(|e| t!("library.save_failed", e = e))?;
+        }
+        self.queries = queries;
+        Ok(())
+    }
+
+    /// Whether what the file held may be missing here (see `load_from`'s
+    /// warning): a saved query not found isn't one that was deleted.
+    pub fn incomplete(&self) -> bool {
+        self.incomplete
+    }
+
+    /// Whether there's a snippets group.
+    pub fn has_snippets(&self) -> bool {
+        self.queries.iter().any(SavedQuery::is_snippet)
     }
 
     pub fn get(&self, id: &str) -> Option<&SavedQuery> {
@@ -80,19 +144,21 @@ impl Library {
         self.check_free(&group, &name, None)?;
         let id = uuid::Uuid::new_v4().to_string();
         let changed = Some(chrono::Local::now().timestamp());
-        self.queries.push(SavedQuery { id: id.clone(), name, group, sql: sql.to_string(), changed });
-        self.sort();
-        self.save().map_err(|e| t!("library.save_failed", e = format!("{e:#}")))?;
+        let mut queries = self.queries.clone();
+        queries.push(SavedQuery { id: id.clone(), name, group, sql: sql.to_string(), changed });
+        self.commit(queries)?;
         Ok(id)
     }
 
     pub fn update_sql(&mut self, id: &str, sql: &str) -> Result<(), String> {
-        let q = self.queries.iter_mut().find(|q| q.id == id).ok_or_else(|| t!("library.gone").to_string())?;
-        if q.sql != sql {
-            q.sql = sql.to_string();
-            q.changed = Some(chrono::Local::now().timestamp());
+        let mut queries = self.queries.clone();
+        let q = queries.iter_mut().find(|q| q.id == id).ok_or_else(|| t!("library.gone").to_string())?;
+        if q.sql == sql {
+            return Ok(());
         }
-        self.save().map_err(|e| t!("library.save_failed", e = format!("{e:#}")))
+        q.sql = sql.to_string();
+        q.changed = Some(chrono::Local::now().timestamp());
+        self.commit(queries)
     }
 
     /// Renames (and possibly regroups) a saved query from "group/name".
@@ -102,16 +168,16 @@ impl Library {
             return Err(t!("library.no_name").to_string());
         }
         self.check_free(&group, &name, Some(id))?;
-        let q = self.queries.iter_mut().find(|q| q.id == id).ok_or_else(|| t!("library.gone").to_string())?;
+        let mut queries = self.queries.clone();
+        let q = queries.iter_mut().find(|q| q.id == id).ok_or_else(|| t!("library.gone").to_string())?;
         q.group = group;
         q.name = name;
-        self.sort();
-        self.save().map_err(|e| t!("library.save_failed", e = format!("{e:#}")))
+        self.commit(queries)
     }
 
     pub fn delete(&mut self, id: &str) -> Result<(), String> {
-        self.queries.retain(|q| q.id != id);
-        self.save().map_err(|e| t!("library.save_failed", e = format!("{e:#}")))
+        let queries = self.queries.iter().filter(|q| q.id != id).cloned().collect();
+        self.commit(queries)
     }
 
     fn check_free(&self, group: &str, name: &str, except: Option<&str>) -> Result<(), String> {
@@ -119,17 +185,6 @@ impl Library {
             q.group.eq_ignore_ascii_case(group) && q.name.eq_ignore_ascii_case(name) && Some(q.id.as_str()) != except
         });
         if taken { Err(t!("library.exists", name = join(group, name))) } else { Ok(()) }
-    }
-
-    /// Ungrouped first, then by group and name.
-    fn sort(&mut self) {
-        self.queries.sort_by(|a, b| {
-            (!a.group.is_empty(), a.group.to_lowercase(), a.name.to_lowercase()).cmp(&(
-                !b.group.is_empty(),
-                b.group.to_lowercase(),
-                b.name.to_lowercase(),
-            ))
-        });
     }
 
     /// Saved queries matching `query` (its words, and its `@` dates), in
@@ -248,6 +303,28 @@ fn start_of(day: chrono::NaiveDate) -> Option<i64> {
     (0..3).find_map(|h| day.and_hms_opt(h, 0, 0)?.and_local_timezone(chrono::Local).earliest()).map(|t| t.timestamp())
 }
 
+/// Ungrouped first, then by group and name.
+fn sort(queries: &mut [SavedQuery]) {
+    queries.sort_by(|a, b| {
+        (!a.group.is_empty(), a.group.to_lowercase(), a.name.to_lowercase()).cmp(&(
+            !b.group.is_empty(),
+            b.group.to_lowercase(),
+            b.name.to_lowercase(),
+        ))
+    });
+}
+
+/// Where a file that couldn't be read is moved: `queries.json.bak-<time>`,
+/// with `-2`, `-3`… after it when one of that second is there already.
+fn backup_path(path: &std::path::Path) -> PathBuf {
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let first = path.with_extension(format!("json.bak-{stamp}"));
+    if !first.exists() {
+        return first;
+    }
+    (2..=u32::MAX).map(|n| path.with_extension(format!("json.bak-{stamp}-{n}"))).find(|p| !p.exists()).unwrap_or(first)
+}
+
 fn join(group: &str, name: &str) -> String {
     if group.is_empty() { name.to_string() } else { format!("{group}/{name}") }
 }
@@ -284,7 +361,7 @@ mod tests {
     fn add_rename_regroup_delete_and_persist() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("q.json");
-        let mut lib = Library::load_from(Some(path.clone()));
+        let mut lib = Library::load_from(Some(path.clone())).0;
         let a = lib.add("reports/churn", "select 1").unwrap();
         let b = lib.add("adhoc", "select 2").unwrap();
         assert!(lib.add("Reports/Churn", "x").unwrap_err().contains("already exists"));
@@ -294,12 +371,106 @@ mod tests {
 
         lib.rename(&a, "finance/churn by month").unwrap();
         lib.update_sql(&b, "select 3").unwrap();
-        let lib2 = Library::load_from(Some(path));
+        let lib2 = Library::load_from(Some(path)).0;
         assert_eq!(lib2.get(&a).unwrap().path(), "finance/churn by month");
         assert_eq!(lib2.get(&b).unwrap().sql, "select 3");
 
         lib.delete(&b).unwrap();
         assert_eq!(lib.queries.len(), 1);
+    }
+
+    #[test]
+    fn an_invalid_file_is_moved_aside_not_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("q.json");
+        fs::write(&path, "[{\"id\": \"a\", \"na").unwrap();
+        let (mut lib, warning) = Library::load_from(Some(path.clone()));
+        assert!(warning.is_some_and(|w| w.contains(".bak-")) && lib.incomplete());
+        assert!(lib.queries.is_empty());
+        let backups: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().contains(".bak-"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read_to_string(backups[0].path()).unwrap(), "[{\"id\": \"a\", \"na");
+        // Saving starts a new file; the old one stays where it was moved.
+        lib.add("fresh", "select 1").unwrap();
+        assert_eq!(Library::load_from(Some(path)).0.queries.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_file_is_not_overwritten() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("q.json");
+        fs::write(&path, "[]").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read_to_string(&path).is_ok() {
+            return; // Running as root: permissions don't stop it.
+        }
+        let (mut lib, warning) = Library::load_from(Some(path.clone()));
+        assert!(warning.is_some());
+        assert!(lib.add("x", "select 1").is_err());
+        assert!(lib.queries.is_empty(), "a save refused changes nothing");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "[]");
+    }
+
+    #[test]
+    fn json_of_another_shape_is_kept_and_not_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("q.json");
+        let newer = r#"{"version": 2, "queries": []}"#;
+        fs::write(&path, newer).unwrap();
+        let (mut lib, warning) = Library::load_from(Some(path.clone()));
+        assert!(warning.is_some() && lib.incomplete());
+        assert!(lib.add("x", "select 1").is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), newer);
+    }
+
+    #[test]
+    fn backups_of_one_second_dont_overwrite_each_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("q.json");
+        for text in ["first {", "second {"] {
+            fs::write(&path, text).unwrap();
+            let _ = Library::load_from(Some(path.clone()));
+        }
+        let mut kept: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| fs::read_to_string(e.path()).unwrap())
+            .collect();
+        kept.sort();
+        assert_eq!(kept, ["first {", "second {"]);
+    }
+
+    #[test]
+    fn a_failed_save_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("q.json");
+        let mut lib = Library::load_from(Some(path)).0;
+        let id = lib.add("reports/churn", "select 1").unwrap();
+        // Its folder is a file now: nothing can be written there.
+        let blocker = dir.path().join("blocker");
+        fs::write(&blocker, "").unwrap();
+        lib.path = Some(blocker.join("q.json"));
+        assert!(lib.add("other", "select 2").is_err());
+        assert!(lib.rename(&id, "finance/churn").is_err());
+        assert!(lib.update_sql(&id, "select 3").is_err());
+        assert!(lib.delete(&id).is_err());
+        assert_eq!(lib.queries.len(), 1);
+        assert_eq!((lib.queries[0].path().as_str(), lib.queries[0].sql.as_str()), ("reports/churn", "select 1"));
+    }
+
+    #[test]
+    fn snippets_are_found_in_any_case() {
+        let mut lib = Library::load_from(None).0;
+        lib.add("Snippets/top", "select 1").unwrap();
+        assert!(lib.has_snippets());
+        assert!(lib.queries[0].is_snippet());
     }
 
     #[test]
@@ -333,7 +504,7 @@ mod tests {
 
     #[test]
     fn search_needs_every_word_in_name_group_or_sql() {
-        let mut lib = Library::load_from(None);
+        let mut lib = Library::load_from(None).0;
         lib.add("reports/churn", "select * from customers where status = 'paused'").unwrap();
         lib.add("adhoc/top", "select * from orders").unwrap();
         let names = |q: &str| lib.search(q).iter().map(|s| s.name.clone()).collect::<Vec<_>>();

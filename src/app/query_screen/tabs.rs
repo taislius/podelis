@@ -256,7 +256,12 @@ impl App {
 
     /// Loads a project's tabs (or its pre-tabs draft) and saved queries.
     pub(in crate::app) fn load_tabs(&mut self, project_id: &str) {
-        self.library = Library::load_from(self.library_path(project_id));
+        let (library, warning) = Library::load_from(self.library_path(project_id));
+        self.library = library;
+        if let Some(warning) = warning {
+            self.log(warning.clone(), true);
+            self.set_status(warning, true);
+        }
         let file: Option<TabsFile> = self
             .tabs_path(project_id)
             .and_then(|p| std::fs::read_to_string(p).ok())
@@ -286,8 +291,9 @@ impl App {
         self.connection.slots.tab_connections.clear();
         self.connection.slots.saved_session = saved.session;
         for (i, tab) in saved.tabs.into_iter().enumerate() {
-            // Links to saved queries that were deleted elsewhere are dropped.
-            let saved_id = tab.saved_id.filter(|id| self.library.get(id).is_some());
+            // Links to saved queries that were deleted elsewhere are dropped;
+            // not while the library's file couldn't be read (they're in it).
+            let saved_id = tab.saved_id.filter(|id| self.library.incomplete() || self.library.get(id).is_some());
             let id = self.next_tab_id();
             self.tabs.push(TabMeta { id, name: tab.name, saved_id, conn: None });
             self.connection.slots.tab_connections.push(tab.connection);
@@ -630,7 +636,7 @@ impl App {
     /// there is one: else with everything (a search for a group that isn't
     /// there showed nothing to pick until it was cleared).
     pub(in crate::app) fn open_snippets(&mut self) {
-        let snippets = self.library.queries.iter().any(|q| q.group.eq_ignore_ascii_case(library::SNIPPETS));
+        let snippets = self.library.has_snippets();
         self.popups.library_view = Some(LibraryView {
             query: LineInput::new(if snippets { library::SNIPPETS } else { "" }),
             selected: 0,

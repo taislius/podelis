@@ -150,9 +150,7 @@ impl App {
                 self.library
                     .queries
                     .iter()
-                    .filter(|q| {
-                        q.group == crate::config::library::SNIPPETS && q.name.to_lowercase().starts_with(&lower)
-                    })
+                    .filter(|q| q.is_snippet() && q.name.to_lowercase().starts_with(&lower))
                     .map(|q| complete::Candidate {
                         label: q.name.clone(),
                         insert: q.sql.trim_end().to_string(),

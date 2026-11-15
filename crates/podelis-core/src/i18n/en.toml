@@ -667,6 +667,11 @@ table = "table"
 view = "view"
 
 [library]
+other_shape = "The saved queries' file ({path}) isn't in a shape this version reads ({e}): it's left as it is, and saving to the library is off."
+unreadable = "Couldn't read the saved queries ({path}): {e}. Saving to the library is off, so the file isn't overwritten."
+moved_aside = "The saved queries' file was invalid ({e}): moved it to {backup}"
+invalid_kept = "The saved queries' file is invalid ({e}) and couldn't be moved aside ({err}): saving to the library is off."
+save_blocked = "The library isn't saved: its file couldn't be read, and saving would overwrite it"
 no_name = "Give the query a name"
 gone = "The saved query no longer exists"
 save_failed = "Couldn't save: {e}"

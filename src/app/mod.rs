@@ -369,7 +369,7 @@ impl App {
             parked: vec![None],
             active_tab: 0,
             tab_ids: TabId(1),
-            library: crate::config::library::Library::load_from(None),
+            library: crate::config::library::Library::load_from(None).0,
             watch: None,
             exports: query_screen::results::export::Exports::default(),
             run_ids: RunId::default(),
