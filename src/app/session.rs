@@ -84,10 +84,6 @@ impl Unrollable {
     }
 }
 
-fn swap_conn(app: &mut App, slot: &mut Connection) {
-    std::mem::swap(&mut app.connection, slot);
-}
-
 /// Which connection each tab uses, and the session being restored.
 #[derive(Default)]
 pub struct Conns {
@@ -110,6 +106,58 @@ pub struct Conns {
     /// Connect as soon as the saved connection's password is loaded (it was
     /// named on the command line).
     pub auto_connect: bool,
+}
+
+impl Conns {
+    /// Parks the active slot and activates `target`. A missing target leaves
+    /// both the active ID and slot untouched.
+    fn switch_active(&mut self, active: &mut Connection, target: Option<u64>) -> bool {
+        if target == self.active || target.is_some_and(|id| !self.parked.contains_key(&id)) {
+            return false;
+        }
+
+        let current = std::mem::take(active);
+        if let Some(id) = self.active {
+            self.parked.insert(id, current);
+        }
+        if let Some(id) = target {
+            *active = self.parked.remove(&id).expect("the target connection was checked above");
+        }
+        self.active = target;
+        true
+    }
+
+    /// Gives a new connection a unique ID and makes its slot active.
+    fn attach_active(&mut self, active: &mut Connection, slot: Connection) -> u64 {
+        debug_assert!(self.active.is_none(), "detach the current connection before attaching another");
+        let id = self.allocate_id();
+        *active = slot;
+        self.active = Some(id);
+        id
+    }
+
+    /// Stores a connection that will be activated when one of its tabs is shown.
+    fn park_new(&mut self, slot: Connection) -> u64 {
+        let id = self.allocate_id();
+        let previous = self.parked.insert(id, slot);
+        debug_assert!(previous.is_none(), "connection IDs are never reused");
+        id
+    }
+
+    /// Removes the active and parked slots, leaving no active connection.
+    fn drain(&mut self, active: &mut Connection) -> Vec<Connection> {
+        let mut slots = Vec::with_capacity(self.parked.len() + 1);
+        slots.push(std::mem::take(active));
+        slots.extend(self.parked.drain().map(|(_, slot)| slot));
+        self.active = None;
+        slots
+    }
+
+    fn allocate_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
 }
 
 /// The card shown while a session's connections are reopened, if that
@@ -244,25 +292,13 @@ impl App {
     /// Makes connection `target` the active one, parking the current one.
     /// Puts `target`'s state in the app's fields, parking the active one's.
     pub(super) fn swap_conns(&mut self, target: Option<u64>) {
-        if target == self.conns.active {
-            return;
-        }
-        let mut current = Connection::default();
-        swap_conn(self, &mut current);
-        if let Some(id) = self.conns.active {
-            self.conns.parked.insert(id, current);
-        }
-        if let Some(mut slot) = target.and_then(|id| self.conns.parked.remove(&id)) {
-            swap_conn(self, &mut slot);
-        }
-        self.conns.active = target;
+        self.conns.switch_active(&mut self.connection, target);
     }
 
     pub(super) fn switch_conn(&mut self, target: Option<u64>) {
-        if target == self.conns.active {
+        if !self.conns.switch_active(&mut self.connection, target) {
             return;
         }
-        self.swap_conns(target);
         self.keepalive.connection_lost = false;
         // Events from the other connection's background work no longer
         // apply; restart what was cut short.
@@ -440,13 +476,9 @@ impl App {
         self.stop_all_runs();
         self.tab.run.set_stream(None);
         self.tab.run.executing = false;
-        let mut current = Connection::default();
-        swap_conn(self, &mut current);
-        let slots = std::iter::once(current).chain(self.conns.parked.drain().map(|(_, s)| s));
-        for db in slots.filter_map(|s| s.database) {
+        for db in self.conns.drain(&mut self.connection).into_iter().filter_map(|slot| slot.database) {
             tokio::spawn(async move { db.close().await });
         }
-        self.conns.active = None;
         self.conns.restoring.clear();
         self.splash = None;
         for tab in &mut self.tabs {
@@ -460,11 +492,9 @@ impl App {
         self.tabs[self.active_tab].conn = None;
         self.switch_conn(None);
         self.release_unused_conns();
-        let id = self.conns.next_id;
-        self.conns.next_id += 1;
+        let id =
+            self.conns.attach_active(&mut self.connection, Connection { database: Some(db), ..Connection::default() });
         self.tabs[self.active_tab].conn = Some(id);
-        self.conns.active = Some(id);
-        self.connection.database = Some(db);
     }
 
     /// Ctrl+D: disconnects this tab. The connection stays open while other
@@ -759,24 +789,23 @@ impl App {
                 return self.set_status(msg, true);
             }
         };
-        let id = self.conns.next_id;
-        self.conns.next_id += 1;
-        for (tab, name) in self.tabs.iter_mut().zip(&self.conns.tab_connections) {
-            if name.as_deref() == Some(form.name.as_str()) {
-                tab.conn = Some(id);
-            }
-        }
+        let connection_name = form.name.clone();
+        let summary = form.summary();
         let project = self.project().map(|p| p.name.clone()).unwrap_or_default();
-        self.log(t!("session.reconnected", summary = form.summary()), false);
-        let slot = Connection {
+        self.log(t!("session.reconnected", summary = summary), false);
+        let id = self.conns.park_new(Connection {
             database: Some(db),
             mode: form.mode,
             tx_mode: form.tx_mode(),
             summary: format!("[{project}] {}", form.summary()),
             form,
             ..Connection::default()
-        };
-        self.conns.parked.insert(id, slot);
+        });
+        for (tab, saved_name) in self.tabs.iter_mut().zip(&self.conns.tab_connections) {
+            if saved_name.as_deref() == Some(connection_name.as_str()) {
+                tab.conn = Some(id);
+            }
+        }
         if self.tabs[self.active_tab].conn == Some(id) {
             self.switch_conn(Some(id));
         }
@@ -803,5 +832,57 @@ impl App {
         for t in wanted {
             self.request_details(t);
         }
+    }
+}
+
+#[cfg(test)]
+mod conns_tests {
+    use super::*;
+
+    fn slot(summary: &str) -> Connection {
+        Connection { summary: summary.to_string(), ..Connection::default() }
+    }
+
+    #[test]
+    fn connection_owner_allocates_and_switches_slots_together() {
+        let mut conns = Conns::default();
+        let mut active = Connection::default();
+        let first = conns.attach_active(&mut active, slot("first"));
+        let second = conns.park_new(slot("second"));
+
+        assert_eq!((first, second), (0, 1));
+        assert!(conns.switch_active(&mut active, Some(second)));
+        assert_eq!(conns.active, Some(second));
+        assert_eq!(active.summary, "second");
+        assert_eq!(conns.parked.get(&first).unwrap().summary, "first");
+
+        assert!(conns.switch_active(&mut active, None));
+        assert_eq!(conns.active, None);
+        assert_eq!(active.summary, "");
+        assert_eq!(conns.parked.get(&second).unwrap().summary, "second");
+    }
+
+    #[test]
+    fn a_missing_connection_does_not_disturb_the_active_slot() {
+        let mut conns = Conns::default();
+        let mut active = Connection::default();
+        let id = conns.attach_active(&mut active, slot("active"));
+
+        assert!(!conns.switch_active(&mut active, Some(999)));
+        assert_eq!(conns.active, Some(id));
+        assert_eq!(active.summary, "active");
+    }
+
+    #[test]
+    fn draining_connections_clears_active_and_parked_state() {
+        let mut conns = Conns::default();
+        let mut active = Connection::default();
+        conns.attach_active(&mut active, slot("active"));
+        conns.park_new(slot("parked"));
+
+        let slots = conns.drain(&mut active);
+        assert_eq!(slots.len(), 2);
+        assert!(conns.active.is_none() && conns.parked.is_empty());
+        assert_eq!(active.summary, "");
     }
 }

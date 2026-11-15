@@ -104,6 +104,11 @@ valid boundaries when they express the design clearly.
   own a real transition invariant; a wrapper that only relocates fields would
   add indirection while those transitions still coordinate connections and
   app events.
+- **Connection slots:** `Conns` owns connection ID allocation and the active
+  and parked slot transitions. `App` still owns the shown `Connection` value
+  for direct app/UI access, while `switch_conn` coordinates generation
+  invalidation, keep-alive state and catalog effects after a successful slot
+  transition.
 - **Crate split:** defer it. Current evidence supports stronger module
   boundaries and typed event identities, but does not yet show a stable
   independent interface that needs a separate crate.

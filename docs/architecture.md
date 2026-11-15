@@ -99,7 +99,8 @@ generation so results from a superseded connection are ignored.
 
 `App` holds the app's state, much of it in parts that change together:
 `tab` (the shown tab, `TabState`), `connection` (the shown tab's
-connection, `Connection`: parked per tab and swapped in, like tabs), `run`
+connection, `Connection`: parked per connection and swapped in, like tabs), `conns`
+(`Conns`: connection IDs and parked slots), `run`
 (the active query and one-shot options for the next run), `notes` (what's
 said), `panes` (the layout),
 `manager` (the projects and connections screen), `agents` (the agents
@@ -187,6 +188,11 @@ everywhere:
   cannot retarget work or navigation to its replacement. Questions awaiting a
   model answer keep the same ID, without shifting their tab reference when
   earlier tabs close.
+- **Connections** (`session.rs`, `Conns`): owns connection ID allocation and
+  active/parked slot transitions. Switching moves the whole `Connection`
+  state between `App::connection` and the parked map; draining a project
+  clears both in one operation. `App::switch_conn` remains the coordinator
+  for the generation bump, keep-alive reset and catalog reload that follow.
 - **Kept results** (`results/runs.rs`): each query run opens a `KeptRun` in the
   tab's `runs`. The one shown lives in the tab (`grid`, `last_sql`, its
   infos and parameters, its error), so every key works on it unchanged;
