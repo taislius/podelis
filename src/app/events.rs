@@ -159,7 +159,7 @@ impl App {
                 self.connection.form = ConnectForm::from_profile(&profile, password);
                 // Without the keychain, the database's own sources (PGPASSWORD,
                 // ~/.pgpass) may still have the password: connect anyway.
-                let connect_now = std::mem::take(&mut self.conns.auto_connect);
+                let connect_now = std::mem::take(&mut self.connection.slots.auto_connect);
                 self.connection.form.error = note.as_ref().map(|n| t!("run.no_saved_password", note = n));
                 self.connection.form.keychain_note = note;
                 self.screen = Screen::Connect;

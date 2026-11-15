@@ -104,11 +104,10 @@ valid boundaries when they express the design clearly.
   own a real transition invariant; a wrapper that only relocates fields would
   add indirection while those transitions still coordinate connections and
   app events.
-- **Connection slots:** `Conns` owns connection ID allocation and the active
-  and parked slot transitions. `App` still owns the shown `Connection` value
-  for direct app/UI access, while `switch_conn` coordinates generation
-  invalidation, keep-alive state and catalog effects after a successful slot
-  transition.
+- **Project connection owner:** `ProjectConnections` groups the active
+  connection with its parked slots; tabs keep references to slot IDs.
+  `App::switch_conn` coordinates generation invalidation and catalog effects
+  after the owner completes a slot transition.
 - **Connection health:** the optional heartbeat, manual `Reconnect` command,
   query failure handling and status bar already share the lost-connection
   signal, with each project connection owning its health and check transitions.

@@ -72,10 +72,10 @@ impl App {
     }
 
     pub(in crate::app) fn not_connected_message(&self) -> String {
-        if self.conns.restoring.is_empty() {
+        if self.connection.slots.restoring.is_empty() {
             t!("run.not_connected").to_string()
         } else {
-            t!("run.still_reconnecting", names = self.conns.restoring.join(", "))
+            t!("run.still_reconnecting", names = self.connection.slots.restoring.join(", "))
         }
     }
 

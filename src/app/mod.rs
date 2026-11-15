@@ -218,8 +218,8 @@ pub struct App {
     pub panes: query_screen::panes::Panes,
     /// The projects and connections screen's state.
     pub manager: manager::projects::Manager,
-    /// The shown tab's connection; the other tabs' are parked (`Conns`).
-    pub connection: session::Connection,
+    /// The project's active and parked connections; tabs refer to slot IDs.
+    pub connection: session::ProjectConnections,
     /// What agents did and asked for (the agents view).
     pub agents: Agents,
     pub screen: Screen,
@@ -259,8 +259,7 @@ pub struct App {
     connect_started: Option<Instant>,
     /// The open cell-edit prompt.
     pub cell_edit: Option<CellEdit>,
-    /// Tabs' connections and the session being restored.
-    conns: session::Conns,
+    /// Open tabs and their project connection slot references.
     /// Open query tabs; the active one's state is in the fields above.
     pub tabs: Vec<TabMeta>,
     /// The active tab's editor, results and run.
@@ -360,7 +359,6 @@ impl App {
             splash: None,
             connect_started: None,
             cell_edit: None,
-            conns: session::Conns::default(),
             tabs: vec![TabMeta {
                 id: TabId(1),
                 name: query_screen::tabs::default_tab_name(1),
@@ -394,12 +392,15 @@ impl App {
                 project_message: projects_message,
                 ..manager::projects::Manager::default()
             },
-            connection: session::Connection {
-                form: ConnectForm::new(),
-                mode: ConnectionMode::Normal,
-                tx_mode: TxMode::AutoCommit,
-                txn: TxnState::Idle,
-                ..session::Connection::default()
+            connection: session::ProjectConnections {
+                active: session::Connection {
+                    form: ConnectForm::new(),
+                    mode: ConnectionMode::Normal,
+                    tx_mode: TxMode::AutoCommit,
+                    txn: TxnState::Idle,
+                    ..session::Connection::default()
+                },
+                slots: session::Conns::default(),
             },
             agents: Agents::default(),
             db_tx,

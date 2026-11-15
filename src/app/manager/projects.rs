@@ -232,7 +232,7 @@ impl App {
         if std::mem::take(&mut self.manager.loading_profile) {
             self.invalidate_tasks();
         }
-        self.conns.auto_connect = false;
+        self.connection.slots.auto_connect = false;
         self.restore_active_form();
         self.popups.completion = None;
         self.popups.menu = None;
@@ -252,7 +252,7 @@ impl App {
     /// new one gets a new tab (dropped again on the way back if it stays
     /// empty and unconnected).
     pub(in crate::app) fn free_tab_for_form(&mut self) {
-        if self.conns.active.is_some() {
+        if self.connection.slots.active.is_some() {
             self.new_tab(None, "", None);
             self.tabs[self.active_tab].conn = None;
             self.switch_conn(None);
@@ -263,7 +263,7 @@ impl App {
     /// Before the settings pane edits a connection: the form belongs to the
     /// active tab's connection, so a connected tab's is set aside.
     pub(in crate::app) fn stash_active_form(&mut self) {
-        if self.conns.active.is_some() && self.manager.form_stash.is_none() {
+        if self.connection.slots.active.is_some() && self.manager.form_stash.is_none() {
             self.manager.form_stash = Some(std::mem::take(&mut self.connection.form));
         }
     }

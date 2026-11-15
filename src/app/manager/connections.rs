@@ -181,7 +181,7 @@ impl App {
             if key.code == KeyCode::Esc {
                 self.invalidate_tasks();
                 self.manager.loading_profile = false;
-                self.conns.auto_connect = false;
+                self.connection.slots.auto_connect = false;
             }
             return;
         }
@@ -224,7 +224,7 @@ impl App {
             KeyCode::Right | KeyCode::Char('l' | 'e') | KeyCode::Tab => self.edit_selected_connection(),
             KeyCode::Enter if on_profile => {
                 self.free_tab_for_form();
-                self.conns.auto_connect = true;
+                self.connection.slots.auto_connect = true;
                 self.load_profile(self.profiles()[self.manager.connection_selected].clone());
             }
             KeyCode::Char('n') | KeyCode::Enter => self.new_connection(),

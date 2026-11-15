@@ -283,14 +283,14 @@ impl App {
         let active = saved.active.min(saved.tabs.len() - 1);
         self.tabs.clear();
         self.parked.clear();
-        self.conns.tab_connections.clear();
-        self.conns.saved_session = saved.session;
+        self.connection.slots.tab_connections.clear();
+        self.connection.slots.saved_session = saved.session;
         for (i, tab) in saved.tabs.into_iter().enumerate() {
             // Links to saved queries that were deleted elsewhere are dropped.
             let saved_id = tab.saved_id.filter(|id| self.library.get(id).is_some());
             let id = self.next_tab_id();
             self.tabs.push(TabMeta { id, name: tab.name, saved_id, conn: None });
-            self.conns.tab_connections.push(tab.connection);
+            self.connection.slots.tab_connections.push(tab.connection);
             let mut editor = TextEditor::with_text(&tab.sql);
             editor.restore_cursor(tab.cursor, tab.scroll);
             let state = TabState { editor, ..TabState::default() };
@@ -304,7 +304,7 @@ impl App {
         }
         self.active_tab = active;
         // An open connection stays with the active tab.
-        self.tabs[active].conn = self.conns.active;
+        self.tabs[active].conn = self.connection.slots.active;
         self.release_unused_conns();
     }
 
@@ -381,7 +381,7 @@ impl App {
             return visit(self);
         }
         let Some(mut parked) = self.parked.get_mut(i).and_then(Option::take) else { return };
-        let (shown, shown_conn, focus) = (self.active_tab, self.conns.active, self.focus);
+        let (shown, shown_conn, focus) = (self.active_tab, self.connection.slots.active, self.focus);
         swap_tab(self, &mut parked);
         self.active_tab = i;
         self.swap_conns(self.tabs[i].conn);
@@ -454,7 +454,7 @@ impl App {
         let name = name.unwrap_or_else(|| self.unused_tab_name());
         // A new tab shares the current tab's connection.
         let id = self.next_tab_id();
-        self.tabs.push(TabMeta { id, name, saved_id, conn: self.conns.active });
+        self.tabs.push(TabMeta { id, name, saved_id, conn: self.connection.slots.active });
         self.parked.push(Some(TabState { editor: TextEditor::with_text(sql), ..TabState::default() }));
         self.switch_tab(self.tabs.len() - 1);
         self.save_draft();
@@ -515,8 +515,8 @@ impl App {
         self.tabs.remove(closing);
         self.parked.remove(closing);
         // Each tab's connection from the last session, kept in step.
-        if closing < self.conns.tab_connections.len() {
-            self.conns.tab_connections.remove(closing);
+        if closing < self.connection.slots.tab_connections.len() {
+            self.connection.slots.tab_connections.remove(closing);
         }
         if self.active_tab > closing {
             self.active_tab -= 1;

@@ -119,7 +119,7 @@ impl App {
             return Some(t!("tab_list.running", time = mm_ss(secs)));
         }
         let Some(id) = tab.conn else { return Some(t!("tab_list.no_connection").to_string()) };
-        if self.conns.active == Some(id) && self.connection.keepalive.connection_lost() {
+        if self.connection.slots.active == Some(id) && self.connection.keepalive.connection_lost() {
             return Some(t!("tab_list.lost").to_string());
         }
         (self.conn_txn(id) == Some(TxnState::Open)).then(|| t!("tab_list.in_transaction").to_string())
@@ -142,7 +142,7 @@ impl App {
     /// Ctrl+K j: the open connections, to go to or close; the shown tab's
     /// selected.
     pub(super) fn open_connection_list(&mut self) {
-        let mut ids: Vec<u64> = self.conns.active.into_iter().collect();
+        let mut ids: Vec<u64> = self.connection.slots.active.into_iter().collect();
         ids.extend(self.parked_connections().into_iter().map(|(id, ..)| id));
         let conn_texts: Vec<(u64, String)> = ids
             .iter()
@@ -178,13 +178,17 @@ impl App {
         let running = tabs.iter().find_map(|&i| self.tab_run(i).filter(|r| r.executing).map(|r| (i, r)));
         let status = if let Some((_, run)) = running {
             Some(t!("tab_list.running", time = mm_ss(run.since.map_or(0, |s| s.elapsed().as_secs()))))
-        } else if self.conns.active == Some(id) && self.connection.keepalive.connection_lost() {
+        } else if self.connection.slots.active == Some(id) && self.connection.keepalive.connection_lost() {
             Some(t!("tab_list.lost").to_string())
         } else {
             (self.conn_txn(id) == Some(TxnState::Open)).then(|| t!("tab_list.in_transaction").to_string())
         };
         let status = status.map(|s| format!("  · {s}")).unwrap_or_default();
-        let here = if self.conns.active == Some(id) { format!("  ({})", t!("menu.this_one")) } else { String::new() };
+        let here = if self.connection.slots.active == Some(id) {
+            format!("  ({})", t!("menu.this_one"))
+        } else {
+            String::new()
+        };
         format!("{name}  · {}  · {names}{status}{here}", self.conn_address(id))
     }
 
@@ -284,7 +288,7 @@ impl App {
                 // The shown tab's own: nothing to go to. The list stays, and
                 // says what can be done with it.
                 if let Some(Command::GoToConnection(id)) = chosen
-                    && self.conns.active == Some(id)
+                    && self.connection.slots.active == Some(id)
                 {
                     let name = self.conn_name(id).unwrap_or_default();
                     return self.set_status(t!("conn_list.here", name = name), false);

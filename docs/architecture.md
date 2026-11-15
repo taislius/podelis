@@ -98,14 +98,13 @@ generation so results from a superseded connection are ignored.
 ## The app's building blocks
 
 `App` holds the app's state, much of it in parts that change together:
-`tab` (the shown tab, `TabState`), `connection` (the shown tab's
-connection, `Connection`: parked per connection and swapped in, like tabs), `conns`
-(`Conns`: connection IDs and parked slots), `run`
+`tab` (the shown tab, `TabState`), `connection` (`ProjectConnections`:
+the project's active `Connection` and parked slots managed with `Conns`), `run`
 (the active query and one-shot options for the next run), `notes` (what's
 said), `panes` (the layout),
 `manager` (the projects and connections screen), `agents` (the agents
 view), `popups` (each popup's state), `ask` (a question being answered),
-`keepalive` (checking an idle connection), `editing` (the editor's find bar, vim, the
+`editing` (the editor's find bar, vim, the
 checks' timer), `exports` (an export of every row running, its size being
 worked out), `sandbox_flow`, `help` (every key's window), `for_terminal`
 (what the main loop does outside the screen: the clipboard, a
@@ -188,13 +187,13 @@ everywhere:
   cannot retarget work or navigation to its replacement. Questions awaiting a
   model answer keep the same ID, without shifting their tab reference when
   earlier tabs close.
-- **Connections** (`session.rs`, `Conns`): owns connection ID allocation and
-  active/parked slot transitions. Each `Connection` owns its health state;
-  switching moves the whole value between `App::connection` and the parked map; draining a project
-  clears both in one operation. `App::switch_conn` remains the coordinator
-  for the generation bump, cancellation of an in-flight check and catalog reload that follow.
-  `KeepAlive` owns health transitions; the last-known health remains separate
-  from whether a check is in progress.
+- **Project connections** (`session.rs`, `ProjectConnections`): owns the
+  active `Connection` and the parked slots together. Tabs refer to stable
+  connection IDs; they don't own these values. Each `Connection` carries its
+  own health state. The owner allocates IDs, switches and drains slots as one
+  transition; `App::switch_conn` coordinates generation invalidation and
+  catalog effects around it. `KeepAlive` owns health transitions; last-known
+  health remains separate from whether a check is in progress.
   The optional heartbeat (`settings.keepalive`, off by default) checks idle
   connections and updates the status bar; `Reconnect` runs that check on
   demand. Query failures also mark an unreachable connection, and a later

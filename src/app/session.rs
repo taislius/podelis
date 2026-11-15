@@ -73,8 +73,8 @@ impl Default for KeepAlive {
 }
 
 /// A connection and what goes with it: its form, modes, transaction,
-/// navigator, health, summary and connect time. The shown one is
-/// `App::connection`; other open connections park the whole value in `Conns`.
+/// navigator, health, summary and connect time. The active value is
+/// `ProjectConnections::active`; other open connections are parked in slots.
 #[derive(Default)]
 pub struct Connection {
     pub database: Option<Database>,
@@ -124,11 +124,10 @@ impl Unrollable {
     }
 }
 
-/// Which connection each tab uses, and the session being restored.
+/// Connection IDs used by tabs, parked connections and session restoration.
 #[derive(Default)]
 pub struct Conns {
-    /// Id of the connection whose state is in `App`'s fields (the active
-    /// tab's), and the other tabs' connections.
+    /// ID of the active connection slot, whose value is `ProjectConnections::active`.
     pub active: Option<u64>,
     parked: HashMap<u64, Connection>,
     next_id: u64,
@@ -146,6 +145,42 @@ pub struct Conns {
     /// Connect as soon as the saved connection's password is loaded (it was
     /// named on the command line).
     pub auto_connect: bool,
+}
+
+/// The project's active connection and its other open connection slots.
+/// Tabs refer to these slots by ID; they do not own the connection values.
+#[derive(Default)]
+pub struct ProjectConnections {
+    pub active: Connection,
+    pub(super) slots: Conns,
+}
+
+impl ProjectConnections {
+    pub(super) fn switch_active(&mut self, target: Option<u64>) -> bool {
+        self.slots.switch_active(&mut self.active, target)
+    }
+
+    pub(super) fn drain(&mut self) -> Vec<Connection> {
+        self.slots.drain(&mut self.active)
+    }
+
+    pub(super) fn attach_active(&mut self, slot: Connection) -> u64 {
+        self.slots.attach_active(&mut self.active, slot)
+    }
+}
+
+impl std::ops::Deref for ProjectConnections {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.active
+    }
+}
+
+impl std::ops::DerefMut for ProjectConnections {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.active
+    }
 }
 
 impl Conns {
@@ -253,19 +288,19 @@ impl App {
 
     /// Whether the active tab has a connection.
     pub fn connected(&self) -> bool {
-        self.conns.active.is_some()
+        self.connection.slots.active.is_some()
     }
 
     /// Marks the active tab connected without a database, for UI tests.
     #[cfg(test)]
     pub fn pretend_connected(&mut self) {
-        self.conns.active = Some(u64::MAX);
+        self.connection.slots.active = Some(u64::MAX);
         self.tabs[self.active_tab].conn = Some(u64::MAX);
     }
 
     /// A transaction is open on any tab's connection.
     pub(super) fn any_open_transaction(&self) -> bool {
-        self.connection.txn != TxnState::Idle || self.conns.parked.values().any(|s| s.txn != TxnState::Idle)
+        self.connection.txn != TxnState::Idle || self.connection.slots.parked.values().any(|s| s.txn != TxnState::Idle)
     }
 
     /// Leaves the project for `target` (or, with `None`, the project list),
@@ -326,22 +361,22 @@ impl App {
 
     /// Connections still being reopened at startup.
     pub fn reconnecting(&self) -> &[String] {
-        &self.conns.restoring
+        &self.connection.slots.restoring
     }
 
     /// Makes connection `target` the active one, parking the current one.
     /// Puts `target`'s state in the app's fields, parking the active one's.
     pub(super) fn swap_conns(&mut self, target: Option<u64>) {
-        self.conns.switch_active(&mut self.connection, target);
+        self.connection.switch_active(target);
     }
 
     pub(super) fn switch_conn(&mut self, target: Option<u64>) {
-        let previous = self.conns.active;
-        if !self.conns.switch_active(&mut self.connection, target) {
+        let previous = self.connection.slots.active;
+        if !self.connection.switch_active(target) {
             return;
         }
         if let Some(id) = previous
-            && let Some(slot) = self.conns.parked.get_mut(&id)
+            && let Some(slot) = self.connection.slots.parked.get_mut(&id)
         {
             slot.keepalive.cancel_check();
         }
@@ -351,38 +386,39 @@ impl App {
         // (A check on its way is for the connection before: see `pinging`.)
         self.generation.bump();
         self.tab.syntax_hint = None;
+        let has_database = self.connection.database.is_some();
         match &mut self.connection.schema {
             Some(panel) if panel.loading => self.load_catalog(),
             Some(panel) => panel.tables.iter_mut().for_each(|t| t.details_loading = false),
-            None if self.connection.database.is_some() => self.load_catalog(),
+            None if has_database => self.load_catalog(),
             None => {}
         }
     }
 
     /// Connection `id`'s transaction state.
     pub(super) fn conn_txn(&self, id: u64) -> Option<TxnState> {
-        if self.conns.active == Some(id) {
+        if self.connection.slots.active == Some(id) {
             return Some(self.connection.txn);
         }
-        self.conns.parked.get(&id).map(|slot| slot.txn)
+        self.connection.slots.parked.get(&id).map(|slot| slot.txn)
     }
 
     /// A connection's name, by its id (the shown one's or a parked one's):
     /// its saved name, else its file's name or `host/database`.
     pub(super) fn conn_name(&self, id: u64) -> Option<String> {
-        if self.conns.active == Some(id) {
+        if self.connection.slots.active == Some(id) {
             return Some(self.connection.form.short_name());
         }
-        self.conns.parked.get(&id).map(|slot| slot.form.short_name())
+        self.connection.slots.parked.get(&id).map(|slot| slot.form.short_name())
     }
 
     /// Where connection `id` goes (`PostgreSQL db.example.com:5432/shop`),
     /// for the connections list.
     pub(super) fn conn_address(&self, id: u64) -> String {
-        let form = if self.conns.active == Some(id) {
+        let form = if self.connection.slots.active == Some(id) {
             Some(&self.connection.form)
         } else {
-            self.conns.parked.get(&id).map(|s| &s.form)
+            self.connection.slots.parked.get(&id).map(|s| &s.form)
         };
         form.map(|f| f.summary()).unwrap_or_default()
     }
@@ -429,7 +465,7 @@ impl App {
     /// Ctrl+X in the connections list: asks before closing every open
     /// connection (open transactions rolled back). Not while a query runs.
     pub(super) fn request_close_all_connections(&mut self) {
-        let mut ids: Vec<u64> = self.conns.active.into_iter().collect();
+        let mut ids: Vec<u64> = self.connection.slots.active.into_iter().collect();
         ids.extend(self.parked_connections().into_iter().map(|(id, ..)| id));
         self.popups.palette = None;
         if let Some(busy) = (0..self.tabs.len()).find(|&i| self.tab_running(i)) {
@@ -453,7 +489,7 @@ impl App {
 
     /// Closes every open connection, as `close_connection` closes one.
     pub(super) fn close_every_connection(&mut self) {
-        let mut ids: Vec<u64> = self.conns.active.into_iter().collect();
+        let mut ids: Vec<u64> = self.connection.slots.active.into_iter().collect();
         ids.extend(self.parked_connections().into_iter().map(|(id, ..)| id));
         let n = ids.len();
         for id in ids {
@@ -467,7 +503,7 @@ impl App {
     /// stays where it is.
     pub(super) fn close_connection(&mut self, id: u64) {
         let Some(name) = self.conn_name(id) else { return };
-        if self.conns.active == Some(id) {
+        if self.connection.slots.active == Some(id) {
             self.invalidate_tasks();
             self.tab.run.set_stream(None);
             self.tab.run.fetching_more = false;
@@ -479,12 +515,12 @@ impl App {
             if self.tabs[i].conn == Some(id) {
                 self.tabs[i].conn = None;
                 // Closed on purpose: a run there doesn't open it again.
-                if let Some(saved) = self.conns.tab_connections.get_mut(i) {
+                if let Some(saved) = self.connection.slots.tab_connections.get_mut(i) {
                     *saved = None;
                 }
             }
         }
-        if self.conns.active == Some(id) {
+        if self.connection.slots.active == Some(id) {
             self.switch_conn(None);
         }
         self.release_unused_conns();
@@ -495,7 +531,8 @@ impl App {
     /// The other tabs' connections: id, database and form.
     pub(super) fn parked_connections(&self) -> Vec<(u64, &Database, &ConnectForm)> {
         let mut out: Vec<_> = self
-            .conns
+            .connection
+            .slots
             .parked
             .iter()
             .filter_map(|(id, slot)| Some((*id, slot.database.as_ref()?, &slot.form)))
@@ -506,10 +543,16 @@ impl App {
 
     /// Closes parked connections that no tab uses any more.
     pub(super) fn release_unused_conns(&mut self) {
-        let unused: Vec<u64> =
-            self.conns.parked.keys().copied().filter(|id| self.tabs.iter().all(|t| t.conn != Some(*id))).collect();
+        let unused: Vec<u64> = self
+            .connection
+            .slots
+            .parked
+            .keys()
+            .copied()
+            .filter(|id| self.tabs.iter().all(|t| t.conn != Some(*id)))
+            .collect();
         for id in unused {
-            if let Some(db) = self.conns.parked.remove(&id).and_then(|s| s.database) {
+            if let Some(db) = self.connection.slots.parked.remove(&id).and_then(|s| s.database) {
                 tokio::spawn(async move { db.close().await });
             }
         }
@@ -520,10 +563,10 @@ impl App {
         self.stop_all_runs();
         self.tab.run.set_stream(None);
         self.tab.run.executing = false;
-        for db in self.conns.drain(&mut self.connection).into_iter().filter_map(|slot| slot.database) {
+        for db in self.connection.drain().into_iter().filter_map(|slot| slot.database) {
             tokio::spawn(async move { db.close().await });
         }
-        self.conns.restoring.clear();
+        self.connection.slots.restoring.clear();
         self.splash = None;
         for tab in &mut self.tabs {
             tab.conn = None;
@@ -536,8 +579,7 @@ impl App {
         self.tabs[self.active_tab].conn = None;
         self.switch_conn(None);
         self.release_unused_conns();
-        let id =
-            self.conns.attach_active(&mut self.connection, Connection { database: Some(db), ..Connection::default() });
+        let id = self.connection.attach_active(Connection { database: Some(db), ..Connection::default() });
         self.tabs[self.active_tab].conn = Some(id);
     }
 
@@ -556,7 +598,7 @@ impl App {
         self.tabs[self.active_tab].conn = None;
         // Disconnected on purpose: a run here doesn't open it again
         // (`tab_connection_to_retry`).
-        if let Some(name) = self.conns.tab_connections.get_mut(self.active_tab) {
+        if let Some(name) = self.connection.slots.tab_connections.get_mut(self.active_tab) {
             *name = None;
         }
         self.switch_conn(None);
@@ -586,7 +628,7 @@ impl App {
         self.screen = Screen::Query;
         let blank = self.tab.editor.is_empty() && self.tabs[self.active_tab].saved_id.is_none();
         if std::mem::take(&mut self.manager.drop_blank_tab)
-            && self.conns.active.is_none()
+            && self.connection.slots.active.is_none()
             && blank
             && self.tabs.len() > 1
         {
@@ -597,8 +639,9 @@ impl App {
     /// Names of the connections open in tabs (the connections pane marks
     /// them).
     pub fn open_connection_names(&self) -> Vec<&str> {
-        let active = self.conns.active.map(|_| self.active_form().name.as_str());
-        let parked = self.conns.parked.values().filter(|s| s.database.is_some()).map(|s| s.form.name.as_str());
+        let active = self.connection.slots.active.map(|_| self.active_form().name.as_str());
+        let parked =
+            self.connection.slots.parked.values().filter(|s| s.database.is_some()).map(|s| s.form.name.as_str());
         active.into_iter().chain(parked).collect()
     }
 
@@ -607,21 +650,22 @@ impl App {
         let name = match self.tabs.get(i)?.conn {
             None => {
                 return self
-                    .conns
+                    .connection
+                    .slots
                     .tab_connections
                     .get(i)
                     .cloned()
                     .flatten()
-                    .filter(|n| self.conns.restoring.contains(n));
+                    .filter(|n| self.connection.slots.restoring.contains(n));
             }
-            Some(id) if Some(id) == self.conns.active => &self.active_form().name,
-            Some(id) => &self.conns.parked.get(&id)?.form.name,
+            Some(id) if Some(id) == self.connection.slots.active => &self.active_form().name,
+            Some(id) => &self.connection.slots.parked.get(&id)?.form.name,
         };
         self.profiles().iter().any(|p| p.name == *name).then(|| name.clone())
     }
 
     pub(super) fn session_ui(&self) -> SessionUi {
-        let mut expanded = self.conns.restore_expanded.clone();
+        let mut expanded = self.connection.slots.restore_expanded.clone();
         let mut add = |form: &ConnectForm, schema: &Option<SchemaPanel>| {
             if let Some(panel) = schema
                 && !form.name.is_empty()
@@ -632,7 +676,7 @@ impl App {
             }
         };
         add(self.active_form(), &self.connection.schema);
-        for slot in self.conns.parked.values() {
+        for slot in self.connection.slots.parked.values() {
             add(&slot.form, &slot.schema);
         }
         expanded.retain(|_, tables| !tables.is_empty());
@@ -689,7 +733,7 @@ impl App {
             crate::config::draft::Target::Saved(name) => {
                 let profile = self.profiles().iter().find(|p| p.name.eq_ignore_ascii_case(&name)).cloned();
                 if let Some(profile) = profile {
-                    self.conns.auto_connect = true;
+                    self.connection.slots.auto_connect = true;
                     self.load_profile(profile);
                 } else {
                     let msg = t!("session.no_saved", name = name);
@@ -735,11 +779,11 @@ impl App {
         if self.current_project.is_none() {
             return;
         }
-        let session = self.conns.saved_session.clone();
+        let session = self.connection.slots.saved_session.clone();
         if !session.on_query {
             return;
         }
-        let mut names: Vec<String> = self.conns.tab_connections.iter().flatten().cloned().collect();
+        let mut names: Vec<String> = self.connection.slots.tab_connections.iter().flatten().cloned().collect();
         names.sort_unstable();
         names.dedup();
         let profiles: Vec<ConnectionProfile> =
@@ -754,7 +798,7 @@ impl App {
             "schema" if session.schema_visible => Focus::Schema,
             _ => Focus::Editor,
         };
-        self.conns.restore_expanded = session.expanded;
+        self.connection.slots.restore_expanded = session.expanded;
         let project = self.project().map(|p| p.name.clone()).unwrap_or_default();
         self.splash = Some(Splash { project, started: Instant::now(), shown: false, done: Vec::new() });
         self.connect_saved(profiles);
@@ -765,19 +809,19 @@ impl App {
     /// a run there tries it again rather than saying "not connected".
     pub(super) fn tab_connection_to_retry(&self) -> Option<ConnectionProfile> {
         if self.connection.database.is_some()
-            || !self.conns.restoring.is_empty()
+            || !self.connection.slots.restoring.is_empty()
             || self.tabs[self.active_tab].conn.is_some()
         {
             return None;
         }
-        let name = self.conns.tab_connections.get(self.active_tab)?.as_ref()?;
+        let name = self.connection.slots.tab_connections.get(self.active_tab)?.as_ref()?;
         self.profiles().iter().find(|p| &p.name == name).cloned()
     }
 
     /// Opens the tab's connection again (`tab_connection_to_retry`), then
     /// does `action` (a run) once it's open.
     pub(super) fn retry_tab_connection(&mut self, profile: ConnectionProfile, action: crate::config::keys::Action) {
-        self.conns.after_reconnect = Some(action);
+        self.connection.slots.after_reconnect = Some(action);
         self.connect_saved(vec![profile]);
     }
 
@@ -785,8 +829,8 @@ impl App {
     /// arrives as `Restored`, for the tabs that used it.
     fn connect_saved(&mut self, profiles: Vec<ConnectionProfile>) {
         let Some(project_id) = self.current_project.clone() else { return };
-        self.conns.restoring = profiles.iter().map(|p| p.name.clone()).collect();
-        self.set_status(t!("session.reconnecting", names = self.conns.restoring.join(", ")), false);
+        self.connection.slots.restoring = profiles.iter().map(|p| p.name.clone()).collect();
+        self.set_status(t!("session.reconnecting", names = self.connection.slots.restoring.join(", ")), false);
         for profile in profiles {
             let send = self.sender();
             let project_id = project_id.clone();
@@ -809,24 +853,25 @@ impl App {
 
     /// A connection reopened by [`restore_session`] arrived.
     pub(super) fn apply_restored(&mut self, project_id: &str, form: ConnectForm, result: Result<Database, String>) {
-        if self.current_project.as_deref() != Some(project_id) || !self.conns.restoring.contains(&form.name) {
+        if self.current_project.as_deref() != Some(project_id) || !self.connection.slots.restoring.contains(&form.name)
+        {
             if let Ok(db) = result {
                 tokio::spawn(async move { db.close().await });
             }
             return;
         }
-        self.conns.restoring.retain(|n| *n != form.name);
+        self.connection.slots.restoring.retain(|n| *n != form.name);
         if let Some(splash) = &mut self.splash {
             splash.done.push((form.name.clone(), result.as_ref().err().cloned()));
         }
         // All reopened: the card's job is done (failures stay in the status bar).
-        if self.conns.restoring.is_empty() {
+        if self.connection.slots.restoring.is_empty() {
             self.splash = None;
         }
         let db = match result {
             Ok(db) => db,
             Err(e) => {
-                self.conns.after_reconnect = None;
+                self.connection.slots.after_reconnect = None;
                 let again = t!("session.again");
                 let msg = t!("session.reconnect_failed", name = form.name, e = form.connect_failure(&e), again = again);
                 self.log(msg.clone(), true);
@@ -837,7 +882,7 @@ impl App {
         let summary = form.summary();
         let project = self.project().map(|p| p.name.clone()).unwrap_or_default();
         self.log(t!("session.reconnected", summary = summary), false);
-        let id = self.conns.park_new(Connection {
+        let id = self.connection.slots.park_new(Connection {
             database: Some(db),
             mode: form.mode,
             tx_mode: form.tx_mode(),
@@ -845,7 +890,7 @@ impl App {
             form,
             ..Connection::default()
         });
-        for (tab, saved_name) in self.tabs.iter_mut().zip(&self.conns.tab_connections) {
+        for (tab, saved_name) in self.tabs.iter_mut().zip(&self.connection.slots.tab_connections) {
             if saved_name.as_deref() == Some(connection_name.as_str()) {
                 tab.conn = Some(id);
             }
@@ -854,10 +899,15 @@ impl App {
             self.switch_conn(Some(id));
         }
         // (A retry for a run: the run says how it went.)
-        if self.conns.restoring.is_empty() && !self.notes.status_is_error && self.conns.after_reconnect.is_none() {
+        if self.connection.slots.restoring.is_empty()
+            && !self.notes.status_is_error
+            && self.connection.slots.after_reconnect.is_none()
+        {
             self.set_status(t!("session.restored").to_string(), false);
         }
-        if let Some(action) = self.conns.after_reconnect.take().filter(|_| self.connection.database.is_some()) {
+        if let Some(action) =
+            self.connection.slots.after_reconnect.take().filter(|_| self.connection.database.is_some())
+        {
             self.run_action(action);
         }
     }
@@ -865,7 +915,8 @@ impl App {
     /// Re-expands the tables that were open last time, once the catalog of
     /// a restored connection is loaded.
     pub(super) fn restore_expanded_tables(&mut self) {
-        let Some(open) = self.conns.restore_expanded.remove(&self.connection.form.name) else { return };
+        let name = self.connection.form.name.clone();
+        let Some(open) = self.connection.slots.restore_expanded.remove(&name) else { return };
         let Some(panel) = &mut self.connection.schema else { return };
         let wanted: Vec<usize> = (0..panel.tables.len())
             .filter(|&t| open.iter().any(|(s, n)| *s == panel.tables[t].info.schema && *n == panel.tables[t].info.name))
@@ -967,5 +1018,31 @@ mod keepalive_tests {
         keepalive.begin_check();
         assert_eq!(keepalive.finish_check(true), (true, false));
         assert!(!keepalive.connection_lost());
+    }
+}
+
+#[cfg(test)]
+mod project_connections_tests {
+    use super::*;
+
+    fn slot(summary: &str) -> Connection {
+        Connection { summary: summary.to_string(), ..Connection::default() }
+    }
+
+    #[test]
+    fn project_owner_moves_active_connections_and_drains_them_as_a_unit() {
+        let mut project = ProjectConnections::default();
+        let alpha = project.attach_active(slot("alpha"));
+        let beta = project.slots.park_new(slot("beta"));
+
+        assert!(project.switch_active(Some(beta)));
+        assert_eq!(project.active.summary, "beta");
+        assert_eq!(project.slots.active, Some(beta));
+        assert_eq!(project.slots.parked.get(&alpha).unwrap().summary, "alpha");
+
+        let drained = project.drain();
+        assert_eq!(drained.len(), 2);
+        assert!(project.slots.active.is_none() && project.slots.parked.is_empty());
+        assert_eq!(project.active.summary, "");
     }
 }

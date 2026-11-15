@@ -32,7 +32,7 @@ impl App {
     pub(in crate::app) fn other_connections(&self) -> Vec<(u64, String)> {
         self.parked_connections()
             .into_iter()
-            .filter(|(id, _, _)| Some(*id) != self.conns.active)
+            .filter(|(id, _, _)| Some(*id) != self.connection.slots.active)
             .map(|(id, _, form)| (id, form.short_name()))
             .collect()
     }
