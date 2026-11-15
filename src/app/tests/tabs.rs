@@ -306,7 +306,7 @@ async fn save_rename_group_and_search_queries() {
     }
     type_text(&mut app, "finance/churn by month");
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.library.queries[0].path(), "finance/churn by month");
+    assert_eq!(app.library.iter().next().unwrap().path(), "finance/churn by month");
     assert_eq!(app.tabs[0].name, "churn by month");
 
     // History entries are searchable too; F3 opens one in a new tab.
@@ -337,8 +337,34 @@ async fn save_rename_group_and_search_queries() {
         ["churn by month", "Query 1", "Query 2"]
     );
     assert_eq!(again.tab_text(1), "select 42 as answer");
-    assert_eq!(again.library.queries.len(), 1);
+    assert_eq!(again.library.len(), 1);
     assert!(!again.tab_dirty(0));
+}
+
+#[cfg(all(feature = "sqlite", unix))]
+#[tokio::test]
+async fn a_delete_that_fails_keeps_the_tab_linked() {
+    use std::os::unix::fs::PermissionsExt;
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    let library = tempfile::tempdir().unwrap();
+    let folder = library.path().to_path_buf();
+    app.library = crate::config::library::Library::load_from(Some(folder.join("q.json"))).0;
+    app.tab.editor.set_text("select 1");
+    app.handle_key(ctrl('s'));
+    type_text(&mut app, "one");
+    app.handle_key(key(KeyCode::Enter));
+    let saved = app.tabs[0].saved_id.clone().expect("saved");
+    // The library's folder can't be written: the delete fails.
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+    if std::fs::write(folder.join("probe"), "").is_ok() {
+        return; // Running as root: permissions don't stop it.
+    }
+    app.handle_key(key(KeyCode::F(3)));
+    app.handle_key(ctrl('d'));
+    app.handle_key(key(KeyCode::Char('y')));
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(!app.library.is_empty(), "the delete failed");
+    assert_eq!(app.tabs[0].saved_id, Some(saved), "still its query's tab");
 }
 
 #[cfg(feature = "sqlite")]
@@ -352,7 +378,7 @@ async fn deleting_a_saved_query_unlinks_its_tab() {
     app.handle_key(key(KeyCode::F(3)));
     app.handle_key(ctrl('d'));
     app.handle_key(key(KeyCode::Char('y')));
-    assert!(app.library.queries.is_empty());
+    assert!(app.library.is_empty());
     assert_eq!(app.tabs[0].saved_id, None);
     app.handle_key(key(KeyCode::Esc));
     assert!(app.popups.library_view.is_none());
@@ -466,7 +492,7 @@ fn the_statement_at_the_cursor_goes_to_the_library_alone() {
     app.run_action(Action::SaveStatement);
     type_text(&mut app, "reports/order two");
     app.handle_key(key(KeyCode::Enter));
-    let saved = app.library.queries.iter().find(|q| q.name == "order two").unwrap();
+    let saved = app.library.iter().find(|q| q.name == "order two").unwrap();
     assert_eq!((saved.group.as_str(), saved.sql.as_str()), ("reports", "select * from orders where id = 2"));
     assert!(saved.changed.is_some());
     // The tab isn't tied to it, and keeps all its text.
@@ -477,7 +503,7 @@ fn the_statement_at_the_cursor_goes_to_the_library_alone() {
     app.run_action(Action::SaveStatement);
     type_text(&mut app, "one");
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.library.queries.iter().find(|q| q.name == "one").unwrap().sql, "select 1");
+    assert_eq!(app.library.iter().find(|q| q.name == "one").unwrap().sql, "select 1");
 }
 
 #[test]
@@ -519,7 +545,7 @@ fn the_library_finds_by_date() {
     app.screen = Screen::Query;
     app.library.add("today", "select 1").unwrap();
     let old = app.library.add("old", "select 2").unwrap();
-    app.library.queries.iter_mut().find(|q| q.id == old).unwrap().changed = Some(1_600_000_000);
+    app.library.set_changed_for_tests(&old, 1_600_000_000);
     app.history.push("select 3");
     app.open_library();
     type_text(&mut app, "@today");

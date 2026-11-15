@@ -51,7 +51,7 @@ pub(super) fn draw_library(f: &mut Frame, app: &mut App, area: Rect) {
     let now = chrono::Local::now();
     // Each saved query by id, once: not a search of the library per row.
     let saved: std::collections::HashMap<&str, &crate::config::library::SavedQuery> =
-        app.library.queries.iter().map(|q| (q.id.as_str(), q)).collect();
+        app.library.iter().map(|q| (q.id.as_str(), q)).collect();
     let rows: Vec<ListItem> = items
         .iter()
         .map(|item| {

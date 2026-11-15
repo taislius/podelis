@@ -5,7 +5,7 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use crate::app::mouse::{DOUBLE_CLICK, inside};
 use crate::app::*;
-use crate::config::library;
+use crate::config::library::{self, LibraryError, LoadWarning};
 
 /// One row of the library window.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -77,11 +77,14 @@ impl App {
                 && let Some(LibraryItem::Saved(id)) = items.get(view.selected)
             {
                 let id = id.clone();
-                if let Err(e) = self.library.delete(&id) {
-                    self.set_status(e, true);
-                }
-                for tab in self.tabs.iter_mut().filter(|t| t.saved_id.as_deref() == Some(id.as_str())) {
-                    tab.saved_id = None;
+                // Tabs let go of it once it's gone: not when that failed.
+                match self.library.delete(&id) {
+                    Ok(()) => {
+                        for tab in self.tabs.iter_mut().filter(|t| t.saved_id.as_deref() == Some(id.as_str())) {
+                            tab.saved_id = None;
+                        }
+                    }
+                    Err(e) => self.set_status(said(&e), true),
                 }
             }
             return;
@@ -184,5 +187,33 @@ impl App {
             }
             _ => {}
         }
+    }
+}
+
+/// What a library change that wasn't made says, in the user's language.
+pub(in crate::app) fn said(e: &LibraryError) -> String {
+    match e {
+        LibraryError::NoName => t!("library.no_name").to_string(),
+        LibraryError::Taken(path) => t!("library.exists", name = path),
+        LibraryError::Gone => t!("library.gone").to_string(),
+        LibraryError::SaveBlocked => t!("library.save_blocked").to_string(),
+        LibraryError::SaveFailed(e) => t!("library.save_failed", e = e),
+    }
+}
+
+/// So `?` says a library error where the app's errors are words.
+impl From<LibraryError> for String {
+    fn from(e: LibraryError) -> Self {
+        said(&e)
+    }
+}
+
+/// What the library's file not being read as it is says.
+pub(in crate::app) fn warning_said(w: &LoadWarning) -> String {
+    match w {
+        LoadWarning::Unreadable { path, error } => t!("library.unreadable", path = path.display(), e = error),
+        LoadWarning::OtherShape { path, error } => t!("library.other_shape", path = path.display(), e = error),
+        LoadWarning::MovedAside { error, backup } => t!("library.moved_aside", e = error, backup = backup.display()),
+        LoadWarning::InvalidKept { error, move_error } => t!("library.invalid_kept", e = error, err = move_error),
     }
 }

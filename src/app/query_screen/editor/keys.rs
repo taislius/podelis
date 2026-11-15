@@ -146,18 +146,14 @@ impl App {
         };
         if !prefix.is_empty() {
             let lower = prefix.to_lowercase();
-            items.extend(
-                self.library
-                    .queries
-                    .iter()
-                    .filter(|q| q.is_snippet() && q.name.to_lowercase().starts_with(&lower))
-                    .map(|q| complete::Candidate {
-                        label: q.name.clone(),
-                        insert: q.sql.trim_end().to_string(),
-                        kind: complete::CandKind::Snippet,
-                        detail: "snippet".into(),
-                    }),
-            );
+            items.extend(self.library.snippets().filter(|q| q.name.to_lowercase().starts_with(&lower)).map(|q| {
+                complete::Candidate {
+                    label: q.name.clone(),
+                    insert: q.sql.trim_end().to_string(),
+                    kind: complete::CandKind::Snippet,
+                    detail: "snippet".into(),
+                }
+            }));
         }
         (!items.is_empty()).then_some(Completion { items, selected: 0, prefix_len })
     }

@@ -258,7 +258,7 @@ impl App {
     pub(in crate::app) fn load_tabs(&mut self, project_id: &str) {
         let (library, warning) = Library::load_from(self.library_path(project_id));
         self.library = library;
-        if let Some(warning) = warning {
+        if let Some(warning) = warning.as_ref().map(crate::app::windows::library::warning_said) {
             self.log(warning.clone(), true);
             self.set_status(warning, true);
         }
@@ -545,7 +545,7 @@ impl App {
                 let path = self.library.get(&id).map(library::SavedQuery::path).unwrap_or_default();
                 self.set_status(t!("tabs.saved", path = path), false);
             }
-            Err(e) => self.set_status(e, true),
+            Err(e) => self.set_status(crate::app::windows::library::said(&e), true),
         }
     }
 

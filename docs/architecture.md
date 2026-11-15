@@ -47,7 +47,10 @@ src/
                          settings (with `[[models]]`, as `podelis-ai` reads
                          them), keys, themes, history, the query library; a
                          connection as typed
-                         (draft: `ConnectionDraft`, URL and file arguments)
+                         (draft: `ConnectionDraft`, URL and file arguments).
+                         The library keeps its queries to itself and says
+                         what went wrong as types (`LibraryError`,
+                         `LoadWarning`); the app puts them in words
   system/                the clipboard, database containers, crash reports,
                          the debug log, installed programs, the install's
                          facts for bug reports, password prompts on a tty
