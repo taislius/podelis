@@ -78,8 +78,9 @@ pub async fn run(command: GatewayCommand, config_dir: &Path, project: Option<&st
     }
 }
 
-/// `podelis mcp`: bridge the agent's stdio to the gateway's MCP session.
-/// The gateway hosts the agent service; this command owns the client side.
+/// `podelis mcp`: a bridge between the agent (stdin and stdout) and the
+/// gateway, which serves the project's shared connections (started if it
+/// isn't running). Returns the exit code.
 pub async fn mcp(config_dir: &Path, project: Option<&str>, name: Option<String>) -> i32 {
     let mut client = match connect_or_start(config_dir, "podelis mcp", || spawn_gateway(config_dir)).await {
         Ok(client) => client,

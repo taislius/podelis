@@ -389,23 +389,23 @@ async fn a_cancel_the_server_cant_be_told_lets_esc_stop_waiting() {
     let refused =
         RunEvent::CancelFailed { message: "Access denied; you need the PROCESS privilege".into(), unreachable: false };
     app.handle_db_event(DbEvent::run(app.tab.run.id, refused));
-    assert!(!app.tab.run.cancel_failed && !app.keepalive.connection_lost() && app.tab.run.executing);
+    assert!(!app.tab.run.cancel_failed && !app.connection.keepalive.connection_lost() && app.tab.run.executing);
     app.handle_key(key(KeyCode::Esc));
     let failed = RunEvent::CancelFailed {
         message: "pool timed out while waiting for an open connection".into(),
         unreachable: true,
     };
     app.handle_db_event(DbEvent::run(app.tab.run.id, failed));
-    assert!(app.tab.run.cancel_failed && app.keepalive.connection_lost() && app.tab.run.executing);
+    assert!(app.tab.run.cancel_failed && app.connection.keepalive.connection_lost() && app.tab.run.executing);
     assert!(said(&app).starts_with("Couldn't cancel: Esc again stops waiting"), "{}", said(&app));
     // Esc again: no longer waiting; the next run checks the server first.
     app.handle_key(key(KeyCode::Esc));
     assert!(!app.tab.run.executing && app.tab.run.task.is_none() && !app.tab.run.cancel_failed);
     assert!(app.tab.run_error.as_ref().is_some_and(|e| e.contains("stopped waiting")));
-    assert!(app.keepalive.connection_lost());
+    assert!(app.connection.keepalive.connection_lost());
     run_sql(&mut app, "select 7").await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("7".to_string())]]);
-    assert!(!app.keepalive.connection_lost());
+    assert!(!app.connection.keepalive.connection_lost());
     // A query that ends after a failed cancel leaves nothing armed.
     app.tab.run.executing = true;
     app.tab.run.task = Some(tokio::spawn(std::future::pending()));
@@ -422,17 +422,17 @@ async fn a_cancel_the_server_cant_be_told_lets_esc_stop_waiting() {
 #[tokio::test]
 async fn a_lost_connection_is_checked_again_and_said_when_back() {
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
-    app.keepalive.mark_lost();
+    app.connection.keepalive.mark_lost();
     // Ticks go on for it, heartbeat or not; something done checks it now.
     assert!(app.settings.keepalive == 0 && app.wants_ticks());
-    app.keepalive.last_activity = Instant::now().checked_sub(Duration::from_secs(3)).unwrap();
+    app.connection.keepalive.last_activity = Instant::now().checked_sub(Duration::from_secs(3)).unwrap();
     app.handle_key(key(KeyCode::Down));
-    assert!(app.keepalive.pinging());
-    while app.keepalive.pinging() {
+    assert!(app.connection.keepalive.pinging());
+    while app.connection.keepalive.pinging() {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
-    assert!(!app.keepalive.connection_lost() && !app.wants_ticks());
+    assert!(!app.connection.keepalive.connection_lost() && !app.wants_ticks());
     assert_eq!(said(&app), "The connection is back");
 }
 
@@ -443,42 +443,42 @@ async fn a_connection_can_be_checked_and_reconnected_from_the_results_pane() {
 
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
     app.focus = Focus::Results;
-    app.keepalive.last_activity = Instant::now();
+    app.connection.keepalive.last_activity = Instant::now();
     assert!(matches!(app.can(Command::Reconnect), Can::Yes));
 
     app.handle_key(key(KeyCode::Char('R')));
-    assert!(app.keepalive.pinging());
-    while app.keepalive.pinging() {
+    assert!(app.connection.keepalive.pinging());
+    while app.connection.keepalive.pinging() {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
 
-    assert!(!app.keepalive.connection_lost());
+    assert!(!app.connection.keepalive.connection_lost());
     assert_eq!(said(&app), "The server is responding");
 
-    app.keepalive.mark_lost();
-    app.keepalive.last_activity = Instant::now();
+    app.connection.keepalive.mark_lost();
+    app.connection.keepalive.last_activity = Instant::now();
     assert!(matches!(app.can(Command::Reconnect), Can::Yes));
     app.handle_key(key(KeyCode::Char('R')));
-    assert!(app.keepalive.pinging());
-    while app.keepalive.pinging() {
+    assert!(app.connection.keepalive.pinging());
+    while app.connection.keepalive.pinging() {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
-    assert!(!app.keepalive.connection_lost());
+    assert!(!app.connection.keepalive.connection_lost());
     assert_eq!(said(&app), "The connection is back");
 
     // The palette routes the same command into Results before it runs.
-    app.keepalive.mark_lost();
+    app.connection.keepalive.mark_lost();
     app.focus = Focus::Editor;
     app.run_command_for_tests(Command::Reconnect);
     assert_eq!(app.focus, Focus::Results);
-    assert!(app.keepalive.pinging());
-    while app.keepalive.pinging() {
+    assert!(app.connection.keepalive.pinging());
+    while app.connection.keepalive.pinging() {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
-    assert!(!app.keepalive.connection_lost());
+    assert!(!app.connection.keepalive.connection_lost());
 }
 
 /// A SQLite connection's timeout stops a query that runs too long.
@@ -877,12 +877,12 @@ async fn connection_info_keepalive_and_diagnostics() {
 
     // Keep-alive: an idle connection gets checked, and the latency updated.
     app.settings.keepalive = 1;
-    app.keepalive.last_activity = Instant::now().checked_sub(std::time::Duration::from_secs(5)).unwrap();
+    app.connection.keepalive.last_activity = Instant::now().checked_sub(std::time::Duration::from_secs(5)).unwrap();
     app.connection.latency = None;
     assert!(app.wants_ticks());
     app.tick_running();
-    assert!(app.keepalive.pinging());
-    while app.keepalive.pinging() {
+    assert!(app.connection.keepalive.pinging());
+    while app.connection.keepalive.pinging() {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
@@ -900,37 +900,37 @@ async fn heartbeat_can_be_switched_on_and_reports_a_lost_connection() {
     assert_eq!(app.settings.keepalive, 0, "off by default");
     app.run_action(crate::config::keys::Action::Heartbeat);
     assert_eq!(app.settings.keepalive, 30);
-    assert!(app.keepalive.pinging(), "checks right away");
-    while app.keepalive.pinging() {
+    assert!(app.connection.keepalive.pinging(), "checks right away");
+    while app.connection.keepalive.pinging() {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
-    assert!(app.connection.latency.is_some() && !app.keepalive.connection_lost());
+    assert!(app.connection.latency.is_some() && !app.connection.keepalive.connection_lost());
     // A failed check marks the connection lost until something succeeds.
     app.pinged(Err(("connection refused".into(), crate::app::Ping::Failed)));
-    assert!(app.keepalive.connection_lost() && app.notes.status.contains("hint:"), "{}", app.notes.status);
+    assert!(app.connection.keepalive.connection_lost() && app.notes.status.contains("hint:"), "{}", app.notes.status);
     run_sql(&mut app, "select 1").await;
-    assert!(!app.keepalive.connection_lost());
+    assert!(!app.connection.keepalive.connection_lost());
     // A heartbeat with no answer once: said, the session kept (an open
     // transaction would go with it).
     run_sql(&mut app, "create table hb (x int); begin; insert into hb values (1)").await;
     assert_eq!(app.connection.txn, TxnState::Open);
     app.pinged(Err(("no answer in 5 s".into(), crate::app::Ping::NoAnswer)));
     app.pinged(Err(("no answer in 5 s".into(), crate::app::Ping::NoAnswer)));
-    assert!(app.keepalive.connection_lost());
+    assert!(app.connection.keepalive.connection_lost());
     run_sql(&mut app, "select count(*) from hb").await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("1".to_string())]], "still its transaction");
     // A check on its way when the connection shown changes isn't waited
     // for any more (its answer is dropped).
     let stale_generation = app.generation;
-    app.keepalive.begin_check();
+    app.connection.keepalive.begin_check();
     app.switch_conn(None);
-    assert!(!app.keepalive.pinging());
+    assert!(!app.connection.keepalive.pinging());
     app.handle_db_event(DbEvent::connection(
         stale_generation,
         DbEventKind::Pinged(Err(("old connection failed".into(), crate::app::Ping::Failed))),
     ));
-    assert!(!app.keepalive.connection_lost(), "a late check cannot poison the new connection state");
+    assert!(!app.connection.keepalive.connection_lost(), "a late check cannot poison the new connection state");
     app.run_action(crate::config::keys::Action::Heartbeat);
     assert_eq!(app.settings.keepalive, 0);
 }
@@ -1305,13 +1305,13 @@ async fn the_running_querys_session_is_watched_on_the_server() {
         app.tab.run.cancel_failed = false;
         app.tab.run.db = app.connection.database.clone();
         app.tab.run.task = Some(tokio::spawn(std::future::pending::<()>()));
-        app.keepalive.mark_healthy();
+        app.connection.keepalive.mark_healthy();
     };
     start(&mut app);
     app.session_seen(SessionSeen::Said(Some(OwnSession::Busy)));
     app.session_seen(SessionSeen::Said(Some(OwnSession::Idle(3))));
     app.session_seen(SessionSeen::Failed("access denied".into()));
-    assert!(app.tab.run.executing && !app.keepalive.connection_lost() && !app.tab.run.cancel_failed);
+    assert!(app.tab.run.executing && !app.connection.keepalive.connection_lost() && !app.tab.run.cancel_failed);
     assert!(!app.tab.run.extra.on_session, "not asked again after an error");
 
     for seen in [
@@ -1322,7 +1322,10 @@ async fn the_running_querys_session_is_watched_on_the_server() {
         start(&mut app);
         let what = format!("{seen:?}");
         app.session_seen(seen);
-        assert!(app.tab.run.executing && app.keepalive.connection_lost() && app.tab.run.cancel_failed, "{what}");
+        assert!(
+            app.tab.run.executing && app.connection.keepalive.connection_lost() && app.tab.run.cancel_failed,
+            "{what}"
+        );
         let last = app.notes.log.last().map(|m| m.text.clone()).unwrap_or_default();
         assert!(last.contains("Esc stops waiting"), "{what}: {last}");
         // Esc: stops waiting, the session given up on.

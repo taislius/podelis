@@ -72,7 +72,7 @@ fn status_bar_shows_the_connection_heartbeat_and_lost_connection() {
     assert!(bar.contains("♥ prod") && bar.contains("MySQL"), "{bar}");
     // The top bar no longer repeats it.
     assert!(!render(&mut app, 120, 12).lines().next().unwrap().contains("prod /"));
-    app.keepalive.mark_lost_for_tests();
+    app.connection.keepalive.mark_lost_for_tests();
     let lost = status_bar(&mut app);
     assert!(lost.contains("× prod") && lost.contains("connection lost"), "{lost}");
 }

@@ -19,8 +19,6 @@ pub struct KeepAlive {
     reconnect_requested: bool,
     /// The last check of the connection failed (shown in the top bar).
     connection_lost: bool,
-    /// The heartbeat interval to go back to when it's switched on again.
-    pub(super) heartbeat_secs: u64,
 }
 
 impl KeepAlive {
@@ -66,30 +64,17 @@ impl KeepAlive {
         self.connection_lost = !succeeded;
         (was_lost, reconnect_requested)
     }
-
-    /// A check belongs to the previous connection after a switch; forget its
-    /// pending state as well as the previous connection's health.
-    pub(super) fn reset_for_connection(&mut self) {
-        self.connection_lost = false;
-        self.pinging = false;
-        self.reconnect_requested = false;
-    }
 }
 
 impl Default for KeepAlive {
     fn default() -> Self {
-        Self {
-            last_activity: Instant::now(),
-            pinging: false,
-            reconnect_requested: false,
-            connection_lost: false,
-            heartbeat_secs: 30,
-        }
+        Self { last_activity: Instant::now(), pinging: false, reconnect_requested: false, connection_lost: false }
     }
 }
 
 /// A connection and what goes with it: its form, modes, transaction,
-/// navigator, summary and connect time. The shown one is `App::connection`.
+/// navigator, health, summary and connect time. The shown one is
+/// `App::connection`; other open connections park the whole value in `Conns`.
 #[derive(Default)]
 pub struct Connection {
     pub database: Option<Database>,
@@ -99,6 +84,8 @@ pub struct Connection {
     /// What happens to writes on it (Ctrl+K w).
     pub tx_mode: TxMode,
     pub txn: TxnState,
+    /// The health and heartbeat timing for this connection's session.
+    pub keepalive: KeepAlive,
     /// The schema navigator's catalog and state.
     pub schema: Option<SchemaPanel>,
     /// Where it goes, for the status bar.
@@ -349,10 +336,16 @@ impl App {
     }
 
     pub(super) fn switch_conn(&mut self, target: Option<u64>) {
+        let previous = self.conns.active;
         if !self.conns.switch_active(&mut self.connection, target) {
             return;
         }
-        self.keepalive.reset_for_connection();
+        if let Some(id) = previous
+            && let Some(slot) = self.conns.parked.get_mut(&id)
+        {
+            slot.keepalive.cancel_check();
+        }
+        self.connection.keepalive.cancel_check();
         // Events from the other connection's background work no longer
         // apply; restart what was cut short.
         // (A check on its way is for the connection before: see `pinging`.)
@@ -493,7 +486,6 @@ impl App {
         }
         if self.conns.active == Some(id) {
             self.switch_conn(None);
-            self.keepalive.mark_healthy();
         }
         self.release_unused_conns();
         self.save_draft();
@@ -962,16 +954,18 @@ mod keepalive_tests {
     }
 
     #[test]
-    fn switching_connections_clears_pending_check_and_reconnect_intent() {
+    fn canceling_a_check_keeps_known_health_and_clears_reconnect_intent() {
         let mut keepalive = KeepAlive::default();
         keepalive.mark_lost();
         keepalive.begin_check();
         keepalive.begin_reconnect();
 
-        keepalive.reset_for_connection();
+        keepalive.cancel_check();
 
-        assert!(!keepalive.connection_lost());
+        assert!(keepalive.connection_lost());
         assert!(!keepalive.pinging());
-        assert_eq!(keepalive.finish_check(true), (false, false));
+        keepalive.begin_check();
+        assert_eq!(keepalive.finish_check(true), (true, false));
+        assert!(!keepalive.connection_lost());
     }
 }

@@ -125,9 +125,7 @@ impl App {
         // session the server lists may not be the one running this.
         self.tab.run.extra.on_session = false;
         self.tab.run.cancel_failed = true;
-        if self.hidden_tab.is_none() {
-            self.keepalive.mark_lost();
-        }
+        self.connection.keepalive.mark_lost();
         self.log(said.clone(), true);
         self.set_status(said, true);
     }
@@ -140,9 +138,7 @@ impl App {
             return;
         }
         self.tab.run.cancel_failed = true;
-        if self.hidden_tab.is_none() {
-            self.keepalive.mark_lost();
-        }
+        self.connection.keepalive.mark_lost();
         let said = t!("run.session_replaced", why = one_line(why));
         self.log(said.clone(), false);
         self.set_result_status(said, false);

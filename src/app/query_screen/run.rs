@@ -285,9 +285,9 @@ impl App {
         // After a quiet while (or a lost connection), the server is asked
         // to answer first: a link that died meanwhile fails in seconds
         // rather than leaving the run waiting.
-        let check_first =
-            self.keepalive.connection_lost() || self.keepalive.last_activity.elapsed() >= CHECK_AFTER_IDLE;
-        self.keepalive.last_activity = Instant::now();
+        let check_first = self.connection.keepalive.connection_lost()
+            || self.connection.keepalive.last_activity.elapsed() >= CHECK_AFTER_IDLE;
+        self.connection.keepalive.last_activity = Instant::now();
         self.tab.run.extra.timed_out = None;
         self.tab.run.extra.started = Some(Instant::now());
         // The connection's own timeout (0 there lets its queries run), else

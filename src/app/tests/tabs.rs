@@ -1,5 +1,38 @@
 use super::*;
 
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn connection_health_follows_the_connection_when_hidden_tabs_are_applied() {
+    let (mut app, dir) = test_app();
+    app.data_dir = Some(dir.path().to_path_buf());
+    let project = project_id(&app);
+    let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
+    app.store.upsert(&project, None, a.clone()).unwrap();
+    app.store.upsert(&project, None, b.clone()).unwrap();
+    app.load_tabs(&project);
+    connect_profile(&mut app, &a).await;
+    app.handle_key(ctrl('o'));
+    connect_profile(&mut app, &b).await;
+    assert_eq!(app.active_tab, 1);
+
+    app.connection.keepalive.mark_lost();
+    let mut alpha_lost = true;
+    app.in_tab(0, |app| {
+        app.connection.keepalive.mark_healthy();
+        alpha_lost = app.connection.keepalive.connection_lost();
+    });
+    assert!(app.connection.keepalive.connection_lost(), "alpha's success must not clear beta's lost state");
+    assert!(!alpha_lost);
+
+    app.connection.keepalive.mark_healthy();
+    app.in_tab(0, |app| {
+        app.connection.keepalive.mark_lost();
+        alpha_lost = app.connection.keepalive.connection_lost();
+    });
+    assert!(!app.connection.keepalive.connection_lost(), "alpha's failure must not mark beta as lost");
+    assert!(alpha_lost);
+}
+
 #[test]
 fn drafts_survive_project_switches_and_restarts() {
     let dir = tempfile::tempdir().unwrap();

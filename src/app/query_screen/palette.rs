@@ -119,7 +119,7 @@ impl App {
             return Some(t!("tab_list.running", time = mm_ss(secs)));
         }
         let Some(id) = tab.conn else { return Some(t!("tab_list.no_connection").to_string()) };
-        if self.conns.active == Some(id) && self.keepalive.connection_lost() {
+        if self.conns.active == Some(id) && self.connection.keepalive.connection_lost() {
             return Some(t!("tab_list.lost").to_string());
         }
         (self.conn_txn(id) == Some(TxnState::Open)).then(|| t!("tab_list.in_transaction").to_string())
@@ -178,7 +178,7 @@ impl App {
         let running = tabs.iter().find_map(|&i| self.tab_run(i).filter(|r| r.executing).map(|r| (i, r)));
         let status = if let Some((_, run)) = running {
             Some(t!("tab_list.running", time = mm_ss(run.since.map_or(0, |s| s.elapsed().as_secs()))))
-        } else if self.conns.active == Some(id) && self.keepalive.connection_lost() {
+        } else if self.conns.active == Some(id) && self.connection.keepalive.connection_lost() {
             Some(t!("tab_list.lost").to_string())
         } else {
             (self.conn_txn(id) == Some(TxnState::Open)).then(|| t!("tab_list.in_transaction").to_string())

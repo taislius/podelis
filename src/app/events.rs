@@ -245,7 +245,7 @@ impl App {
         let stuck = self.tab.run.executing && unreachable;
         self.tab.run.cancel_failed = stuck;
         if stuck {
-            self.keepalive.mark_lost();
+            self.connection.keepalive.mark_lost();
         }
         let again = if stuck { format!("{} · ", t!("run.esc_again")) } else { String::new() };
         let status = t!("run.cancel_failed", again = again, err = one_line(err));
@@ -309,7 +309,7 @@ impl App {
         }
         self.connection.txn = txn.unwrap_or_else(|| self.tracked_txn_state());
         let rows_affected = outcome.rows_affected.unwrap_or(0);
-        self.keepalive.mark_healthy();
+        self.connection.keepalive.mark_healthy();
         self.tab.run.cancel_failed = false;
         tracing::debug!(
             rows = outcome.rows.len(),
@@ -394,7 +394,7 @@ impl App {
         let ran_on = self.tab.run.db.take();
         self.stop_watch(&format!(": {}", t!("run.query_failed")));
         if err.contains("couldn't reconnect") || err.contains("the server doesn't answer") {
-            self.keepalive.mark_lost();
+            self.connection.keepalive.mark_lost();
         }
         self.tab.run.cancel_failed = false;
         tracing::debug!(error = err, "query failed");

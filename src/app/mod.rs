@@ -212,8 +212,6 @@ pub struct App {
     pub popups: query_screen::overlay::Popups,
     /// `Ctrl+K q`'s question being answered, and what goes with it.
     pub ask: query_screen::ask::AskState,
-    /// Keeping the connection alive.
-    pub keepalive: session::KeepAlive,
     /// What's said to the user.
     pub notes: query_screen::results::messages::Notes,
     /// The panes' layout.
@@ -249,6 +247,8 @@ pub struct App {
     /// Handling a key, click or paste (see `on_input`).
     handling_input: bool,
     pub settings: Settings,
+    /// The heartbeat interval to restore when heartbeat is toggled back on.
+    heartbeat_secs: u64,
     pub keymap: crate::config::keys::KeyMap,
     history: History,
     pub focus: Focus,
@@ -339,7 +339,6 @@ impl App {
         Self {
             popups: query_screen::overlay::Popups::default(),
             ask: query_screen::ask::AskState::default(),
-            keepalive: session::KeepAlive::default(),
             screen: Screen::Projects,
             store,
             current_project: None,
@@ -354,6 +353,7 @@ impl App {
             sandbox: false,
             handling_input: false,
             settings: Settings::default(),
+            heartbeat_secs: 30,
             keymap: crate::config::keys::KeyMap::default(),
             focus: Focus::Editor,
             help: Help::default(),
@@ -572,7 +572,7 @@ impl App {
         self.tab.run.db = None;
         // A check on its way is for the connection before: its answer will
         // be dropped (another generation), so it's no longer awaited.
-        self.keepalive.cancel_check();
+        self.connection.keepalive.cancel_check();
         self.generation.bump();
         self.tab.run.id = self.next_run_id();
         self.tab.run.queued_plan = None;

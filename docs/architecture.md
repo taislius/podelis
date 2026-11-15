@@ -189,10 +189,10 @@ everywhere:
   model answer keep the same ID, without shifting their tab reference when
   earlier tabs close.
 - **Connections** (`session.rs`, `Conns`): owns connection ID allocation and
-  active/parked slot transitions. Switching moves the whole `Connection`
-  state between `App::connection` and the parked map; draining a project
+  active/parked slot transitions. Each `Connection` owns its health state;
+  switching moves the whole value between `App::connection` and the parked map; draining a project
   clears both in one operation. `App::switch_conn` remains the coordinator
-  for the generation bump, keep-alive reset and catalog reload that follow.
+  for the generation bump, cancellation of an in-flight check and catalog reload that follow.
   `KeepAlive` owns health transitions; the last-known health remains separate
   from whether a check is in progress.
   The optional heartbeat (`settings.keepalive`, off by default) checks idle
