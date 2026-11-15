@@ -161,8 +161,8 @@ fn the_active_tab_shows_its_whole_name_and_stays_in_sight() {
     );
     assert_eq!(app.active_tab, 10, "no tab picked yet");
     app.popups.palette = None;
-    // Whatever is beside the name (a saved query's " !", wide characters,
-    // the left line after "‹N"), a narrow row keeps the active tab and `+`.
+    // Even with wide names and a left line after "‹N", a narrow row keeps
+    // the active tab and `+`.
     let active = app.active_tab;
     app.tabs[active].saved_id = Some("changed".into());
     app.tab.editor.set_text("select 1;");
@@ -172,7 +172,7 @@ fn the_active_tab_shows_its_whole_name_and_stays_in_sight() {
             let screen = render(&mut app, width, 24);
             let row = screen.lines().nth(2).unwrap();
             assert!(row.contains(" + ") && app.hits.new_tab.is_some(), "the + in sight at {width}: {row}");
-            assert!(row.contains(" ! "), "the change mark at {width}: {row}");
+            assert!(!row.contains(" ! "), "tabs don't show dirty-state markers: {row}");
             assert!(app.hits.tabs.iter().any(|(_, _, i)| *i == active), "the active tab at {width}: {row}");
         }
     }
@@ -455,6 +455,19 @@ fn ctrl_k_lists_the_tabs_and_finds_them_by_name() {
     }
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.active_tab, 1);
+}
+
+#[test]
+fn the_tab_browser_marks_a_changed_library_query_as_edited() {
+    let (mut app, _dir) = query_app();
+    let saved_id = app.library.add("saved query", "select original").unwrap();
+    app.tabs[app.active_tab].saved_id = Some(saved_id);
+    app.tab.editor.set_text("select changed");
+    app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+    app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+    let screen = render(&mut app, 100, 30);
+    assert!(screen.contains("Query 1") && screen.contains("edited"), "{screen}");
+    assert_snapshot!(screen);
 }
 
 #[test]

@@ -445,8 +445,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Vec<Cols>, Optio
     };
     let width = |spans: &[Span]| spans.iter().map(Span::width).sum::<usize>();
     // A tab's spans with its name cut to `cols` screen columns: " SQL ",
-    // the name, " !" (a saved query changed, not saved: dots are for
-    // connections), " …" (running while hidden).
+    // its name and " …" (running while hidden).
     let tab_spans = |i: usize, cols: usize| -> Vec<Span<'static>> {
         let tab = &app.tabs[i];
         let active = i == app.active_tab;
@@ -454,15 +453,14 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Vec<Cols>, Optio
         let bg = t.inset;
         // Orange warns that the tab isn't in the library; saved tabs stay quiet.
         let saved_marker = if tab.saved_id.is_some() { muted() } else { fg(t.warn) };
-        let name_style = if active { fg(t.text_bright) } else { muted() };
+        let mut name_style = if active { fg(t.text_bright) } else { muted() };
+        if tab.saved_id.is_some() && app.tab_dirty(i) {
+            name_style = name_style.add_modifier(Modifier::UNDERLINED).underline_color(t.warn);
+        }
         let mut spans = vec![
             Span::styled(" SQL ", saved_marker.bg(bg)),
             Span::styled(truncate_cols(&tab.name, cols), name_style.bg(bg)),
         ];
-        // Only a saved query's changes: other tabs are drafts, kept anyway.
-        if tab.saved_id.is_some() && app.tab_dirty(i) {
-            spans.push(Span::styled(" !", bold(t.warn).bg(bg)));
-        }
         if !active && app.tab_running(i) {
             spans.push(Span::styled(" …", fg(t.accent).bg(bg)));
         }

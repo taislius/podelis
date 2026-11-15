@@ -1314,6 +1314,7 @@ reopening = "atveriama"
 
 [tab_list]
 cancelling = "nutraukiama…"
+edited = "redaguota"
 in_transaction = "atvira transakcija"
 lost = "ryšys nutrūko"
 no_connection = "be ryšio"

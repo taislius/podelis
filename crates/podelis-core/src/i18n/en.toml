@@ -1289,6 +1289,7 @@ reopening = "reopening"
 
 [tab_list]
 cancelling = "cancelling…"
+edited = "edited"
 in_transaction = "transaction open"
 lost = "connection lost"
 no_connection = "no connection"

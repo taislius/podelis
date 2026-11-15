@@ -93,16 +93,20 @@ impl App {
         self.popups.palette = Some(palette);
     }
 
-    /// A tab as the tab list shows it: its name, ! if its saved query has
-    /// changed, its connection and how that is (a query running and for
+    /// A tab as the tab list shows it: its name, connection and how that is
+    /// (a query running and for
     /// how long, a transaction open, lost), and which is shown.
     pub fn tab_entry(&self, i: usize) -> String {
         let Some(tab) = self.tabs.get(i) else { return String::new() };
-        let dirty = if tab.saved_id.is_some() && self.tab_dirty(i) { " !" } else { "" };
         let on = tab.conn.and_then(|id| self.conn_name(id)).map(|n| format!("  · {n}")).unwrap_or_default();
-        let status = self.tab_status(i).map(|s| format!("  · {s}")).unwrap_or_default();
+        let mut statuses = Vec::new();
+        if tab.saved_id.is_some() && self.tab_dirty(i) {
+            statuses.push(t!("tab_list.edited").to_string());
+        }
+        statuses.extend(self.tab_status(i));
+        let status = if statuses.is_empty() { String::new() } else { format!("  · {}", statuses.join(" · ")) };
         let here = if i == self.active_tab { format!("  ({})", t!("menu.this_one")) } else { String::new() };
-        format!("{}{dirty}{on}{status}{here}", tab.name)
+        format!("{}{on}{status}{here}", tab.name)
     }
 
     /// How tab `i`'s connection is, when it's worth saying: its query

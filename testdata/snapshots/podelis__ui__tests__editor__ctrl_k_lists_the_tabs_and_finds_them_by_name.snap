@@ -17,7 +17,7 @@ expression: screen
 "│       │ APP          m this pane's menu  , settings  ? every key                         │       │"
 "│       │                                                                                  │       │"
 "│       │ TABS  Ctrl+W closes this one                                                     │mit  ? │"
-"│       │ 1 Query 1 !                              2 Query 2 (this one)                    │───────┘"
+"│       │ 1 Query 1                                2 Query 2 (this one)                    │───────┘"
 "│       │                                                                                  │───────┐"
 "│       │ / or ↵ searches every command · Esc closes                                       │menu ▾ │"
 "│       └──────────────────────────────────────────────────────────────────────────────────┘5.     │"

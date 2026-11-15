@@ -425,6 +425,11 @@ fn the_tab_list_finds_a_tab_by_name_connection_or_sql() {
         app.tab.editor.set_text(&format!("select {i} from orders_{i}"));
         app.tabs[app.active_tab].name = format!("report {i}");
     }
+    let saved_id = app.library.add("saved query", "select original").unwrap();
+    app.tabs[app.active_tab].saved_id = Some(saved_id);
+    app.tab.editor.set_text("select edited");
+    assert!(app.tab_dirty(app.active_tab));
+    assert!(app.tab_entry(app.active_tab).contains("edited"), "{}", app.tab_entry(app.active_tab));
     app.handle_key(ctrl('k'));
     app.handle_key(key(KeyCode::Char('g')));
     let palette = app.popups.palette.as_ref().expect("the tab list");

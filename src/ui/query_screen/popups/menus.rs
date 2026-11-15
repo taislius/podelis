@@ -2,6 +2,7 @@
 //! panes' menus.
 
 use super::*;
+use crate::app::commands::Command;
 
 /// A pop-up menu: what can be done here, each with its key; what doesn't
 /// apply dimmed.
@@ -164,9 +165,8 @@ pub(super) fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
             .enumerate()
             .take(9)
             .map(|(i, tab)| {
-                let dirty = if app.tab_dirty(i) { " !" } else { "" };
                 let here = if i == app.active_tab { format!(" ({})", t!("menu.this_one")) } else { String::new() };
-                ((i + 1).to_string(), format!("{}{dirty}{here}", tab.name))
+                ((i + 1).to_string(), format!("{}{here}", tab.name))
             })
             .collect();
         let more = app.tabs.len().saturating_sub(9);
@@ -257,10 +257,31 @@ pub(super) fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
             let name = truncate(&texts[i], w.saturating_sub(keys.chars().count() + 4));
             let pad = w.saturating_sub(name.chars().count() + keys.chars().count() + 2);
             let style = if i == palette.selected { bold(t.text_bright).bg(t.active) } else { fg(t.text) };
-            Line::from(vec![
-                Span::styled(format!(" {name}{}", " ".repeat(pad)), style),
-                Span::styled(format!("{keys} "), if i == palette.selected { muted().bg(t.active) } else { dim() }),
-            ])
+            let mut spans = Vec::new();
+            let edited = if palette.tabs_only() {
+                match *cmd {
+                    Command::SwitchTab(tab) if app.tabs[tab].saved_id.is_some() && app.tab_dirty(tab) => {
+                        Some(t!("tab_list.edited").to_string())
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if let Some(label) = edited.as_deref().and_then(|label| name.find(label).map(|at| (at, label))) {
+                let (at, label) = label;
+                spans.push(Span::styled(format!(" {}", &name[..at]), style));
+                let amber = if i == palette.selected { fg(t.warn).bg(t.active) } else { fg(t.warn) };
+                spans.push(Span::styled(label.to_string(), amber));
+                spans.push(Span::styled(format!("{}{}", &name[at + label.len()..], " ".repeat(pad)), style));
+            } else {
+                spans.push(Span::styled(format!(" {name}{}", " ".repeat(pad)), style));
+            }
+            spans.push(Span::styled(
+                format!("{keys} "),
+                if i == palette.selected { muted().bg(t.active) } else { dim() },
+            ));
+            Line::from(spans)
         })
         .collect();
     let lines = if lines.is_empty() {
