@@ -39,6 +39,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `d` in the navigator: the window's title said TABLE or VIEW (and *Loading…*) in English in Lithuanian too.
 - A connection lost in a hidden tab is marked on that tab's connection (it wasn't marked at all), and switching tabs no longer clears another connection's *connection lost*.
 - A foreign-key list, plan or error place coming back after its tab was closed is dropped, not shown in the tab that took its place.
 - A SQLite file opened from the command line by a relative path is saved with its whole path, so it opens again from another folder.

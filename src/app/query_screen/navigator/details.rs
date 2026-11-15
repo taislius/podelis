@@ -49,12 +49,13 @@ impl App {
         let engine = self.engine();
         let Some(panel) = &mut self.connection.schema else { return };
         let Some(table) = panel.tables.get(t) else { return };
-        let title = format!("{} {}", if table.info.is_view { "VIEW" } else { "TABLE" }, table.info.name);
+        let kind = if table.info.is_view { t!("navigator.view_title") } else { t!("navigator.table_title") };
+        let title = format!("{kind} {}", table.info.name);
         if table.details.is_none() {
             panel.show_definition_of = Some((table.info.schema.clone(), table.info.name.clone()));
             // Browsing: the popup says so rather than showing the last one.
             if self.popups.cell_view.as_ref().is_some_and(|v| v.browse) {
-                self.popups.cell_view = Some(CellView::definition(title, "Loading…".to_string()));
+                self.popups.cell_view = Some(CellView::definition(title, t!("navigator.loading_tables").to_string()));
             }
             return self.request_details(t);
         }
@@ -95,7 +96,7 @@ impl App {
             SchemaNode::Table(t) => self.show_table_definition(t),
             SchemaNode::Routine(r) => {
                 if let Some(view) = &mut self.popups.cell_view {
-                    view.text = "Loading…".to_string();
+                    view.text = t!("navigator.loading_tables").to_string();
                     view.scroll = 0;
                 }
                 self.show_routine(r);

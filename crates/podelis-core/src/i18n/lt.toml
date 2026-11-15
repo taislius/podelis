@@ -871,6 +871,8 @@ production = "veiklos aplinka (PROD)"
 read_only = "tik skaitymas"
 
 [navigator]
+table_title = "LENTELĖ"
+view_title = "RODINYS"
 by_name = "pavadinimą"
 by_rows = "eilutes"
 by_size = "dydį"

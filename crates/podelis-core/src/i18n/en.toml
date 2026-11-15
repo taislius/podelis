@@ -854,6 +854,8 @@ production = "production"
 read_only = "read-only"
 
 [navigator]
+table_title = "TABLE"
+view_title = "VIEW"
 by_name = "name"
 by_rows = "rows"
 by_size = "size"
