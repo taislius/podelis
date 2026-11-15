@@ -182,7 +182,7 @@ impl App {
         }
         let Some(dir) = self.pending_dir() else { return };
         let Some(request) = crate::agents::pending(&dir).into_iter().next() else { return };
-        let place = if request.production { " (PRODUCTION)" } else { "" };
+        let place = if request.production { format!(" ({})", t!("bar.production")) } else { String::new() };
         let mut details: Vec<String> = request.sql.lines().take(12).map(str::to_string).collect();
         if request.sql.lines().count() > 12 {
             details.push("…".to_string());

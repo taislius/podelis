@@ -40,7 +40,7 @@ pub fn over_ssh() -> bool {
 /// Over SSH the keys are the other machine's, which could be either.
 pub fn terminal_paste_keys() -> &'static str {
     if over_ssh() {
-        "Cmd+V or Ctrl+Shift+V"
+        "Cmd+V / Ctrl+Shift+V"
     } else if cfg!(target_os = "macos") {
         "Cmd+V"
     } else {
@@ -50,7 +50,7 @@ pub fn terminal_paste_keys() -> &'static str {
 
 /// Why Ctrl+V couldn't paste, and what does.
 pub fn read_failed(e: &str) -> String {
-    format!("Couldn't read the clipboard ({e}): paste with {} instead", terminal_paste_keys())
+    t!("clipboard.read_failed", e = e, keys = terminal_paste_keys())
 }
 
 /// Many terminals drop an OSC 52 copy bigger than about this (xterm's
@@ -112,7 +112,7 @@ fn run_with_input(tool: &[&str], text: &str) -> Result<(), String> {
         if started.elapsed() > TIMEOUT {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("timed out".to_string());
+            return Err(t!("clipboard.timed_out").to_string());
         }
         std::thread::sleep(Duration::from_millis(5));
     };
@@ -124,7 +124,7 @@ fn run_with_input(tool: &[&str], text: &str) -> Result<(), String> {
 pub fn read() -> Result<String, String> {
     let installed: Vec<_> = tools().into_iter().filter(|t| crate::system::programs::on_path(t[0])).collect();
     if installed.is_empty() {
-        return Err("no clipboard tool here (pbpaste, wl-paste, xclip or xsel)".to_string());
+        return Err(t!("clipboard.no_tool").to_string());
     }
     let mut last = String::new();
     for tool in installed {
@@ -158,15 +158,15 @@ fn run(tool: &[&str]) -> Result<String, String> {
         if started.elapsed() > TIMEOUT {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("timed out".to_string());
+            return Err(t!("clipboard.timed_out").to_string());
         }
         std::thread::sleep(Duration::from_millis(5));
     };
-    let out = reader.join().map_err(|_| "couldn't read it")?.map_err(|e| e.to_string())?;
+    let out = reader.join().map_err(|_| t!("clipboard.cant_read").to_string())?.map_err(|e| e.to_string())?;
     if !status.success() {
-        return Err("the clipboard is empty or holds no text".to_string());
+        return Err(t!("clipboard.empty").to_string());
     }
-    String::from_utf8(out).map_err(|_| "the clipboard holds no text".to_string())
+    String::from_utf8(out).map_err(|_| t!("clipboard.no_text").to_string())
 }
 
 #[cfg(test)]

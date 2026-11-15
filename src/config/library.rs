@@ -75,50 +75,50 @@ impl Library {
     pub fn add(&mut self, path: &str, sql: &str) -> Result<String, String> {
         let (group, name) = split_path(path);
         if name.is_empty() {
-            return Err("Give the query a name".into());
+            return Err(t!("library.no_name").to_string());
         }
         self.check_free(&group, &name, None)?;
         let id = uuid::Uuid::new_v4().to_string();
         let changed = Some(chrono::Local::now().timestamp());
         self.queries.push(SavedQuery { id: id.clone(), name, group, sql: sql.to_string(), changed });
         self.sort();
-        self.save().map_err(|e| format!("Couldn't save: {e:#}"))?;
+        self.save().map_err(|e| t!("library.save_failed", e = format!("{e:#}")))?;
         Ok(id)
     }
 
     pub fn update_sql(&mut self, id: &str, sql: &str) -> Result<(), String> {
-        let q = self.queries.iter_mut().find(|q| q.id == id).ok_or("The saved query no longer exists")?;
+        let q = self.queries.iter_mut().find(|q| q.id == id).ok_or_else(|| t!("library.gone").to_string())?;
         if q.sql != sql {
             q.sql = sql.to_string();
             q.changed = Some(chrono::Local::now().timestamp());
         }
-        self.save().map_err(|e| format!("Couldn't save: {e:#}"))
+        self.save().map_err(|e| t!("library.save_failed", e = format!("{e:#}")))
     }
 
     /// Renames (and possibly regroups) a saved query from "group/name".
     pub fn rename(&mut self, id: &str, path: &str) -> Result<(), String> {
         let (group, name) = split_path(path);
         if name.is_empty() {
-            return Err("Give the query a name".into());
+            return Err(t!("library.no_name").to_string());
         }
         self.check_free(&group, &name, Some(id))?;
-        let q = self.queries.iter_mut().find(|q| q.id == id).ok_or("The saved query no longer exists")?;
+        let q = self.queries.iter_mut().find(|q| q.id == id).ok_or_else(|| t!("library.gone").to_string())?;
         q.group = group;
         q.name = name;
         self.sort();
-        self.save().map_err(|e| format!("Couldn't save: {e:#}"))
+        self.save().map_err(|e| t!("library.save_failed", e = format!("{e:#}")))
     }
 
     pub fn delete(&mut self, id: &str) -> Result<(), String> {
         self.queries.retain(|q| q.id != id);
-        self.save().map_err(|e| format!("Couldn't save: {e:#}"))
+        self.save().map_err(|e| t!("library.save_failed", e = format!("{e:#}")))
     }
 
     fn check_free(&self, group: &str, name: &str, except: Option<&str>) -> Result<(), String> {
         let taken = self.queries.iter().any(|q| {
             q.group.eq_ignore_ascii_case(group) && q.name.eq_ignore_ascii_case(name) && Some(q.id.as_str()) != except
         });
-        if taken { Err(format!("A saved query named '{}' already exists", join(group, name))) } else { Ok(()) }
+        if taken { Err(t!("library.exists", name = join(group, name))) } else { Ok(()) }
     }
 
     /// Ungrouped first, then by group and name.

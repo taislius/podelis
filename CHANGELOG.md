@@ -39,6 +39,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- More of what the app says is in Lithuanian too: the connection's info (`Ctrl+K i`: its rows, yes and no, and the latency, which also showed twice), cancelling a query, a transaction left open after a review, an agent asking on a production connection, the library's errors, the clipboard's, the schema comparison's report, a CSV import's errors and looking for database containers.
 - `d` in the navigator: the window's title said TABLE or VIEW (and *Loading…*) in English in Lithuanian too.
 - A connection lost in a hidden tab is marked on that tab's connection (it wasn't marked at all), and switching tabs no longer clears another connection's *connection lost*.
 - A foreign-key list, plan or error place coming back after its tab was closed is dropped, not shown in the tab that took its place.

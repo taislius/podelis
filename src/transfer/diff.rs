@@ -274,26 +274,26 @@ pub fn schema_diff(here: &[TableShape], there: &[TableShape], this: Side, other:
         }
     }
 
-    let kind = |t: &TableShape| if t.info.is_view { "view" } else { "table" };
-    let mut report = format!("{} (this tab) compared with {}\n", this.name, other.name);
+    let kind = |t: &TableShape| if t.info.is_view { t!("kind.view") } else { t!("kind.table") };
+    let mut report = format!("{}\n", t!("compare.report_title", here = this.name, there = other.name));
     if missing.is_empty() && extra.is_empty() && altered.is_empty() {
-        let _ = write!(report, "\nThe schemas match: {same} tables and views.");
+        let _ = write!(report, "\n{}", t!("compare.report_match", same = same));
         return SchemaDiff { report, sql: String::new(), differences: 0 };
     }
     if !missing.is_empty() {
-        let _ = writeln!(report, "\nONLY HERE");
+        let _ = writeln!(report, "\n{}", t!("compare.report_only_here"));
         for (key, table) in &missing {
             let _ = writeln!(report, "  {} {key}", kind(table));
         }
     }
     if !extra.is_empty() {
-        let _ = writeln!(report, "\nONLY THERE");
+        let _ = writeln!(report, "\n{}", t!("compare.report_only_there"));
         for (key, table) in &extra {
             let _ = writeln!(report, "  {} {key}", kind(table));
         }
     }
     if !altered.is_empty() {
-        let _ = writeln!(report, "\nDIFFERENT");
+        let _ = writeln!(report, "\n{}", t!("compare.report_different"));
         for (key, changes) in &altered {
             let _ = writeln!(report, "  {key}");
             for line in &changes.lines {
@@ -301,7 +301,7 @@ pub fn schema_diff(here: &[TableShape], there: &[TableShape], this: Side, other:
             }
         }
     }
-    let _ = write!(report, "\nThe same: {same} tables and views.");
+    let _ = write!(report, "\n{}", t!("compare.report_same", same = same));
 
     let mut sql =
         format!("-- Makes {} match {}. Review it first: drops are left commented out.\n", other.name, this.name);
@@ -355,11 +355,7 @@ type Row = Vec<Option<String>>;
 pub fn row_diff(here: &QueryOutcome, there: &QueryOutcome) -> Result<RowDiff, String> {
     let lower = |cols: &[String]| cols.iter().map(|c| c.to_lowercase()).collect::<Vec<_>>();
     if lower(&here.columns) != lower(&there.columns) {
-        return Err(format!(
-            "The results have different columns: ({}) here, ({}) there",
-            here.columns.join(", "),
-            there.columns.join(", ")
-        ));
+        return Err(t!("compare.different_columns", here = here.columns.join(", "), there = there.columns.join(", ")));
     }
     let identifies = |rows: &[Row]| {
         let mut seen = HashSet::new();

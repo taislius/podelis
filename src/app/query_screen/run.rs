@@ -146,7 +146,7 @@ impl App {
     ) {
         self.tab.run.executing = false;
         if std::mem::take(&mut self.tab.run.cancelling) {
-            return self.set_status("Cancelled".to_string(), false);
+            return self.set_status(t!("run.cancelled").to_string(), false);
         }
         #[expect(clippy::cast_precision_loss, reason = "a threshold")]
         let limit = self.settings.guard_rows as f64;
@@ -402,7 +402,7 @@ impl App {
         let Some(db) = self.tab.run.db.clone().or_else(|| self.connection.database.clone()) else { return };
         self.tab.run.cancelling = true;
         self.tab.run.queued_plan = None;
-        self.set_result_status("Cancelling...".to_string(), false);
+        self.set_result_status(t!("run.cancelling").to_string(), false);
         let send = self.run_sender();
         tokio::spawn(cancel_on_server(db, send));
     }

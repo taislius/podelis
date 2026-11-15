@@ -68,9 +68,10 @@ impl App {
             let _ = db.run(db.engine().backend().ping(), 1).await;
             let ping = started.elapsed();
             let mut rows = local;
-            rows.retain(|(k, _)| k != "Latency");
-            rows.push(("Latency".to_string(), format!("{:.1} ms (now)", ping.as_secs_f64() * 1000.0)));
-            rows.extend(db.session_info().await);
+            let latency = t!("info.latency").to_string();
+            rows.retain(|(k, _)| *k != latency);
+            rows.push((latency, t!("info.latency_now", ms = format!("{:.1}", ping.as_secs_f64() * 1000.0))));
+            rows.extend(db.session_info().await.into_iter().map(session_row));
             let width = rows.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0);
             let mut text = String::new();
             for (k, v) in rows {
@@ -269,4 +270,40 @@ impl App {
             }
         }
     }
+}
+
+/// A row of `Database::session_info`, in the app's language. Its names are
+/// English there, as `podelis doctor` reads them by name.
+fn session_row((name, value): (String, String)) -> (String, String) {
+    let label = match name.as_str() {
+        "Server version" => t!("session_info.server_version"),
+        "Version" => t!("session_info.version"),
+        "Git version" => t!("session_info.git_version"),
+        "User" => t!("session_info.user"),
+        "Session user" => t!("session_info.session_user"),
+        "Database" => t!("session_info.database"),
+        "Schemas" => t!("session_info.schemas"),
+        "Time zone" => t!("session_info.time_zone"),
+        "Encoding" => t!("session_info.encoding"),
+        "Isolation" => t!("session_info.isolation"),
+        "Statement timeout" => t!("session_info.statement_timeout"),
+        "Read-only" => t!("session_info.read_only"),
+        "Server address" => t!("session_info.server_address"),
+        "Server started" => t!("session_info.server_started"),
+        "Server" => t!("session_info.server"),
+        "Journal mode" => t!("session_info.journal_mode"),
+        "Foreign keys" => t!("session_info.foreign_keys"),
+        "Size (bytes)" => t!("session_info.size_bytes"),
+        "Access mode" => t!("session_info.access_mode"),
+        "Threads" => t!("session_info.threads"),
+        "Memory limit" => t!("session_info.memory_limit"),
+        "Connections" => t!("session_info.connections"),
+        _ => return (name, value),
+    };
+    let value = match value.as_str() {
+        "yes" if matches!(name.as_str(), "Read-only" | "Foreign keys") => t!("session_info.yes").to_string(),
+        "no" if matches!(name.as_str(), "Read-only" | "Foreign keys") => t!("session_info.no").to_string(),
+        _ => value,
+    };
+    (label.to_string(), value)
 }

@@ -137,7 +137,7 @@ impl App {
                 return self.stop_export();
             }
             self.tab.run.queued_plan = None;
-            self.set_status("Cancelled".to_string(), false);
+            self.set_status(t!("run.cancelled").to_string(), false);
             return;
         }
         match confirm.action {

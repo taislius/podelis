@@ -205,9 +205,7 @@ fn explain(e: csv::Error, line: u64, delimiter: u8) -> anyhow::Error {
         }
         csv::ErrorKind::Utf8 { pos, .. } => {
             let line = pos.as_ref().map_or(line, csv::Position::line);
-            anyhow::anyhow!(
-                "line {line} isn't UTF-8 text; convert the file first, e.g. iconv -f windows-1257 -t utf-8 file.csv > utf8.csv"
-            )
+            anyhow::anyhow!("{}", t!("import.not_utf8", line = line))
         }
         _ => anyhow::Error::from(e).context(format!("line {line}")),
     }
@@ -322,10 +320,7 @@ pub async fn import(
     let size = std::fs::metadata(path).map_or(0, |m| m.len());
     // First pass: the header and each column's type.
     let (header, mut rows) = Rows::open(path, format)?;
-    anyhow::ensure!(
-        !header.is_empty() && header.iter().all(|h| !h.is_empty()),
-        "the first line must name every column"
-    );
+    anyhow::ensure!(!header.is_empty() && header.iter().all(|h| !h.is_empty()), "{}", t!("import.unnamed_columns"));
     let mut guessed: Vec<Option<ColType>> = vec![None; header.len()];
     while let Some(record) = rows.next() {
         for (i, value) in record?.iter().enumerate().take(header.len()) {

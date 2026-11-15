@@ -208,10 +208,10 @@ impl App {
             }
             KeyCode::Esc => {
                 self.popups.review = None;
-                let msg = format!(
-                    "Transaction left open: check with SELECTs, then {} commits, {} rolls back",
-                    self.keymap.label(Action::Commit),
-                    self.keymap.label(Action::Rollback)
+                let msg = t!(
+                    "review.left_open",
+                    commit = self.keymap.label(Action::Commit),
+                    rollback = self.keymap.label(Action::Rollback)
                 );
                 self.set_status(msg, false);
             }

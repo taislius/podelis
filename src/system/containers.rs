@@ -28,7 +28,7 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 /// Docker first, then Podman (if Docker isn't installed or not running).
 pub fn find() -> Result<Vec<Container>, String> {
     let tools: Vec<&str> = ["docker", "podman"].into_iter().filter(|t| crate::system::programs::on_path(t)).collect();
-    let mut error = "Neither docker nor podman is installed (or on PATH)".to_string();
+    let mut error = t!("manager.containers_no_tool").to_string();
     for tool in tools {
         match find_with(tool) {
             Ok(found) => return Ok(found),
@@ -78,16 +78,16 @@ fn run(tool: &str, args: &[&str]) -> Result<String, String> {
     let Ok(out) = rx.recv_timeout(TIMEOUT) else {
         // No signal API without unsafe code: kill(1) does it.
         let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).status();
-        return Err(format!("{tool} didn't answer within {} seconds", TIMEOUT.as_secs()));
+        return Err(t!("manager.containers_timeout", tool = tool, s = TIMEOUT.as_secs()));
     };
-    let out = out.map_err(|e| format!("couldn't run {tool}: {e}"))?;
+    let out = out.map_err(|e| t!("manager.containers_cant_run", tool = tool, e = e))?;
     if !out.status.success() {
         let said = String::from_utf8_lossy(&out.stderr);
         let said = said.trim().lines().next().unwrap_or_default();
         if said.to_lowercase().contains("cannot connect") || said.contains("daemon") {
-            return Err(format!("{tool} isn't running ({said})"));
+            return Err(t!("manager.containers_not_running", tool = tool, said = said));
         }
-        return Err(format!("{tool} {} failed: {said}", args[0]));
+        return Err(t!("manager.containers_failed", tool = tool, what = args[0], said = said));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
