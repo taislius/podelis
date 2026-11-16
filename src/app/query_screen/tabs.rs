@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::app::*;
-use crate::config::library::{self, Library};
+use crate::config::library::{self, Library, SavedQueryId};
 
 /// A tab's state: the active tab's is `App::tab`, the others are parked.
 #[derive(Default)]
@@ -162,7 +162,7 @@ fn swap_tab(app: &mut App, state: &mut TabState) {
 pub struct TabMeta {
     pub(in crate::app) id: TabId,
     pub name: String,
-    pub saved_id: Option<String>,
+    pub saved_id: Option<SavedQueryId>,
     /// The tab's connection (an id into the app's connections).
     pub conn: Option<u64>,
 }
@@ -174,7 +174,7 @@ pub enum TabPromptKind {
     /// Rename the active tab (and its saved query, if any).
     Rename,
     /// Rename a saved query from the library window.
-    RenameSaved(String),
+    RenameSaved(SavedQueryId),
     /// Save this SQL (a statement or the selection) to the library as a
     /// query of its own: the tab stays as it is.
     SaveStatement(String),
@@ -234,7 +234,7 @@ struct SavedTab {
     name: String,
     sql: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    saved_id: Option<String>,
+    saved_id: Option<SavedQueryId>,
     /// Name of the saved connection the tab used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     connection: Option<String>,
@@ -453,7 +453,7 @@ impl App {
     }
 
     /// Opens a new tab with `sql` and switches to it.
-    pub(in crate::app) fn new_tab(&mut self, name: Option<String>, sql: &str, saved_id: Option<String>) {
+    pub(in crate::app) fn new_tab(&mut self, name: Option<String>, sql: &str, saved_id: Option<SavedQueryId>) {
         if self.blocks_tabs() {
             return self.set_status(t!("tabs.wait_open").into(), true);
         }
@@ -545,7 +545,10 @@ impl App {
                 let path = self.library.get(&id).map(library::SavedQuery::path).unwrap_or_default();
                 self.set_status(t!("tabs.saved", path = path), false);
             }
-            Err(e) => self.set_status(crate::app::windows::library::said(&e), true),
+            Err(e) => {
+                self.let_go_if_gone(&id, &e);
+                self.set_status(crate::app::windows::library::said(&e), true);
+            }
         }
     }
 
@@ -607,10 +610,7 @@ impl App {
                 self.set_status(t!("tabs.saved_to_library", name = text), false);
             }
             TabPromptKind::Rename => match self.tabs[self.active_tab].saved_id.clone() {
-                Some(id) => {
-                    self.library.rename(&id, text)?;
-                    self.tabs[self.active_tab].name = library::split_path(text).1;
-                }
+                Some(id) => self.rename_saved(&id, text)?,
                 None if text.is_empty() => return Err(t!("tabs.need_name").into()),
                 None => self.tabs[self.active_tab].name = text.to_string(),
             },
@@ -618,13 +618,7 @@ impl App {
                 self.library.add(text, sql)?;
                 self.set_status(t!("tabs.saved_to_library", name = text), false);
             }
-            TabPromptKind::RenameSaved(id) => {
-                self.library.rename(id, text)?;
-                let name = library::split_path(text).1;
-                for tab in self.tabs.iter_mut().filter(|t| t.saved_id.as_deref() == Some(id)) {
-                    tab.name.clone_from(&name);
-                }
-            }
+            TabPromptKind::RenameSaved(id) => self.rename_saved(id, text)?,
         }
         Ok(())
     }
@@ -649,7 +643,7 @@ impl App {
 
     /// Puts `sql` in the current tab if it's empty and unsaved, otherwise
     /// in a new tab.
-    pub(in crate::app) fn open_sql_in_tab(&mut self, name: Option<String>, sql: &str, saved_id: Option<String>) {
+    pub(in crate::app) fn open_sql_in_tab(&mut self, name: Option<String>, sql: &str, saved_id: Option<SavedQueryId>) {
         let current_blank = self.tab.editor.is_empty() && self.tabs[self.active_tab].saved_id.is_none();
         if current_blank && !self.running_here() {
             let name = name.unwrap_or_else(|| self.tabs[self.active_tab].name.clone());

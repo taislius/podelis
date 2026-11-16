@@ -652,3 +652,33 @@ fn more_than_nine_tabs_are_reached_by_keys_every_terminal_sends() {
     app.handle_key(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::ALT));
     assert_eq!(app.active_tab, 11);
 }
+
+#[test]
+fn renaming_a_saved_query_renames_every_tab_tied_to_it() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    let id = app.library.add("one", "select 1").unwrap();
+    app.tabs[0].saved_id = Some(id.clone());
+    app.new_tab(Some("one".into()), "select 1", Some(id.clone()));
+    app.rename_tab();
+    app.popups.tab_prompt.as_mut().unwrap().text = LineInput::new("reports/two");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.popups.tab_prompt.is_none());
+    assert_eq!(app.tabs.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["two", "two"]);
+    assert_eq!(app.library.get(&id).unwrap().path(), "reports/two");
+}
+
+#[test]
+fn a_tab_whose_saved_query_is_gone_saves_anew() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    let id = app.library.add("one", "select 1").unwrap();
+    app.tabs[0].saved_id = Some(id.clone());
+    app.tab.editor.set_text("select 2");
+    // Deleted elsewhere (another window, say).
+    app.library.delete(&id).unwrap();
+    app.save_tab();
+    assert_eq!(app.tabs[0].saved_id, None, "no longer tied to it");
+    app.save_tab();
+    assert!(matches!(app.popups.tab_prompt.as_ref().map(|p| &p.kind), Some(TabPromptKind::SaveAs)));
+}

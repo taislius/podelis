@@ -5,12 +5,12 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use crate::app::mouse::{DOUBLE_CLICK, inside};
 use crate::app::*;
-use crate::config::library::{self, LibraryError, LoadWarning};
+use crate::config::library::{self, LibraryError, LoadWarning, SavedQueryId};
 
 /// One row of the library window.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LibraryItem {
-    Saved(String),
+    Saved(SavedQueryId),
     /// A history entry, and when it ran (if that's known).
     History(String, Option<i64>),
 }
@@ -77,14 +77,8 @@ impl App {
                 && let Some(LibraryItem::Saved(id)) = items.get(view.selected)
             {
                 let id = id.clone();
-                // Tabs let go of it once it's gone: not when that failed.
-                match self.library.delete(&id) {
-                    Ok(()) => {
-                        for tab in self.tabs.iter_mut().filter(|t| t.saved_id.as_deref() == Some(id.as_str())) {
-                            tab.saved_id = None;
-                        }
-                    }
-                    Err(e) => self.set_status(said(&e), true),
+                if let Err(e) = self.delete_saved(&id) {
+                    self.set_status(said(&e), true);
                 }
             }
             return;
@@ -122,6 +116,40 @@ impl App {
                     view.selected = 0;
                 }
             }
+        }
+    }
+
+    /// Deletes a saved query, and its tabs let go of it: only once that's
+    /// saved, so a delete that fails leaves them tied to it.
+    pub(in crate::app) fn delete_saved(&mut self, id: &SavedQueryId) -> Result<(), LibraryError> {
+        self.library.delete(id).inspect_err(|e| self.let_go_if_gone(id, e))?;
+        self.let_go_of(id);
+        Ok(())
+    }
+
+    /// Renames (or regroups) a saved query from "group/name", and every tab
+    /// tied to it takes its new name.
+    pub(in crate::app) fn rename_saved(&mut self, id: &SavedQueryId, path: &str) -> Result<(), LibraryError> {
+        self.library.rename(id, path).inspect_err(|e| self.let_go_if_gone(id, e))?;
+        let name = self.library.get(id).map(|q| q.name.clone()).unwrap_or_default();
+        for tab in self.tabs.iter_mut().filter(|t| t.saved_id.as_ref() == Some(id)) {
+            tab.name.clone_from(&name);
+        }
+        Ok(())
+    }
+
+    /// A saved query found gone: its tabs become plain ones, so Ctrl+S
+    /// offers to save them anew. Not while the library's file couldn't be
+    /// read, where it may only be missing here.
+    pub(in crate::app) fn let_go_if_gone(&mut self, id: &SavedQueryId, e: &LibraryError) {
+        if *e == LibraryError::Gone && !self.library.incomplete() {
+            self.let_go_of(id);
+        }
+    }
+
+    fn let_go_of(&mut self, id: &SavedQueryId) {
+        for tab in self.tabs.iter_mut().filter(|t| t.saved_id.as_ref() == Some(id)) {
+            tab.saved_id = None;
         }
     }
 

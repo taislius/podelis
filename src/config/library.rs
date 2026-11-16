@@ -11,9 +11,29 @@ use crate::config::store::write_atomic;
 /// The group whose saved queries autocomplete offers as snippets.
 pub const SNIPPETS: &str = "snippets";
 
+/// A saved query's id: what a tab tied to it keeps. Written as the plain
+/// string it always was.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SavedQueryId(String);
+
+impl SavedQueryId {
+    fn new() -> Self {
+        Self(uuid::Uuid::new_v4().to_string())
+    }
+}
+
+/// An id made up by a test, for a link to a query that isn't saved.
+#[cfg(test)]
+impl From<&str> for SavedQueryId {
+    fn from(id: &str) -> Self {
+        Self(id.to_string())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedQuery {
-    pub id: String,
+    pub id: SavedQueryId,
     pub name: String,
     /// "" when not in a group.
     #[serde(default)]
@@ -185,24 +205,24 @@ impl Library {
 
     /// Sets when a saved query last changed, for tests of dates.
     #[cfg(test)]
-    pub fn set_changed_for_tests(&mut self, id: &str, at: i64) {
-        if let Some(q) = self.queries.iter_mut().find(|q| q.id == id) {
+    pub fn set_changed_for_tests(&mut self, id: &SavedQueryId, at: i64) {
+        if let Some(q) = self.queries.iter_mut().find(|q| q.id == *id) {
             q.changed = Some(at);
         }
     }
 
-    pub fn get(&self, id: &str) -> Option<&SavedQuery> {
-        self.queries.iter().find(|q| q.id == id)
+    pub fn get(&self, id: &SavedQueryId) -> Option<&SavedQuery> {
+        self.queries.iter().find(|q| q.id == *id)
     }
 
     /// Saves a new query under "group/name"; returns its id.
-    pub fn add(&mut self, path: &str, sql: &str) -> Result<String, LibraryError> {
+    pub fn add(&mut self, path: &str, sql: &str) -> Result<SavedQueryId, LibraryError> {
         let (group, name) = split_path(path);
         if name.is_empty() {
             return Err(LibraryError::NoName);
         }
         self.check_free(&group, &name, None)?;
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = SavedQueryId::new();
         let changed = Some(chrono::Local::now().timestamp());
         let mut queries = self.queries.clone();
         queries.push(SavedQuery { id: id.clone(), name, group, sql: sql.to_string(), changed });
@@ -210,9 +230,9 @@ impl Library {
         Ok(id)
     }
 
-    pub fn update_sql(&mut self, id: &str, sql: &str) -> Result<(), LibraryError> {
+    pub fn update_sql(&mut self, id: &SavedQueryId, sql: &str) -> Result<(), LibraryError> {
         let mut queries = self.queries.clone();
-        let q = queries.iter_mut().find(|q| q.id == id).ok_or(LibraryError::Gone)?;
+        let q = queries.iter_mut().find(|q| q.id == *id).ok_or(LibraryError::Gone)?;
         if q.sql == sql {
             return Ok(());
         }
@@ -222,7 +242,7 @@ impl Library {
     }
 
     /// Renames (and possibly regroups) a saved query from "group/name".
-    pub fn rename(&mut self, id: &str, path: &str) -> Result<(), LibraryError> {
+    pub fn rename(&mut self, id: &SavedQueryId, path: &str) -> Result<(), LibraryError> {
         let (group, name) = split_path(path);
         if name.is_empty() {
             return Err(LibraryError::NoName);
@@ -232,20 +252,23 @@ impl Library {
         }
         self.check_free(&group, &name, Some(id))?;
         let mut queries = self.queries.clone();
-        let q = queries.iter_mut().find(|q| q.id == id).ok_or(LibraryError::Gone)?;
+        let q = queries.iter_mut().find(|q| q.id == *id).ok_or(LibraryError::Gone)?;
         q.group = group;
         q.name = name;
         self.commit(queries)
     }
 
-    pub fn delete(&mut self, id: &str) -> Result<(), LibraryError> {
-        let queries = self.queries.iter().filter(|q| q.id != id).cloned().collect();
+    pub fn delete(&mut self, id: &SavedQueryId) -> Result<(), LibraryError> {
+        if self.get(id).is_none() {
+            return Err(LibraryError::Gone);
+        }
+        let queries = self.queries.iter().filter(|q| q.id != *id).cloned().collect();
         self.commit(queries)
     }
 
-    fn check_free(&self, group: &str, name: &str, except: Option<&str>) -> Result<(), LibraryError> {
+    fn check_free(&self, group: &str, name: &str, except: Option<&SavedQueryId>) -> Result<(), LibraryError> {
         let taken = self.queries.iter().find(|q| {
-            q.group.eq_ignore_ascii_case(group) && q.name.eq_ignore_ascii_case(name) && Some(q.id.as_str()) != except
+            q.group.eq_ignore_ascii_case(group) && q.name.eq_ignore_ascii_case(name) && Some(&q.id) != except
         });
         // Named as it's saved, which may differ in case from what was typed.
         taken.map_or(Ok(()), |q| Err(LibraryError::Taken(q.path())))
@@ -433,7 +456,7 @@ mod tests {
         // Ungrouped queries sort first.
         assert_eq!(lib.queries.iter().map(SavedQuery::path).collect::<Vec<_>>(), ["adhoc", "reports/churn"]);
 
-        assert_eq!(lib.rename("no such id", "adhoc"), Err(LibraryError::Gone), "gone before taken");
+        assert_eq!(lib.rename(&SavedQueryId::new(), "adhoc"), Err(LibraryError::Gone), "gone before taken");
         lib.rename(&a, "finance/churn by month").unwrap();
         lib.update_sql(&b, "select 3").unwrap();
         let lib2 = Library::load_from(Some(path)).0;
@@ -442,6 +465,7 @@ mod tests {
 
         lib.delete(&b).unwrap();
         assert_eq!(lib.queries.len(), 1);
+        assert_eq!(lib.delete(&b), Err(LibraryError::Gone));
     }
 
     #[test]
@@ -531,6 +555,14 @@ mod tests {
         assert!(lib.delete(&id).is_err());
         assert_eq!(lib.queries.len(), 1);
         assert_eq!((lib.queries[0].path().as_str(), lib.queries[0].sql.as_str()), ("reports/churn", "select 1"));
+    }
+
+    #[test]
+    fn ids_are_written_as_the_strings_they_were() {
+        let old = r#"[{"id": "1b2c", "name": "churn", "group": "reports", "sql": "select 1"}]"#;
+        let queries: Vec<SavedQuery> = serde_json::from_str(old).unwrap();
+        assert_eq!(queries[0].id, SavedQueryId::from("1b2c"));
+        assert!(serde_json::to_string(&queries).unwrap().contains(r#""id":"1b2c""#));
     }
 
     #[test]

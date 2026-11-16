@@ -50,7 +50,9 @@ src/
                          (draft: `ConnectionDraft`, URL and file arguments).
                          The library keeps its queries to itself and says
                          what went wrong as types (`LibraryError`,
-                         `LoadWarning`); the app puts them in words
+                         `LoadWarning`); the app puts them in words. Tabs
+                         keep a `SavedQueryId`; `App::delete_saved` and
+                         `rename_saved` change a query and its tabs together
   system/                the clipboard, database containers, crash reports,
                          the debug log, installed programs, the install's
                          facts for bug reports, password prompts on a tty
