@@ -8,3 +8,4 @@
 
 # The engines scripts/build.sh last built with
 /.podelis-engines
+.DS_Store

@@ -7,7 +7,7 @@ use crate::transfer::diff::{self, Side, TableShape};
 
 /// The other side of a comparison, as it was when it started.
 pub struct Other {
-    pub id: u64,
+    pub id: ConnId,
     pub name: String,
     pub engine: Engine,
 }
@@ -29,7 +29,7 @@ async fn shapes(db: &Database) -> Result<Vec<TableShape>, String> {
 
 impl App {
     /// The other tabs' open connections: id and name.
-    pub(in crate::app) fn other_connections(&self) -> Vec<(u64, String)> {
+    pub(in crate::app) fn other_connections(&self) -> Vec<(ConnId, String)> {
         self.parked_connections()
             .into_iter()
             .filter(|(id, _, _)| Some(*id) != self.connection.slots.active)
@@ -38,7 +38,7 @@ impl App {
     }
 
     /// The connection to compare with: `id`, or the only other one.
-    fn compare_target(&mut self, id: Option<u64>) -> Option<(Database, Other)> {
+    fn compare_target(&mut self, id: Option<ConnId>) -> Option<(Database, Other)> {
         if self.connection.database.is_none() {
             self.set_status(self.not_connected_message(), true);
             return None;
@@ -62,7 +62,7 @@ impl App {
     }
 
     /// Compares this tab's schema with another connection's.
-    pub(in crate::app) fn compare_schema(&mut self, id: Option<u64>) {
+    pub(in crate::app) fn compare_schema(&mut self, id: Option<ConnId>) {
         if self.tab.run.executing {
             return;
         }
@@ -214,7 +214,7 @@ impl App {
 
     /// Runs the selection, or the statement at the cursor, on this and
     /// another connection and shows the rows that differ.
-    pub(in crate::app) fn compare_rows(&mut self, id: Option<u64>) {
+    pub(in crate::app) fn compare_rows(&mut self, id: Option<ConnId>) {
         if self.tab.run.executing {
             return;
         }

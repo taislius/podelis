@@ -36,7 +36,7 @@ mod types;
 #[cfg(feature = "via-sqlx")]
 mod via_sqlx;
 
-pub use activity::{Activity, OwnSession};
+pub use activity::{Activity, OwnSession, SessionId};
 pub use backend::{Backend, Capabilities, ContainerLogin, ContainerSecret, Transactions};
 pub use details::{Comment, ForeignKey, IndexInfo, Link, RoutineInfo, TableDetails};
 pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint};
@@ -380,8 +380,8 @@ impl Database {
     /// Which server session the connection's session is (PostgreSQL's
     /// backend pid, MySQL's connection id; 0 for SQLite): another one after
     /// a reconnect, and with it any transaction is gone.
-    pub fn session_id(&self) -> i64 {
-        self.0.backend_id.load(std::sync::atomic::Ordering::SeqCst)
+    pub fn session_id(&self) -> SessionId {
+        SessionId(self.0.backend_id.load(std::sync::atomic::Ordering::SeqCst))
     }
 
     /// Whether `other` is this same connection (not one opened again).

@@ -69,11 +69,72 @@ impl ConnectionProfile {
     }
 }
 
+/// A project's stable id: keys its keychain entries and its files
+/// (history, tabs, library, memory…), so renaming the project touches
+/// neither. Written as the plain string it always was.
+/// It names files and folders, so one read back (connections.toml, the
+/// gateway) is taken only without `/`, `\` and the like that would lead
+/// out of them, and not starting with `.`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct ProjectId(String);
+
+impl TryFrom<String> for ProjectId {
+    type Error = String;
+
+    fn try_from(id: String) -> Result<Self, String> {
+        let unsafe_char = |c: char| matches!(c, '/' | '\\' | '\0') || c.is_control();
+        // Not `.x` either: a hidden file, like `..` a way out of the folder.
+        if id.is_empty() || id.len() > 200 || id.starts_with('.') || id.chars().any(unsafe_char) {
+            return Err(format!("not a project id: {id:?}"));
+        }
+        Ok(Self(id))
+    }
+}
+
+impl From<ProjectId> for String {
+    fn from(id: ProjectId) -> Self {
+        id.0
+    }
+}
+
+impl ProjectId {
+    fn new() -> Self {
+        Self(uuid::Uuid::new_v4().to_string())
+    }
+
+    /// As it's written in file names, keychain accounts and messages to
+    /// the gateway.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// One read back from where it was written (a gateway request): `None`
+    /// when it can't be one. Whether a project has it is the store's to say.
+    pub fn from_written(id: impl Into<String>) -> Option<Self> {
+        Self::try_from(id.into()).ok()
+    }
+}
+
+/// An id made up by a test.
+#[cfg(test)]
+impl From<&str> for ProjectId {
+    fn from(id: &str) -> Self {
+        Self::try_from(id.to_string()).expect("a test's id is safe")
+    }
+}
+
+impl std::fmt::Display for ProjectId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
     /// Stable id: keys the project's keychain entries and history file, so
     /// renaming the project doesn't have to touch either.
-    pub id: String,
+    pub id: ProjectId,
     pub name: String,
     #[serde(default)]
     pub connections: Vec<ConnectionProfile>,
@@ -131,10 +192,10 @@ impl Eq for Unknown {}
 
 #[derive(Default, Serialize, Deserialize)]
 struct ConnectionsFile {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    last_project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "project_if_valid")]
+    last_project: Option<ProjectId>,
     #[serde(default)]
-    projects: Vec<Project>,
+    projects: Vec<StoredProject>,
     /// The pre-projects format; migrated into `DEFAULT_PROJECT` on load.
     #[serde(default, skip_serializing)]
     connections: Vec<ConnectionProfile>,
@@ -143,16 +204,74 @@ struct ConnectionsFile {
     unknown: Unknown,
 }
 
+/// A project as the file has it: one this version can't read (its id
+/// isn't one, a setting of another shape) is kept as it is and written
+/// back, rather than failing the whole file.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum StoredProject {
+    Readable(Project),
+    Unreadable(toml::Value),
+}
+
+/// A project this version can't read, kept as it is, and where it was:
+/// after how many of the readable ones (so a save leaves it in its place).
+#[derive(Clone)]
+struct Kept {
+    after: usize,
+    project: toml::Value,
+}
+
+impl Kept {
+    fn name(&self) -> Option<&str> {
+        self.project.get("name").and_then(toml::Value::as_str)
+    }
+}
+
+/// The projects this version reads, and those it keeps as they are.
+fn sort_out(stored: Vec<StoredProject>) -> (Vec<Project>, Vec<Kept>) {
+    let mut readable = Vec::new();
+    let mut unreadable = Vec::new();
+    for project in stored {
+        match project {
+            StoredProject::Readable(p) => readable.push(p),
+            StoredProject::Unreadable(project) => unreadable.push(Kept { after: readable.len(), project }),
+        }
+    }
+    (readable, unreadable)
+}
+
+/// What's said of the projects kept as they are, if there are any.
+fn unreadable_warning(unreadable: &[Kept]) -> Option<String> {
+    if unreadable.is_empty() {
+        return None;
+    }
+    let names: Vec<&str> = unreadable.iter().map(|k| k.name().unwrap_or("(no name)")).collect();
+    Some(format!(
+        "connections.toml: {} project(s) couldn't be read and are left in it as they are: {}",
+        names.len(),
+        names.join(", ")
+    ))
+}
+
+/// `last_project`, dropped when it can't be a project's id.
+fn project_if_valid<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<ProjectId>, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.and_then(ProjectId::from_written))
+}
+
 pub struct ConnectionStore {
     path: PathBuf,
     pub projects: Vec<Project>,
+    /// Projects in the file this version can't read: written back as found,
+    /// where they were.
+    unreadable: Vec<Kept>,
     /// Id of the project opened most recently.
-    pub last_project: Option<String>,
+    pub last_project: Option<ProjectId>,
     /// Set when the file on disk couldn't be parsed or moved aside; saving
     /// is refused so it is never overwritten with an empty list.
     save_blocked: bool,
     /// Id of a project created by migrating the old format on this load.
-    pub migrated_project: Option<String>,
+    pub migrated_project: Option<ProjectId>,
     /// The file's own settings this version doesn't know, written back.
     unknown: Unknown,
 }
@@ -168,6 +287,7 @@ impl ConnectionStore {
         Self {
             path,
             projects: vec![],
+            unreadable: vec![],
             last_project: None,
             save_blocked,
             migrated_project: None,
@@ -190,15 +310,18 @@ impl ConnectionStore {
         };
         match toml::from_str::<ConnectionsFile>(&text) {
             Ok(file) => {
+                let (projects, unreadable) = sort_out(file.projects);
+                let warning = unreadable_warning(&unreadable);
                 let store = Self {
                     path,
                     unknown: file.unknown,
-                    projects: file.projects,
+                    projects,
+                    unreadable,
                     last_project: file.last_project,
                     save_blocked: true,
                     migrated_project: None,
                 };
-                (store, None)
+                (store, warning)
             }
             Err(e) => {
                 let first_line = e.to_string().lines().next().unwrap_or_default().to_string();
@@ -238,9 +361,12 @@ impl ConnectionStore {
             }
         };
 
+        let (projects, unreadable) = sort_out(file.projects);
+        let warning = unreadable_warning(&unreadable);
         let mut store = Self {
             path,
-            projects: file.projects,
+            projects,
+            unreadable,
             last_project: file.last_project,
             save_blocked: false,
             migrated_project: None,
@@ -261,19 +387,31 @@ impl ConnectionStore {
             store.migrated_project = Some(id);
             // Persist now so the new project id is stable across runs.
             if let Err(e) = store.save() {
-                return (store, Some(format!("Couldn't save migrated connections: {e:#}")));
+                // Said with what else there was to say (projects left out).
+                let failed = format!("Couldn't save migrated connections: {e:#}");
+                let said = warning.map_or(failed.clone(), |w| format!("{failed}; {w}"));
+                return (store, Some(said));
             }
         }
-        (store, None)
+        (store, warning)
     }
 
     fn save(&self) -> Result<()> {
         if self.save_blocked {
             bail!("refusing to overwrite unreadable {}", self.path.display());
         }
+        // Each project kept as it was goes back where it was among the others.
+        let mut projects = Vec::with_capacity(self.projects.len() + self.unreadable.len());
+        let kept_after = |i: usize| self.unreadable.iter().filter(move |k| k.after == i);
+        for (i, project) in self.projects.iter().enumerate() {
+            projects.extend(kept_after(i).map(|k| StoredProject::Unreadable(k.project.clone())));
+            projects.push(StoredProject::Readable(project.clone()));
+        }
+        let at_end = self.unreadable.iter().filter(|k| k.after >= self.projects.len());
+        projects.extend(at_end.map(|k| StoredProject::Unreadable(k.project.clone())));
         let file = ConnectionsFile {
             last_project: self.last_project.clone(),
-            projects: self.projects.clone(),
+            projects,
             connections: vec![],
             unknown: self.unknown.clone(),
         };
@@ -281,15 +419,15 @@ impl ConnectionStore {
         write_atomic(&self.path, &text).context("failed to write connections file")
     }
 
-    pub fn project(&self, id: &str) -> Option<&Project> {
-        self.projects.iter().find(|p| p.id == id)
+    pub fn project(&self, id: &ProjectId) -> Option<&Project> {
+        self.projects.iter().find(|p| p.id == *id)
     }
 
-    fn project_mut(&mut self, id: &str) -> Option<&mut Project> {
-        self.projects.iter_mut().find(|p| p.id == id)
+    fn project_mut(&mut self, id: &ProjectId) -> Option<&mut Project> {
+        self.projects.iter_mut().find(|p| p.id == *id)
     }
 
-    fn project_or_err(&mut self, id: &str) -> Result<&mut Project> {
+    fn project_or_err(&mut self, id: &ProjectId) -> Result<&mut Project> {
         self.project_mut(id).context("project no longer exists")
     }
 
@@ -297,18 +435,21 @@ impl ConnectionStore {
         self.projects.iter().find(|p| p.name.eq_ignore_ascii_case(name))
     }
 
-    fn check_project_name(&self, name: &str, except_id: Option<&str>) -> Result<()> {
+    fn check_project_name(&self, name: &str, except_id: Option<&ProjectId>) -> Result<()> {
         if name.is_empty() {
             bail!("project name can't be empty");
         }
-        if self.projects.iter().any(|p| p.name.eq_ignore_ascii_case(name) && Some(p.id.as_str()) != except_id) {
+        let mut kept = self.unreadable.iter().filter_map(Kept::name);
+        if self.projects.iter().any(|p| p.name.eq_ignore_ascii_case(name) && Some(&p.id) != except_id)
+            || kept.any(|n| n.eq_ignore_ascii_case(name))
+        {
             bail!("a project named '{name}' already exists");
         }
         Ok(())
     }
 
-    fn add_project_unsaved(&mut self, name: &str) -> String {
-        let id = uuid::Uuid::new_v4().to_string();
+    fn add_project_unsaved(&mut self, name: &str) -> ProjectId {
+        let id = ProjectId::new();
         self.projects.push(Project {
             unknown: Unknown::default(),
             id: id.clone(),
@@ -320,7 +461,7 @@ impl ConnectionStore {
     }
 
     /// Creates a project and returns its id.
-    pub fn add_project(&mut self, name: &str) -> Result<String> {
+    pub fn add_project(&mut self, name: &str) -> Result<ProjectId> {
         let name = name.trim();
         self.check_project_name(name, None)?;
         let id = self.add_project_unsaved(name);
@@ -328,7 +469,7 @@ impl ConnectionStore {
         Ok(id)
     }
 
-    pub fn rename_project(&mut self, id: &str, name: &str) -> Result<()> {
+    pub fn rename_project(&mut self, id: &ProjectId, name: &str) -> Result<()> {
         let name = name.trim();
         self.check_project_name(name, Some(id))?;
         self.project_or_err(id)?.name = name.to_string();
@@ -336,41 +477,47 @@ impl ConnectionStore {
     }
 
     /// Where the project's schemas may be sent to write SQL.
-    pub fn set_share_schema(&mut self, id: &str, share: ShareSchema) -> Result<()> {
+    pub fn set_share_schema(&mut self, id: &ProjectId, share: ShareSchema) -> Result<()> {
         self.project_or_err(id)?.share_schema = share;
         self.save()
     }
 
     /// Removes a project, returning it so the caller can clean up its
     /// keychain entries and history.
-    pub fn delete_project(&mut self, id: &str) -> Result<Project> {
-        let idx = self.projects.iter().position(|p| p.id == id).context("project no longer exists")?;
+    pub fn delete_project(&mut self, id: &ProjectId) -> Result<Project> {
+        let idx = self.projects.iter().position(|p| p.id == *id).context("project no longer exists")?;
         let project = self.projects.remove(idx);
-        if self.last_project.as_deref() == Some(id) {
+        // The projects kept as they were stay where they were among the rest.
+        for kept in &mut self.unreadable {
+            if kept.after > idx {
+                kept.after -= 1;
+            }
+        }
+        if self.last_project.as_ref() == Some(id) {
             self.last_project = None;
         }
         self.save()?;
         Ok(project)
     }
 
-    pub fn set_last_project(&mut self, id: &str) -> Result<()> {
-        if self.last_project.as_deref() == Some(id) {
+    pub fn set_last_project(&mut self, id: &ProjectId) -> Result<()> {
+        if self.last_project.as_ref() == Some(id) {
             return Ok(());
         }
-        self.last_project = Some(id.to_string());
+        self.last_project = Some(id.clone());
         self.save()
     }
 
     /// True if `name` belongs to a connection in the project other than the
     /// one being edited.
-    pub fn name_taken(&self, project_id: &str, original: Option<&str>, name: &str) -> bool {
+    pub fn name_taken(&self, project_id: &ProjectId, original: Option<&str>, name: &str) -> bool {
         Some(name) != original && self.project(project_id).is_some_and(|p| p.connections.iter().any(|c| c.name == name))
     }
 
     /// Saves `profile` in the project, replacing the connection called
     /// `original` (so a rename doesn't leave the old entry behind) or
     /// appending a new one.
-    pub fn upsert(&mut self, project_id: &str, original: Option<&str>, profile: ConnectionProfile) -> Result<()> {
+    pub fn upsert(&mut self, project_id: &ProjectId, original: Option<&str>, profile: ConnectionProfile) -> Result<()> {
         if self.name_taken(project_id, original, &profile.name) {
             bail!("a connection named '{}' already exists in this project", profile.name);
         }
@@ -386,14 +533,14 @@ impl ConnectionStore {
         self.save()
     }
 
-    pub fn delete(&mut self, project_id: &str, name: &str) -> Result<()> {
+    pub fn delete(&mut self, project_id: &ProjectId, name: &str) -> Result<()> {
         self.project_or_err(project_id)?.connections.retain(|c| c.name != name);
         self.save()
     }
 
     /// Moves a connection between projects. Doesn't touch the keychain; the
     /// caller moves the password (see `keychain_account`).
-    pub fn move_connection(&mut self, from: &str, name: &str, to: &str) -> Result<()> {
+    pub fn move_connection(&mut self, from: &ProjectId, name: &str, to: &ProjectId) -> Result<()> {
         if from == to {
             return Ok(());
         }
@@ -411,12 +558,12 @@ impl ConnectionStore {
 }
 
 /// Keychain account a connection's password is stored under.
-pub fn keychain_account(project_id: &str, profile: &ConnectionProfile) -> String {
+pub fn keychain_account(project_id: &ProjectId, profile: &ConnectionProfile) -> String {
     if profile.legacy_keychain { profile.name.clone() } else { project_account(project_id, &profile.name) }
 }
 
 /// Keychain account for a connection saved in the current format.
-pub fn project_account(project_id: &str, name: &str) -> String {
+pub fn project_account(project_id: &ProjectId, name: &str) -> String {
     format!("{project_id}/{name}")
 }
 
@@ -499,7 +646,7 @@ fn restrict(path: &Path, mode: u32) {
 /// that can't be read (none on a server, or locked) isn't fatal: the
 /// password is then empty, so the database's own sources (`PGPASSWORD`,
 /// `~/.pgpass`) can still supply it, and the second value says why.
-pub fn saved_password(project_id: &str, profile: &ConnectionProfile) -> (String, Option<String>) {
+pub fn saved_password(project_id: &ProjectId, profile: &ConnectionProfile) -> (String, Option<String>) {
     if profile.engine.is_file_based() || !profile.password_command.is_empty() {
         return (String::new(), None);
     }
@@ -582,7 +729,50 @@ mod tests {
         (store, dir)
     }
 
-    fn names(store: &ConnectionStore, project: &str) -> Vec<String> {
+    #[test]
+    fn a_project_that_cant_be_read_is_kept_and_the_others_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("c.toml");
+        let text = "last_project = \"../x\"\n\n[[projects]]\nid = \"good\"\nname = \"kept\"\n\n\
+                    [[projects]]\nid = \"../x\"\nname = \"odd\"\nfuture = 1\n\n\
+                    [[projects]]\nid = \"last\"\nname = \"third\"\n";
+        fs::write(&path, text).unwrap();
+        let (mut store, warning) = ConnectionStore::load_from(path.clone());
+        assert!(warning.as_deref().is_some_and(|w| w.contains("odd")), "{warning:?}");
+        assert_eq!(store.projects.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["kept", "third"]);
+        assert_eq!(store.last_project, None, "not a project's id: dropped");
+        assert!(!path.with_extension("toml.bak").exists() && path.exists(), "the file isn't moved aside");
+        // Its name stays its own.
+        assert!(store.add_project("ODD").is_err());
+        // Saving writes it back as it was, where it was.
+        store.add_project("new").unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("id = \"../x\"") && saved.contains("future = 1"), "{saved}");
+        let order: Vec<usize> =
+            ["\"kept\"", "\"odd\"", "\"third\"", "\"new\""].iter().map(|n| saved.find(n).unwrap()).collect();
+        assert!(order.is_sorted(), "{saved}");
+        // Deleting one before it: it stays between the same two.
+        let first = store.projects[0].id.clone();
+        store.delete_project(&first).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+        let order: Vec<usize> = ["\"odd\"", "\"third\"", "\"new\""].iter().map(|n| saved.find(n).unwrap()).collect();
+        assert!(order.is_sorted(), "{saved}");
+        let (again, _) = ConnectionStore::load_from(path);
+        assert_eq!(again.projects.len(), 2);
+    }
+
+    #[test]
+    fn a_project_id_that_would_lead_out_of_its_folders_isnt_taken() {
+        for bad in ["", ".", "..", "../x", ".x", "a/b", "a\\b", "a\0b"] {
+            assert!(ProjectId::try_from(bad.to_string()).is_err(), "{bad:?}");
+            assert!(toml::from_str::<Project>(&format!("id = {bad:?}\nname = \"p\"\n")).is_err(), "{bad:?}");
+        }
+        let id = ProjectId::new();
+        assert_eq!(ProjectId::from_written(id.as_str()), Some(id));
+        assert!(ProjectId::from_written("podelis-test-1 (2)").is_some());
+    }
+
+    fn names(store: &ConnectionStore, project: &ProjectId) -> Vec<String> {
         store.project(project).unwrap().connections.iter().map(|c| c.name.clone()).collect()
     }
 
@@ -604,7 +794,7 @@ mod tests {
             }
         }
         let p = profile("shop db / ąčę: \"prod\"");
-        let project = format!("podelis-test-{} (2)", uuid::Uuid::new_v4());
+        let project = ProjectId::from_written(format!("podelis-test-{} (2)", uuid::Uuid::new_v4())).unwrap();
         let entry = Forget(keychain_account(&project, &p));
         crate::db::keychain::store_password(&entry.0, "s3cret").unwrap();
         assert_eq!(saved_password(&project, &p), ("s3cret".to_string(), None));
@@ -629,7 +819,7 @@ mod tests {
         let mut edited = store.projects[0].connections[0].clone();
         edited.unknown = Unknown::default();
         edited.database = "main".into();
-        store.upsert(&id, Some("db"), edited).unwrap();
+        store.upsert(&ProjectId::from_written(id.clone()).unwrap(), Some("db"), edited).unwrap();
         let saved = fs::read_to_string(&path).unwrap();
         for kept in [
             "future_top = 1",
@@ -641,7 +831,7 @@ mod tests {
             assert!(saved.contains(kept), "{kept} in:\n{saved}");
         }
         // A setting this version knows, set back to its default, stays gone.
-        store.set_share_schema(&id, ShareSchema::Local).unwrap();
+        store.set_share_schema(&ProjectId::from_written(id).unwrap(), ShareSchema::Local).unwrap();
         assert!(!fs::read_to_string(&path).unwrap().contains("share_schema"));
     }
 
@@ -668,7 +858,7 @@ mod tests {
         store.set_last_project(&id).unwrap();
         let (reloaded, _) = ConnectionStore::load_from(path);
         assert_eq!(reloaded.projects, store.projects);
-        assert_eq!(reloaded.last_project.as_deref(), Some(id.as_str()));
+        assert_eq!(reloaded.last_project.as_ref(), Some(&id));
     }
 
     #[test]

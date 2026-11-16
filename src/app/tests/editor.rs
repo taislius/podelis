@@ -451,12 +451,12 @@ async fn tab_and_shift_tab_go_round_the_panes() {
     app.manager.project_selected = 1;
     app.handle_key(key(KeyCode::Tab));
     assert!(matches!(app.screen, Screen::Connections));
-    assert_eq!(app.current_project.as_deref(), Some(other.as_str()));
+    assert_eq!(app.current_project.as_ref(), Some(&other));
     app.handle_key(key(KeyCode::BackTab));
     app.manager.project_selected = 0;
     app.handle_key(key(KeyCode::Right));
     assert!(matches!(app.screen, Screen::Connections));
-    assert_eq!(app.current_project.as_deref(), Some(project.as_str()));
+    assert_eq!(app.current_project.as_ref(), Some(&project));
     app.manager.connection_selected = 0;
     app.handle_key(key(KeyCode::Tab));
     read_password(&mut app).await;
@@ -691,7 +691,7 @@ fn a_question_written_in_the_editor_gets_its_sql_under_it() {
         explain: false,
         at: Some(0),
     };
-    let answer = |sql: &str| serde_json::json!({ "model": "local", "sql": sql, "said": "Counts them." });
+    let answer = |sql: &str| as_answer(serde_json::json!({ "model": "local", "sql": sql, "said": "Counts them." }));
     app.insert_answer(&asked, &answer("SELECT city, COUNT(*) FROM customers\n\nGROUP BY city"));
     // Under the question, marked, the model's SQL as it wrote it (a blank
     // line too); the user's own SQL kept, apart.
@@ -733,7 +733,7 @@ fn asking_again_keeps_what_the_user_wrote_right_under_the_answer() {
     let asked =
         Question { text: "notes".into(), tab: app.tabs[0].id, connection: "c".into(), explain: false, at: Some(0) };
     let sql = "INSERT INTO notes VALUES ('line 1\n\nline 3')";
-    app.insert_answer(&asked, &serde_json::json!({ "model": "local", "sql": sql, "said": "New." }));
+    app.insert_answer(&asked, &as_answer(serde_json::json!({ "model": "local", "sql": sql, "said": "New." })));
     assert_eq!(
         app.tab.editor.text(),
         "-- ? notes\n-- ↳ local\n-- New.\nINSERT INTO notes VALUES ('line 1\n\nline 3');\n\nSELECT 'mine';",
@@ -754,13 +754,49 @@ fn a_models_words_stay_inside_their_comments() {
     // the rest SQL.
     let answer = serde_json::json!({
         "model": "local", "sql": "SELECT 1", "said": "Fine.\rDROP TABLE a;",
-        "suggested": [{ "subject": "t", "relation": "means", "value": "x\r\nDROP TABLE b;" }],
+        "suggested": [{ "id": 1, "subject": "t", "relation": "means", "value": "x\r\nDROP TABLE b;" }],
         "problems": ["no\nDROP TABLE c;"],
     });
-    app.insert_answer(&asked, &answer);
+    app.insert_answer(&asked, &as_answer(answer));
     let text = app.tab.editor.text();
     for line in text.lines().filter(|l| l.contains("DROP")) {
         assert!(line.starts_with("-- "), "{text}");
     }
     assert!(!text.contains('\r'), "{text:?}");
+}
+
+#[test]
+fn any_change_by_a_key_does_what_an_edit_does() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    app.tab.editor.set_text("select 1");
+    app.tab.error_marker = Some(((0, 0), (0, 6)));
+    app.editing.lint_due = None;
+    // An edit path that forgets `edited()`.
+    app.on_input(|app| app.tab.editor.insert_str(" -- x"));
+    assert_eq!(app.tab.error_marker, None, "the old error mark goes");
+    assert!(app.editing.lint_due.is_some(), "the checks run");
+    // Nothing changed: nothing done.
+    app.tab.error_marker = Some(((0, 0), (0, 6)));
+    app.on_input(|app| app.tab.editor.move_left());
+    assert!(app.tab.error_marker.is_some());
+}
+
+#[test]
+fn going_back_through_the_history_keeps_its_place() {
+    let (mut app, _dir) = test_app();
+    app.screen = Screen::Query;
+    app.focus = Focus::Editor;
+    for sql in ["select 1", "select 2", "select 3"] {
+        app.history.push(sql);
+    }
+    app.on_input(App::history_older);
+    app.on_input(App::history_older);
+    assert_eq!(app.tab.editor.text(), "select 2", "the second step goes further back");
+    assert!(app.editing.lint_due.is_some(), "a query brought back is checked too");
+}
+
+/// An answer as the gateway sends it, read as the app reads it.
+fn as_answer(sent: serde_json::Value) -> crate::gateway::methods::AskResult {
+    serde_json::from_value(sent).expect("an answer the gateway could send")
 }

@@ -146,7 +146,11 @@ pub fn learn(files: &[(String, String)], engine: Engine) -> Vec<Learned> {
     let mut learned: Vec<Learned> = histories
         .into_iter()
         .filter(|(_, h)| !h.events.is_empty())
-        .map(|(table, h)| Learned { subject: table, relation: "history".into(), value: h.events.join("; ") })
+        .map(|(table, h)| Learned {
+            subject: table,
+            relation: crate::memory::HISTORY.into(),
+            value: h.events.join("; "),
+        })
         .collect();
     learned.extend(notes);
     learned

@@ -180,9 +180,9 @@ pub(super) fn draw_activity(f: &mut Frame, app: &App, area: Rect) {
         let waiting = if a.blocked_by.is_empty() {
             a.wait.clone()
         } else {
-            t!("activity.blocked_by", ids = a.blocked_by.join(","))
+            t!("activity.blocked_by", ids = a.blocked_by.iter().map(ToString::to_string).collect::<Vec<_>>().join(","))
         };
-        let id = if a.own { format!("{}*", a.id) } else { a.id.clone() };
+        let id = if a.own { format!("{}*", a.id) } else { a.id.to_string() };
         let text = format!(
             "{:<8} {:<12} {:<12} {:<20} {:>7} {:<18} {}",
             truncate(&id, 8),

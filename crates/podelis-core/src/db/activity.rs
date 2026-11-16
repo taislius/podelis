@@ -3,10 +3,29 @@
 
 use super::*;
 
+/// A session on the server: PostgreSQL's backend pid, MySQL's connection
+/// id (0 where there's none: SQLite, DuckDB). What a cancel or kill is
+/// for, and how a reconnect is told from the same session.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SessionId(pub(crate) i64);
+
+impl SessionId {
+    /// As the server lists it (`pid::text`, `CAST(id AS CHAR)`).
+    pub(crate) fn parse(text: &str) -> Option<Self> {
+        text.trim().parse().ok().map(Self)
+    }
+}
+
+impl std::fmt::Display for SessionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Activity {
     /// Postgres backend pid / MySQL connection id.
-    pub id: String,
+    pub id: SessionId,
     pub user: String,
     pub database: String,
     pub client: String,
@@ -18,7 +37,7 @@ pub struct Activity {
     pub wait: String,
     pub query: String,
     /// Sessions holding locks this one waits for.
-    pub blocked_by: Vec<String>,
+    pub blocked_by: Vec<SessionId>,
     /// The session of this app's tab.
     pub own: bool,
 }
@@ -44,12 +63,11 @@ impl Database {
         if !self.0.engine.capabilities().activity {
             return Ok(None);
         }
-        let own = self.0.backend_id.load(Ordering::SeqCst);
-        if own == 0 {
+        let own = self.session_id();
+        if own == SessionId::default() {
             return Ok(None);
         }
         let sessions = on_driver!(self.0.engine, engine::queries::activity(self).await)?;
-        let own = own.to_string();
         Ok(Some(match sessions.iter().find(|a| a.id == own) {
             None => OwnSession::Gone,
             // PostgreSQL's idle (in transaction, too); MySQL's Sleep.
@@ -62,7 +80,7 @@ impl Database {
     /// it works while this tab's query is running.
     pub async fn activity(&self) -> Result<Vec<Activity>> {
         let mut sessions = on_driver!(self.0.engine, engine::queries::activity(self).await)?;
-        let own = self.0.backend_id.load(Ordering::SeqCst).to_string();
+        let own = self.session_id();
         for a in &mut sessions {
             a.own = a.id == own;
         }
@@ -71,8 +89,7 @@ impl Database {
 
     /// Cancels session `id`'s running query, or (`terminate`) ends the
     /// session.
-    pub async fn stop_session(&self, id: &str, terminate: bool) -> Result<()> {
-        let id: i64 = id.parse().context("not a session id")?;
-        on_driver!(self.0.engine, engine::queries::stop_session(self, id, terminate).await)
+    pub async fn stop_session(&self, id: SessionId, terminate: bool) -> Result<()> {
+        on_driver!(self.0.engine, engine::queries::stop_session(self, id.0, terminate).await)
     }
 }

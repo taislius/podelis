@@ -154,7 +154,8 @@ impl App {
     /// The editor position under screen cell (x, y), clamped to the text.
     pub(in crate::app) fn editor_pos_at(&self, x: u16, y: u16) -> Pos {
         let area = self.hits.editor_text;
-        let row = (self.tab.editor.scroll_row + y.saturating_sub(area.y) as usize).min(self.tab.editor.lines.len() - 1);
+        let row =
+            (self.tab.editor.scroll_row + y.saturating_sub(area.y) as usize).min(self.tab.editor.lines().len() - 1);
         let display = self.tab.editor.scroll_col + x.saturating_sub(area.x) as usize;
         (row, self.tab.editor.col_at_display(row, display))
     }

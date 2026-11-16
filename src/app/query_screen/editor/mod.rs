@@ -25,4 +25,7 @@ pub struct Editing {
     pub(in crate::app) esc_then_tab: bool,
     /// When the checks run, once typing pauses.
     pub(in crate::app) lint_due: Option<Instant>,
+    /// The text's version after it was brought back from the history: that
+    /// change keeps the history's place (`App::on_input`).
+    pub(in crate::app) recalled: Option<u64>,
 }

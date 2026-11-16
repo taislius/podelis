@@ -26,11 +26,18 @@ impl VimMode {
     }
 }
 
+/// Vim's state for one tab (as vim's for a buffer): its mode and what's
+/// typed of a command. In `TabState`, so a tab switch takes it along.
 #[derive(Default)]
-pub struct Vim {
+pub struct VimTab {
     pub mode: VimMode,
     /// Typed count and operator so far, e.g. "2d".
-    pending: String,
+    pub(in crate::app) pending: String,
+}
+
+/// Vim's state for every tab: the register (yanks paste in any tab).
+#[derive(Default)]
+pub struct Vim {
     /// Last yanked/deleted text, and whether it was whole lines.
     register: (String, bool),
 }
@@ -58,7 +65,7 @@ fn step(ed: &TextEditor, (r, c): Pos, forward: bool) -> Option<Pos> {
     if forward {
         if c < ed.line_len(r) {
             Some((r, c + 1))
-        } else if r + 1 < ed.lines.len() {
+        } else if r + 1 < ed.lines().len() {
             Some((r + 1, 0))
         } else {
             None
@@ -129,13 +136,13 @@ fn word_back(ed: &TextEditor, p: Pos) -> Pos {
 }
 
 fn first_non_blank(ed: &TextEditor, row: usize) -> Pos {
-    let col = ed.lines[row].chars().take_while(|c| c.is_whitespace()).count();
+    let col = ed.lines()[row].chars().take_while(|c| c.is_whitespace()).count();
     (row, col.min(ed.line_len(row)))
 }
 
 /// The range of the word under the cursor (`iw`), end exclusive.
 fn inner_word(ed: &TextEditor, (r, c): Pos) -> (Pos, Pos) {
-    let chars: Vec<char> = ed.lines[r].chars().collect();
+    let chars: Vec<char> = ed.lines()[r].chars().collect();
     if chars.is_empty() {
         return ((r, 0), (r, 0));
     }
@@ -175,11 +182,11 @@ fn motion(ed: &TextEditor, key: char, from: Pos, count: usize) -> Option<(Pos, b
                 inclusive = false;
                 (p.0, ed.line_len(p.0))
             }
-            'G' => (ed.lines.len() - 1, 0),
+            'G' => (ed.lines().len() - 1, 0),
             _ => return None,
         };
     }
-    let p = (p.0.min(ed.lines.len() - 1), p.1.min(ed.line_len(p.0.min(ed.lines.len() - 1))));
+    let p = (p.0.min(ed.lines().len() - 1), p.1.min(ed.line_len(p.0.min(ed.lines().len() - 1))));
     Some((p, inclusive))
 }
 
@@ -190,15 +197,15 @@ impl App {
 
     /// The vim mode to show, when vim editing is on.
     pub fn vim_mode(&self) -> Option<VimMode> {
-        self.vim_enabled().then_some(self.editing.vim.mode)
+        self.vim_enabled().then_some(self.tab.vim.mode)
     }
 
     /// Keys for the editor in vim mode.
     pub(in crate::app) fn handle_vim_key(&mut self, key: KeyEvent) {
-        match self.editing.vim.mode {
+        match self.tab.vim.mode {
             VimMode::Insert => {
                 if key.code == KeyCode::Esc {
-                    self.editing.vim.mode = VimMode::Normal;
+                    self.tab.vim.mode = VimMode::Normal;
                     self.tab.editor.prepare_move(false);
                     self.tab.editor.move_left();
                     self.popups.completion = None;
@@ -213,24 +220,24 @@ impl App {
     }
 
     fn take_count(&mut self) -> usize {
-        let digits: String = self.editing.vim.pending.chars().take_while(char::is_ascii_digit).collect();
-        self.editing.vim.pending.drain(..digits.len());
+        let digits: String = self.tab.vim.pending.chars().take_while(char::is_ascii_digit).collect();
+        self.tab.vim.pending.drain(..digits.len());
         digits.parse().unwrap_or(1)
     }
 
     fn vim_insert(&mut self) {
-        self.editing.vim.mode = VimMode::Insert;
-        self.editing.vim.pending.clear();
+        self.tab.vim.mode = VimMode::Insert;
+        self.tab.vim.pending.clear();
     }
 
     fn vim_normal(&mut self, key: KeyEvent) {
         let KeyCode::Char(ch) = key.code else {
             // Arrows, Home/End etc. behave as in the standard editor.
             if key.code == KeyCode::Esc {
-                if self.editing.vim.pending == self.settings.local_leader {
+                if self.tab.vim.pending == self.settings.local_leader {
                     self.notes.status.clear();
                 }
-                self.editing.vim.pending.clear();
+                self.tab.vim.pending.clear();
             } else {
                 self.handle_standard_editor_key(key);
             }
@@ -247,28 +254,27 @@ impl App {
             return;
         }
         // Space is the leader, as in Neovim: Ctrl+K's menu.
-        if ch == ' ' && self.editing.vim.pending.is_empty() {
+        if ch == ' ' && self.tab.vim.pending.is_empty() {
             return self.open_palette(false);
         }
         if self.vim_prefix_key(ch) {
             return;
         }
         // Counts: 1-9, then any digit (a lone 0 is a motion).
-        if ch.is_ascii_digit()
-            && (ch != '0' || self.editing.vim.pending.chars().last().is_some_and(|c| c.is_ascii_digit()))
+        if ch.is_ascii_digit() && (ch != '0' || self.tab.vim.pending.chars().last().is_some_and(|c| c.is_ascii_digit()))
         {
-            self.editing.vim.pending.push(ch);
+            self.tab.vim.pending.push(ch);
             return;
         }
-        let operator = self.editing.vim.pending.chars().find(|c| matches!(c, 'd' | 'c' | 'y'));
-        let pending_g = self.editing.vim.pending.ends_with('g');
-        let pending_r = self.editing.vim.pending.ends_with('r');
-        let pending_i = self.editing.vim.pending.ends_with('i');
+        let operator = self.tab.vim.pending.chars().find(|c| matches!(c, 'd' | 'c' | 'y'));
+        let pending_g = self.tab.vim.pending.ends_with('g');
+        let pending_r = self.tab.vim.pending.ends_with('r');
+        let pending_i = self.tab.vim.pending.ends_with('i');
         if let Some(op) = operator {
             return self.vim_operator(op, ch, pending_i);
         }
         if pending_r {
-            self.editing.vim.pending.clear();
+            self.tab.vim.pending.clear();
             let p = self.tab.editor.cursor();
             if self.tab.editor.char_at_pos(p).is_some() {
                 self.tab.editor.set_anchor(Some(p));
@@ -282,7 +288,7 @@ impl App {
         // Operators and prefixes wait for the next key; the count stays
         // pending with them.
         if matches!(ch, 'd' | 'c' | 'y' | 'r') || (ch == 'g' && !pending_g) {
-            self.editing.vim.pending.push(ch);
+            self.tab.vim.pending.push(ch);
             return;
         }
         let count = self.take_count();
@@ -292,21 +298,21 @@ impl App {
         let ed = &mut self.tab.editor;
         match ch {
             'g' if pending_g => {
-                self.editing.vim.pending.clear();
+                self.tab.vim.pending.clear();
                 ed.prepare_move(false);
-                ed.set_cursor((count.saturating_sub(1).min(ed.lines.len() - 1), 0));
+                ed.set_cursor((count.saturating_sub(1).min(ed.lines().len() - 1), 0));
             }
             'G' if count > 1 => {
                 ed.prepare_move(false);
                 ed.set_cursor((count - 1, 0));
             }
             'v' => {
-                self.editing.vim.mode = VimMode::Visual;
+                self.tab.vim.mode = VimMode::Visual;
                 let p = ed.cursor();
                 ed.set_anchor(Some(p));
             }
             'V' => {
-                self.editing.vim.mode = VimMode::VisualLine;
+                self.tab.vim.mode = VimMode::VisualLine;
                 let p = ed.cursor();
                 ed.set_anchor(Some(p));
             }
@@ -323,7 +329,7 @@ impl App {
     fn vim_comment_lines(&mut self, count: usize) {
         let ed = &mut self.tab.editor;
         let row = ed.cursor().0;
-        let last = (row + count.max(1) - 1).min(ed.lines.len() - 1);
+        let last = (row + count.max(1) - 1).min(ed.lines().len() - 1);
         if last > row {
             ed.set_anchor(Some((row, 0)));
             ed.set_cursor((last, ed.line_len(last)));
@@ -339,34 +345,32 @@ impl App {
     fn vim_prefix_key(&mut self, ch: char) -> bool {
         // The local leader, as Neovim's: the editor's own commands.
         let local = self.settings.local_leader.chars().next();
-        if local
-            .is_some_and(|l| self.editing.vim.pending.len() == l.len_utf8() && self.editing.vim.pending.starts_with(l))
-        {
-            self.editing.vim.pending.clear();
+        if local.is_some_and(|l| self.tab.vim.pending.len() == l.len_utf8() && self.tab.vim.pending.starts_with(l)) {
+            self.tab.vim.pending.clear();
             self.notes.status.clear();
             self.local_leader_key(ch);
             return true;
         }
         // Waiting for its letter: said in the status bar, as Ctrl+K's (not
         // in the editor's footer, which MESSAGES keeps).
-        if local == Some(ch) && self.editing.vim.pending.is_empty() {
-            self.editing.vim.pending.push(ch);
+        if local == Some(ch) && self.tab.vim.pending.is_empty() {
+            self.tab.vim.pending.push(ch);
             self.notes.status = format!("{ch}…");
             self.notes.status_is_error = false;
             return true;
         }
         // `gc` comments, as vim-commentary's: `gcc` the line, `3gcc` three
         // from it. Before the operators: `c` after `g` isn't a change.
-        if self.editing.vim.pending.ends_with("gc") {
+        if self.tab.vim.pending.ends_with("gc") {
             let count = self.take_count();
-            self.editing.vim.pending.clear();
+            self.tab.vim.pending.clear();
             if ch == 'c' {
                 self.vim_comment_lines(count);
             }
             return true;
         }
-        if ch == 'c' && self.editing.vim.pending.ends_with('g') {
-            self.editing.vim.pending.push('c');
+        if ch == 'c' && self.tab.vim.pending.ends_with('g') {
+            self.tab.vim.pending.push('c');
             return true;
         }
         false
@@ -457,10 +461,10 @@ impl App {
             'J' => {
                 for _ in 0..count {
                     let row = self.tab.editor.cursor_row;
-                    if row + 1 >= self.tab.editor.lines.len() {
+                    if row + 1 >= self.tab.editor.lines().len() {
                         break;
                     }
-                    let next_blank = self.tab.editor.lines[row + 1].chars().take_while(|c| c.is_whitespace()).count();
+                    let next_blank = self.tab.editor.lines()[row + 1].chars().take_while(|c| c.is_whitespace()).count();
                     let end = self.tab.editor.line_len(row);
                     self.tab.editor.set_anchor(Some((row, end)));
                     self.tab.editor.set_cursor((row + 1, next_blank));
@@ -489,7 +493,7 @@ impl App {
     /// or `iw`.
     fn vim_operator(&mut self, op: char, ch: char, pending_i: bool) {
         let count = {
-            let digits: String = self.editing.vim.pending.chars().filter(char::is_ascii_digit).collect();
+            let digits: String = self.tab.vim.pending.chars().filter(char::is_ascii_digit).collect();
             digits.parse::<usize>().unwrap_or(1)
         };
         let ed = &self.tab.editor;
@@ -497,11 +501,11 @@ impl App {
         let range = if pending_i {
             (ch == 'w').then(|| inner_word(ed, from)).map(|(a, b)| (a, b, false))
         } else if ch == 'i' {
-            self.editing.vim.pending.push('i');
+            self.tab.vim.pending.push('i');
             return;
         } else if ch == op {
             // dd / cc / yy: `count` whole lines.
-            let last = (from.0 + count - 1).min(ed.lines.len() - 1);
+            let last = (from.0 + count - 1).min(ed.lines().len() - 1);
             Some(((from.0, 0), (last, ed.line_len(last)), true))
         } else if ch == 'w' && op == 'c' {
             // `cw` changes to the end of the word, like `ce`.
@@ -513,7 +517,7 @@ impl App {
                 (a, b, false)
             })
         };
-        self.editing.vim.pending.clear();
+        self.tab.vim.pending.clear();
         let Some((a, b, linewise)) = range else { return };
         match op {
             'y' => {
@@ -551,7 +555,7 @@ impl App {
         self.vim_yank(a, b, linewise);
         let ed = &mut self.tab.editor;
         let (a, b) = if linewise {
-            if b.0 + 1 < ed.lines.len() {
+            if b.0 + 1 < ed.lines().len() {
                 (a, (b.0 + 1, 0))
             } else if a.0 > 0 {
                 ((a.0 - 1, ed.line_len(a.0 - 1)), b)
@@ -567,8 +571,8 @@ impl App {
             ed.cut();
         }
         if linewise {
-            let row = ed.cursor_row.min(ed.lines.len() - 1);
-            let p = first_non_blank(ed, if a.0 < ed.lines.len() && b.0 > a.0 { a.0 } else { row });
+            let row = ed.cursor_row.min(ed.lines().len() - 1);
+            let p = first_non_blank(ed, if a.0 < ed.lines().len() && b.0 > a.0 { a.0 } else { row });
             ed.set_cursor(p);
         }
         self.edited();
@@ -621,7 +625,7 @@ impl App {
     fn vim_visual(&mut self, key: KeyEvent) {
         let KeyCode::Char(ch) = key.code else {
             if key.code == KeyCode::Esc {
-                self.editing.vim.mode = VimMode::Normal;
+                self.tab.vim.mode = VimMode::Normal;
                 self.tab.editor.set_anchor(None);
             } else {
                 // Arrows extend the selection.
@@ -632,13 +636,13 @@ impl App {
             return;
         };
         if ch.is_ascii_digit() && ch != '0' {
-            self.editing.vim.pending.push(ch);
+            self.tab.vim.pending.push(ch);
             return;
         }
         let anchor = self.tab.editor.anchor().unwrap_or_else(|| self.tab.editor.cursor());
         let cursor = self.tab.editor.cursor();
         let (a, b) = if anchor <= cursor { (anchor, cursor) } else { (cursor, anchor) };
-        let line_mode = self.editing.vim.mode == VimMode::VisualLine;
+        let line_mode = self.tab.vim.mode == VimMode::VisualLine;
         // Visual selections include the char under the cursor.
         let (a, b) = if line_mode {
             ((a.0, 0), (b.0, self.tab.editor.line_len(b.0)))
@@ -647,7 +651,7 @@ impl App {
         };
         match ch {
             'y' | 'd' | 'x' | 'c' => {
-                self.editing.vim.mode = VimMode::Normal;
+                self.tab.vim.mode = VimMode::Normal;
                 match ch {
                     'y' => {
                         self.vim_yank(a, b, line_mode);
@@ -663,11 +667,11 @@ impl App {
             }
             'v' | 'V' => {
                 let target = if ch == 'v' { VimMode::Visual } else { VimMode::VisualLine };
-                if self.editing.vim.mode == target {
-                    self.editing.vim.mode = VimMode::Normal;
+                if self.tab.vim.mode == target {
+                    self.tab.vim.mode = VimMode::Normal;
                     self.tab.editor.set_anchor(None);
                 } else {
-                    self.editing.vim.mode = target;
+                    self.tab.vim.mode = target;
                 }
             }
             _ => {
@@ -705,6 +709,40 @@ mod tests {
     }
 
     #[test]
+    fn each_tab_has_its_own_vim_mode_and_nothing_half_typed_goes_along() {
+        let (mut app, _dir) = vim_app("select 1 from t");
+        app.new_tab(None, "select 2 from u", None);
+        app.switch_tab(0);
+        app.focus = Focus::Editor;
+        // Visual mode here, then the other tab.
+        keys(&mut app, "vl");
+        assert_eq!(app.vim_mode(), Some(VimMode::Visual));
+        let selected = app.tab.editor.selected_text();
+        assert!(selected.is_some());
+        app.switch_tab(1);
+        app.focus = Focus::Editor;
+        assert_eq!(app.vim_mode(), Some(VimMode::Normal), "not visual with nothing selected");
+        // Back: still visual there, with its selection.
+        app.switch_tab(0);
+        app.focus = Focus::Editor;
+        assert_eq!(app.vim_mode(), Some(VimMode::Visual));
+        assert_eq!(app.tab.editor.selected_text(), selected);
+        keys(&mut app, "\u{1b}");
+        // Half a command: it isn't finished on another tab's text.
+        keys(&mut app, "2");
+        app.switch_tab(1);
+        app.focus = Focus::Editor;
+        keys(&mut app, "0x");
+        assert_eq!(app.tab.editor.text(), "elect 2 from u", "one x, not 2x");
+        // The local leader's prompt goes with what it waited for.
+        let leader = app.settings.local_leader.clone();
+        keys(&mut app, &leader);
+        assert_eq!(app.notes.status, format!("{leader}…"));
+        app.switch_tab(0);
+        assert!(app.notes.status.is_empty(), "{:?}", app.notes.status);
+    }
+
+    #[test]
     fn yanks_reach_the_system_clipboard_and_deletes_dont() {
         let (mut app, _dir) = vim_app("select 1\nfrom t");
         keys(&mut app, "yy");
@@ -731,10 +769,10 @@ mod tests {
         keys(&mut app, "\\Z");
         assert!(app.notes.editor_note_is_error, "an unknown key says so");
         keys(&mut app, "\\\u{1b}");
-        assert!(app.editing.vim.pending.is_empty() && app.notes.status.is_empty(), "Esc drops it");
+        assert!(app.tab.vim.pending.is_empty() && app.notes.status.is_empty(), "Esc drops it");
         app.settings.local_leader = String::new();
         keys(&mut app, "\\");
-        assert!(app.editing.vim.pending.is_empty());
+        assert!(app.tab.vim.pending.is_empty());
     }
 
     #[test]
@@ -749,7 +787,7 @@ mod tests {
     fn run(text: &str, input: &str) -> (String, Pos, VimMode) {
         let (mut app, _dir) = vim_app(text);
         keys(&mut app, input);
-        (app.tab.editor.text(), app.tab.editor.cursor(), app.editing.vim.mode)
+        (app.tab.editor.text(), app.tab.editor.cursor(), app.tab.vim.mode)
     }
 
     #[test]
@@ -830,10 +868,10 @@ mod tests {
         assert_eq!(run("one two", "wvecX\u{1b}").0, "one X");
         let (mut app, _dir) = vim_app("abc");
         keys(&mut app, "vl");
-        assert_eq!(app.editing.vim.mode, VimMode::Visual);
+        assert_eq!(app.tab.vim.mode, VimMode::Visual);
         assert_eq!(app.tab.editor.selected_text().as_deref(), Some("a"));
         keys(&mut app, "\u{1b}");
-        assert!(app.tab.editor.selection().is_none() && app.editing.vim.mode == VimMode::Normal);
+        assert!(app.tab.editor.selection().is_none() && app.tab.vim.mode == VimMode::Normal);
     }
 
     #[test]

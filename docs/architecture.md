@@ -230,6 +230,17 @@ everywhere:
   searches, exports, the gateway's answers, a sandbox's locks) is a
   `Background` event instead, applied wherever it is and never dropped:
   `handle_db_event` sends those to `apply_background` before anything else.
+- **Ids have types of their own**: what something is called by, where it
+  crosses modules, isn't a bare `String` or number, so one can't be passed
+  for another. `ConnId` (an open connection's slot: what a tab on it
+  keeps), `TabId`, `RunId`; `ProjectId` (`config::store`: files, keychain
+  accounts, the gateway and agents; the AI crate takes it as `&str`),
+  `SavedQueryId` (`config::library`), `FactId` (`podelis_ai::memory`),
+  `RequestId` (`agents::approvals`: names the request's files, so one read
+  back is checked to stay in its folder) and `SessionId` (`db`: the
+  server's session, for cancelling, the activity window and agents'
+  sandboxes). Those written to files or JSON are written as the plain
+  value they always were (`serde(transparent)`).
 - **Text inputs** (`input.rs`): `LineInput` is one line with a cursor and
   the same keys everywhere (←/→, Home/End, Ctrl+U, Ctrl+W, paste). Its
   `handle` reports `Changed`, `Moved`, `Submit`, `Cancel` or `Ignored`, and
@@ -518,11 +529,23 @@ src/gateway/
                 0600 in a 0700 folder), connections, stopping when no
                 client has been connected for `gateway_idle`, the call log
                 (each line one write under a file lock: calls end at once)
-  client.rs     connect and say hello, call, and start the gateway when
-                none answers (`connect_or_start`, `spawn_gateway`)
+  methods.rs    each method as a type (`Method`: its name, params and
+                answer) and the notifications (`Note`); the server reads
+                requests and clients read answers with them
+  client.rs     connect and say hello, call (`request::<M>`, typed), and
+                start the gateway when none answers (`connect_or_start`,
+                `spawn_gateway`)
   command.rs    `podelis gateway [status | start | stop | models | key | test]`
-  ai.rs         the `models`, `complete`, `context` and `ask` methods, and
-                the schemas kept (each with its catalog's ontology)
+  call.rs       what a method gets: the config folder, the caches, a
+                `Notifier` (the only thing it may write to its client) and
+                its call-log line
+  caches.rs     what's kept between calls (schemas, memories, keys), swept
+                on the server's tick when past its time
+  source.rs     projects, saved connections and their schemas (one load
+                at a time per connection), and a question's context
+  ai.rs         `models` and `complete`, the model asked and its key
+  ask.rs        `context` and `ask`: what may go to which model, and what's
+                kept of the answer (the conversation is `podelis_ai::ask`)
   memory.rs     the `memory.*` methods: a project's facts
   ontology.rs   `ontology` and `ontology.import`: a database's ontology to
                 read or export, and an edited file loaded back
@@ -533,13 +556,19 @@ crates/podelis-ai/
                 compiled in by src/prompts.rs: one-pass {name}s, snapshot
                 tests of each; its README says how to change one
 crates/podelis-ai/src/
+  ask.rs        asking a model for SQL (or what SQL does): the prompt, the
+                conversation (lookups, unknown names sent back), the
+                `FACT:` lines taken out of its note
   memory.rs     a project's facts ("thing, relation, value", who said it,
                 confirmed or not) in `memory/<project-id>.db`, with an FTS5
                 index and a database each (or every database); those about
                 the question's tables (as the ontology reads their subjects)
                 or matching its words are shown
   ontology/     a database's ontology (mod.rs: concepts, labels, relations,
-                assertions, from the catalog and the facts; SKOS Turtle);
+                assertions, from the catalog and the facts; other names
+                resolve like a table's own, confirmed ones only;
+                `resolve_fact`: what only a table has, said of a word, is
+                stale; SKOS Turtle);
                 file.rs the YAML file to edit, plan.rs what loading it back
                 changes, outline.rs the app's browser's sections
   migrations.rs a folder of SQL migrations read into facts, without a model:
@@ -574,7 +603,7 @@ comments in MySQL, none in SQLite) and keeps them for five minutes per
 connection. It reads `connections.toml` with `ConnectionStore::peek`,
 which never moves an unreadable file aside as the app's load does.
 
-The gateway's `ai::Caches` hold what's kept between calls: those
+The gateway's `caches::Caches` hold what's kept between calls: those
 schemas, each project's memory connection (opened and set up once,
 reopened after an error), and what models' `key_command`s printed (15
 minutes; a key the provider refuses is dropped at once).
@@ -602,7 +631,7 @@ project's `share_schema` is `all` (or the call says `share_once`, which
 `podelis ask` sends after asking you), asks for one query in a `sql`
 block, checks its names with `names.rs`, and sends what's wrong back in
 the same conversation, at most twice. A model with `tools` (a provider's,
-by default) may first look up tables it wasn't shown: `converse` answers
+by default) may first look up tables it wasn't shown: `podelis_ai::ask::converse` answers
 its `find_tables` and `describe_table` calls from the same `Schema`
 (`context::find`, `context::describe`; never rows), two rounds and eight
 tables at most, then asks for the answer without more calls

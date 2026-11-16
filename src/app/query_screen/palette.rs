@@ -24,7 +24,7 @@ pub enum PaletteMode {
     Tabs(Vec<String>),
     /// Only the open connections (Ctrl+K j), with their text to search
     /// (name, address, its tabs' names), lowercased.
-    Connections(Vec<(u64, String)>),
+    Connections(Vec<(ConnId, String)>),
 }
 
 pub struct Palette {
@@ -146,9 +146,9 @@ impl App {
     /// Ctrl+K j: the open connections, to go to or close; the shown tab's
     /// selected.
     pub(super) fn open_connection_list(&mut self) {
-        let mut ids: Vec<u64> = self.connection.slots.active.into_iter().collect();
+        let mut ids: Vec<ConnId> = self.connection.slots.active.into_iter().collect();
         ids.extend(self.parked_connections().into_iter().map(|(id, ..)| id));
-        let conn_texts: Vec<(u64, String)> = ids
+        let conn_texts: Vec<(ConnId, String)> = ids
             .iter()
             .map(|&id| {
                 let tabs: Vec<&str> =
@@ -174,7 +174,7 @@ impl App {
     /// An open connection as its list shows it: its name, engine and
     /// address, its tabs, and how it is (a query running, a transaction
     /// open, lost).
-    pub fn connection_entry(&self, id: u64) -> String {
+    pub fn connection_entry(&self, id: ConnId) -> String {
         let name = self.conn_name(id).unwrap_or_default();
         let tabs: Vec<usize> = (0..self.tabs.len()).filter(|&i| self.tabs[i].conn == Some(id)).collect();
         let names: Vec<&str> = tabs.iter().map(|&i| self.tabs[i].name.as_str()).collect();
@@ -232,7 +232,7 @@ impl App {
         // The other open tabs, by name, after the commands.
         let tabs = (0..self.tabs.len()).filter(|i| *i != self.active_tab).map(Command::SwitchTab);
         // Comparing: with each other connection, or (with none open) a hint.
-        let others: Vec<Option<u64>> = match self.other_connections().as_slice() {
+        let others: Vec<Option<ConnId>> = match self.other_connections().as_slice() {
             [] => vec![None],
             many => many.iter().map(|(id, _)| Some(*id)).collect(),
         };

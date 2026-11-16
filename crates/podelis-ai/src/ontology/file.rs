@@ -38,7 +38,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::{Ontology, Resolved};
-use crate::memory::{ALSO_CALLED, DEFINED_AS, EXCLUDED_BY_DEFAULT, Fact};
+use crate::memory::{Fact, Relation};
 
 /// One value, or several. Written by hand, a value YAML would read as a
 /// number or a yes/no (`means: 3`, `means: y`) is taken as the text it is.
@@ -150,50 +150,44 @@ struct Said {
     columns: BTreeMap<String, Said>,
 }
 
-/// The relations, as facts name them and as the file's keys do.
-const RELATIONS: [(&str, &str); 8] = [
-    ("means", "means"),
-    ("is", "is"),
-    ("are", "are"),
-    ("equals", "equals"),
-    (ALSO_CALLED, "also_called"),
-    (DEFINED_AS, "defined_as"),
-    (EXCLUDED_BY_DEFAULT, "excluded_by_default"),
-    ("history", "history"),
-];
-
 impl Said {
+    /// The key a relation's facts go under. One match for every relation,
+    /// so none can be missed or paired with another's key.
+    fn values(&self, relation: Relation) -> &Values {
+        match relation {
+            Relation::Means => &self.means,
+            Relation::Is => &self.is,
+            Relation::Are => &self.are,
+            Relation::Equals => &self.equals,
+            Relation::AlsoCalled => &self.also_called,
+            Relation::DefinedAs => &self.defined_as,
+            Relation::ExcludedByDefault => &self.excluded_by_default,
+            Relation::History => &self.history,
+        }
+    }
+
+    fn values_mut(&mut self, relation: Relation) -> &mut Values {
+        match relation {
+            Relation::Means => &mut self.means,
+            Relation::Is => &mut self.is,
+            Relation::Are => &mut self.are,
+            Relation::Equals => &mut self.equals,
+            Relation::AlsoCalled => &mut self.also_called,
+            Relation::DefinedAs => &mut self.defined_as,
+            Relation::ExcludedByDefault => &mut self.excluded_by_default,
+            Relation::History => &mut self.history,
+        }
+    }
+
+    /// Where a fact with `relation` goes: none for one the file has no key
+    /// for (it's kept under `other`).
     fn slot(&mut self, relation: &str) -> Option<&mut Values> {
-        Some(match relation {
-            "means" => &mut self.means,
-            "is" => &mut self.is,
-            "are" => &mut self.are,
-            "equals" => &mut self.equals,
-            ALSO_CALLED => &mut self.also_called,
-            DEFINED_AS => &mut self.defined_as,
-            EXCLUDED_BY_DEFAULT => &mut self.excluded_by_default,
-            "history" => &mut self.history,
-            _ => return None,
-        })
+        Relation::of(relation).map(|r| self.values_mut(r))
     }
 
     /// (relation, value) for each fact it holds.
     fn facts(&self) -> Vec<(&'static str, &str)> {
-        let slots = [
-            &self.means,
-            &self.is,
-            &self.are,
-            &self.equals,
-            &self.also_called,
-            &self.defined_as,
-            &self.excluded_by_default,
-            &self.history,
-        ];
-        RELATIONS
-            .iter()
-            .zip(slots)
-            .flat_map(|((relation, _), values)| values.all().into_iter().map(|v| (*relation, v)))
-            .collect()
+        Relation::ALL.into_iter().flat_map(|r| self.values(r).all().into_iter().map(move |v| (r.as_str(), v))).collect()
     }
 }
 
@@ -275,12 +269,17 @@ pub fn export(ontology: &Ontology, facts: &[Fact], database: &str, title: &str) 
         } else {
             (&mut file.tables, &mut file.terms)
         };
-        let said = match ontology.resolve(&fact.subject) {
+        let said = match ontology.resolve_fact(fact) {
             Resolved::Missing => {
                 file.stale.push(Entry::of(fact));
                 continue;
             }
-            Resolved::Term(word) => terms.entry(word).or_default(),
+            // Under one name, however each fact wrote it (`Revenue`,
+            // `revenue`, or another of its names).
+            Resolved::Term(word) => terms.entry(ontology.term_name(&word)).or_default(),
+            Resolved::Concept(id) if id.kind() == super::Kind::Term => {
+                terms.entry(ontology.term_name(id.name())).or_default()
+            }
             // Under the table's own name, however the fact wrote it.
             Resolved::Concept(id) => match ontology.short_name(&id) {
                 Some((table, Some(column))) => tables.entry(table).or_default().columns.entry(column).or_default(),

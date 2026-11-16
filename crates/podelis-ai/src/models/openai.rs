@@ -92,7 +92,7 @@ impl Answer {
         };
         if let Some(error) = data.get("error") {
             let message = error.get("message").and_then(Value::as_str).unwrap_or("the stream failed");
-            return Err(ModelError { message: message.to_string(), retry: false, retry_after: None });
+            return Err(ModelError::fatal(message));
         }
         if let Some(model) = data.get("model").and_then(Value::as_str) {
             model.clone_into(&mut self.reply.model);

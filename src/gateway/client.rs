@@ -9,6 +9,7 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
+use super::methods::{self, Method, Note};
 use super::protocol::{self, Outgoing, RpcError};
 use super::server::{LineError, read_line};
 
@@ -46,7 +47,7 @@ pub struct Client {
     writer: OwnedWriteHalf,
     next_id: u64,
     /// The gateway's answer to hello: its version.
-    pub hello: Value,
+    pub hello: methods::HelloResult,
     /// Notifications that came while waiting for responses, oldest first.
     pub notifications: Vec<(String, Value)>,
 }
@@ -63,10 +64,47 @@ impl Client {
     async fn connect_speaking(config_dir: &Path, name: &str, protocol: u32) -> Result<Self, CallError> {
         let stream = UnixStream::connect(super::usable_socket_path(config_dir)?).await?;
         let (read, writer) = stream.into_split();
-        let mut client =
-            Client { reader: BufReader::new(read), writer, next_id: 1, hello: Value::Null, notifications: Vec::new() };
-        client.hello = client.call("hello", json!({ "client": name, "protocol": protocol })).await?;
+        let mut client = Client {
+            reader: BufReader::new(read),
+            writer,
+            next_id: 1,
+            hello: methods::HelloResult::default(),
+            notifications: Vec::new(),
+        };
+        let hello = methods::HelloParams { client: name.to_string(), protocol: Some(u64::from(protocol)) };
+        client.hello = client.request::<methods::Hello>(&hello).await?;
         Ok(client)
+    }
+
+    /// Calls method `M` and waits for its answer. Notifications meanwhile
+    /// are dropped.
+    pub async fn request<M: Method>(&mut self, params: &M::Params) -> Result<M::Result, CallError> {
+        self.request_streaming::<M>(params, |_| {}).await
+    }
+
+    /// Calls method `M`, handing each notification that comes meanwhile to
+    /// `on_note` as it arrives (an answer being written; ones this version
+    /// doesn't know are left out), and waits for its answer.
+    pub async fn request_streaming<M: Method>(
+        &mut self,
+        params: &M::Params,
+        mut on_note: impl FnMut(Note),
+    ) -> Result<M::Result, CallError> {
+        let params = serde_json::to_value(params)
+            .map_err(|e| CallError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
+        let answer = self
+            .call_streaming(M::NAME, params, |method, params| {
+                if let Some(note) = Note::parse(method, params) {
+                    on_note(note);
+                }
+            })
+            .await?;
+        // It answered: not a connection gone, but an answer this version
+        // can't read (another build's).
+        serde_json::from_value(answer).map_err(|e| {
+            let said = format!("the gateway's answer to {} couldn't be read: {e}", M::NAME);
+            CallError::Rpc(RpcError::new(protocol::code::INTERNAL, said))
+        })
     }
 
     /// Calls `method` and waits for its response.
@@ -202,7 +240,7 @@ pub async fn replace_other(config_dir: &Path, refused: &RpcError) -> Result<(), 
     let Ok(mut old) = Client::connect_speaking(config_dir, "podelis (replacing an older gateway)", theirs).await else {
         return Ok(());
     };
-    let _ = old.call("shutdown", json!({})).await;
+    let _ = old.request::<methods::Shutdown>(&methods::NoParams {}).await;
     let deadline = Instant::now() + START_TIMEOUT;
     while super::socket_path(config_dir).exists() && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(25)).await;

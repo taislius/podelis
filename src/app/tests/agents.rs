@@ -121,11 +121,11 @@ fn agent_writes_wait_for_your_answer() {
     app.approvals_tick();
     // A key typed as it appears, or any but y / n / Esc, doesn't answer.
     app.handle_key(key(KeyCode::Char('y')));
-    assert_eq!(read_answer(&pending, "1"), None, "too soon");
+    assert_eq!(read_answer(&pending, &"1".into()), None, "too soon");
     app.agents.asked = None;
     app.handle_key(key(KeyCode::Char('x')));
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(read_answer(&pending, "1"), None);
+    assert_eq!(read_answer(&pending, &"1".into()), None);
     let confirm = app.popups.confirm.as_ref().unwrap();
     assert_eq!(confirm.message, "billing asks to write on prod (PRODUCTION). Allow it?");
     assert_eq!(
@@ -135,22 +135,22 @@ fn agent_writes_wait_for_your_answer() {
     assert!(confirm.danger);
     assert!(app.take_notification().is_some_and(|n| n.contains("billing asks to write")));
     app.handle_key(key(KeyCode::Char('y')));
-    assert_eq!(read_answer(&pending, "1"), Some(true));
+    assert_eq!(read_answer(&pending, &"1".into()), Some(true));
     // The next one, once this is answered; Esc says no.
     app.approvals_tick();
     app.agents.asked = None;
     app.handle_key(key(KeyCode::Esc));
-    assert_eq!(read_answer(&pending, "2"), Some(false));
+    assert_eq!(read_answer(&pending, &"2".into()), Some(false));
     app.approvals_tick();
     assert!(app.popups.confirm.is_none());
     // The agent gave up while the question was up.
     ask(&pending, &request("3")).unwrap();
     app.approvals_tick();
     app.agents.asked = None;
-    crate::agents::forget(&pending, "3");
+    crate::agents::forget(&pending, &"3".into());
     app.handle_key(key(KeyCode::Char('y')));
     assert!(app.notes.status.contains("stopped waiting"), "{}", app.notes.status);
-    assert!(!answer(&pending, "3", true));
+    assert!(!answer(&pending, &"3".into(), true));
 }
 
 /// While the agent window is open, new calls don't move its rows; Esc out
@@ -240,7 +240,7 @@ async fn on_a_saved_connection_the_memory_window_is_its_databases_ontology() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = asking_app(dir.path(), "").await;
     let _gateway = crate::gateway::tests::start(dir.path(), None);
-    let mut conn = podelis_ai::memory::open(dir.path(), &app.project().unwrap().id).await.unwrap();
+    let mut conn = podelis_ai::memory::open(dir.path(), app.project().unwrap().id.as_str()).await.unwrap();
     // Every database's, this one's, another database's, and a model's guess.
     podelis_ai::memory::add(&mut conn, "revenue", "defined as", "sum(x)", "user", true, "").await.unwrap();
     podelis_ai::memory::add(&mut conn, "orders", "means", "sales", "user", true, "shop").await.unwrap();
@@ -278,7 +278,7 @@ async fn on_a_saved_connection_the_memory_window_is_its_databases_ontology() {
         app.handle_db_event(event);
     }
     assert!(confirmed(&app), "{:?}", app.popups.memory_view.as_ref().unwrap().lines);
-    let mut conn = podelis_ai::memory::open(dir.path(), &app.project().unwrap().id).await.unwrap();
+    let mut conn = podelis_ai::memory::open(dir.path(), app.project().unwrap().id.as_str()).await.unwrap();
     let guess = podelis_ai::memory::list(&mut conn, None, None)
         .await
         .unwrap()
@@ -295,7 +295,7 @@ async fn the_memory_window_adds_confirms_and_forgets_facts() {
     let mut app = asking_app(dir.path(), "").await;
     let _gateway = crate::gateway::tests::start(dir.path(), None);
     // A model's guess, waiting.
-    let mut conn = podelis_ai::memory::open(dir.path(), &app.project().unwrap().id).await.unwrap();
+    let mut conn = podelis_ai::memory::open(dir.path(), app.project().unwrap().id.as_str()).await.unwrap();
     podelis_ai::memory::add(&mut conn, "orders.total", "means", "VAT included", "model:near", false, "").await.unwrap();
     drop(conn);
     // No saved connection on the tab: the project's facts, in a list.
@@ -418,7 +418,7 @@ fn deleting_a_project_deletes_its_memory() {
     let id = store.add_project("gone").unwrap();
     store.add_project("kept").unwrap();
     let mut app = App::new(store, None, Some(dir.path().to_path_buf()));
-    let memory = podelis_ai::memory::path(dir.path(), &id);
+    let memory = podelis_ai::memory::path(dir.path(), id.as_str());
     std::fs::create_dir_all(memory.parent().unwrap()).unwrap();
     std::fs::write(&memory, "facts").unwrap();
     app.manager.project_selected = app.store.projects.iter().position(|p| p.id == id).unwrap();

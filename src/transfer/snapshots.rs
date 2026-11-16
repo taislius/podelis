@@ -3,6 +3,7 @@
 //! One JSON file each, in `snapshots/<project>/`, named
 //! `<connection>@<when>.json` so they can be listed without reading them.
 
+use crate::config::store::ProjectId;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -29,8 +30,8 @@ pub struct Saved {
     pub taken: String,
 }
 
-pub fn dir(config_dir: &Path, project_id: &str) -> PathBuf {
-    config_dir.join("snapshots").join(project_id)
+pub fn dir(config_dir: &Path, project_id: &ProjectId) -> PathBuf {
+    config_dir.join("snapshots").join(project_id.as_str())
 }
 
 /// Saves `snapshot` in `dir`; its path.

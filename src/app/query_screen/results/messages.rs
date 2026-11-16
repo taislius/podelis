@@ -46,7 +46,7 @@ impl App {
 
     /// The editor at a failure's place: selected, underlined, focused.
     pub(in crate::app) fn show_error_place(&mut self, start: Pos, end: Pos) {
-        let last = self.tab.editor.lines.len().saturating_sub(1);
+        let last = self.tab.editor.lines().len().saturating_sub(1);
         let clamp = |(r, c): Pos, ed: &crate::text_editor::TextEditor| (r.min(last), c.min(ed.line_len(r.min(last))));
         let (start, end) = (clamp(start, &self.tab.editor), clamp(end, &self.tab.editor));
         self.tab.editor.set_anchor(Some(start));

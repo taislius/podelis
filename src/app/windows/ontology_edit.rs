@@ -4,9 +4,8 @@
 //! scroll through) before `y` changes anything. Edits that don't load are
 //! kept, to open again.
 
+use crate::config::store::ProjectId;
 use std::path::PathBuf;
-
-use serde_json::{Value, json};
 
 use super::memory::GatewayPurpose;
 use crate::app::query_screen::pipes::{AfterExternal, External, shell_quote};
@@ -46,14 +45,14 @@ impl App {
         };
         if let Some(step) = step {
             // No further than the last line in sight: ↑ moves at once after.
-            let last = view.plan.as_ref().map_or(0, |(p, _)| plan_len(p)).saturating_sub(view.plan_shown.get());
+            let last = view.plan.as_ref().map_or(0, |(p, _)| p.len()).saturating_sub(view.plan_shown.get());
             view.plan_scroll = view.plan_scroll.saturating_add_signed(step).min(last);
             return;
         }
         match key.code {
             // Not before every change has been in sight.
             KeyCode::Char('y')
-                if view.plan_scroll + view.plan_shown.get() < view.plan.as_ref().map_or(0, |(p, _)| plan_len(p)) =>
+                if view.plan_scroll + view.plan_shown.get() < view.plan.as_ref().map_or(0, |(p, _)| p.len()) =>
             {
                 self.set_status(t!("memory.plan_scroll").into(), true);
             }
@@ -76,7 +75,7 @@ impl App {
 
     /// `E`: the ontology written to a file of the user's alone, then opened
     /// in their editor with the terminal handed over.
-    pub(super) fn edit_in_editor(&mut self, project: String, yaml: &str, database: Option<&str>) {
+    pub(super) fn edit_in_editor(&mut self, project: ProjectId, yaml: &str, database: Option<&str>) {
         // A folder of their own: `opened/` is emptied of day-old files,
         // and edits kept after a failed load must stay until dealt with.
         let config_dir = self.data_dir.clone().unwrap_or_else(crate::config::store::config_dir);
@@ -97,7 +96,7 @@ impl App {
 
     /// Opens `file` in `$VISUAL`, else `$EDITOR`, else `vi`, in this
     /// terminal; when it exits, the file is read back.
-    pub(super) fn open_editor(&mut self, project: String, file: PathBuf) {
+    pub(super) fn open_editor(&mut self, project: ProjectId, file: PathBuf) {
         let editor = ["VISUAL", "EDITOR"]
             .iter()
             .find_map(|v| std::env::var(v).ok().filter(|e| !e.trim().is_empty()))
@@ -120,55 +119,28 @@ impl App {
 
     /// After the editor: what the file would change, asked about before
     /// anything is changed.
-    pub(in crate::app) fn ontology_edited(&mut self, project: String, file: PathBuf) {
+    pub(in crate::app) fn ontology_edited(&mut self, project: ProjectId, file: PathBuf) {
         self.load_edits(project, file, false);
     }
 
     /// The edited `file` to the gateway: what it'd change, or (`apply`)
     /// changed so.
-    fn load_edits(&mut self, project: String, file: PathBuf, apply: bool) {
+    fn load_edits(&mut self, project: ProjectId, file: PathBuf, apply: bool) {
         let text = match std::fs::read_to_string(&file) {
             Ok(text) => text,
             Err(e) => return self.set_status(t!("memory.editor_failed", e = e), true),
         };
-        let params = json!({ "text": text, "apply": apply, "refresh": false });
+        let params = crate::gateway::methods::ImportParams {
+            text: Some(text),
+            apply,
+            refresh: Some(false),
+            ..Default::default()
+        };
         let purpose = if apply {
             GatewayPurpose::OntologyApplied(project, file)
         } else {
             GatewayPurpose::OntologyPlan(project, file)
         };
-        self.gateway_call("ontology.import", params, purpose);
-    }
-}
-
-/// How many lines the plan takes.
-pub(super) fn plan_len(plan: &Value) -> usize {
-    ["add", "confirm", "move", "forget"]
-        .into_iter()
-        .map(|key| plan[key].as_array().map_or(0, |items| items.len() + usize::from(!items.is_empty())))
-        .sum()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::plan_len;
-    use serde_json::json;
-
-    #[test]
-    fn plan_len_counts_items_and_one_heading_per_nonempty_section() {
-        let plan = json!({
-            "add": [{}, {}],
-            "confirm": [],
-            "move": [{}],
-            "forget": [{}]
-        });
-
-        assert_eq!(plan_len(&plan), 7);
-    }
-
-    #[test]
-    fn plan_len_ignores_empty_or_missing_sections() {
-        assert_eq!(plan_len(&json!({ "add": [], "move": [{}] })), 2);
-        assert_eq!(plan_len(&json!({})), 0);
+        self.gateway_call::<crate::gateway::methods::OntologyImport>(params, purpose);
     }
 }

@@ -135,7 +135,7 @@ impl App {
     fn load_agent_log(&mut self) -> bool {
         let engine = self.engine();
         let path =
-            self.current_project.as_deref().and_then(|id| Some(crate::agents::log_path(self.data_dir.as_ref()?, id)));
+            self.current_project.as_ref().and_then(|id| Some(crate::agents::log_path(self.data_dir.as_ref()?, id)));
         let stamp = path.as_ref().and_then(|p| {
             let meta = std::fs::metadata(p).ok()?;
             Some((p.clone(), meta.modified().ok()?, meta.len()))
@@ -157,7 +157,7 @@ impl App {
 
     fn agent_paths(&self) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
         let dir = self.data_dir.as_ref()?;
-        let id = self.current_project.as_deref()?;
+        let id = self.current_project.as_ref()?;
         Some((crate::agents::log_path(dir, id), crate::agents::seen_path(dir, id)))
     }
 
@@ -165,13 +165,13 @@ impl App {
     /// the log is watched for what's new.
     pub fn watching_agents(&self) -> bool {
         self.current_project
-            .as_deref()
+            .as_ref()
             .and_then(|id| self.store.project(id))
             .is_some_and(|p| p.connections.iter().any(|c| c.agents != crate::db::AgentAccess::None))
     }
 
     fn pending_dir(&self) -> Option<std::path::PathBuf> {
-        Some(crate::agents::pending_dir(self.data_dir.as_ref()?, self.current_project.as_deref()?))
+        Some(crate::agents::pending_dir(self.data_dir.as_ref()?, self.current_project.as_ref()?))
     }
 
     /// Every second: an agent's write waiting for the user's answer is

@@ -15,7 +15,9 @@
 //! asks the user (`y` this once, `a` always for the project).
 
 use crate::app::*;
+use crate::config::store::ProjectId;
 use crate::gateway::client::{CallError, connect_or_start, spawn_gateway};
+use crate::gateway::methods::{self as m, Note};
 use crate::gateway::protocol::code;
 
 /// Identity of one replaceable question sent to the gateway.
@@ -170,20 +172,20 @@ impl App {
     fn start_question(&mut self) {
         let marker = format!("{} ? ", self.comment_opener());
         let editor = &self.tab.editor;
-        let last = editor.lines.len() - 1;
+        let last = editor.lines().len() - 1;
         let (rows, new, row) = if self.focus == Focus::Editor {
             let here = editor.cursor_row.min(last);
-            if editor.lines[here].trim().is_empty() {
+            if editor.lines()[here].trim().is_empty() {
                 (here..here + 1, vec![marker.clone()], here)
             } else {
                 (here + 1..here + 1, vec![marker.clone()], here + 1)
             }
         } else {
             // From another pane: after everything, a blank line apart.
-            let keep = editor.lines.iter().rposition(|l| !l.trim().is_empty()).map_or(0, |i| i + 1);
+            let keep = editor.lines().iter().rposition(|l| !l.trim().is_empty()).map_or(0, |i| i + 1);
             let new = if keep == 0 { vec![marker.clone()] } else { vec![String::new(), marker.clone()] };
             let row = keep + new.len() - 1;
-            (keep..editor.lines.len(), new, row)
+            (keep..editor.lines().len(), new, row)
         };
         self.tab.editor.replace_rows(rows, new, (row, marker.chars().count()));
         self.edited();
@@ -198,7 +200,7 @@ impl App {
     /// that, even with no blank line between, is the user's and stays.
     fn answer_end(&self, row: usize, written: &[Written]) -> usize {
         let opener = self.comment_opener();
-        let lines = &self.tab.editor.lines;
+        let lines = self.tab.editor.lines();
         let mark = format!("{opener} {ANSWER_MARK}");
         if !lines.get(row + 1).is_some_and(|l| l.trim_start().starts_with(&mark)) {
             return row + 1;
@@ -213,7 +215,7 @@ impl App {
             return sql;
         }
         let text = self.tab.editor.text();
-        let start: usize = lines[..sql].iter().map(|l| l.len() + 1).sum();
+        let start = self.tab.editor.line_start(sql);
         let Some(statement) =
             crate::language::statement_ranges(&text, self.engine()).into_iter().find(|r| r.end > start)
         else {
@@ -278,7 +280,7 @@ impl App {
             return self.set_status(t!("ask.tab_closed").into(), true);
         }
         // By id: two projects' names may differ only in case.
-        let project = self.current_project.as_ref().map(|id| format!("id:{id}")).unwrap_or_default();
+        let project = self.current_project.as_ref().map(|id| format!("id:{id}"));
         let connection = question.connection.clone();
         let config_dir = self.data_dir.clone().unwrap_or_else(crate::config::store::config_dir);
         let id = self.ask.count.next();
@@ -289,30 +291,26 @@ impl App {
         };
         // Where the app runs: a relative SQLite path is from here.
         let dir = std::env::current_dir().ok().map(|d| d.display().to_string());
-        let mut params =
-            serde_json::json!({ "project": project, "connection": connection, "question": question.text, "dir": dir });
-        if share_once {
-            params["share_once"] = serde_json::json!(true);
-        }
-        // The schema read again where the gateway may keep an older one.
-        if !std::mem::replace(&mut self.ask.gateway_current, true) {
-            params["refresh"] = serde_json::json!(true);
-        }
-        if question.explain {
-            params["explain"] = serde_json::json!(true);
-        }
+        let params = m::AskParams {
+            scope: m::Scope { project, connection: Some(connection), dir },
+            question: question.text.clone(),
+            model: None,
+            share_once,
+            explain: question.explain,
+            // The schema read again where the gateway may keep an older one.
+            refresh: !std::mem::replace(&mut self.ask.gateway_current, true),
+        };
         let task = tokio::spawn(async move {
             let started = connect_or_start(&config_dir, "podelis", || spawn_gateway(&config_dir)).await;
             let result = match started {
                 Ok(mut client) => {
                     client
-                        .call_streaming("ask", params, |method, note| {
-                            if method == "ask.delta" {
-                                let chars = note["text"].as_str().map_or(0, |t| t.chars().count());
-                                send(Background::AskProgress(id, chars).into());
-                            } else if method == "key.waiting" {
-                                send(Background::AskWaitingKey(id).into());
+                        .request_streaming::<m::Ask>(&params, |note| match note {
+                            Note::AskDelta(delta) => {
+                                send(Background::AskProgress(id, delta.text.chars().count()).into());
                             }
+                            Note::KeyWaiting(_) => send(Background::AskWaitingKey(id).into()),
+                            _ => {}
                         })
                         .await
                 }
@@ -380,7 +378,7 @@ impl App {
         self.say_asking(status);
     }
 
-    pub(in crate::app) fn ask_done(&mut self, id: AskId, result: Result<serde_json::Value, AskFailure>) {
+    pub(in crate::app) fn ask_done(&mut self, id: AskId, result: Result<m::AskResult, AskFailure>) {
         if self.ask.asking.as_ref().is_none_or(|a| a.id != id) {
             return;
         }
@@ -398,17 +396,15 @@ impl App {
                 }
             }
             Err(e) if e.code == Some(code::NOT_SHARED) => {
+                let refused = m::NotShared::from_data(e.data.as_ref()).unwrap_or_default();
                 let project =
-                    e.data.as_ref().and_then(|d| d["project"].as_str()).unwrap_or(t!("ask.this_project")).to_string();
+                    Some(refused.project).filter(|p| !p.is_empty()).unwrap_or_else(|| t!("ask.this_project").into());
                 // Shown once no other confirmation is open (`share_tick`).
                 self.ask.pending_share = Some(Confirm {
                     message: t!("ask.share_schema", project = project),
                     details: vec![e.message, t!("ask.rows_never_sent").into()],
                     danger: false,
-                    action: ConfirmAction::ShareSchema {
-                        question: asking.question,
-                        project_id: e.data.and_then(|d| d["project_id"].as_str().map(str::to_string)),
-                    },
+                    action: ConfirmAction::ShareSchema { question: asking.question, project_id: refused.project_id },
                     offer_transaction: false,
                 });
             }
@@ -435,10 +431,10 @@ impl App {
 
     /// The answer to the sharing question: `always` saves it for the
     /// project, then the question goes again.
-    pub(in crate::app) fn answer_share(&mut self, question: Question, project_id: Option<&str>, always: bool) {
+    pub(in crate::app) fn answer_share(&mut self, question: Question, project_id: Option<&ProjectId>, always: bool) {
         // Always: saved for the project (its own, or the open one if the
         // gateway didn't say), then asked as allowed.
-        let id = project_id.map(str::to_string).or_else(|| self.current_project.clone()).filter(|_| always);
+        let id = project_id.cloned().or_else(|| self.current_project.clone()).filter(|_| always);
         let saved = match id {
             Some(id) => match self.store.set_share_schema(&id, crate::config::store::ShareSchema::All) {
                 Ok(()) => true,
@@ -452,9 +448,9 @@ impl App {
     /// What the model said a statement does, in a pop-over: its words
     /// wrapped, its code blocks (the query it would write instead, if it
     /// found a mistake) as they are, indented, without their fences.
-    fn show_explanation(&mut self, answer: &serde_json::Value) {
-        let model = answer["model"].as_str().unwrap_or(t!("ask.the_model"));
-        let said = answer["said"].as_str().unwrap_or_default().trim();
+    fn show_explanation(&mut self, answer: &m::AskResult) {
+        let model = model_of(answer);
+        let said = answer.said.trim();
         if said.is_empty() {
             return self.set_status(format!("{model}: {}", t!("ask.no_explanation")), true);
         }
@@ -477,12 +473,11 @@ impl App {
         }
         let title = t!("ask.explained_by", model = model);
         self.popups.cell_view = Some(CellView::new(title, text.trim_end().to_string()));
-        let tokens = &answer["usage"];
         let status = t!(
             "ask.explained",
             model = model,
-            tokens_in = tokens["input_tokens"],
-            tokens_out = tokens["output_tokens"]
+            tokens_in = answer.usage.input_tokens,
+            tokens_out = answer.usage.output_tokens
         );
         self.set_status(status, false);
     }
@@ -490,11 +485,11 @@ impl App {
     /// The SQL at the end of the editor, a blank line apart, under the
     /// question and what the model said, as comments; the cursor on it. A
     /// question written in the editor gets it right under it instead.
-    pub(in crate::app) fn insert_answer(&mut self, asked: &Question, answer: &serde_json::Value) {
+    pub(in crate::app) fn insert_answer(&mut self, asked: &Question, answer: &m::AskResult) {
         let question = asked.text.as_str();
-        let model = answer["model"].as_str().unwrap_or(t!("ask.the_model"));
-        let said = answer["said"].as_str().unwrap_or_default();
-        let Some(sql) = answer["sql"].as_str() else {
+        let model = model_of(answer);
+        let said = answer.said.as_str();
+        let Some(sql) = answer.sql.as_deref() else {
             let why = if said.is_empty() { t!("ask.no_sql").to_string() } else { one_line(said) };
             return self.set_status(format!("{model}: {why}"), true);
         };
@@ -505,30 +500,16 @@ impl App {
         for line in wrap_comment(said, 76) {
             let _ = writeln!(block, "{c} {line}");
         }
-        let problems: Vec<&str> =
-            answer["problems"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str).collect();
+        let problems = &answer.problems;
         if !problems.is_empty() {
             let _ = writeln!(block, "{c} {}: {}", t!("ask.check"), one_line(&problems.join("; ")));
         }
         // The tables it looked up itself, beyond those it was shown.
-        let looked: Vec<&str> =
-            answer["looked_at"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str).collect();
+        let looked = &answer.looked_at;
         if !looked.is_empty() {
             let _ = writeln!(block, "{c} {}", one_line(&t!("ask.looked_at", tables = looked.join(", "))));
         }
-        let assumed: Vec<String> = answer["suggested"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|f| {
-                format!(
-                    "{} {} {}",
-                    f["subject"].as_str().unwrap_or("?"),
-                    f["relation"].as_str().unwrap_or("?"),
-                    f["value"].as_str().unwrap_or("?")
-                )
-            })
-            .collect();
+        let assumed: Vec<String> = answer.suggested.iter().map(podelis_ai::memory::Fact::line).collect();
         for a in &assumed {
             // The model's words: a line break in them would end the comment.
             let _ = writeln!(block, "{c} {}", one_line(&t!("ask.assumed", fact = a)));
@@ -538,9 +519,9 @@ impl App {
             Some(at) => self.answer_under(question, at, &block),
             None => self.append_statement(&block),
         }
-        let tokens = &answer["usage"];
+        let tokens = answer.usage;
         let mut status =
-            t!("ask.sql_from", model = model, tokens_in = tokens["input_tokens"], tokens_out = tokens["output_tokens"]);
+            t!("ask.sql_from", model = model, tokens_in = tokens.input_tokens, tokens_out = tokens.output_tokens);
         if !assumed.is_empty() {
             let n = assumed.len();
             let _ = write!(status, " · {}", tn!("ask.assumed_things", n));
@@ -570,7 +551,7 @@ impl App {
         let mut new: Vec<String> = block.lines().map(str::to_string).collect();
         let first_sql = row + 1 + new.iter().take_while(|l| l.trim_start().starts_with(opener)).count();
         // What follows stays apart from the answer.
-        if self.tab.editor.lines.get(after).is_some_and(|l| !l.trim().is_empty()) {
+        if self.tab.editor.lines().get(after).is_some_and(|l| !l.trim().is_empty()) {
             new.push(String::new());
         }
         self.tab.editor.replace_rows(row + 1..after, new, (first_sql, 0));
@@ -630,6 +611,11 @@ fn wrap_comment(text: &str, width: usize) -> Vec<String> {
         lines.push(line);
     }
     lines
+}
+
+/// The model that answered, as `config.toml` names it.
+fn model_of(answer: &m::AskResult) -> &str {
+    Some(answer.model.as_str()).filter(|m| !m.is_empty()).unwrap_or(t!("ask.the_model"))
 }
 
 #[cfg(test)]

@@ -5,9 +5,8 @@
 use std::io::Write as _;
 use std::path::Path;
 
-use serde_json::{Value, json};
-
 use super::client::{CallError, Client, connect_or_start, spawn_gateway};
+use super::methods::{self as m, Note, Scope};
 use super::server::{Ended, Options, serve};
 
 /// What `podelis gateway` was asked to do.
@@ -51,7 +50,7 @@ pub async fn run(command: GatewayCommand, config_dir: &Path, project: Option<&st
             }
         }
         GatewayCommand::Stop => match Client::connect(config_dir, "podelis gateway stop").await {
-            Ok(mut client) => match client.call("shutdown", json!({})).await {
+            Ok(mut client) => match client.request::<m::Shutdown>(&m::NoParams {}).await {
                 Ok(_) => say("The gateway is stopping.", 0),
                 Err(e) => fail(&e),
             },
@@ -66,7 +65,7 @@ pub async fn run(command: GatewayCommand, config_dir: &Path, project: Option<&st
             Err(e) => fail(&e),
         },
         GatewayCommand::Models => match started(config_dir, "podelis gateway models").await {
-            Ok(mut client) => match client.call("models", json!({})).await {
+            Ok(mut client) => match client.request::<m::Models>(&m::NoParams {}).await {
                 Ok(listed) => list_models(&listed),
                 Err(e) => fail(&e),
             },
@@ -89,9 +88,8 @@ pub async fn mcp(config_dir: &Path, project: Option<&str>, name: Option<String>)
             return 1;
         }
     };
-    let dir = std::env::current_dir().ok().map(|d| d.display().to_string());
-    let open = json!({ "project": project, "name": name, "dir": dir });
-    match client.call("mcp.open", open).await {
+    let open = m::McpOpenParams { project: project.map(str::to_string), name, dir: here() };
+    match client.request::<m::McpOpen>(&open).await {
         Ok(_) => {}
         Err(CallError::Rpc(e)) => {
             let _ = eprintln_safe(&format!("podelis mcp: {}", e.message));
@@ -121,6 +119,16 @@ pub async fn mcp(config_dir: &Path, project: Option<&str>, name: Option<String>)
     0
 }
 
+/// Where this runs: a relative SQLite file is from here.
+fn here() -> Option<String> {
+    std::env::current_dir().ok().map(|d| d.display().to_string())
+}
+
+/// About `connection` (if any) in `project` (the last one opened when none).
+fn scope(project: Option<&str>, connection: Option<&str>) -> Scope {
+    Scope { project: project.map(str::to_string), connection: connection.map(str::to_string), dir: here() }
+}
+
 /// A message on stderr (stdout carries the protocol).
 fn eprintln_safe(message: &str) -> std::io::Result<()> {
     writeln!(std::io::stderr(), "{message}")
@@ -135,14 +143,10 @@ pub async fn ontology(config_dir: &Path, project: Option<&str>, words: &[String]
         Ok(client) => client,
         Err(e) => return fail(&e),
     };
-    let dir = std::env::current_dir().ok().map(|d| d.display().to_string());
-    let mut params = json!({ "connection": words[0], "dir": dir });
-    if let Some(project) = project {
-        params["project"] = json!(project);
-    }
+    let scope = scope(project, Some(&words[0]));
     match words.get(1).map(String::as_str) {
-        Some("import") => import_ontology(&mut client, params, &words[2], yes).await,
-        action => show_ontology(&mut client, params, action, words.get(2), &words[0], project).await,
+        Some("import") => import_ontology(&mut client, scope, &words[2], yes).await,
+        action => show_ontology(&mut client, scope, action, words.get(2), &words[0], project).await,
     }
 }
 
@@ -150,24 +154,28 @@ pub async fn ontology(config_dir: &Path, project: Option<&str>, words: &[String]
 /// Turtle or YAML, written out or to `file`.
 async fn show_ontology(
     client: &mut Client,
-    params: Value,
+    scope: Scope,
     action: Option<&str>,
     file: Option<&String>,
     connection: &str,
     project: Option<&str>,
 ) -> i32 {
-    let key = match action {
+    let format = match action {
         Some("turtle") => "turtle",
         Some("export" | "yaml") => "yaml",
         _ => "text",
     };
-    let mut params = params;
-    params["format"] = json!(key);
-    let built = match client.call("ontology", params).await {
+    let params = m::OntologyParams { scope, format: Some(format.to_string()), refresh: None };
+    let built = match client.request::<m::Ontology>(&params).await {
         Ok(built) => built,
         Err(e) => return fail(&e),
     };
-    let text = built[key].as_str().unwrap_or_default();
+    let text = match format {
+        "turtle" => built.turtle,
+        "yaml" => built.yaml,
+        _ => built.text,
+    }
+    .unwrap_or_default();
     let Some(file) = file else {
         let _ = write!(std::io::stdout(), "{text}");
         return 0;
@@ -185,23 +193,36 @@ async fn show_ontology(
 /// `ontology <connection> import <file>`: what loading the edited file
 /// would change, as the app's `E` shows it; changed so after a yes (or
 /// `-y`).
-async fn import_ontology(client: &mut Client, mut params: Value, file: &str, yes: bool) -> i32 {
+async fn import_ontology(client: &mut Client, scope: Scope, file: &str, yes: bool) -> i32 {
     use std::io::IsTerminal as _;
     let text = match std::fs::read_to_string(file) {
         Ok(text) => text,
         Err(e) => return say(&format!("couldn't read {file}: {e}"), 2),
     };
-    params["text"] = json!(text);
-    let planned = match client.call("ontology.import", params.clone()).await {
-        Ok(planned) => planned,
+    let mut params = m::ImportParams { scope, text: Some(text), apply: false, refresh: None };
+    let planned = match client.request::<m::OntologyImport>(&params).await {
+        Ok(m::ImportResult::Plan(planned)) => planned,
+        Ok(m::ImportResult::Applied(_)) => {
+            return say("The gateway changed the memory when only asked what it would change.", 1);
+        }
         Err(e) => return fail(&e),
     };
     let mut out = std::io::stdout();
-    if let Some(kept) = planned["kept"].as_u64().filter(|n| *n > 0) {
+    // (A file that doesn't say when it was exported: its plan says so.)
+    if planned.kept > 0 && !planned.undated {
+        let kept = planned.kept;
         let _ = writeln!(out, "Kept: {kept} fact(s) said since the file was exported, though it doesn't have them.");
     }
     let lines = super::ontology::plan_lines(&planned);
     if lines.is_empty() {
+        // Undated, so its plan says nothing of what it lacks: said here.
+        if planned.undated && planned.kept > 0 {
+            let kept = planned.kept;
+            let _ = writeln!(
+                out,
+                "Kept: {kept} fact(s) the file doesn't have, as it doesn't say when it was exported (export it again to remove facts)."
+            );
+        }
         return say(&format!("Nothing to change: {file} says what the memory does."), 0);
     }
     for (heading, line) in lines {
@@ -219,19 +240,16 @@ async fn import_ontology(client: &mut Client, mut params: Value, file: &str, yes
             return say("Not changed.", 3);
         }
     }
-    params["apply"] = json!(true);
-    match client.call("ontology.import", params).await {
-        Ok(done) => {
-            let n = |k: &str| done[k].as_u64().unwrap_or(0);
+    params.apply = true;
+    match client.request::<m::OntologyImport>(&params).await {
+        Ok(m::ImportResult::Applied(done)) => {
             let said = format!(
                 "Done: {} added, {} confirmed, {} moved, {} forgotten.",
-                n("added"),
-                n("confirmed"),
-                n("moved"),
-                n("forgotten")
+                done.added, done.confirmed, done.moved, done.forgotten
             );
             say(&said, 0)
         }
+        Ok(m::ImportResult::Plan(_)) => say("The gateway didn't say what it changed.", 1),
         Err(e) => fail(&e),
     }
 }
@@ -244,22 +262,17 @@ async fn context(config_dir: &Path, project: Option<&str>, words: &[String]) -> 
         Ok(client) => client,
         Err(e) => return fail(&e),
     };
-    let dir = std::env::current_dir().ok().map(|d| d.display().to_string());
-    let mut params = json!({ "connection": connection, "question": question, "refresh": true, "dir": dir });
-    if let Some(project) = project {
-        params["project"] = json!(project);
-    }
-    let built = match client.call("context", params).await {
+    let params = m::ContextParams { scope: scope(project, Some(connection)), question, refresh: true };
+    let built = match client.request::<m::Context>(&params).await {
         Ok(built) => built,
         Err(e) => return fail(&e),
     };
     let mut out = std::io::stdout();
-    let tables = built["tables"].as_array().cloned().unwrap_or_default();
-    let _ = writeln!(out, "Tables ({}):", tables.len());
-    for t in &tables {
-        let _ = writeln!(out, "  {}: {}", t["name"].as_str().unwrap_or("?"), t["why"].as_str().unwrap_or(""));
+    let _ = writeln!(out, "Tables ({}):", built.tables.len());
+    for t in &built.tables {
+        let _ = writeln!(out, "  {}: {}", t.name, t.why);
     }
-    if let Some(n) = built["left_out"].as_u64().filter(|n| *n > 0) {
+    if let Some(n) = Some(built.left_out).filter(|n| *n > 0) {
         use podelis_ai::context::{MAX_CHARS, MAX_ENTRY, MAX_TABLES};
         let tokens = MAX_CHARS / 4;
         let _ = writeln!(
@@ -267,14 +280,13 @@ async fn context(config_dir: &Path, project: Option<&str>, words: &[String]) -> 
             "  ({n} more qualified, left out: at most {MAX_ENTRY} tables by their words and {MAX_TABLES} in all, within about {tokens} tokens)"
         );
     }
-    let stale: Vec<&str> = built["stale_facts"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-    if !stale.is_empty() {
+    if !built.stale_facts.is_empty() {
         let _ = writeln!(out, "Left out, the table or column they name isn't in this database (stale?):");
-        for f in stale {
+        for f in &built.stale_facts {
             let _ = writeln!(out, "  {f}");
         }
     }
-    let chars = built["chars"].as_u64().unwrap_or(0);
+    let chars = built.chars;
     let _ = writeln!(
         out,
         "
@@ -282,7 +294,7 @@ What a model would be shown (about {} tokens):
 ",
         chars.div_ceil(4)
     );
-    let _ = write!(out, "{}", built["text"].as_str().unwrap_or_default());
+    let _ = write!(out, "{}", built.text);
     0
 }
 
@@ -297,23 +309,15 @@ async fn started(config_dir: &Path, name: &str) -> Result<Client, CallError> {
     connect_or_start(config_dir, name, || spawn_gateway(config_dir)).await
 }
 
-fn list_models(listed: &serde_json::Value) -> i32 {
-    let models = listed["models"].as_array().cloned().unwrap_or_default();
+fn list_models(listed: &m::ModelsResult) -> i32 {
+    let models = &listed.models;
     if models.is_empty() {
         return say("No models are set up: add a [[models]] entry to config.toml (podelis(1), FILES).", 1);
     }
     let mut out = std::io::stdout();
     for (i, m) in models.iter().enumerate() {
         let default = if i == 0 { "  (default)" } else { "" };
-        let _ = writeln!(
-            out,
-            "{}  {} {} at {}; key: {}{default}",
-            m["name"].as_str().unwrap_or("?"),
-            m["api"].as_str().unwrap_or("?"),
-            m["model"].as_str().unwrap_or("?"),
-            m["url"].as_str().unwrap_or("?"),
-            m["key"].as_str().unwrap_or("?"),
-        );
+        let _ = writeln!(out, "{}  {} {} at {}; key: {}{default}", m.name, m.api, m.model, m.url, m.key);
     }
     0
 }
@@ -366,25 +370,24 @@ async fn test(config_dir: &Path, name: Option<&str>) -> i32 {
         Ok(client) => client,
         Err(e) => return fail(&e),
     };
-    let mut params = json!({
-        "messages": [{ "role": "user", "content": "Reply with the single word OK." }],
-        "max_tokens": 2000,
-    });
-    if let Some(name) = name {
-        params["model"] = json!(name);
-    }
+    let params = m::CompleteParams {
+        model: name.map(str::to_string),
+        system: None,
+        messages: vec![m::ChatMessage { role: "user".into(), content: "Reply with the single word OK.".into() }],
+        max_tokens: Some(2000),
+    };
     let started_at = std::time::Instant::now();
-    match client.call("complete", params).await {
+    match client.request::<m::Complete>(&params).await {
         Ok(reply) => {
             let text = format!(
                 "{} ({}) answered in {:.1} s: {:?} · {} tokens in, {} out · stopped: {}",
-                reply["model"].as_str().unwrap_or("?"),
-                reply["provider_model"].as_str().unwrap_or("?"),
+                reply.model,
+                reply.provider_model,
                 started_at.elapsed().as_secs_f64(),
-                reply["text"].as_str().unwrap_or_default().trim(),
-                reply["usage"]["input_tokens"],
-                reply["usage"]["output_tokens"],
-                reply["stop_reason"].as_str().unwrap_or("?"),
+                reply.text.trim(),
+                reply.usage.input_tokens,
+                reply.usage.output_tokens,
+                reply.stop_reason,
             );
             say(&text, 0)
         }
@@ -432,20 +435,20 @@ async fn foreground(config_dir: &Path) -> i32 {
 }
 
 async fn status(client: &mut Client) -> i32 {
-    let s = match client.call("status", json!({})).await {
+    let s = match client.request::<m::Status>(&m::NoParams {}).await {
         Ok(s) => s,
         Err(e) => return fail(&e),
     };
-    let idle = s["idle_stop_secs"]
-        .as_u64()
+    let idle = s
+        .idle_stop_secs
         .map_or_else(|| "keeps running".to_string(), |secs| format!("stops after {} min with no client", secs / 60));
     let text = format!(
         "The gateway runs: version {}, process {}, up {} s, {} other client(s); {idle}.",
-        s["version"].as_str().unwrap_or("?"),
-        s["pid"],
-        s["uptime_secs"],
+        s.version,
+        s.pid,
+        s.uptime_secs,
         // Not counting this one.
-        s["clients"].as_u64().unwrap_or(1).saturating_sub(1),
+        s.clients.saturating_sub(1),
     );
     say(&text, 0)
 }
@@ -470,23 +473,21 @@ pub async fn ask(config_dir: &Path, project: Option<&str>, model: Option<&str>, 
         Ok(client) => client,
         Err(e) => return fail(&e),
     };
-    let dir = std::env::current_dir().ok().map(|d| d.display().to_string());
-    let mut params = json!({ "connection": connection, "question": question, "dir": dir });
-    if let Some(project) = project {
-        params["project"] = json!(project);
-    }
-    if let Some(model) = model {
-        params["model"] = json!(model);
-    }
+    let mut params = m::AskParams {
+        scope: scope(project, Some(connection)),
+        question,
+        model: model.map(str::to_string),
+        ..m::AskParams::default()
+    };
     let _ = writeln!(err, "Asking…");
-    let mut answer = client.call_streaming("ask", params.clone(), |method, _| waiting_key(method)).await;
+    let mut answer = client.request_streaming::<m::Ask>(&params, |note| waiting_key(&note)).await;
     if let Err(CallError::Rpc(e)) = &answer
         && e.code == super::protocol::code::NOT_SHARED
     {
-        match allow(&e.message, e.data.as_ref()) {
+        match allow(&e.message, m::NotShared::from_data(e.data.as_ref())) {
             Some(()) => {
-                params["share_once"] = json!(true);
-                answer = client.call_streaming("ask", params, |method, _| waiting_key(method)).await;
+                params.share_once = true;
+                answer = client.request_streaming::<m::Ask>(&params, |note| waiting_key(&note)).await;
             }
             None => return 3,
         }
@@ -495,43 +496,40 @@ pub async fn ask(config_dir: &Path, project: Option<&str>, model: Option<&str>, 
         Ok(answer) => answer,
         Err(e) => return fail(&e),
     };
-    let tables: Vec<&str> =
-        answer["tables"].as_array().into_iter().flatten().filter_map(|t| t["name"].as_str()).collect();
+    let tables: Vec<&str> = answer.tables.iter().map(|t| t.name.as_str()).collect();
     let _ = writeln!(
         err,
         "{} ({}) was shown {} · {} tokens in, {} out{}",
-        answer["model"].as_str().unwrap_or("?"),
-        answer["provider_model"].as_str().unwrap_or("?"),
+        answer.model,
+        answer.provider_model,
         tables.join(", "),
-        answer["usage"]["input_tokens"],
-        answer["usage"]["output_tokens"],
-        match answer["attempts"].as_u64() {
-            Some(n) if n > 1 => format!(" · asked {n} times: its first SQL used names not in the schema"),
+        answer.usage.input_tokens,
+        answer.usage.output_tokens,
+        match answer.attempts {
+            n if n > 1 => format!(" · asked {n} times: its first SQL used names not in the schema"),
             _ => String::new(),
         },
     );
-    let looked: Vec<&str> = answer["looked_at"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-    if !looked.is_empty() {
-        let _ = writeln!(err, "It also looked at: {}", looked.join(", "));
+    if !answer.looked_at.is_empty() {
+        let _ = writeln!(err, "It also looked at: {}", answer.looked_at.join(", "));
     }
-    if let Some(said) = answer["said"].as_str().filter(|s| !s.is_empty()) {
-        let _ = writeln!(err, "{said}");
+    if !answer.said.is_empty() {
+        let _ = writeln!(err, "{}", answer.said);
     }
-    let problems: Vec<&str> = answer["problems"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-    if !problems.is_empty() {
-        let _ = writeln!(err, "Check before running it: {}", problems.join("; "));
+    if !answer.problems.is_empty() {
+        let _ = writeln!(err, "Check before running it: {}", answer.problems.join("; "));
     }
-    for f in answer["suggested"].as_array().into_iter().flatten() {
+    for f in &answer.suggested {
         let _ = writeln!(
             err,
             "It assumed: {} {} {} — `podelis memory confirm {id}` if that's right, `podelis memory forget {id}` if not",
-            f["subject"].as_str().unwrap_or("?"),
-            f["relation"].as_str().unwrap_or("?"),
-            f["value"].as_str().unwrap_or("?"),
-            id = f["id"]
+            f.subject,
+            f.relation,
+            f.value,
+            id = f.id
         );
     }
-    if let Some(sql) = answer["sql"].as_str() {
+    if let Some(sql) = &answer.sql {
         let _ = writeln!(std::io::stdout(), "{}", sql.trim_end());
         0
     } else {
@@ -542,10 +540,10 @@ pub async fn ask(config_dir: &Path, project: Option<&str>, model: Option<&str>, 
 
 /// The project doesn't share its schema with this model: asks in the
 /// terminal whether to, this once or always. `None`: no.
-fn allow(message: &str, data: Option<&Value>) -> Option<()> {
+fn allow(message: &str, data: Option<m::NotShared>) -> Option<()> {
     use std::io::IsTerminal as _;
     let mut err = std::io::stderr();
-    let project = data.and_then(|d| d["project"].as_str()).unwrap_or("?").to_string();
+    let project = data.as_ref().map_or("?", |d| d.project.as_str()).to_string();
     if !std::io::stdin().is_terminal() {
         let _ = writeln!(err, "Not sent: {message}. Run `podelis ask` in a terminal to allow it.");
         return None;
@@ -558,12 +556,12 @@ fn allow(message: &str, data: Option<&Value>) -> Option<()> {
     match line.trim().to_ascii_lowercase().as_str() {
         "y" | "yes" => Some(()),
         "a" | "always" => {
-            let Some(id) = data.and_then(|d| d["project_id"].as_str()) else {
+            let Some(id) = data.and_then(|d| d.project_id) else {
                 let _ = writeln!(err, "Couldn't tell which project to save it for: sent this once.");
                 return Some(());
             };
             let (mut store, _) = crate::config::store::ConnectionStore::load();
-            match store.set_share_schema(id, crate::config::store::ShareSchema::All) {
+            match store.set_share_schema(&id, crate::config::store::ShareSchema::All) {
                 Ok(()) => {
                     let _ = writeln!(err, "Project '{project}' now shares its schemas with every model set up.");
                     Some(())
@@ -587,102 +585,89 @@ pub async fn memory(config_dir: &Path, project: Option<&str>, connection: Option
         Ok(client) => client,
         Err(e) => return fail(&e),
     };
-    let mut params = json!({});
-    if let Some(project) = project {
-        params["project"] = json!(project);
-    }
     // `-c prod`: about prod's database.
-    if let Some(connection) = connection {
-        params["connection"] = json!(connection);
-    }
+    let scope = Scope { project: project.map(str::to_string), connection: connection.map(str::to_string), dir: None };
+    let id = || words.get(1).and_then(|w| w.parse::<i64>().ok()).map(podelis_ai::memory::FactId::from_written);
     let action = words.first().map_or("list", String::as_str);
-    let (method, said) = match action {
+    let mut out = std::io::stdout();
+    let said = |said: &str, f: &podelis_ai::memory::Fact| {
+        format!("{said} #{}: {} {} {}", f.id, f.subject, f.relation, f.value)
+    };
+    let done = match action {
         "add" => {
-            params["text"] = json!(words[1..].join(" "));
-            ("memory.add", "Remembered")
+            let p = m::MemoryAddParams { scope, text: Some(words[1..].join(" ")), ..m::MemoryAddParams::default() };
+            client.request::<m::MemoryAdd>(&p).await.map(|f| said("Remembered", &f))
         }
         "edit" => {
-            params["id"] = json!(words[1].parse::<i64>().unwrap_or(0));
-            params["text"] = json!(words[2..].join(" "));
-            ("memory.update", "Changed")
+            let p = m::MemoryUpdateParams { scope, id: id(), text: Some(words[2..].join(" ")) };
+            client.request::<m::MemoryUpdate>(&p).await.map(|f| said("Changed", &f))
         }
-        "forget" | "confirm" => {
-            params["id"] = json!(words[1].parse::<i64>().unwrap_or(0));
-            if action == "forget" { ("memory.forget", "Forgot") } else { ("memory.confirm", "Confirmed") }
+        "forget" => {
+            let p = m::FactParams { scope, id: id() };
+            client.request::<m::MemoryForget>(&p).await.map(|d| format!("Forgot #{}", d.id))
+        }
+        "confirm" => {
+            let p = m::FactParams { scope, id: id() };
+            client.request::<m::MemoryConfirm>(&p).await.map(|d| format!("Confirmed #{}", d.id))
         }
         "learn" => {
             // The gateway may run elsewhere: the folder goes as a full path.
             let folder = crate::config::settings::expand_home(&words[1]);
             let folder = std::fs::canonicalize(&folder).unwrap_or(folder);
-            params["folder"] = json!(folder.display().to_string());
-            ("memory.learn", "")
-        }
-        "export" => ("memory.export", ""),
-        _ => {
-            if words.len() > 1 {
-                params["search"] = json!(words[1..].join(" "));
-            }
-            ("memory.list", "")
-        }
-    };
-    let answer = match client.call(method, params).await {
-        Ok(answer) => answer,
-        Err(e) => return fail(&e),
-    };
-    let mut out = std::io::stdout();
-    match method {
-        "memory.export" => {
-            let _ = write!(out, "{}", answer["text"].as_str().unwrap_or_default());
-        }
-        "memory.learn" => {
-            let _ = writeln!(
-                out,
-                "Learned {} facts from {} migration files in {} (what was learned from there before is replaced).",
-                answer["facts"],
-                answer["files"],
-                answer["folder"].as_str().unwrap_or("?")
-            );
-        }
-        "memory.list" => {
-            let facts = answer["facts"].as_array().cloned().unwrap_or_default();
-            if facts.is_empty() {
-                let _ = writeln!(out, "No facts yet: `podelis memory add orders.status 3 = cancelled` adds one.");
-            }
-            for f in &facts {
-                let unconfirmed = if f["confirmed"].as_bool() == Some(true) { "" } else { "  (not confirmed)" };
-                let _ = writeln!(
-                    out,
-                    "{:>4}  {} {} {}  · {}{unconfirmed}",
-                    f["id"].as_i64().unwrap_or(0),
-                    f["subject"].as_str().unwrap_or("?"),
-                    f["relation"].as_str().unwrap_or("?"),
-                    f["value"].as_str().unwrap_or("?"),
-                    f["source"].as_str().unwrap_or("?"),
-                );
-            }
-        }
-        _ => {
-            let what = if method == "memory.add" || method == "memory.update" {
+            let p = m::MemoryLearnParams { scope, folder: Some(folder.display().to_string()) };
+            client.request::<m::MemoryLearn>(&p).await.map(|l| {
                 format!(
-                    " #{}: {} {} {}",
-                    answer["id"],
-                    answer["subject"].as_str().unwrap_or("?"),
-                    answer["relation"].as_str().unwrap_or("?"),
-                    answer["value"].as_str().unwrap_or("?")
+                    "Learned {} facts from {} migration files in {} (what was learned from there before is replaced).",
+                    l.facts, l.files, l.folder
                 )
-            } else {
-                format!(" #{}", answer["id"])
-            };
-            let _ = writeln!(out, "{said}{what}");
+            })
         }
+        "export" => match client.request::<m::MemoryExport>(&scope).await {
+            Ok(exported) => {
+                let _ = write!(out, "{}", exported.text);
+                return 0;
+            }
+            Err(e) => Err(e),
+        },
+        _ => {
+            let search = (words.len() > 1).then(|| words[1..].join(" "));
+            match client.request::<m::MemoryList>(&m::MemoryListParams { scope, search }).await {
+                Ok(listed) => {
+                    if listed.facts.is_empty() {
+                        let _ =
+                            writeln!(out, "No facts yet: `podelis memory add orders.status 3 = cancelled` adds one.");
+                    }
+                    for f in &listed.facts {
+                        let unconfirmed = if f.confirmed { "" } else { "  (not confirmed)" };
+                        let _ = writeln!(
+                            out,
+                            "{:>4}  {} {} {}  · {}{unconfirmed}",
+                            f.id.get(),
+                            f.subject,
+                            f.relation,
+                            f.value,
+                            f.source
+                        );
+                    }
+                    return 0;
+                }
+                Err(e) => Err(e),
+            }
+        }
+    };
+    match done {
+        Ok(said) => {
+            let _ = writeln!(out, "{said}");
+            0
+        }
+        Err(e) => fail(&e),
     }
-    0
 }
 
 /// A key slow to come (`key.waiting`): said on stderr, as the app's status
 /// bar says it.
-fn waiting_key(method: &str) {
-    if method == "key.waiting" {
+fn waiting_key(note: &Note) {
+    if matches!(note, Note::KeyWaiting(_)) {
         let _ = writeln!(std::io::stderr(), "{}", t!("ask.waiting_key"));
     }
 }

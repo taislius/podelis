@@ -14,60 +14,94 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use sqlx::{Connection as _, Row as _};
+
+/// What went wrong with a project's memory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryError {
+    /// Its file couldn't be opened, read or written (it may have been
+    /// moved or replaced): one kept open is opened again next time.
+    Storage(String),
+    /// What was given doesn't make a fact.
+    NotAFact,
+}
+
+impl std::fmt::Display for MemoryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MemoryError::Storage(e) => f.write_str(e),
+            MemoryError::NotAFact => f.write_str("a fact needs what it's about and what's said about it"),
+        }
+    }
+}
+
+impl std::error::Error for MemoryError {}
+
+impl From<sqlx::Error> for MemoryError {
+    fn from(e: sqlx::Error) -> Self {
+        MemoryError::Storage(format!("memory: {e}"))
+    }
+}
+
+impl From<MemoryError> for String {
+    fn from(e: MemoryError) -> Self {
+        e.to_string()
+    }
+}
 
 /// The most facts shown to a model for one question.
 const MAX_SHOWN: usize = 30;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A fact's id: its row in the memory file. What the gateway, the memory
+/// window and the ontology call it by, written as the number it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct FactId(i64);
+
+impl FactId {
+    /// As it's written: in JSON, and for `podelis memory forget <id>`.
+    pub const fn get(self) -> i64 {
+        self.0
+    }
+
+    /// One read back from where it was written (a gateway request, the
+    /// command line). Whether a fact has it is the memory's to say.
+    pub const fn from_written(id: i64) -> Self {
+        Self(id)
+    }
+}
+
+impl std::fmt::Display for FactId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// As the gateway sends it: its fields by name.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Fact {
-    pub id: i64,
+    pub id: FactId,
     /// What it's about: a table, `table.column`, or a word (`revenue`).
     pub subject: String,
     /// How the value relates to it: `means` by default.
     pub relation: String,
     pub value: String,
     /// Who said it: `user`, `model:<name>`, `file:<path>`.
+    #[serde(default)]
     pub source: String,
+    #[serde(default)]
     pub confirmed: bool,
     /// When it was said (RFC 3339, local time).
+    #[serde(default)]
     pub at: String,
     /// The database it's about (its key: `shop`), or "" for every
     /// database in the project.
+    #[serde(default)]
     pub database: String,
 }
 
 impl Fact {
-    pub fn to_json(&self) -> Value {
-        json!({
-            "id": self.id,
-            "subject": self.subject,
-            "relation": self.relation,
-            "value": self.value,
-            "source": self.source,
-            "confirmed": self.confirmed,
-            "at": self.at,
-            "database": self.database,
-        })
-    }
-
-    /// As [`to_json`](Self::to_json) wrote it (what the gateway sends).
-    pub fn from_json(v: &Value) -> Option<Self> {
-        let text = |k: &str| v[k].as_str().map(str::to_string);
-        Some(Fact {
-            id: v["id"].as_i64()?,
-            subject: text("subject")?,
-            relation: text("relation")?,
-            value: text("value")?,
-            source: text("source").unwrap_or_default(),
-            confirmed: v["confirmed"].as_bool().unwrap_or(false),
-            at: text("at").unwrap_or_default(),
-            database: text("database").unwrap_or_default(),
-        })
-    }
-
     /// As a model is shown it: one line.
     pub fn line(&self) -> String {
         format!("{} {} {}", self.subject, self.relation, self.value)
@@ -116,34 +150,87 @@ pub const ALSO_CALLED: &str = "also called";
 pub const DEFINED_AS: &str = "defined as";
 /// Rows of a table left out unless the question asks for them.
 pub const EXCLUDED_BY_DEFAULT: &str = "excluded by default";
+/// What happened to a table or column, from migrations.
+pub const HISTORY: &str = "history";
+
+/// The relations Podėlis knows a fact by: what its subject means, its
+/// other names, a term's formula, rows left out by default, its history.
+/// A fact may have any other word (`note`): it's read as what it means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Relation {
+    Means,
+    Is,
+    Are,
+    Equals,
+    AlsoCalled,
+    DefinedAs,
+    ExcludedByDefault,
+    History,
+}
+
+impl Relation {
+    pub const ALL: [Relation; 8] = [
+        Relation::Means,
+        Relation::Is,
+        Relation::Are,
+        Relation::Equals,
+        Relation::AlsoCalled,
+        Relation::DefinedAs,
+        Relation::ExcludedByDefault,
+        Relation::History,
+    ];
+
+    /// As a fact writes it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Relation::Means => "means",
+            Relation::Is => "is",
+            Relation::Are => "are",
+            Relation::Equals => "equals",
+            Relation::AlsoCalled => ALSO_CALLED,
+            Relation::DefinedAs => DEFINED_AS,
+            Relation::ExcludedByDefault => EXCLUDED_BY_DEFAULT,
+            Relation::History => HISTORY,
+        }
+    }
+
+    /// The one `relation` names (ignoring case and spaces around it), if
+    /// it's one of these.
+    pub fn of(relation: &str) -> Option<Self> {
+        let relation = relation.trim();
+        Self::ALL.into_iter().find(|r| r.as_str().eq_ignore_ascii_case(relation))
+    }
+
+    /// Said only of a table (or its columns), never of a word: a fact of
+    /// one word with it names a table, here or gone.
+    pub fn is_of_tables(self) -> bool {
+        matches!(self, Relation::ExcludedByDefault | Relation::History)
+    }
+}
 
 pub fn path(config_dir: &Path, project_id: &str) -> PathBuf {
     config_dir.join("memory").join(format!("{project_id}.db"))
 }
 
 /// The project's memory, created on first use, only the user's to read.
-pub async fn open(config_dir: &Path, project_id: &str) -> Result<SqliteConnection, String> {
+pub async fn open(config_dir: &Path, project_id: &str) -> Result<SqliteConnection, MemoryError> {
     let file = path(config_dir, project_id);
-    let dir = file.parent().ok_or("no memory folder")?;
-    std::fs::create_dir_all(dir).map_err(|e| format!("couldn't create {}: {e}", dir.display()))?;
+    let dir = file.parent().ok_or_else(|| MemoryError::Storage("no memory folder".into()))?;
+    std::fs::create_dir_all(dir)
+        .map_err(|e| MemoryError::Storage(format!("couldn't create {}: {e}", dir.display())))?;
     restrict(dir, 0o700);
     // By path, not a URL: a `?` or `%20` in the folder's name is just a name.
     let options = SqliteConnectOptions::new().filename(&file).create_if_missing(true);
-    let mut conn = SqliteConnection::connect_with(&options).await.map_err(|e| format!("memory: {e}"))?;
+    let mut conn = SqliteConnection::connect_with(&options).await?;
     restrict(&file, 0o600);
     for statement in SCHEMA.iter().copied() {
-        sqlx::query(statement).execute(&mut conn).await.map_err(|e| format!("memory: {e}"))?;
+        sqlx::query(statement).execute(&mut conn).await?;
     }
     // A memory from before facts had a database: theirs is every database.
-    let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('facts')")
-        .fetch_all(&mut conn)
-        .await
-        .map_err(|e| format!("memory: {e}"))?;
+    let columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('facts')").fetch_all(&mut conn).await?;
     if !columns.iter().any(|c| c == "database") {
-        sqlx::query("ALTER TABLE facts ADD COLUMN database TEXT NOT NULL DEFAULT ''")
-            .execute(&mut conn)
-            .await
-            .map_err(|e| format!("memory: {e}"))?;
+        sqlx::query("ALTER TABLE facts ADD COLUMN database TEXT NOT NULL DEFAULT ''").execute(&mut conn).await?;
     }
     Ok(conn)
 }
@@ -186,7 +273,7 @@ const SCHEMA: &[&str] = &[
 
 fn row(r: &sqlx::sqlite::SqliteRow) -> Fact {
     Fact {
-        id: r.get("id"),
+        id: FactId(r.get("id")),
         subject: r.get("subject"),
         relation: r.get("relation"),
         value: r.get("value"),
@@ -206,10 +293,10 @@ pub async fn add(
     source: &str,
     confirmed: bool,
     database: &str,
-) -> Result<Fact, String> {
+) -> Result<Fact, MemoryError> {
     let (subject, relation, value) = (subject.trim(), relation.trim(), value.trim());
     if subject.is_empty() || value.is_empty() {
-        return Err("a fact needs what it's about and what's said about it".into());
+        return Err(MemoryError::NotAFact);
     }
     let relation = if relation.is_empty() { "means" } else { relation };
     let at = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
@@ -225,8 +312,7 @@ pub async fn add(
     .bind(at)
     .bind(database.trim().to_lowercase())
     .fetch_one(&mut *conn)
-    .await
-    .map_err(|e| format!("memory: {e}"))?;
+    .await?;
     Ok(row(&r))
 }
 
@@ -236,7 +322,7 @@ pub async fn list(
     conn: &mut SqliteConnection,
     text: Option<&str>,
     database: Option<&str>,
-) -> Result<Vec<Fact>, String> {
+) -> Result<Vec<Fact>, MemoryError> {
     // A database's facts and those about every database; all of them for
     // none (`?1` NULL).
     let database = database.map(|d| d.trim().to_lowercase());
@@ -258,7 +344,7 @@ pub async fn list(
                 .await
         }
     };
-    Ok(rows.map_err(|e| format!("memory: {e}"))?.iter().map(row).collect())
+    Ok(rows?.iter().map(row).collect())
 }
 
 /// Replaces what was learned from `source` (a folder of migrations), in
@@ -270,8 +356,8 @@ pub async fn replace_source(
     source: &str,
     facts: &[super::migrations::Learned],
     database: &str,
-) -> Result<usize, String> {
-    let failed = |e: sqlx::Error| format!("memory: {e}");
+) -> Result<usize, MemoryError> {
+    let failed = MemoryError::from;
     let database = database.trim().to_lowercase();
     let mut tx = conn.begin().await.map_err(failed)?;
     // What the folder taught before, in any scope: learning it again (for
@@ -299,29 +385,28 @@ pub async fn replace_source(
 /// Removes a fact; false if there was none with that id. A model's
 /// suggestion forgotten is remembered as rejected, so the same guess
 /// isn't kept again.
-pub async fn forget(conn: &mut SqliteConnection, id: i64) -> Result<bool, String> {
-    let failed = |e: sqlx::Error| format!("memory: {e}");
+pub async fn forget(conn: &mut SqliteConnection, id: FactId) -> Result<bool, MemoryError> {
+    let failed = MemoryError::from;
     sqlx::query(
         "INSERT INTO rejected (subject, value) SELECT subject, value FROM facts WHERE id = ? AND source LIKE 'model:%'",
     )
-    .bind(id)
+    .bind(id.0)
     .execute(&mut *conn)
     .await
     .map_err(failed)?;
-    let done = sqlx::query("DELETE FROM facts WHERE id = ?").bind(id).execute(&mut *conn).await.map_err(failed)?;
+    let done = sqlx::query("DELETE FROM facts WHERE id = ?").bind(id.0).execute(&mut *conn).await.map_err(failed)?;
     Ok(done.rows_affected() > 0)
 }
 
 /// Whether the user forgot this suggestion before.
-pub async fn rejected(conn: &mut SqliteConnection, subject: &str, value: &str) -> Result<bool, String> {
+pub async fn rejected(conn: &mut SqliteConnection, subject: &str, value: &str) -> Result<bool, MemoryError> {
     let found: Option<i64> = sqlx::query_scalar(
         "SELECT 1 FROM rejected WHERE lower(subject) = lower(?) AND lower(value) = lower(?) LIMIT 1",
     )
     .bind(subject)
     .bind(value)
     .fetch_optional(&mut *conn)
-    .await
-    .map_err(|e| format!("memory: {e}"))?;
+    .await?;
     Ok(found.is_some())
 }
 
@@ -346,10 +431,10 @@ pub fn parse_edit(text: &str, relation: &str) -> Option<(String, String, String)
 /// folder again doesn't replace it), dated now. A model's guess changed is
 /// remembered as rejected, as when forgotten, so it isn't suggested again
 /// beside the correction. None if there's no such fact.
-pub async fn update(conn: &mut SqliteConnection, id: i64, text: &str) -> Result<Option<Fact>, String> {
-    let failed = |e: sqlx::Error| format!("memory: {e}");
+pub async fn update(conn: &mut SqliteConnection, id: FactId, text: &str) -> Result<Option<Fact>, MemoryError> {
+    let failed = MemoryError::from;
     let Some(old) = sqlx::query("SELECT * FROM facts WHERE id = ?")
-        .bind(id)
+        .bind(id.0)
         .fetch_optional(&mut *conn)
         .await
         .map_err(failed)?
@@ -359,7 +444,7 @@ pub async fn update(conn: &mut SqliteConnection, id: i64, text: &str) -> Result<
         return Ok(None);
     };
     let Some((subject, relation, value)) = parse_edit(text, &old.relation) else {
-        return Err("a fact needs what it's about and what's said about it".into());
+        return Err(MemoryError::NotAFact);
     };
     if old.source.starts_with("model:") && (old.subject != subject || old.value != value) {
         sqlx::query("INSERT INTO rejected (subject, value) VALUES (?, ?)")
@@ -378,7 +463,7 @@ pub async fn update(conn: &mut SqliteConnection, id: i64, text: &str) -> Result<
     .bind(relation)
     .bind(value)
     .bind(at)
-    .bind(id)
+    .bind(id.0)
     .fetch_optional(&mut *conn)
     .await
     .map_err(failed)?;
@@ -387,23 +472,18 @@ pub async fn update(conn: &mut SqliteConnection, id: i64, text: &str) -> Result<
 
 /// Moves a fact to `database` (its key), or with "" to every database in
 /// the project. False if there's no such fact.
-pub async fn set_database(conn: &mut SqliteConnection, id: i64, database: &str) -> Result<bool, String> {
+pub async fn set_database(conn: &mut SqliteConnection, id: FactId, database: &str) -> Result<bool, MemoryError> {
     let done = sqlx::query("UPDATE facts SET database = ? WHERE id = ?")
         .bind(database.trim().to_lowercase())
-        .bind(id)
+        .bind(id.0)
         .execute(&mut *conn)
-        .await
-        .map_err(|e| format!("memory: {e}"))?;
+        .await?;
     Ok(done.rows_affected() > 0)
 }
 
 /// Marks a fact confirmed (one a model suggested, now the user's).
-pub async fn confirm(conn: &mut SqliteConnection, id: i64) -> Result<bool, String> {
-    let done = sqlx::query("UPDATE facts SET confirmed = 1 WHERE id = ?")
-        .bind(id)
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| format!("memory: {e}"))?;
+pub async fn confirm(conn: &mut SqliteConnection, id: FactId) -> Result<bool, MemoryError> {
+    let done = sqlx::query("UPDATE facts SET confirmed = 1 WHERE id = ?").bind(id.0).execute(&mut *conn).await?;
     Ok(done.rows_affected() > 0)
 }
 
@@ -448,7 +528,7 @@ pub async fn for_question(
     conn: &mut SqliteConnection,
     question: &str,
     database: Option<&str>,
-) -> Result<ForQuestion, String> {
+) -> Result<ForQuestion, MemoryError> {
     let confirmed = |facts: Vec<Fact>| facts.into_iter().filter(|f| f.confirmed).collect();
     Ok(ForQuestion {
         all: confirmed(list(conn, None, database).await?),
@@ -457,12 +537,17 @@ pub async fn for_question(
 }
 
 impl ForQuestion {
+    /// Every confirmed fact about the database.
+    pub fn all(&self) -> &[Fact] {
+        &self.all
+    }
+
     /// What the facts matching the question say, for choosing tables:
     /// "revenue is payment.amount" brings `payment`. Not histories: a
     /// table's past names other tables and columns.
     pub fn words(&self) -> String {
         let mut out = String::new();
-        for f in self.matched.iter().filter(|f| f.relation != "history") {
+        for f in self.matched.iter().filter(|f| Relation::of(&f.relation) != Some(Relation::History)) {
             let _ = write!(out, " {} {}", f.subject, f.value);
         }
         out
@@ -487,9 +572,9 @@ impl ForQuestion {
         }
         // What people said first, then notes from files, then histories: when
         // there's no room for all, the history goes.
-        shown.sort_by_key(|f| match (f.source.as_str(), f.relation.as_str()) {
+        shown.sort_by_key(|f| match (f.source.as_str(), Relation::of(&f.relation)) {
             ("user", _) => 0,
-            (_, "history") => 2,
+            (_, Some(Relation::History)) => 2,
             _ => 1,
         });
         shown.truncate(MAX_SHOWN);
@@ -506,7 +591,7 @@ pub async fn relevant(
     ontology: &crate::ontology::Ontology,
     tables: &[String],
     question: &str,
-) -> Result<Vec<Fact>, String> {
+) -> Result<Vec<Fact>, MemoryError> {
     Ok(for_question(conn, question, None).await?.about(ontology, tables))
 }
 

@@ -12,7 +12,7 @@ pub(in crate::app) struct Followed {
     pub tab_name: String,
     pub sql: String,
     /// The tab that asked, on its connection then: the row is for it only.
-    pub asked_from: (TabId, Option<u64>),
+    pub asked_from: (TabId, Option<ConnId>),
 }
 
 /// The most rows a lookup shows (a key that isn't unique may match more).

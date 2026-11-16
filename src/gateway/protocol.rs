@@ -14,6 +14,8 @@ pub mod code {
     pub const INVALID_REQUEST: i64 = -32600;
     pub const METHOD_NOT_FOUND: i64 = -32601;
     pub const INVALID_PARAMS: i64 = -32602;
+    /// The gateway couldn't write its answer.
+    pub const INTERNAL: i64 = -32603;
     /// Something other than `hello` came first.
     pub const HELLO_FIRST: i64 = -32001;
     /// The client speaks another protocol version.
@@ -89,10 +91,6 @@ pub fn error(id: &Value, error: &RpcError) -> String {
         body["data"] = data.clone();
     }
     line(&json!({ "jsonrpc": "2.0", "id": id, "error": body }))
-}
-
-pub fn notification(method: &str, params: &Value) -> String {
-    line(&json!({ "jsonrpc": "2.0", "method": method, "params": params }))
 }
 
 /// Parses a client's line: the message, or the error to answer with.

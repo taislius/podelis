@@ -1,4 +1,5 @@
 use crate::app::*;
+use crate::config::store::ProjectId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectField {
@@ -325,7 +326,7 @@ impl App {
     }
 
     /// `base`, or `base (2)`, `base (3)`… whichever the project hasn't got.
-    fn free_name(&self, project_id: &str, base: &str) -> String {
+    fn free_name(&self, project_id: &ProjectId, base: &str) -> String {
         let mut name = base.to_string();
         let mut n = 2;
         while self.store.name_taken(project_id, None, &name) {
@@ -385,7 +386,7 @@ impl App {
     }
 
     /// Moves the selected connection, and its keychain entry, to another project.
-    pub(in crate::app) fn move_selected(&mut self, target: &str) {
+    pub(in crate::app) fn move_selected(&mut self, target: &ProjectId) {
         let (Some(from), Some(profile)) =
             (self.current_project.clone(), self.profiles().get(self.manager.connection_selected).cloned())
         else {

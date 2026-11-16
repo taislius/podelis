@@ -63,7 +63,7 @@ pub(in crate::ui) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Op
     app.hits.tabs_y = tabs.y;
     app.hits.new_tab = new_tab;
 
-    let gutter_width = (app.tab.editor.lines.len().to_string().len() as u16 + 2).max(4);
+    let gutter_width = (app.tab.editor.lines().len().to_string().len() as u16 + 2).max(4);
     let [gutter, text_area] = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(gutter_width.min(code.width)), Constraint::Min(0)])
@@ -96,7 +96,7 @@ pub(in crate::ui) fn draw_editor(f: &mut Frame, app: &mut App, area: Rect) -> Op
     let shown_rows = rows.map_or(text_area.height as usize, |(_, last)| (last + 1).saturating_sub(scroll_row));
 
     // Gutter, with the current line's number picked out.
-    let numbers: Vec<Line> = (scroll_row..app.tab.editor.lines.len())
+    let numbers: Vec<Line> = (scroll_row..app.tab.editor.lines().len())
         .take((gutter.height as usize).min(shown_rows))
         .map(|row| {
             let style = if row == cursor_row { bold(t.accent).bg(t.selected) } else { dim() };
@@ -191,9 +191,9 @@ fn editor_lines(app: &App, first: usize, count: usize) -> Vec<Line<'static>> {
     // Find matches on screen (a common word can match tens of thousands of
     // times in a long script), and the bracket pair at the cursor.
     let found = Style::default().bg(t.selected).add_modifier(Modifier::UNDERLINED);
-    let lines = &app.tab.editor.lines;
-    let shown_start: usize = lines.iter().take(first).map(|l| l.len() + 1).sum();
-    let shown_end: usize = shown_start + lines.iter().skip(first).take(count).map(|l| l.len() + 1).sum::<usize>();
+    let ed = &app.tab.editor;
+    let shown_start = ed.line_start(first.min(ed.lines().len()));
+    let shown_end = ed.line_start((first + count).min(ed.lines().len()));
     let matches = app.find_matches().0;
     let from = matches.partition_point(|m| m.end < shown_start);
     let to = matches.partition_point(|m| m.start <= shown_end);
@@ -207,8 +207,8 @@ fn editor_lines(app: &App, first: usize, count: usize) -> Vec<Line<'static>> {
         .collect();
     // One row past the last visible one, so a name at the end of it can
     // still see a `(` on the next line (and be coloured as a function).
-    let last = (first + count).min(app.tab.editor.lines.len());
-    let end = app.tab.editor.lines.iter().take(last + 1).map(|l| l.len() + 1).sum::<usize>().min(text.len());
+    let last = (first + count).min(app.tab.editor.lines().len());
+    let end = app.tab.editor.line_start((last + 1).min(app.tab.editor.lines().len())).min(text.len());
     // Questions for the model (`-- ? …`): in the accent, not dim comments,
     // so they read as something Ctrl+K q acts on.
     let rows = highlighted_rows(&text, end, app.engine(), first, count);

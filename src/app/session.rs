@@ -5,6 +5,7 @@
 //! [`Connection`]s, and switching swaps the two. Tabs opened with Ctrl+T share
 //! their tab's connection (and so its session and transaction).
 
+use crate::config::store::ProjectId;
 use serde::{Deserialize, Serialize};
 
 use super::*;
@@ -128,9 +129,9 @@ impl Unrollable {
 #[derive(Default)]
 pub struct Conns {
     /// ID of the active connection slot, whose value is `ProjectConnections::active`.
-    pub active: Option<u64>,
-    parked: HashMap<u64, Connection>,
-    next_id: u64,
+    pub active: Option<ConnId>,
+    parked: HashMap<ConnId, Connection>,
+    next_id: ConnId,
     /// Each tab's saved connection name, from the tabs file.
     pub tab_connections: Vec<Option<String>>,
     /// UI state saved with the tabs.
@@ -156,7 +157,7 @@ pub struct ProjectConnections {
 }
 
 impl ProjectConnections {
-    pub(super) fn switch_active(&mut self, target: Option<u64>) -> bool {
+    pub(super) fn switch_active(&mut self, target: Option<ConnId>) -> bool {
         self.slots.switch_active(&mut self.active, target)
     }
 
@@ -164,7 +165,7 @@ impl ProjectConnections {
         self.slots.drain(&mut self.active)
     }
 
-    pub(super) fn attach_active(&mut self, slot: Connection) -> u64 {
+    pub(super) fn attach_active(&mut self, slot: Connection) -> ConnId {
         self.slots.attach_active(&mut self.active, slot)
     }
 }
@@ -186,7 +187,7 @@ impl std::ops::DerefMut for ProjectConnections {
 impl Conns {
     /// Parks the active slot and activates `target`. A missing target leaves
     /// both the active ID and slot untouched.
-    fn switch_active(&mut self, active: &mut Connection, target: Option<u64>) -> bool {
+    fn switch_active(&mut self, active: &mut Connection, target: Option<ConnId>) -> bool {
         if target == self.active || target.is_some_and(|id| !self.parked.contains_key(&id)) {
             return false;
         }
@@ -203,7 +204,7 @@ impl Conns {
     }
 
     /// Gives a new connection a unique ID and makes its slot active.
-    fn attach_active(&mut self, active: &mut Connection, slot: Connection) -> u64 {
+    fn attach_active(&mut self, active: &mut Connection, slot: Connection) -> ConnId {
         debug_assert!(self.active.is_none(), "detach the current connection before attaching another");
         let id = self.allocate_id();
         *active = slot;
@@ -212,7 +213,7 @@ impl Conns {
     }
 
     /// Stores a connection that will be activated when one of its tabs is shown.
-    fn park_new(&mut self, slot: Connection) -> u64 {
+    fn park_new(&mut self, slot: Connection) -> ConnId {
         let id = self.allocate_id();
         let previous = self.parked.insert(id, slot);
         debug_assert!(previous.is_none(), "connection IDs are never reused");
@@ -228,10 +229,8 @@ impl Conns {
         slots
     }
 
-    fn allocate_id(&mut self) -> u64 {
-        let id = self.next_id;
-        self.next_id += 1;
-        id
+    fn allocate_id(&mut self) -> ConnId {
+        self.next_id.next()
     }
 }
 
@@ -294,8 +293,8 @@ impl App {
     /// Marks the active tab connected without a database, for UI tests.
     #[cfg(test)]
     pub fn pretend_connected(&mut self) {
-        self.connection.slots.active = Some(u64::MAX);
-        self.tabs[self.active_tab].conn = Some(u64::MAX);
+        self.connection.slots.active = Some(ConnId::from_test_id(u64::MAX));
+        self.tabs[self.active_tab].conn = Some(ConnId::from_test_id(u64::MAX));
     }
 
     /// A transaction is open on any tab's connection.
@@ -306,7 +305,7 @@ impl App {
     /// Leaves the project for `target` (or, with `None`, the project list),
     /// asking first if a transaction would be rolled back. With `panes`,
     /// `target`'s connections take the keys rather than its tabs.
-    pub(super) fn switch_project(&mut self, target: Option<String>, panes: bool) {
+    pub(super) fn switch_project(&mut self, target: Option<ProjectId>, panes: bool) {
         // Leaving stops every tab's query: each has to end first.
         if !self.running_tabs().is_empty() {
             return self.set_status(t!("session.wait").to_string(), true);
@@ -327,7 +326,7 @@ impl App {
     /// Leaves this project and opens `target` where it was left (or shows
     /// the project list). With `panes`, its tabs come back behind its
     /// connections.
-    pub(super) fn go_to_project(&mut self, target: Option<String>, panes: bool) {
+    pub(super) fn go_to_project(&mut self, target: Option<ProjectId>, panes: bool) {
         self.leave_project();
         if let Some(id) = target.filter(|id| self.store.project(id).is_some()) {
             self.open_project(&id);
@@ -366,11 +365,11 @@ impl App {
 
     /// Makes connection `target` the active one, parking the current one.
     /// Puts `target`'s state in the app's fields, parking the active one's.
-    pub(super) fn swap_conns(&mut self, target: Option<u64>) {
+    pub(super) fn swap_conns(&mut self, target: Option<ConnId>) {
         self.connection.switch_active(target);
     }
 
-    pub(super) fn switch_conn(&mut self, target: Option<u64>) {
+    pub(super) fn switch_conn(&mut self, target: Option<ConnId>) {
         let previous = self.connection.slots.active;
         if !self.connection.switch_active(target) {
             return;
@@ -396,7 +395,7 @@ impl App {
     }
 
     /// Connection `id`'s transaction state.
-    pub(super) fn conn_txn(&self, id: u64) -> Option<TxnState> {
+    pub(super) fn conn_txn(&self, id: ConnId) -> Option<TxnState> {
         if self.connection.slots.active == Some(id) {
             return Some(self.connection.txn);
         }
@@ -405,7 +404,7 @@ impl App {
 
     /// A connection's name, by its id (the shown one's or a parked one's):
     /// its saved name, else its file's name or `host/database`.
-    pub(super) fn conn_name(&self, id: u64) -> Option<String> {
+    pub(super) fn conn_name(&self, id: ConnId) -> Option<String> {
         if self.connection.slots.active == Some(id) {
             return Some(self.connection.form.short_name());
         }
@@ -414,7 +413,7 @@ impl App {
 
     /// Where connection `id` goes (`PostgreSQL db.example.com:5432/shop`),
     /// for the connections list.
-    pub(super) fn conn_address(&self, id: u64) -> String {
+    pub(super) fn conn_address(&self, id: ConnId) -> String {
         let form = if self.connection.slots.active == Some(id) {
             Some(&self.connection.form)
         } else {
@@ -425,7 +424,7 @@ impl App {
 
     /// From the connections list: to the shown tab if it's on `id`, else
     /// the first tab on it.
-    pub(super) fn go_to_connection(&mut self, id: u64) {
+    pub(super) fn go_to_connection(&mut self, id: ConnId) {
         if self.tabs[self.active_tab].conn == Some(id) {
             return;
         }
@@ -437,7 +436,7 @@ impl App {
     /// Ctrl+D in the connections list: asks before closing connection `id`
     /// (its tabs are disconnected, an open transaction rolled back). Not
     /// while a query runs on it: that's stopped in its tab first.
-    pub(super) fn request_close_connection(&mut self, id: u64) {
+    pub(super) fn request_close_connection(&mut self, id: ConnId) {
         let Some(name) = self.conn_name(id) else { return };
         let tabs: Vec<usize> = (0..self.tabs.len()).filter(|&i| self.tabs[i].conn == Some(id)).collect();
         if let Some(&busy) = tabs.iter().find(|&&i| self.tab_running(i)) {
@@ -465,7 +464,7 @@ impl App {
     /// Ctrl+X in the connections list: asks before closing every open
     /// connection (open transactions rolled back). Not while a query runs.
     pub(super) fn request_close_all_connections(&mut self) {
-        let mut ids: Vec<u64> = self.connection.slots.active.into_iter().collect();
+        let mut ids: Vec<ConnId> = self.connection.slots.active.into_iter().collect();
         ids.extend(self.parked_connections().into_iter().map(|(id, ..)| id));
         self.popups.palette = None;
         if let Some(busy) = (0..self.tabs.len()).find(|&i| self.tab_running(i)) {
@@ -489,7 +488,7 @@ impl App {
 
     /// Closes every open connection, as `close_connection` closes one.
     pub(super) fn close_every_connection(&mut self) {
-        let mut ids: Vec<u64> = self.connection.slots.active.into_iter().collect();
+        let mut ids: Vec<ConnId> = self.connection.slots.active.into_iter().collect();
         ids.extend(self.parked_connections().into_iter().map(|(id, ..)| id));
         let n = ids.len();
         for id in ids {
@@ -501,7 +500,7 @@ impl App {
     /// Closes connection `id`: every tab on it is disconnected (and isn't
     /// reopened by its next run), the connection closed; the shown tab
     /// stays where it is.
-    pub(super) fn close_connection(&mut self, id: u64) {
+    pub(super) fn close_connection(&mut self, id: ConnId) {
         let Some(name) = self.conn_name(id) else { return };
         if self.connection.slots.active == Some(id) {
             self.invalidate_tasks();
@@ -529,7 +528,7 @@ impl App {
     }
 
     /// The other tabs' connections: id, database and form.
-    pub(super) fn parked_connections(&self) -> Vec<(u64, &Database, &ConnectForm)> {
+    pub(super) fn parked_connections(&self) -> Vec<(ConnId, &Database, &ConnectForm)> {
         let mut out: Vec<_> = self
             .connection
             .slots
@@ -543,7 +542,7 @@ impl App {
 
     /// Closes parked connections that no tab uses any more.
     pub(super) fn release_unused_conns(&mut self) {
-        let unused: Vec<u64> = self
+        let unused: Vec<ConnId> = self
             .connection
             .slots
             .parked
@@ -852,9 +851,13 @@ impl App {
     }
 
     /// A connection reopened by [`restore_session`] arrived.
-    pub(super) fn apply_restored(&mut self, project_id: &str, form: ConnectForm, result: Result<Database, String>) {
-        if self.current_project.as_deref() != Some(project_id) || !self.connection.slots.restoring.contains(&form.name)
-        {
+    pub(super) fn apply_restored(
+        &mut self,
+        project_id: &ProjectId,
+        form: ConnectForm,
+        result: Result<Database, String>,
+    ) {
+        if self.current_project.as_ref() != Some(project_id) || !self.connection.slots.restoring.contains(&form.name) {
             if let Ok(db) = result {
                 tokio::spawn(async move { db.close().await });
             }
@@ -945,7 +948,7 @@ mod conns_tests {
         let first = conns.attach_active(&mut active, slot("first"));
         let second = conns.park_new(slot("second"));
 
-        assert_eq!((first, second), (0, 1));
+        assert_ne!(first, second, "a new slot gets an id of its own");
         assert!(conns.switch_active(&mut active, Some(second)));
         assert_eq!(conns.active, Some(second));
         assert_eq!(active.summary, "second");
@@ -963,7 +966,7 @@ mod conns_tests {
         let mut active = Connection::default();
         let id = conns.attach_active(&mut active, slot("active"));
 
-        assert!(!conns.switch_active(&mut active, Some(999)));
+        assert!(!conns.switch_active(&mut active, Some(ConnId::from_test_id(999))));
         assert_eq!(conns.active, Some(id));
         assert_eq!(active.summary, "active");
     }

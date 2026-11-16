@@ -61,7 +61,13 @@ enum EditKind {
 /// Rolling a tiny editor here instead of pulling in `tui-textarea` avoids
 /// that crate's ratatui version pin conflicting with ours.
 pub struct TextEditor {
-    pub lines: Vec<String>,
+    /// Read with `lines()`; changed only through `lines_mut()`, which lets
+    /// go of `starts`.
+    lines: Vec<String>,
+    /// Where each line starts in `text()` (bytes), worked out when first
+    /// asked for after a change: offsets and positions without walking
+    /// every line before them.
+    starts: std::cell::RefCell<Option<Vec<usize>>>,
     pub cursor_row: usize,
     /// Cursor position in chars (not bytes, not display columns).
     pub cursor_col: usize,
@@ -100,6 +106,7 @@ impl TextEditor {
     pub fn new() -> Self {
         Self {
             lines: vec![String::new()],
+            starts: std::cell::RefCell::new(None),
             cursor_row: 0,
             cursor_col: 0,
             scroll_row: 0,
@@ -127,6 +134,50 @@ impl TextEditor {
 
     pub fn text(&self) -> String {
         self.lines.join("\n")
+    }
+
+    /// Whether the text is `other`, compared line by line (no copy made).
+    pub fn has_text(&self, other: &str) -> bool {
+        normalized(other).split('\n').eq(self.lines.iter().map(String::as_str))
+    }
+
+    /// Whether the text is only spaces and line breaks.
+    pub fn is_blank(&self) -> bool {
+        self.lines.iter().all(|l| l.trim().is_empty())
+    }
+
+    /// The text's lines (without their line breaks).
+    pub fn lines(&self) -> &[String] {
+        &self.lines
+    }
+
+    /// The lines to change: what's worked out from them goes.
+    fn lines_mut(&mut self) -> &mut Vec<String> {
+        self.starts.get_mut().take();
+        &mut self.lines
+    }
+
+    /// Where line `row` starts in `text()`, in bytes (past the last line:
+    /// the text's length plus one).
+    pub fn line_start(&self, row: usize) -> usize {
+        let last = self.lines.last().map_or(0, String::len);
+        self.with_starts(|starts| starts.get(row).copied().unwrap_or_else(|| starts.last().unwrap_or(&0) + last + 1))
+    }
+
+    fn with_starts<T>(&self, read: impl FnOnce(&[usize]) -> T) -> T {
+        let mut starts = self.starts.borrow_mut();
+        let starts = starts.get_or_insert_with(|| {
+            let mut at = 0;
+            self.lines
+                .iter()
+                .map(|l| {
+                    let start = at;
+                    at += l.len() + 1;
+                    start
+                })
+                .collect()
+        });
+        read(starts)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -164,8 +215,7 @@ impl TextEditor {
 
     /// Byte offset of a position within `text()`.
     pub fn offset_of(&self, (row, col): Pos) -> usize {
-        let before: usize = self.lines[..row].iter().map(|l| l.len() + 1).sum();
-        before + char_to_byte_idx(&self.lines[row], col)
+        self.line_start(row) + char_to_byte_idx(&self.lines[row], col)
     }
 
     /// Byte offset of the cursor within `text()`.
@@ -175,16 +225,16 @@ impl TextEditor {
 
     /// The position of a byte offset within `text()` (clamped to the end).
     pub fn pos_of_offset(&self, offset: usize) -> Pos {
-        let mut remaining = offset;
-        for (row, line) in self.lines.iter().enumerate() {
-            if remaining <= line.len() {
-                let col = line[..floor_char_boundary(line, remaining)].chars().count();
-                return (row, col);
-            }
-            remaining -= line.len() + 1;
+        // The last line starting at or before it.
+        let row = self.with_starts(|starts| starts.partition_point(|&start| start <= offset).saturating_sub(1));
+        let line = &self.lines[row];
+        let within = offset - self.line_start(row);
+        if within > line.len() {
+            // Past the end of the text.
+            let last = self.lines.len() - 1;
+            return (last, self.lines[last].chars().count());
         }
-        let last = self.lines.len() - 1;
-        (last, self.lines[last].chars().count())
+        (row, line[..floor_char_boundary(line, within)].chars().count())
     }
 
     /// Display column of the cursor, accounting for wide characters.
@@ -305,9 +355,10 @@ impl TextEditor {
         };
         let tail = self.lines[end.0][char_to_byte_idx(&self.lines[end.0], end.1)..].to_string();
         let head_end = char_to_byte_idx(&self.lines[start.0], start.1);
-        self.lines[start.0].truncate(head_end);
-        self.lines[start.0].push_str(&tail);
-        self.lines.drain(start.0 + 1..=end.0);
+        let lines = self.lines_mut();
+        lines[start.0].truncate(head_end);
+        lines[start.0].push_str(&tail);
+        lines.drain(start.0 + 1..=end.0);
         self.set_cursor(start);
         self.anchor = None;
         true
@@ -341,12 +392,25 @@ impl TextEditor {
     /// Replaces the whole text (undoable) and puts the cursor at byte
     /// `cursor` of the new text.
     pub fn replace_text(&mut self, text: &str, cursor: usize) {
-        self.checkpoint(EditKind::Other);
-        self.lines = vec![String::new()];
-        self.set_cursor((0, 0));
+        // `cursor` is in `text` as given: where it is once its line breaks
+        // and tabs are as the editor keeps them.
+        let mut cursor = cursor.min(text.len());
+        while !text.is_char_boundary(cursor) {
+            cursor -= 1;
+        }
+        let cursor = normalized(&text[..cursor]).len();
+        let text = normalized(text);
+        // The same text: only the cursor moves (no undo step, no new version).
+        if !self.has_text(&text) {
+            self.checkpoint(EditKind::Other);
+            *self.lines_mut() = vec![String::new()];
+            self.set_cursor((0, 0));
+            self.raw_insert_str(&text);
+        }
+        // Typing after it is a step of its own, as after any change.
+        self.last_edit = None;
         self.anchor = None;
-        self.raw_insert_str(text);
-        let pos = self.pos_of_offset(cursor.min(text.len()));
+        let pos = self.pos_of_offset(cursor);
         self.set_cursor(pos);
     }
 
@@ -396,7 +460,7 @@ impl TextEditor {
         let mut anchor_shift: isize = 0;
         let anchor_row = self.anchor.map(|a| a.0);
         for row in rows {
-            let line = &mut self.lines[row];
+            let line = &mut self.lines_mut()[row];
             let delta: isize = if all_commented {
                 let lead = line.len() - line.trim_start().len();
                 if !line[lead..].starts_with("--") {
@@ -485,7 +549,7 @@ impl TextEditor {
 
     fn restore(&mut self, snap: Snapshot) {
         self.version = next_version();
-        self.lines = snap.lines;
+        *self.lines_mut() = snap.lines;
         self.set_cursor(snap.cursor);
         self.anchor = None;
         self.last_edit = None;
@@ -509,19 +573,30 @@ impl TextEditor {
 
     /// Replaces the whole contents (undoable), cursor at the end.
     pub fn set_text(&mut self, text: &str) {
+        let text = normalized(text);
+        // The same text: only the cursor goes to the end.
+        if self.has_text(&text) {
+            // Typing after it is a step of its own, as after any change.
+            self.last_edit = None;
+            self.anchor = None;
+            let last = self.lines.len() - 1;
+            let end = (last, self.lines[last].chars().count());
+            return self.set_cursor(end);
+        }
         self.checkpoint(EditKind::Other);
-        self.lines = vec![String::new()];
+        *self.lines_mut() = vec![String::new()];
         self.set_cursor((0, 0));
         self.anchor = None;
-        self.raw_insert_str(text);
+        self.raw_insert_str(&text);
     }
 
     pub fn insert_char(&mut self, c: char) {
         let kind = if self.selection().is_some() || c.is_whitespace() { EditKind::Other } else { EditKind::Typing };
         self.checkpoint(kind);
         self.raw_delete_selection();
-        let line = &mut self.lines[self.cursor_row];
-        let byte_idx = char_to_byte_idx(line, self.cursor_col);
+        let (row, col) = (self.cursor_row, self.cursor_col);
+        let line = &mut self.lines_mut()[row];
+        let byte_idx = char_to_byte_idx(line, col);
         line.insert(byte_idx, c);
         self.cursor_col += 1;
         if c.is_whitespace() {
@@ -531,19 +606,24 @@ impl TextEditor {
 
     /// Inserts pasted text, normalising line endings and expanding tabs.
     pub fn insert_str(&mut self, text: &str) {
+        // Nothing pasted over nothing selected changes nothing.
+        if text.is_empty() && self.selection().is_none() {
+            return;
+        }
         self.checkpoint(EditKind::Other);
         self.raw_delete_selection();
         self.raw_insert_str(text);
     }
 
     fn raw_insert_str(&mut self, text: &str) {
-        let text = text.replace("\r\n", "\n").replace('\r', "\n").replace('\t', "    ");
+        let text = normalized(text);
         for (i, part) in text.split('\n').enumerate() {
             if i > 0 {
                 self.raw_newline();
             }
-            let line = &mut self.lines[self.cursor_row];
-            let byte_idx = char_to_byte_idx(line, self.cursor_col);
+            let (row, col) = (self.cursor_row, self.cursor_col);
+            let line = &mut self.lines_mut()[row];
+            let byte_idx = char_to_byte_idx(line, col);
             line.insert_str(byte_idx, part);
             self.cursor_col += part.chars().count();
         }
@@ -556,10 +636,11 @@ impl TextEditor {
     }
 
     fn raw_newline(&mut self) {
-        let line = &mut self.lines[self.cursor_row];
-        let byte_idx = char_to_byte_idx(line, self.cursor_col);
-        let rest = line.split_off(byte_idx);
-        self.lines.insert(self.cursor_row + 1, rest);
+        let (row, col) = (self.cursor_row, self.cursor_col);
+        let lines = self.lines_mut();
+        let byte_idx = char_to_byte_idx(&lines[row], col);
+        let rest = lines[row].split_off(byte_idx);
+        lines.insert(row + 1, rest);
         self.cursor_row += 1;
         self.cursor_col = 0;
     }
@@ -573,50 +654,69 @@ impl TextEditor {
     }
 
     pub fn backspace(&mut self) {
+        // At the very start with nothing selected: nothing to change (and
+        // so no undo step, and the text's version stays).
+        if self.selection().is_none() && self.cursor() == (0, 0) {
+            return;
+        }
         self.checkpoint(EditKind::Other);
         if self.raw_delete_selection() {
             return;
         }
-        if self.cursor_col > 0 {
-            let line = &mut self.lines[self.cursor_row];
-            let byte_idx = char_to_byte_idx(line, self.cursor_col - 1);
+        let (row, col) = (self.cursor_row, self.cursor_col);
+        if col > 0 {
+            let line = &mut self.lines_mut()[row];
+            let byte_idx = char_to_byte_idx(line, col - 1);
             line.remove(byte_idx);
             self.cursor_col -= 1;
-        } else if self.cursor_row > 0 {
-            let prev_len = self.lines[self.cursor_row - 1].chars().count();
-            let current = self.lines.remove(self.cursor_row);
+        } else if row > 0 {
+            let prev_len = self.lines[row - 1].chars().count();
+            let lines = self.lines_mut();
+            let current = lines.remove(row);
+            lines[row - 1].push_str(&current);
             self.cursor_row -= 1;
-            self.lines[self.cursor_row].push_str(&current);
             self.cursor_col = prev_len;
         }
     }
 
     pub fn delete(&mut self) {
+        let last = self.lines.len() - 1;
+        if self.selection().is_none() && self.cursor() == (last, self.line_len(last)) {
+            return;
+        }
         self.checkpoint(EditKind::Other);
         if self.raw_delete_selection() {
             return;
         }
-        let line_len = self.lines[self.cursor_row].chars().count();
-        if self.cursor_col < line_len {
-            let line = &mut self.lines[self.cursor_row];
-            let byte_idx = char_to_byte_idx(line, self.cursor_col);
+        let (row, col) = (self.cursor_row, self.cursor_col);
+        let line_len = self.lines[row].chars().count();
+        if col < line_len {
+            let line = &mut self.lines_mut()[row];
+            let byte_idx = char_to_byte_idx(line, col);
             line.remove(byte_idx);
-        } else if self.cursor_row + 1 < self.lines.len() {
-            let next = self.lines.remove(self.cursor_row + 1);
-            self.lines[self.cursor_row].push_str(&next);
+        } else if row + 1 < self.lines.len() {
+            let lines = self.lines_mut();
+            let next = lines.remove(row + 1);
+            lines[row].push_str(&next);
         }
     }
 
     /// Replaces the `len` chars before the cursor on the current line with
     /// `text` (used by autocomplete).
     pub fn replace_before_cursor(&mut self, len: usize, text: &str) {
+        if len == 0 && text.is_empty() {
+            return;
+        }
         self.checkpoint(EditKind::Other);
         self.anchor = None;
-        let line = &mut self.lines[self.cursor_row];
-        let start = char_to_byte_idx(line, self.cursor_col.saturating_sub(len));
-        let end = char_to_byte_idx(line, self.cursor_col);
-        line.replace_range(start..end, text);
-        self.cursor_col = self.cursor_col.saturating_sub(len) + text.chars().count();
+        let (row, col) = (self.cursor_row, self.cursor_col);
+        let line = &mut self.lines_mut()[row];
+        let start = char_to_byte_idx(line, col.saturating_sub(len));
+        let end = char_to_byte_idx(line, col);
+        line.replace_range(start..end, "");
+        self.cursor_col = col.saturating_sub(len);
+        // As typed: a snippet of several lines is several lines.
+        self.raw_insert_str(text);
     }
 
     // ------------------------------------------------------------ movement
@@ -733,6 +833,15 @@ fn floor_char_boundary(s: &str, mut idx: usize) -> usize {
     idx
 }
 
+/// `text` as the editor keeps it: `\n` line breaks, a tab as 4 spaces.
+fn normalized(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.contains(['\r', '\t']) {
+        text.replace("\r\n", "\n").replace('\r', "\n").replace('\t', "    ").into()
+    } else {
+        text.into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -778,6 +887,23 @@ mod tests {
                 let offset = ed.cursor_offset();
                 prop_assert!(offset <= ed.text().len());
                 prop_assert_eq!(ed.pos_of_offset(offset), (ed.cursor_row, ed.cursor_col));
+                // The kept line starts are the text's, after every change.
+                let text = ed.text();
+                let mut start = 0;
+                for (row, line) in ed.lines.iter().enumerate() {
+                    prop_assert_eq!(ed.line_start(row), start);
+                    for (col, (at, _)) in line.char_indices().chain([(line.len(), ' ')]).enumerate() {
+                        prop_assert_eq!(ed.pos_of_offset(start + at), (row, col));
+                        prop_assert_eq!(ed.offset_of((row, col)), start + at);
+                    }
+                    start += line.len() + 1;
+                }
+                let last = ed.lines.len() - 1;
+                prop_assert_eq!(ed.pos_of_offset(text.len() + 5), (last, ed.lines[last].chars().count()));
+                prop_assert!(ed.has_text(&text));
+                let (longer, more_lines) = (format!("{text}x"), format!("{text}\n"));
+                prop_assert!(!ed.has_text(&longer) && !ed.has_text(&more_lines));
+                prop_assert_eq!(ed.is_blank(), text.trim().is_empty());
             }
         }
     }
@@ -1028,11 +1154,53 @@ mod tests {
     }
 
     #[test]
+    fn a_key_that_changes_nothing_leaves_the_version_and_undo_alone() {
+        let mut e = editor("ab");
+        e.set_cursor((0, 0));
+        let version = e.version();
+        e.backspace();
+        e.set_cursor((0, 2));
+        e.delete();
+        // An empty paste, the same text set again, nothing replaced by nothing.
+        e.insert_str("");
+        e.set_text("ab");
+        e.replace_text("ab", 1);
+        e.replace_rows(0..1, vec!["ab".into()], (0, 0));
+        e.replace_before_cursor(0, "");
+        assert_eq!(e.version(), version);
+        assert!(!e.undo(), "no empty undo steps");
+        assert_eq!(e.cursor(), (0, 0), "the cursor still goes where it's asked");
+        e.set_text("ab");
+        assert_eq!(e.cursor(), (0, 2), "set_text: at the end, as with new text");
+        // Typing before and after it stays two undo steps.
+        let mut e = editor("");
+        e.insert_char('a');
+        e.set_text("a");
+        e.insert_char('b');
+        e.undo();
+        assert_eq!(e.text(), "a", "only what was typed after it");
+        // Text with a tab or CRLF is the same as the editor keeps it, and
+        // the cursor is placed after the tab as given.
+        let mut e = editor("");
+        e.set_text("a\tb\r\nc");
+        let version = e.version();
+        e.set_text("a\tb\r\nc");
+        e.replace_text("a\tb\r\nc", 2);
+        assert_eq!(e.version(), version);
+        assert_eq!(e.cursor(), (0, 5), "after the tab's 4 spaces");
+    }
+
+    #[test]
     fn replace_before_cursor() {
         let mut e = editor("select us");
         e.replace_before_cursor(2, "users");
         assert_eq!(e.text(), "select users");
         assert_eq!(e.cursor_col, 12);
+        // A snippet of several lines (completion's) is several lines.
+        let mut e = editor("-- x\ntop");
+        e.replace_before_cursor(3, "select *\nfrom t");
+        assert_eq!(e.lines(), ["-- x", "select *", "from t"]);
+        assert_eq!(e.cursor(), (2, 6));
     }
 
     #[test]

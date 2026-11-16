@@ -1,154 +1,170 @@
 //! The gateway's `memory.*` methods: a project's facts, to list, add,
-//! change, confirm, forget, move between databases, and export.
+//! change, confirm, forget, move between databases, learn from a folder
+//! of migrations, and export. The log keeps the project, never a fact's
+//! text.
 
-use std::path::Path;
+use podelis_ai::memory::{self as mem, Fact, FactId, MemoryError};
 
-use serde_json::{Value, json};
-
-use super::ai::{Caches, find_project};
+use super::caches::Memory;
+use super::call::Call;
+use super::methods::{
+    ExportResult, FactIdResult, FactParams, LearnResult, MemoryAddParams, MemoryLearnParams, MemoryListParams,
+    MemoryListResult, MemoryMoveParams, MemoryUpdateParams, MovedResult, Scope, given,
+};
 use super::protocol::{RpcError, code};
+use super::source::{connection_of, find_project};
+use crate::config::store::Project;
 
-/// `memory.move` `{ id, every }`: fact `id` about every database, or about
-/// the connection's (`database`) alone.
-async fn move_fact(
-    conn: &mut sqlx::SqliteConnection,
-    params: &Value,
-    id: Option<i64>,
-    database: Option<&str>,
-    project: &str,
-) -> Result<Value, RpcError> {
-    let every = params.get("every").and_then(Value::as_bool).unwrap_or(false);
-    let to = if every { Some("") } else { database };
-    let (Some(id), Some(to)) = (id, to) else {
+/// A project's memory, open, for a call about it.
+struct Opened {
+    project: Project,
+    /// The connection's database, as the memory names it: what's added is
+    /// about it, and what's listed is its and every database's. None: the
+    /// whole project (and what's added is about every database).
+    database: Option<String>,
+    conn: Memory,
+}
+
+impl Opened {
+    /// Says `e` to the client; a file that failed is opened again next time.
+    fn failed(&self, call: &Call<'_>, e: MemoryError) -> RpcError {
+        call.caches.memory_failed(&self.project.id, &e);
+        RpcError::new(code::MEMORY, String::from(e))
+    }
+
+    fn no_fact(&self, id: FactId) -> RpcError {
+        RpcError::new(code::MEMORY, format!("no fact {id} in project '{}'", self.project.name))
+    }
+}
+
+async fn open(call: &mut Call<'_>, scope: &Scope) -> Result<Opened, RpcError> {
+    let project = find_project(call.config_dir, scope.project()).map_err(|e| RpcError::new(code::DATABASE, e))?;
+    call.log("project", &project.name);
+    let database = match scope.connection() {
+        Some(name) => Some(connection_of(&project, name).map_err(|e| RpcError::new(code::DATABASE, e))?.database_key()),
+        None => None,
+    };
+    let conn = call.caches.memory(call.config_dir, &project.id).await.map_err(|e| {
+        call.caches.memory_failed(&project.id, &e);
+        RpcError::new(code::MEMORY, String::from(e))
+    })?;
+    Ok(Opened { project, database, conn })
+}
+
+/// `memory.add`: the user's own word, so confirmed. (A model's suggestion
+/// comes with its `source` and waits to be confirmed.) As typed (`text`),
+/// read here so the app and the command line read it alike; or already
+/// apart.
+pub(super) async fn add(call: &mut Call<'_>, p: MemoryAddParams) -> Result<Fact, RpcError> {
+    let opened = open(call, &p.scope).await?;
+    let parsed = given(p.text.as_deref()).and_then(mem::parse_fact);
+    let (subject, relation, value) = match (&parsed, given(p.subject.as_deref()), given(p.value.as_deref())) {
+        (Some((s, r, v)), _, _) => (s.as_str(), r.as_str(), v.as_str()),
+        (None, Some(s), Some(v)) => (s, given(p.relation.as_deref()).unwrap_or("means"), v),
+        _ => {
+            let needs = "memory.add needs the fact: what it's about, then what's said (`text`)";
+            return Err(RpcError::new(code::INVALID_PARAMS, needs));
+        }
+    };
+    let database = opened.database.as_deref().unwrap_or_default();
+    let mut conn = opened.conn.lock().await;
+    mem::add(&mut conn, subject, relation, value, "user", true, database).await.map_err(|e| opened.failed(call, e))
+}
+
+/// `memory.update`: fact `id` now says `text`.
+pub(super) async fn update(call: &mut Call<'_>, p: MemoryUpdateParams) -> Result<Fact, RpcError> {
+    let opened = open(call, &p.scope).await?;
+    let (Some(id), Some(text)) = (p.id, given(p.text.as_deref())) else {
+        let needs = "memory.update needs the fact's `id` and what it says now (`text`)";
+        return Err(RpcError::new(code::INVALID_PARAMS, needs));
+    };
+    let mut conn = opened.conn.lock().await;
+    match mem::update(&mut conn, id, text).await {
+        Ok(Some(fact)) => Ok(fact),
+        Ok(None) => Err(opened.no_fact(id)),
+        Err(e) => Err(opened.failed(call, e)),
+    }
+}
+
+/// `memory.list`: the facts (those matching `search`), oldest first.
+pub(super) async fn list(call: &mut Call<'_>, p: MemoryListParams) -> Result<MemoryListResult, RpcError> {
+    let opened = open(call, &p.scope).await?;
+    let mut conn = opened.conn.lock().await;
+    let facts = mem::list(&mut conn, given(p.search.as_deref()), opened.database.as_deref())
+        .await
+        .map_err(|e| opened.failed(call, e))?;
+    Ok(MemoryListResult { project: opened.project.name.clone(), facts })
+}
+
+/// `memory.forget`.
+pub(super) async fn forget(call: &mut Call<'_>, p: FactParams) -> Result<FactIdResult, RpcError> {
+    by_id(call, p, "memory.forget", false).await
+}
+
+/// `memory.confirm`: a model's suggestion, now the user's.
+pub(super) async fn confirm(call: &mut Call<'_>, p: FactParams) -> Result<FactIdResult, RpcError> {
+    by_id(call, p, "memory.confirm", true).await
+}
+
+async fn by_id(call: &mut Call<'_>, p: FactParams, method: &str, confirm: bool) -> Result<FactIdResult, RpcError> {
+    let opened = open(call, &p.scope).await?;
+    let Some(id) = p.id else {
+        return Err(RpcError::new(code::INVALID_PARAMS, format!("{method} needs the fact's `id`")));
+    };
+    let mut conn = opened.conn.lock().await;
+    let done = if confirm { mem::confirm(&mut conn, id).await } else { mem::forget(&mut conn, id).await };
+    match done {
+        Ok(true) => Ok(FactIdResult { id }),
+        Ok(false) => Err(opened.no_fact(id)),
+        Err(e) => Err(opened.failed(call, e)),
+    }
+}
+
+/// `memory.move`: fact `id` about every database, or about the
+/// connection's alone.
+pub(super) async fn move_fact(call: &mut Call<'_>, p: MemoryMoveParams) -> Result<MovedResult, RpcError> {
+    let opened = open(call, &p.scope).await?;
+    let to = if p.every { Some("") } else { opened.database.as_deref() };
+    let (Some(id), Some(to)) = (p.id, to) else {
         let needs = "memory.move needs the fact's `id`, and `every` or a `connection` to move it to";
         return Err(RpcError::new(code::INVALID_PARAMS, needs));
     };
-    match podelis_ai::memory::set_database(conn, id, to).await {
-        Ok(true) => Ok(json!({ "id": id, "database": to })),
-        Ok(false) => Err(RpcError::new(code::MEMORY, format!("no fact {id} in project '{project}'"))),
-        Err(e) => Err(RpcError::new(code::MEMORY, e)),
+    let mut conn = opened.conn.lock().await;
+    match mem::set_database(&mut conn, id, to).await {
+        Ok(true) => Ok(MovedResult { id, database: to.to_string() }),
+        Ok(false) => Err(opened.no_fact(id)),
+        Err(e) => Err(opened.failed(call, e)),
     }
 }
 
-/// The database a project's saved connection is to, as the memory names it.
-fn database_of(project: &crate::config::store::Project, connection: &str) -> Result<String, String> {
-    let found = project.connections.iter().find(|c| c.name.eq_ignore_ascii_case(connection));
-    found.map(crate::config::store::ConnectionProfile::database_key).ok_or_else(|| {
-        let known: Vec<&str> = project.connections.iter().map(|c| c.name.as_str()).collect();
-        format!("no connection '{connection}' in project '{}' (there: {})", project.name, known.join(", "))
-    })
+/// `memory.learn`: a folder of migrations read into facts, replacing what
+/// was learned from it before.
+pub(super) async fn learn(call: &mut Call<'_>, p: MemoryLearnParams) -> Result<LearnResult, RpcError> {
+    let opened = open(call, &p.scope).await?;
+    let Some(folder) = given(p.folder.as_deref()) else {
+        return Err(RpcError::new(code::INVALID_PARAMS, "memory.learn needs the `folder`"));
+    };
+    let folder = crate::config::settings::expand_home(folder);
+    let reading = folder.clone();
+    let files = match tokio::task::spawn_blocking(move || podelis_ai::migrations::read_folder(&reading)).await {
+        Ok(Ok(files)) => files,
+        Ok(Err(e)) => return Err(RpcError::new(code::MEMORY, e)),
+        Err(e) => return Err(RpcError::new(code::MEMORY, e.to_string())),
+    };
+    let engine = podelis_ai::migrations::engine_of(opened.project.connections.iter().map(|c| c.engine));
+    let learned = podelis_ai::migrations::learn(&files, engine);
+    let source = format!("file:{}", folder.display());
+    let database = opened.database.as_deref().unwrap_or_default();
+    let mut conn = opened.conn.lock().await;
+    let facts =
+        mem::replace_source(&mut conn, &source, &learned, database).await.map_err(|e| opened.failed(call, e))?;
+    Ok(LearnResult { files: files.len(), facts, folder: folder.display().to_string() })
 }
 
-/// `memory.add` / `memory.list` / `memory.forget` / `memory.confirm` /
-/// `memory.export`, each with `project?`. Returns what the log may keep
-/// (the project, never a fact's text).
-pub async fn memory(
-    config_dir: &Path,
-    caches: &Caches,
-    method: &str,
-    params: &Value,
-) -> (Result<Value, RpcError>, Value) {
-    use podelis_ai::memory as mem;
-    let text = |key: &str| params.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
-    let project = match find_project(config_dir, text("project")) {
-        Ok(p) => p,
-        Err(e) => return (Err(RpcError::new(code::DATABASE, e)), Value::Null),
-    };
-    let about = json!({ "project": project.name });
-    // With a `connection`, about its database: what's added is about it,
-    // what's listed is its and every database's. Without one, the whole
-    // project (and what's added is about every database).
-    let database = match text("connection").map(|name| database_of(&project, name)).transpose() {
-        Ok(database) => database,
-        Err(e) => return (Err(RpcError::new(code::DATABASE, e)), about),
-    };
-    let conn = match caches.memory(config_dir, &project.id).await {
-        Ok(conn) => conn,
-        Err(e) => return (Err(RpcError::new(code::MEMORY, e)), about),
-    };
-    let mut conn = conn.lock().await;
-    let id = params.get("id").and_then(Value::as_i64);
-    let failed = |e: String| RpcError::new(code::MEMORY, e);
-    let outcome = match method {
-        "memory.add" => {
-            // The user's own word: confirmed. (A model's suggestion would
-            // come with `source` and wait to be confirmed.)
-            // As typed (`text`), read here so the app and the command line
-            // read it alike; or already apart.
-            let parsed = text("text").and_then(mem::parse_fact);
-            let (subject, relation, value) = match (&parsed, text("subject"), text("value")) {
-                (Some((s, r, v)), _, _) => (s.as_str(), r.as_str(), v.as_str()),
-                (None, Some(s), Some(v)) => (s, text("relation").unwrap_or("means"), v),
-                _ => {
-                    let needs = "memory.add needs the fact: what it's about, then what's said (`text`)";
-                    return (Err(RpcError::new(code::INVALID_PARAMS, needs)), about);
-                }
-            };
-            mem::add(&mut conn, subject, relation, value, "user", true, database.as_deref().unwrap_or_default())
-                .await
-                .map(|f| f.to_json())
-                .map_err(failed)
-        }
-        "memory.update" => {
-            let (Some(id), Some(text)) = (id, text("text").filter(|t| !t.trim().is_empty())) else {
-                let needs = "memory.update needs the fact's `id` and what it says now (`text`)";
-                return (Err(RpcError::new(code::INVALID_PARAMS, needs)), about);
-            };
-            match mem::update(&mut conn, id, text).await {
-                Ok(Some(f)) => Ok(f.to_json()),
-                Ok(None) => Err(RpcError::new(code::MEMORY, format!("no fact {id} in project '{}'", project.name))),
-                Err(e) => Err(failed(e)),
-            }
-        }
-        "memory.list" => mem::list(&mut conn, text("search"), database.as_deref())
-            .await
-            .map(|facts| json!({ "project": project.name, "facts": facts.iter().map(mem::Fact::to_json).collect::<Vec<_>>() }))
-            .map_err(failed),
-        "memory.forget" | "memory.confirm" => {
-            let Some(id) = id else {
-                return (Err(RpcError::new(code::INVALID_PARAMS, format!("{method} needs the fact's `id`"))), about);
-            };
-            let done = if method == "memory.forget" { mem::forget(&mut conn, id).await } else { mem::confirm(&mut conn, id).await };
-            match done {
-                Ok(true) => Ok(json!({ "id": id })),
-                Ok(false) => Err(RpcError::new(code::MEMORY, format!("no fact {id} in project '{}'", project.name))),
-                Err(e) => Err(failed(e)),
-            }
-        }
-        "memory.move" => move_fact(&mut conn, params, id, database.as_deref(), &project.name).await,
-        "memory.learn" => {
-            let Some(folder) = text("folder") else {
-                return (Err(RpcError::new(code::INVALID_PARAMS, "memory.learn needs the `folder`")), about);
-            };
-            let folder = crate::config::settings::expand_home(folder);
-            let reading = folder.clone();
-            let files = tokio::task::spawn_blocking(move || podelis_ai::migrations::read_folder(&reading)).await;
-            match files {
-                Ok(Ok(files)) => {
-                    let engine = podelis_ai::migrations::engine_of(project.connections.iter().map(|c| c.engine));
-                    let learned = podelis_ai::migrations::learn(&files, engine);
-                    let source = format!("file:{}", folder.display());
-                    mem::replace_source(&mut conn, &source, &learned, database.as_deref().unwrap_or_default())
-                        .await
-                        .map(|n| json!({ "files": files.len(), "facts": n, "folder": folder.display().to_string() }))
-                        .map_err(failed)
-                }
-                Ok(Err(e)) => Err(RpcError::new(code::MEMORY, e)),
-                Err(e) => Err(failed(e.to_string())),
-            }
-        }
-        "memory.export" => mem::list(&mut conn, None, database.as_deref())
-            .await
-            .map(|facts| json!({ "text": mem::export(&project.name, &facts), "facts": facts.len() }))
-            .map_err(failed),
-        _ => Err(RpcError::new(code::METHOD_NOT_FOUND, format!("no method `{method}`"))),
-    };
-    // Only after the database failed (its errors start "memory:"), not a
-    // wrong fact number or folder.
-    if outcome.as_ref().is_err_and(|e| e.code == code::MEMORY && e.message.starts_with("memory:")) {
-        // Open again next time: the file may have been moved or replaced.
-        drop(conn);
-        caches.forget_memory(&project.id).await;
-    }
-    (outcome, about)
+/// `memory.export`: the facts as a text file.
+pub(super) async fn export(call: &mut Call<'_>, scope: Scope) -> Result<ExportResult, RpcError> {
+    let opened = open(call, &scope).await?;
+    let mut conn = opened.conn.lock().await;
+    let facts = mem::list(&mut conn, None, opened.database.as_deref()).await.map_err(|e| opened.failed(call, e))?;
+    Ok(ExportResult { text: mem::export(&opened.project.name, &facts), facts: facts.len() })
 }

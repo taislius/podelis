@@ -10,6 +10,7 @@
 // The core's modules, under the names the code uses.
 use podelis_core::{db, sql};
 
+pub mod ask;
 pub mod context;
 pub mod memory;
 pub mod migrations;

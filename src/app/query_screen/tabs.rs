@@ -4,6 +4,7 @@
 //! The active tab's state is `App::tab`; inactive tabs are "parked" as a
 //! [`TabState`] and swapped in on switching.
 
+use crate::config::store::ProjectId;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -57,6 +58,8 @@ pub struct TabState {
     /// Its query: running, or the last one's state. Each tab has its own,
     /// so tabs on different connections run at the same time.
     pub run: Run,
+    /// Vim's mode and what's typed of a command, in this tab.
+    pub(in crate::app) vim: crate::app::query_screen::editor::vim::VimTab,
 }
 
 /// The statement a plan or a result was made for.
@@ -164,7 +167,7 @@ pub struct TabMeta {
     pub name: String,
     pub saved_id: Option<SavedQueryId>,
     /// The tab's connection (an id into the app's connections).
-    pub conn: Option<u64>,
+    pub conn: Option<ConnId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -246,16 +249,16 @@ struct SavedTab {
 }
 
 impl App {
-    pub(in crate::app) fn tabs_path(&self, project_id: &str) -> Option<PathBuf> {
+    pub(in crate::app) fn tabs_path(&self, project_id: &ProjectId) -> Option<PathBuf> {
         Some(self.data_dir.as_ref()?.join("drafts").join(format!("{project_id}.json")))
     }
 
-    fn library_path(&self, project_id: &str) -> Option<PathBuf> {
+    fn library_path(&self, project_id: &ProjectId) -> Option<PathBuf> {
         Some(self.data_dir.as_ref()?.join("queries").join(format!("{project_id}.json")))
     }
 
     /// Loads a project's tabs (or its pre-tabs draft) and saved queries.
-    pub(in crate::app) fn load_tabs(&mut self, project_id: &str) {
+    pub(in crate::app) fn load_tabs(&mut self, project_id: &ProjectId) {
         let (library, warning) = Library::load_from(self.library_path(project_id));
         self.library = library;
         if let Some(warning) = warning.as_ref().map(crate::app::windows::library::warning_said) {
@@ -335,7 +338,7 @@ impl App {
     /// The tabs file to write, captured now (with a ticket so an older write
     /// that finishes late can't replace a newer one).
     pub(in crate::app) fn draft_job(&self) -> Option<DraftJob> {
-        let id = self.current_project.as_deref()?;
+        let id = self.current_project.as_ref()?;
         let path = self.tabs_path(id)?;
         let tabs = self
             .tabs
@@ -363,19 +366,24 @@ impl App {
     }
 
     pub fn tab_text(&self, i: usize) -> String {
-        if i == self.active_tab {
-            self.tab.editor.text()
-        } else {
-            self.parked.get(i).and_then(Option::as_ref).map(|s| s.editor.text()).unwrap_or_default()
-        }
+        self.tab_editor(i).map(TextEditor::text).unwrap_or_default()
     }
 
-    /// Unsaved changes: differs from its saved query, or (never saved) not empty.
+    /// Tab `i`'s editor, shown or parked.
+    fn tab_editor(&self, i: usize) -> Option<&TextEditor> {
+        if i == self.active_tab { Some(&self.tab.editor) } else { self.parked.get(i)?.as_ref().map(|s| &s.editor) }
+    }
+
+    /// Unsaved changes: differs from its saved query, or (never saved) not
+    /// empty. Asked for every tab on every frame: compared without a copy.
     pub fn tab_dirty(&self, i: usize) -> bool {
-        let text = self.tab_text(i);
-        match self.tabs.get(i).and_then(|t| t.saved_id.as_ref()).and_then(|id| self.library.get(id)) {
-            Some(saved) => saved.sql != text,
-            None => !text.trim().is_empty(),
+        let saved = self.tabs.get(i).and_then(|t| t.saved_id.as_ref()).and_then(|id| self.library.get(id));
+        // No editor (a slot taken for a moment): its text is empty.
+        match (self.tab_editor(i), saved) {
+            (Some(editor), Some(saved)) => !editor.has_text(&saved.sql),
+            (Some(editor), None) => !editor.is_blank(),
+            (None, Some(saved)) => !saved.sql.is_empty(),
+            (None, None) => false,
         }
     }
 
@@ -423,6 +431,12 @@ impl App {
         self.popups.completion = None;
         self.popups.cell_view = None;
         self.cell_edit = None;
+        // A command half typed is the keys just before: not for another tab.
+        // The local leader's `\…` in the status bar goes with it.
+        if !self.tab.vim.pending.is_empty() && self.notes.status == format!("{}…", self.tab.vim.pending) {
+            self.notes.status.clear();
+        }
+        self.tab.vim.pending.clear();
         let mut incoming = self.parked[i].take().unwrap_or_default();
         swap_tab(self, &mut incoming);
         self.parked[self.active_tab] = Some(incoming);
@@ -468,7 +482,7 @@ impl App {
 
     /// Opens a new tab with `sql` on connection `conn` (another tab's), so
     /// SQL meant for that connection runs there.
-    pub(in crate::app) fn open_tab_on(&mut self, conn: u64, sql: &str) {
+    pub(in crate::app) fn open_tab_on(&mut self, conn: ConnId, sql: &str) {
         if self.blocks_tabs() {
             return self.set_status(t!("tabs.wait_open").into(), true);
         }

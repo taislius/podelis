@@ -13,7 +13,7 @@ pub struct ActivityView {
     pub selected: usize,
     pub error: Option<String>,
     /// Asking "cancel / kill session id?" (`true`: kill).
-    pub confirm: Option<(String, bool)>,
+    pub confirm: Option<(crate::db::SessionId, bool)>,
     loading: bool,
     refreshed: Option<Instant>,
 }
@@ -64,7 +64,7 @@ impl App {
         match result {
             Ok(rows) => {
                 // Keep the same session selected across refreshes.
-                let keep = view.rows.get(view.selected).map(|a| a.id.clone());
+                let keep = view.rows.get(view.selected).map(|a| a.id);
                 view.rows = rows;
                 view.selected = keep
                     .and_then(|id| view.rows.iter().position(|a| a.id == id))
@@ -107,19 +107,19 @@ impl App {
                 }
                 let Some(view) = &mut self.popups.activity else { return };
                 if let Some(a) = view.rows.get(view.selected) {
-                    view.confirm = Some((a.id.clone(), c == 'x'));
+                    view.confirm = Some((a.id, c == 'x'));
                 }
             }
             _ => {}
         }
     }
 
-    fn stop_session(&mut self, id: String, kill: bool) {
+    fn stop_session(&mut self, id: crate::db::SessionId, kill: bool) {
         let Some(db) = self.connection.database.clone() else { return };
         let what = if kill { t!("activity.ended") } else { t!("activity.cancelled") };
         let send = self.sender();
         tokio::spawn(async move {
-            let result = db.stop_session(&id, kill).await.map(|()| format!("{what} {id}"));
+            let result = db.stop_session(id, kill).await.map(|()| format!("{what} {id}"));
             send(DbEventKind::SessionStopped(result.map_err(|e| crate::db::error_message(&e))));
         });
     }

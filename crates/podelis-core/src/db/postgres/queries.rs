@@ -293,17 +293,19 @@ pub(in crate::db) async fn activity(db: &Database) -> Result<Vec<Activity>> {
                 .await?;
         Ok(rows
             .into_iter()
-            .map(|(id, user, database, client, state, seconds, wait, query, blocked)| Activity {
-                id,
-                user,
-                database,
-                client,
-                state,
-                seconds,
-                wait,
-                query,
-                blocked_by: blocked.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect(),
-                own: false,
+            .filter_map(|(id, user, database, client, state, seconds, wait, query, blocked)| {
+                Some(Activity {
+                    id: crate::db::SessionId::parse(&id)?,
+                    user,
+                    database,
+                    client,
+                    state,
+                    seconds,
+                    wait,
+                    query,
+                    blocked_by: blocked.split(',').filter_map(crate::db::SessionId::parse).collect(),
+                    own: false,
+                })
             })
             .collect())
     }

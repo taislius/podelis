@@ -86,9 +86,9 @@ pub enum Command {
     /// An open tab, by index.
     SwitchTab(usize),
     /// An open connection (`Ctrl+K j`), by its id: goes to a tab on it.
-    GoToConnection(u64),
+    GoToConnection(ConnId),
     /// Compare with another tab's connection (or the only other one).
-    CompareSchema(Option<u64>),
+    CompareSchema(Option<ConnId>),
     /// Run the last query again every this many seconds.
     Watch(u64),
     /// Save this connection's schema to a file, to compare with later.
@@ -96,7 +96,7 @@ pub enum Command {
     /// Compare the schema now with a saved snapshot (by its place in the
     /// list, newest first).
     CompareSnapshot(usize),
-    CompareRows(Option<u64>),
+    CompareRows(Option<ConnId>),
 }
 
 /// Whether a command applies now.

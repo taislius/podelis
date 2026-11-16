@@ -170,7 +170,7 @@ async fn test_connections(store: &ConnectionStore, project: Option<&str>, out: &
     let mut failed = false;
     let project = match project {
         Some(name) => store.project_by_name(name),
-        None => store.last_project.as_deref().and_then(|id| store.project(id)),
+        None => store.last_project.as_ref().and_then(|id| store.project(id)),
     };
     match project {
         None => {

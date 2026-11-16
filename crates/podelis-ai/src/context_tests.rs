@@ -272,7 +272,7 @@ fn neighbours_of_tables_matched_only_by_a_column_dont_pull_each_other_in() {
 #[test]
 fn facts_about_missing_tables_are_left_out_as_stale() {
     let fact = |subject: &str, relation: &str, value: &str| super::super::memory::Fact {
-        id: 1,
+        id: crate::memory::FactId::from_written(1),
         subject: subject.into(),
         relation: relation.into(),
         value: value.into(),

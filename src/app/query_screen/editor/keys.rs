@@ -138,7 +138,7 @@ impl App {
             complete::complete(&text, self.tab.editor.cursor_offset(), self.engine(), &tables);
         // Snippets by name: saved queries in the `snippets` group.
         let prefix: String = {
-            let line = &self.tab.editor.lines[self.tab.editor.cursor_row];
+            let line = &self.tab.editor.lines()[self.tab.editor.cursor_row];
             line.chars()
                 .take(self.tab.editor.cursor_col)
                 .skip(self.tab.editor.cursor_col.saturating_sub(prefix_len))
@@ -176,7 +176,7 @@ impl App {
 
     /// Whether every candidate is just the word already typed.
     pub(in crate::app) fn completion_is_typed(&self, completion: &Completion) -> bool {
-        let line = &self.tab.editor.lines[self.tab.editor.cursor_row];
+        let line = &self.tab.editor.lines()[self.tab.editor.cursor_row];
         let col = self.tab.editor.cursor_col;
         let typed: String = line.chars().take(col).skip(col.saturating_sub(completion.prefix_len)).collect();
         completion.items.iter().all(|c| c.insert.eq_ignore_ascii_case(&typed))
@@ -209,7 +209,7 @@ impl App {
                 let len = c.prefix_len;
                 self.popups.completion = None;
                 // Already typed in full: Enter is a new line, not a choice.
-                let line = &self.tab.editor.lines[self.tab.editor.cursor_row];
+                let line = &self.tab.editor.lines()[self.tab.editor.cursor_row];
                 let typed: String = line
                     .chars()
                     .take(self.tab.editor.cursor_col)
@@ -248,6 +248,7 @@ impl App {
         if let Some(text) = self.history.older(&self.tab.editor.text()) {
             let text = text.to_string();
             self.tab.editor.set_text(&text);
+            self.editing.recalled = Some(self.tab.editor.version());
             self.focus = Focus::Editor;
             self.tab.error_marker = None;
             self.tab.syntax_hint = None;
@@ -258,6 +259,7 @@ impl App {
         if let Some(text) = self.history.newer() {
             let text = text.to_string();
             self.tab.editor.set_text(&text);
+            self.editing.recalled = Some(self.tab.editor.version());
             self.focus = Focus::Editor;
             self.tab.error_marker = None;
             self.tab.syntax_hint = None;

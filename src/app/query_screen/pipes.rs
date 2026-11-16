@@ -25,7 +25,7 @@ pub struct External {
 pub enum AfterExternal {
     /// The ontology edited in an editor (for project `0`): read back, and
     /// what it changes shown before anything is changed.
-    OntologyEdited(String),
+    OntologyEdited(crate::config::store::ProjectId),
 }
 
 /// Whether `command` wants JSON rather than TSV (by its program name).

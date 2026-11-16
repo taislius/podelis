@@ -5,6 +5,7 @@
 //! [`crate::agents`]).
 //! Everything they run is logged for reviewing in Podėlis.
 
+use crate::config::store::ProjectId;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -105,7 +106,7 @@ struct Turn {
 
 #[derive(Clone)]
 pub struct Server {
-    project_id: String,
+    project_id: ProjectId,
     project_name: String,
     /// The connections shared with agents, as the server started.
     connections: Vec<ConnectionProfile>,
@@ -143,7 +144,7 @@ pub struct Server {
 struct AgentSandbox {
     number: u32,
     db: Database,
-    session: i64,
+    session: crate::db::SessionId,
     calls: usize,
     last: Instant,
 }
@@ -163,7 +164,7 @@ fn failed(s: impl Into<String>) -> Result<CallToolResult, ErrorData> {
 
 #[tool_router]
 impl Server {
-    pub fn new(project_id: String, project_name: String, connections: Vec<ConnectionProfile>, log: PathBuf) -> Self {
+    pub fn new(project_id: ProjectId, project_name: String, connections: Vec<ConnectionProfile>, log: PathBuf) -> Self {
         let connections = connections.into_iter().filter(|c| c.agents != AgentAccess::None).collect();
         Self {
             project_id,
@@ -725,7 +726,7 @@ impl Server {
         let dry_run = dry_run_note(db, profile, sql, held).await?;
         let dir = self.log.with_extension("pending");
         let request = agents::Request {
-            id: format!("{}-{}", chrono::Local::now().format("%Y%m%d-%H%M%S%.3f"), self.session),
+            id: agents::RequestId::new(&self.session),
             agent: entry.name.clone().unwrap_or_else(|| entry.agent.clone()),
             connection: profile.name.clone(),
             production: profile.mode == ConnectionMode::Production,

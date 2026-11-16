@@ -262,7 +262,7 @@ fn projects_keep_separate_connections_and_history() {
     assert_eq!(app.history.older(""), None);
     app.open_project_by_name("a").unwrap();
     assert_eq!(app.history.older(""), Some("select 'a'"));
-    assert_eq!(app.store.last_project.as_deref(), Some(a.as_str()));
+    assert_eq!(app.store.last_project.as_ref(), Some(&a));
     assert!(app.open_project_by_name("nope").is_err());
 }
 
@@ -975,7 +975,7 @@ async fn the_projects_pane_switches_adds_renames_and_deletes_over_the_work() {
     app.manager.project_selected = app.store.projects.iter().position(|p| p.id == second).unwrap();
     app.handle_key(key(KeyCode::Enter));
     assert!(matches!(app.screen, Screen::Connections));
-    assert_eq!(app.current_project.as_deref(), Some(second.as_str()));
+    assert_eq!(app.current_project.as_ref(), Some(&second));
     assert!(app.connection.database.is_none());
 
     // Back to the first: its tab comes back and reconnects.
@@ -983,7 +983,7 @@ async fn the_projects_pane_switches_adds_renames_and_deletes_over_the_work() {
     show_projects(&mut app);
     app.manager.project_selected = app.store.projects.iter().position(|p| p.id == first).unwrap();
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.current_project.as_deref(), Some(first.as_str()));
+    assert_eq!(app.current_project.as_ref(), Some(&first));
     assert!(matches!(app.screen, Screen::Query));
     assert_eq!(app.tab.editor.text(), "select 'kept'");
     while app.connection.database.is_none() {

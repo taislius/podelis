@@ -172,7 +172,7 @@ async fn a_fact_is_changed_and_found_by_its_new_words() {
     // Forgetting it after an edit leaves the index clean too.
     assert!(forget(&mut conn, guess.id).await.unwrap());
     assert!(list(&mut conn, Some("refunded"), None).await.unwrap().is_empty());
-    assert!(update(&mut conn, 999, "x means y").await.unwrap().is_none());
+    assert!(update(&mut conn, FactId::from_written(999), "x means y").await.unwrap().is_none());
 }
 
 #[tokio::test]

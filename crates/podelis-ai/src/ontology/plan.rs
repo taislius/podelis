@@ -1,8 +1,10 @@
 //! What loading an edited file back would change: facts to add, confirm,
 //! forget or move, matched by what they say (see [`super::file`]).
 
-use super::Ontology;
+use std::collections::{HashMap, HashSet};
+
 use super::file::Wanted;
+use super::{Ontology, SubjectKey};
 use crate::memory::Fact;
 
 /// What loading the file would change.
@@ -17,8 +19,13 @@ pub struct Plan {
     /// Facts moved between this database and every database: the fact,
     /// and whether it's about every database now.
     pub moved: Vec<(Fact, bool)>,
-    /// Facts the file doesn't have, kept: said after it was exported.
+    /// Facts the file doesn't have, kept: said after it was exported, or
+    /// all of them when the file doesn't say when that was.
     pub kept: usize,
+    /// The file doesn't say when it was exported (`exported` taken out,
+    /// or a file written by hand): what it lacks isn't forgotten, as it
+    /// can't be told from what was added since.
+    pub undated: bool,
 }
 
 impl Plan {
@@ -27,52 +34,57 @@ impl Plan {
     }
 }
 
-/// Matched by what they say: what they're about (however it's written:
-/// `customer` is `customers`, as `keys` resolved them), the relation, and
+/// What a fact says, as facts are matched: what it's about (however it's
+/// written: `customer` is `customers`), the relation (ignoring case) and
 /// the value.
-fn same(fact: &Fact, fact_key: &str, w: &Wanted, wanted_key: &str) -> bool {
-    fact_key == wanted_key && fact.relation.trim().eq_ignore_ascii_case(&w.relation) && fact.value.trim() == w.value
+type Said = (SubjectKey, String, String);
+
+fn said(ontology: &Ontology, subject: &str, relation: &str, value: &str) -> Said {
+    (ontology.fact_key(subject, relation), relation.trim().to_lowercase(), value.trim().to_string())
 }
 
-/// Whether `fact` was said after `exported` (both RFC 3339): added to the
-/// memory after the file was written, so not in it.
-fn newer(fact: &Fact, exported: Option<&str>) -> bool {
-    let parse = |t: &str| chrono::DateTime::parse_from_rfc3339(t.trim()).ok();
-    match (parse(&fact.at), exported.and_then(parse)) {
-        (Some(at), Some(exported)) => at > exported,
-        _ => false,
-    }
+/// When (RFC 3339).
+fn time(text: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    chrono::DateTime::parse_from_rfc3339(text.trim()).ok()
 }
 
 /// The changes from `current` (the memory's facts now) to what the file
 /// says. Each fact in the memory answers at most one line of the file,
-/// the one about the same scope first, so a fact said both for this
-/// database and for every database stays two. A fact the file doesn't
-/// have is forgotten, unless it was said after the file was `exported`.
+/// the one that says it exactly first (its scope, and whether it's
+/// confirmed), so a fact said both for this database and for every
+/// database stays two. A fact the file doesn't
+/// have is forgotten, unless it was said after the file was `exported`
+/// (or the file doesn't say when that was, or the fact when it was said).
 /// A confirmed fact the file only lists as a suggestion stays confirmed:
 /// a suggestion can be accepted or rejected, not taken back.
 pub fn plan(ontology: &Ontology, current: &[Fact], wanted: &[Wanted], exported: Option<&str>) -> Plan {
     let mut plan = Plan::default();
     let mut used = vec![false; current.len()];
-    // What each is about, resolved once (not for every pair).
-    let current_keys: Vec<String> = current.iter().map(|f| ontology.subject_key(&f.subject)).collect();
-    let mut added_keys: Vec<String> = Vec::new();
+    // The memory's facts by what they say: each line of the file finds
+    // its own at once, not by reading them all.
+    let mut by_said: HashMap<Said, Vec<usize>> = HashMap::new();
+    for (i, f) in current.iter().enumerate() {
+        by_said.entry(said(ontology, &f.subject, &f.relation, &f.value)).or_default().push(i);
+    }
+    let mut added: HashSet<(Said, Option<bool>)> = HashSet::new();
     let same_scope = |f: &Fact, w: &Wanted| w.everywhere.is_none_or(|every| every == f.database.is_empty());
     for w in wanted {
-        let key = ontology.subject_key(&w.subject);
-        let free = |i: &usize| !used[*i] && same(&current[*i], &current_keys[*i], w, &key);
-        let found = (0..current.len())
-            .filter(free)
-            .find(|i| same_scope(&current[*i], w))
-            .or_else(|| (0..current.len()).find(free));
+        let key = said(ontology, &w.subject, &w.relation, &w.value);
+        let candidates = by_said.get(&key).map_or(&[][..], Vec::as_slice);
+        let free = || candidates.iter().copied().filter(|&i| !used[i]);
+        // The one it says exactly first (scope and whether it's confirmed),
+        // then one in its scope, then any: an unchanged file then finds
+        // each fact its own line, even a fact both suggested and confirmed.
+        let same_confirmed = |i: usize| current[i].confirmed == w.confirmed;
+        let found = free()
+            .find(|&i| same_scope(&current[i], w) && same_confirmed(i))
+            .or_else(|| free().find(|&i| same_scope(&current[i], w)))
+            .or_else(|| free().find(|&i| same_confirmed(i)))
+            .or_else(|| free().next());
         let Some(i) = found else {
             // Two the same in the file: the second adds nothing more.
-            let again = plan.add.iter().zip(&added_keys).any(|(a, a_key)| {
-                *a_key == key && a.relation == w.relation && a.value == w.value && a.everywhere == w.everywhere
-            });
-            if !again {
+            if added.insert((key, w.everywhere)) {
                 plan.add.push(Wanted { confirmed: true, ..w.clone() });
-                added_keys.push(key);
             }
             continue;
         };
@@ -85,14 +97,24 @@ pub fn plan(ontology: &Ontology, current: &[Fact], wanted: &[Wanted], exported: 
             plan.confirm.push(f.clone());
         }
     }
+    let exported = exported.and_then(time);
     for (i, f) in current.iter().enumerate() {
         if used[i] {
             continue;
         }
-        if newer(f, exported) {
-            plan.kept += 1;
-        } else {
+        let older = match (exported, time(&f.at)) {
+            (Some(exported), Some(at)) => at <= exported,
+            (None, _) => {
+                plan.undated = true;
+                false
+            }
+            // A fact that doesn't say when: not known to be in the file.
+            (Some(_), None) => false,
+        };
+        if older {
             plan.forget.push(f.clone());
+        } else {
+            plan.kept += 1;
         }
     }
     plan

@@ -2,6 +2,7 @@
 //! `agents/<project>.jsonl`, private to the user; its sessions and what's
 //! new since the user last looked.
 
+use crate::config::store::ProjectId;
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
@@ -183,12 +184,12 @@ pub fn alerts_since<'a>(entries: impl IntoIterator<Item = &'a Entry>, seen: Opti
     alerts
 }
 
-pub fn log_path(config_dir: &Path, project_id: &str) -> PathBuf {
+pub fn log_path(config_dir: &Path, project_id: &ProjectId) -> PathBuf {
     config_dir.join("agents").join(format!("{project_id}.jsonl"))
 }
 
 /// When the user last looked at what agents did in a project.
-pub fn seen_path(config_dir: &Path, project_id: &str) -> PathBuf {
+pub fn seen_path(config_dir: &Path, project_id: &ProjectId) -> PathBuf {
     config_dir.join("agents").join(format!("{project_id}.seen"))
 }
 
@@ -298,7 +299,7 @@ mod tests {
     #[test]
     fn the_log_takes_writers_at_once() {
         let dir = tempfile::tempdir().unwrap();
-        let path = log_path(dir.path(), "p1");
+        let path = log_path(dir.path(), &"p1".into());
         let writers: Vec<_> = (0..8)
             .map(|w| {
                 let path = path.clone();
@@ -319,7 +320,7 @@ mod tests {
     #[test]
     fn the_log_keeps_entries_but_not_passwords() {
         let dir = tempfile::tempdir().unwrap();
-        let path = log_path(dir.path(), "p1");
+        let path = log_path(dir.path(), &"p1".into());
         let entry = |sql: &str| Entry {
             agent: "claude-code".into(),
             connection: "dev".into(),

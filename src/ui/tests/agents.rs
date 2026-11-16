@@ -111,7 +111,7 @@ fn on_a_connection_the_memory_window_is_its_databases_ontology() {
     let fact = |id: i64, subject: &str, relation: &str, value: &str, database: &str, section, confirmed: bool| {
         let source = if confirmed { "user" } else { "model:claude" };
         let fact = podelis_ai::memory::Fact {
-            id,
+            id: podelis_ai::memory::FactId::from_written(id),
             subject: subject.into(),
             relation: relation.into(),
             value: value.into(),
@@ -161,7 +161,7 @@ fn the_memory_window_marks_what_waits_for_the_user() {
     let fact = |id: i64, subject: &str, value: &str, confirmed: bool, source: &str| {
         crate::app::windows::memory::MemoryLine::Fact {
             fact: podelis_ai::memory::Fact {
-                id,
+                id: podelis_ai::memory::FactId::from_written(id),
                 subject: subject.into(),
                 relation: "means".into(),
                 value: value.into(),
@@ -198,7 +198,7 @@ fn the_memory_window_marks_what_waits_for_the_user() {
     // `e`: the selected fact whole, to change.
     app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
     let view = app.popups.memory_view.as_ref().unwrap();
-    assert_eq!(view.editing, Some(1));
+    assert_eq!(view.editing, Some(podelis_ai::memory::FactId::from_written(1)));
     assert_eq!(view.adding.as_ref().map(crate::app::LineInput::text), Some("orders.status means 3 = cancelled"));
     let screen = render(&mut app, 110, 24);
     assert!(
@@ -221,7 +221,7 @@ fn the_edits_plan_scrolls_to_its_end_and_no_further() {
     let adds: Vec<String> = (0..40).map(|i| format!("orders.c{i} means {i}")).collect();
     app.popups.memory_view = Some(crate::app::windows::memory::MemoryView {
         database: Some("shop".into()),
-        plan: Some((serde_json::json!({ "add": adds }), file)),
+        plan: Some((crate::gateway::methods::ImportPlan { add: adds, ..Default::default() }, file)),
         ..Default::default()
     });
     let _ = render(&mut app, 100, 20);

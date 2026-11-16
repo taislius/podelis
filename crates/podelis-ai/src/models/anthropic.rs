@@ -190,7 +190,12 @@ impl Answer {
                 let error_type = data.pointer("/error/type").and_then(Value::as_str).unwrap_or("error");
                 let message = data.pointer("/error/message").and_then(Value::as_str).unwrap_or("the stream failed");
                 let retry = matches!(error_type, "overloaded_error" | "api_error" | "rate_limit_error");
-                return Err(ModelError { message: format!("{error_type}: {message}"), retry, retry_after: None });
+                return Err(ModelError {
+                    message: format!("{error_type}: {message}"),
+                    retry,
+                    retry_after: None,
+                    key_refused: error_type == "authentication_error",
+                });
             }
             // ping, content_block_start/stop, thinking and other blocks.
             _ => {}

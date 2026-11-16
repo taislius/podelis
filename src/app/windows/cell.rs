@@ -13,7 +13,7 @@ pub struct CellView {
     pub record: bool,
     /// SQL that comes with the text (a schema comparison's), and the
     /// connection it's for: `y` copies it, `e` opens it in a tab there.
-    pub sql: Option<(String, u64)>,
+    pub sql: Option<(String, ConnId)>,
     /// How far it scrolls, as last drawn (the text wraps to the popup).
     pub max_scroll: u16,
     /// A definition opened from the navigator (`d`): ←/→ show the previous

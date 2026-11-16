@@ -278,7 +278,7 @@ fn a_long_script_draws_about_as_fast_as_a_short_one() {
         let (mut app, _dir) = query_app();
         app.tab.editor.set_text(text);
         app.focus = Focus::Editor;
-        app.tab.editor.set_cursor((app.tab.editor.lines.len().saturating_sub(1 + row_from_end), 0));
+        app.tab.editor.set_cursor((app.tab.editor.lines().len().saturating_sub(1 + row_from_end), 0));
         let _ = render(&mut app, 120, 40);
         let started = std::time::Instant::now();
         for _ in 0..5 {

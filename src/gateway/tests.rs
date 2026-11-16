@@ -7,7 +7,7 @@ use tokio::net::UnixStream;
 
 use super::client::{CallError, Client, connect_or_start};
 use super::protocol::code;
-use super::server::{Ended, Options, serve};
+use super::server::{Ended, Options, StopReason, serve};
 
 /// A gateway for `dir` in this process, stopping after `idle`.
 pub(crate) fn start(dir: &Path, idle: Option<Duration>) -> tokio::task::JoinHandle<std::io::Result<Ended>> {
@@ -40,7 +40,7 @@ async fn hello_then_status_and_shutdown() {
     let dir = tempfile::tempdir().unwrap();
     let server = start(dir.path(), None);
     let mut client = connect(dir.path()).await;
-    assert_eq!(client.hello["protocol"], json!(super::PROTOCOL));
+    assert_eq!(client.hello.protocol, super::PROTOCOL);
     let status = client.call("status", json!({})).await.unwrap();
     assert_eq!((status["clients"].clone(), status["pid"].clone()), (json!(1), json!(std::process::id())));
     assert!(status["idle_stop_secs"].is_null());
@@ -51,7 +51,7 @@ async fn hello_then_status_and_shutdown() {
     let mode = std::fs::metadata(super::dir(dir.path())).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o700);
     client.call("shutdown", json!({})).await.unwrap();
-    assert_eq!(server.await.unwrap().unwrap(), Ended::Stopped("asked"));
+    assert_eq!(server.await.unwrap().unwrap(), Ended::Stopped(StopReason::Asked));
     assert!(!super::socket_path(dir.path()).exists());
 }
 
@@ -101,7 +101,7 @@ async fn idle_counts_from_the_last_client() {
     tokio::time::sleep(Duration::from_millis(700)).await;
     assert!(!server.is_finished(), "stopped counting from the start");
     let ended = tokio::time::timeout(Duration::from_secs(3), server).await.unwrap().unwrap().unwrap();
-    assert_eq!(ended, Ended::Stopped("idle"));
+    assert_eq!(ended, Ended::Stopped(StopReason::Idle));
 }
 
 #[tokio::test]
@@ -114,7 +114,7 @@ async fn it_stops_when_idle_and_tells_clients_when_it_stops() {
     assert!(!server.is_finished());
     drop(client);
     let ended = tokio::time::timeout(Duration::from_secs(5), server).await.unwrap().unwrap().unwrap();
-    assert_eq!(ended, Ended::Stopped("idle"));
+    assert_eq!(ended, Ended::Stopped(StopReason::Idle));
 
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     let path = dir.path().to_path_buf();
@@ -126,7 +126,7 @@ async fn it_stops_when_idle_and_tells_clients_when_it_stops() {
     });
     let mut client = connect(dir.path()).await;
     tx.send(()).unwrap();
-    assert_eq!(server.await.unwrap().unwrap(), Ended::Stopped("interrupted"));
+    assert_eq!(server.await.unwrap().unwrap(), Ended::Stopped(StopReason::Interrupted));
     let said = client.next_notification().await.unwrap();
     assert_eq!(said, ("stopping".to_string(), json!({ "reason": "interrupted" })));
     let err = client.call("status", json!({})).await.unwrap_err();
@@ -400,7 +400,8 @@ async fn context_never_moves_an_unreadable_connections_file() {
     let _gateway = start(dir.path(), None);
     let mut client = connect(dir.path()).await;
     let err = client.call("context", json!({ "connection": "x", "question": "y" })).await.unwrap_err();
-    assert!(matches!(&err, CallError::Rpc(e) if e.message.contains("connections.toml is invalid")), "{err}");
+    // Its one project can't be read: kept as it is, and said.
+    assert!(matches!(&err, CallError::Rpc(e) if e.message.contains("couldn't be read")), "{err}");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "[[projects]]\nid = 1\n", "left as it was");
 }
 
@@ -841,6 +842,30 @@ async fn a_key_command_runs_once_for_many_questions() {
     assert!(requests.iter().all(|r| r.to_lowercase().contains("x-api-key: sk-from-command")));
 }
 
+/// A key the provider refuses isn't used again: the next question runs
+/// the `key_command` afresh (the user may have fixed the key meanwhile).
+#[tokio::test]
+async fn a_refused_key_is_asked_for_again() {
+    let refused = r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#;
+    let (url, server) = fake_model(vec![(401, refused.to_string()), (200, claude_answer("OK"))]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let runs = dir.path().join("runs");
+    let command = format!("sh -c 'echo run >> {}; echo sk-from-command'", runs.display());
+    let config = format!(
+        "[[models]]\nname = \"cmdkey\"\napi = \"anthropic\"\nurl = \"{url}\"\nmodel = \"claude-opus-5-5\"\nkey_command = \"{}\"\n",
+        command.replace('\\', "\\\\").replace('"', "\\\"")
+    );
+    std::fs::write(dir.path().join("config.toml"), config).unwrap();
+    let _gateway = start(dir.path(), None);
+    let mut client = connect(dir.path()).await;
+    let ask = json!({ "messages": [{ "role": "user", "content": "hi" }] });
+    let err = client.call("complete", ask.clone()).await.unwrap_err();
+    assert!(matches!(&err, CallError::Rpc(e) if e.code == code::MODEL && e.message.contains("refused")), "{err}");
+    client.call("complete", ask).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&runs).unwrap().lines().count(), 2, "asked again after the refusal");
+    server.await.unwrap();
+}
+
 /// A key slow to come (a keychain dialog, a password manager) is said to
 /// the client while it waits; a quick one isn't.
 #[tokio::test]
@@ -911,7 +936,7 @@ async fn an_older_versions_gateway_is_replaced() {
     .unwrap();
     assert!(started, "this version's gateway was started");
     old.await.unwrap();
-    assert_eq!(client.hello["protocol"], json!(super::PROTOCOL));
+    assert_eq!(client.hello.protocol, super::PROTOCOL);
     client.call("status", json!({})).await.unwrap();
 }
 
@@ -1005,11 +1030,11 @@ async fn projects_differing_only_in_case_are_told_apart_by_id() {
     let second = store.add_project("shop");
     // (If the store refuses names differing in case, there's nothing to tell apart.)
     if let Ok(second) = second {
-        let found = super::ai::find_project(dir.path(), Some(&format!("id:{second}"))).unwrap();
+        let found = super::source::find_project(dir.path(), Some(&format!("id:{second}"))).unwrap();
         assert_eq!(found.id, second);
     }
     let first = store.project_by_name("Shop").unwrap().id.clone();
-    assert_eq!(super::ai::find_project(dir.path(), Some(&format!("id:{first}"))).unwrap().id, first);
+    assert_eq!(super::source::find_project(dir.path(), Some(&format!("id:{first}"))).unwrap().id, first);
 }
 
 #[cfg(feature = "sqlite")]

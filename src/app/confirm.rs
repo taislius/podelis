@@ -1,6 +1,7 @@
 //! The y/n questions (`Confirm`): what each one does once answered.
 
 use super::*;
+use crate::config::store::ProjectId;
 
 /// Something to do once the user answers "y".
 pub enum ConfirmAction {
@@ -33,14 +34,14 @@ pub enum ConfirmAction {
     Disconnect,
     /// Close an open connection (`Ctrl+K j`, `Ctrl+D`): every tab on it
     /// is disconnected.
-    CloseConnection(u64),
+    CloseConnection(ConnId),
     /// Every open connection (Ctrl+X in the connections list).
     CloseAllConnections,
     Quit,
     CloseTab,
     /// Leave the project, for another one (or the project list); `true`
     /// lands in its connections.
-    LeaveProject(Option<String>, bool),
+    LeaveProject(Option<ProjectId>, bool),
     /// An agent's write waiting for the user: y approves it, anything else
     /// says no.
     AgentWrite(crate::agents::Request),
@@ -48,7 +49,7 @@ pub enum ConfirmAction {
     /// sends it this once, `a` always for the project.
     ShareSchema {
         question: query_screen::ask::Question,
-        project_id: Option<String>,
+        project_id: Option<ProjectId>,
     },
 }
 
@@ -123,7 +124,7 @@ impl App {
             };
             match answer {
                 Some(Some(always)) if settled => {
-                    return self.answer_share(question.clone(), project_id.as_deref(), always);
+                    return self.answer_share(question.clone(), project_id.as_ref(), always);
                 }
                 Some(None) if settled => return self.set_status(t!("app.not_sent").into(), false),
                 _ => {

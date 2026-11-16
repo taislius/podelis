@@ -1,3 +1,4 @@
+use crate::config::store::ProjectId;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,13 +28,13 @@ pub struct History {
     draft: String,
 }
 
-pub fn project_history_path(dir: &Path, project_id: &str) -> PathBuf {
+pub fn project_history_path(dir: &Path, project_id: &ProjectId) -> PathBuf {
     dir.join(format!("{project_id}.jsonl"))
 }
 
 /// Moves the pre-projects global history file to the project that the old
 /// connections were migrated into.
-pub fn migrate_legacy(legacy: &Path, dir: &Path, project_id: &str) {
+pub fn migrate_legacy(legacy: &Path, dir: &Path, project_id: &ProjectId) {
     let target = project_history_path(dir, project_id);
     if legacy.exists() && !target.exists() && fs::create_dir_all(dir).is_ok() {
         let _ = fs::rename(legacy, target);
@@ -219,9 +220,9 @@ mod tests {
         let legacy = dir.path().join("history.jsonl");
         fs::write(&legacy, "\"select 1\"\n").unwrap();
         let hist_dir = dir.path().join("history");
-        migrate_legacy(&legacy, &hist_dir, "p1");
+        migrate_legacy(&legacy, &hist_dir, &"p1".into());
         assert!(!legacy.exists());
-        let h = History::load_from(Some(project_history_path(&hist_dir, "p1")));
+        let h = History::load_from(Some(project_history_path(&hist_dir, &"p1".into())));
         assert_eq!(h.entries, ["select 1"]);
     }
 

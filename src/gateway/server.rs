@@ -19,6 +19,8 @@ use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::watch;
 
+use super::call::{Call, Notifier};
+use super::methods::{self as m, Method, Note, Stopping};
 use super::protocol::{self, RpcError, code};
 
 /// The call log is cut to its newer half past this.
@@ -46,9 +48,35 @@ impl Options {
 pub enum Ended {
     /// Another gateway has this config folder.
     AlreadyRunning,
-    /// It stopped, saying why: `idle`, `asked` (a client's `shutdown`) or
-    /// `interrupted`.
-    Stopped(&'static str),
+    /// It stopped, saying why.
+    Stopped(StopReason),
+}
+
+/// Why the gateway stops, as its `stopping` notification and log say it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    /// No client for the idle time.
+    Idle,
+    /// A client's `shutdown`.
+    Asked,
+    /// Ctrl+C or a signal.
+    Interrupted,
+}
+
+impl StopReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StopReason::Idle => "idle",
+            StopReason::Asked => "asked",
+            StopReason::Interrupted => "interrupted",
+        }
+    }
+}
+
+impl std::fmt::Display for StopReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// What the connections share.
@@ -62,8 +90,8 @@ struct Shared {
     /// Where `config.toml` is (models are read from it on each call).
     config_dir: PathBuf,
     /// What's kept between calls: schemas, memories, keys.
-    caches: super::ai::Caches,
-    stop: watch::Sender<Option<&'static str>>,
+    caches: super::caches::Caches,
+    stop: watch::Sender<Option<StopReason>>,
 }
 
 impl Shared {
@@ -103,7 +131,7 @@ pub async fn serve(
         idle: options.idle,
         log: super::log_path(config_dir),
         config_dir: config_dir.to_path_buf(),
-        caches: super::ai::Caches::default(),
+        caches: super::caches::Caches::default(),
         stop,
     });
     tracing::info!(socket = %socket.display(), idle = ?options.idle, "gateway started");
@@ -117,15 +145,16 @@ pub async fn serve(
                 }
                 Err(e) => tracing::warn!(error = %e, "gateway: accept failed"),
             },
-            _ = stopped.changed() => break (*stopped.borrow()).unwrap_or("asked"),
-            () = &mut interrupt => break "interrupted",
+            _ = stopped.changed() => break (*stopped.borrow()).unwrap_or(StopReason::Asked),
+            () = &mut interrupt => break StopReason::Interrupted,
             _ = tick.tick() => {
                 let idle = shared.idle.is_some_and(|idle| {
                     shared.clients.load(Ordering::SeqCst) == 0 && shared.idle_for() >= idle
                 });
                 if idle {
-                    break "idle";
+                    break StopReason::Idle;
                 }
+                shared.caches.sweep();
             }
         }
     };
@@ -133,7 +162,7 @@ pub async fn serve(
     let _ = shared.stop.send(Some(reason));
     let_clients_read(&shared).await;
     let _ = std::fs::remove_file(&socket);
-    tracing::info!(reason, "gateway stopped");
+    tracing::info!(reason = reason.as_str(), "gateway stopped");
     drop(lock);
     Ok(Ended::Stopped(reason))
 }
@@ -180,8 +209,9 @@ async fn connection(stream: UnixStream, shared: Arc<Shared>) {
         let line = tokio::select! {
             line = read_line(&mut reader, &mut buf) => line,
             _ = stopping.changed() => {
-                let reason = (*stopping.borrow()).unwrap_or("asked");
-                let _ = write.write_all(protocol::notification("stopping", &json!({ "reason": reason })).as_bytes()).await;
+                let reason = (*stopping.borrow()).unwrap_or(StopReason::Asked);
+                let note = Note::Stopping(Stopping { reason: reason.as_str().to_string() });
+                Notifier::new(&mut write).send(&note).await;
                 break;
             }
         };
@@ -247,7 +277,7 @@ async fn connection(stream: UnixStream, shared: Arc<Shared>) {
 async fn watched(
     work: impl std::future::Future<Output = Reply>,
     reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>,
-    stopping: &mut watch::Receiver<Option<&'static str>>,
+    stopping: &mut watch::Receiver<Option<StopReason>>,
 ) -> Option<Reply> {
     #[derive(PartialEq)]
     enum Client {
@@ -335,65 +365,15 @@ async fn handle(line: &[u8], client: &mut Option<String>, shared: &Shared, write
         Err(e) => return Reply::send(protocol::error(&Value::Null, &e)),
     };
     let started = Instant::now();
-    let first = client.is_none();
-    let mut about = Value::Null;
+    let id = incoming.id.clone().unwrap_or(Value::Null);
+    let mut call = Call::new(&shared.config_dir, &shared.caches, id, Notifier::new(write));
     let mut agent = None;
-    let outcome = if first && incoming.method != "hello" {
+    let outcome = if client.is_none() && incoming.method != m::Hello::NAME {
         Err(RpcError::new(code::HELLO_FIRST, "say hello first: the first request must be `hello`"))
     } else {
-        match incoming.method.as_str() {
-            "models" => super::ai::models(&shared.config_dir).await,
-            "context" => {
-                let (outcome, log) = super::ai::context(&shared.config_dir, &shared.caches, &incoming.params).await;
-                about = log;
-                outcome
-            }
-            "ontology" => {
-                let (outcome, log) =
-                    super::ontology::ontology(&shared.config_dir, &shared.caches, &incoming.params).await;
-                about = log;
-                outcome
-            }
-            "ontology.import" => {
-                let (outcome, log) =
-                    super::ontology::ontology_import(&shared.config_dir, &shared.caches, &incoming.params).await;
-                about = log;
-                outcome
-            }
-            "ask" => {
-                let id = incoming.id.clone().unwrap_or(Value::Null);
-                let (outcome, log) =
-                    super::ai::ask(&shared.config_dir, &shared.caches, &id, &incoming.params, write).await;
-                about = log;
-                outcome
-            }
-            "mcp.open" => {
-                let text = |key: &str| incoming.params.get(key).and_then(Value::as_str).map(str::to_string);
-                match super::ai::find_project(&shared.config_dir, text("project").as_deref()) {
-                    Ok(project) => {
-                        about = json!({ "project": project.name });
-                        agent = Some(Agent { project, name: text("name"), dir: text("dir") });
-                        Ok(json!({ "mcp": true }))
-                    }
-                    Err(e) => Err(RpcError::new(code::DATABASE, e)),
-                }
-            }
-            method if method.starts_with("memory.") => {
-                let (outcome, log) =
-                    super::memory::memory(&shared.config_dir, &shared.caches, method, &incoming.params).await;
-                about = log;
-                outcome
-            }
-            "complete" => {
-                let id = incoming.id.clone().unwrap_or(Value::Null);
-                let (outcome, log) =
-                    super::ai::complete(&shared.config_dir, &shared.caches, &id, &incoming.params, write).await;
-                about = log;
-                outcome
-            }
-            method => call(method, &incoming.params, client, shared),
-        }
+        dispatch(&incoming, &mut call, client, shared, &mut agent).await
     };
+    let about = call.into_log();
     log_call(shared, client.as_deref(), &incoming.method, &outcome, started.elapsed(), about);
     // A client that didn't get through hello is hung up on.
     let close = client.is_none();
@@ -407,34 +387,84 @@ async fn handle(line: &[u8], client: &mut Option<String>, shared: &Shared, write
     Reply { text: Some(text), close, agent }
 }
 
-fn call(method: &str, params: &Value, client: &mut Option<String>, shared: &Shared) -> Result<Value, RpcError> {
-    match method {
-        "hello" => hello(params, client),
-        "status" => Ok(json!({
-            "version": env!("CARGO_PKG_VERSION"),
-            "protocol": super::PROTOCOL,
-            "pid": std::process::id(),
-            "uptime_secs": shared.started.elapsed().as_secs(),
-            "clients": shared.clients.load(Ordering::SeqCst),
-            "idle_stop_secs": shared.idle.map(|d| d.as_secs()),
-        })),
-        "shutdown" => {
-            let _ = shared.stop.send(Some("asked"));
-            Ok(json!({ "stopping": true }))
+/// `M`'s params, as the request has them (none: its defaults).
+fn params<M: Method>(params: &Value) -> Result<M::Params, RpcError> {
+    let params = if params.is_null() { json!({}) } else { params.clone() };
+    serde_json::from_value(params).map_err(|e| RpcError::new(code::INVALID_PARAMS, format!("{}: {e}", M::NAME)))
+}
+
+/// `M`'s answer, as it goes.
+fn answer<M: Method>(result: &M::Result) -> Result<Value, RpcError> {
+    serde_json::to_value(result).map_err(|e| RpcError::new(code::INTERNAL, format!("{}: {e}", M::NAME)))
+}
+
+/// Runs the request's method.
+async fn dispatch(
+    incoming: &protocol::Incoming,
+    call: &mut Call<'_>,
+    client: &mut Option<String>,
+    shared: &Shared,
+    agent: &mut Option<Agent>,
+) -> Result<Value, RpcError> {
+    // A method's params read, its handler run on them, its answer written.
+    macro_rules! run {
+        ($method:ty, $handler:path) => {{
+            let p = params::<$method>(&incoming.params)?;
+            answer::<$method>(&$handler(call, p).await?)
+        }};
+    }
+    match incoming.method.as_str() {
+        m::Hello::NAME => answer::<m::Hello>(&hello(params::<m::Hello>(&incoming.params)?, client)?),
+        m::Status::NAME => answer::<m::Status>(&status(shared)),
+        m::Shutdown::NAME => {
+            let _ = shared.stop.send(Some(StopReason::Asked));
+            answer::<m::Shutdown>(&m::ShutdownResult { stopping: true })
         }
-        _ => Err(RpcError::new(code::METHOD_NOT_FOUND, format!("no method `{method}`"))),
+        m::Models::NAME => run!(m::Models, super::ai::models),
+        m::Complete::NAME => run!(m::Complete, super::ai::complete),
+        m::Context::NAME => run!(m::Context, super::ask::context),
+        m::Ask::NAME => run!(m::Ask, super::ask::ask),
+        m::Ontology::NAME => run!(m::Ontology, super::ontology::ontology),
+        m::OntologyImport::NAME => run!(m::OntologyImport, super::ontology::import),
+        m::MemoryAdd::NAME => run!(m::MemoryAdd, super::memory::add),
+        m::MemoryUpdate::NAME => run!(m::MemoryUpdate, super::memory::update),
+        m::MemoryList::NAME => run!(m::MemoryList, super::memory::list),
+        m::MemoryForget::NAME => run!(m::MemoryForget, super::memory::forget),
+        m::MemoryConfirm::NAME => run!(m::MemoryConfirm, super::memory::confirm),
+        m::MemoryMove::NAME => run!(m::MemoryMove, super::memory::move_fact),
+        m::MemoryLearn::NAME => run!(m::MemoryLearn, super::memory::learn),
+        m::MemoryExport::NAME => run!(m::MemoryExport, super::memory::export),
+        m::McpOpen::NAME => {
+            let p = params::<m::McpOpen>(&incoming.params)?;
+            let project = super::source::find_project(call.config_dir, m::given(p.project.as_deref()))
+                .map_err(|e| RpcError::new(code::DATABASE, e))?;
+            call.log("project", &project.name);
+            *agent = Some(Agent { project, name: p.name, dir: p.dir });
+            answer::<m::McpOpen>(&m::McpOpenResult { mcp: true })
+        }
+        method => Err(RpcError::new(code::METHOD_NOT_FOUND, format!("no method `{method}`"))),
     }
 }
 
-fn hello(params: &Value, client: &mut Option<String>) -> Result<Value, RpcError> {
+fn status(shared: &Shared) -> m::StatusResult {
+    m::StatusResult {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        protocol: super::PROTOCOL,
+        pid: std::process::id(),
+        uptime_secs: shared.started.elapsed().as_secs(),
+        clients: shared.clients.load(Ordering::SeqCst),
+        idle_stop_secs: shared.idle.map(|d| d.as_secs()),
+    }
+}
+
+fn hello(p: m::HelloParams, client: &mut Option<String>) -> Result<m::HelloResult, RpcError> {
     if client.is_some() {
         return Err(RpcError::new(code::INVALID_REQUEST, "already said hello"));
     }
-    let name = params.get("client").and_then(Value::as_str).unwrap_or_default();
-    if name.is_empty() || name.len() > 64 {
+    if p.client.is_empty() || p.client.len() > 64 {
         return Err(RpcError::new(code::INVALID_PARAMS, "hello needs `client`: who's asking, 1 to 64 bytes"));
     }
-    let Some(version) = params.get("protocol").and_then(Value::as_u64) else {
+    let Some(version) = p.protocol else {
         return Err(RpcError::new(code::INVALID_PARAMS, "hello needs `protocol`: the version the client speaks"));
     };
     if version != u64::from(super::PROTOCOL) {
@@ -449,8 +479,12 @@ fn hello(params: &Value, client: &mut Option<String>) -> Result<Value, RpcError>
             json!({ "protocol": super::PROTOCOL, "pid": std::process::id() }),
         ));
     }
-    *client = Some(name.to_string());
-    Ok(json!({ "gateway": "podelis", "version": env!("CARGO_PKG_VERSION"), "protocol": super::PROTOCOL }))
+    *client = Some(p.client);
+    Ok(m::HelloResult {
+        gateway: "podelis".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        protocol: super::PROTOCOL,
+    })
 }
 
 /// A line in the call log: when, who, what, the outcome and how long it
@@ -462,7 +496,7 @@ fn log_call(
     method: &str,
     outcome: &Result<Value, RpcError>,
     took: Duration,
-    about: Value,
+    about: serde_json::Map<String, Value>,
 ) {
     let mut entry = json!({
         "at": chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false),
@@ -471,7 +505,7 @@ fn log_call(
         "error": outcome.as_ref().err().map(|e| e.code),
         "ms": took.as_millis(),
     });
-    if let (Some(entry), Value::Object(about)) = (entry.as_object_mut(), about) {
+    if let Some(entry) = entry.as_object_mut() {
         entry.extend(about);
     }
     if let Err(e) = append(&shared.log, &entry) {

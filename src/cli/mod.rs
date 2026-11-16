@@ -628,7 +628,7 @@ fn saved_form(store: &ConnectionStore, project: Option<&str>, name: &str) -> Res
         Some(p) => store.project_by_name(p).ok_or_else(|| Failure::usage(format!("no project named '{p}'")))?,
         None => store
             .last_project
-            .as_deref()
+            .as_ref()
             .and_then(|id| store.project(id))
             .ok_or_else(|| Failure::usage("no project to look the connection up in: pass -p <project>"))?,
     };

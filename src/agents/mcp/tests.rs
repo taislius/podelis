@@ -476,7 +476,7 @@ async fn approved_writes_wait_for_the_user() {
     )
     .waiting(Duration::from_secs(2));
     // The user: yes to x = 5, no to x = 6, and x = 7 left unanswered.
-    let pending = crate::agents::pending_dir(dir.path(), "p1");
+    let pending = crate::agents::pending_dir(dir.path(), &"p1".into());
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let user = tokio::spawn({
         let (pending, seen) = (pending.clone(), Arc::clone(&seen));

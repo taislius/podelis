@@ -3,6 +3,7 @@
 //! which of them has the keys.
 
 use crate::app::*;
+use crate::config::store::ProjectId;
 
 /// Which manager pane a click landed in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +46,7 @@ pub struct Manager {
     /// edits another connection's (connecting takes a new tab instead).
     pub(in crate::app) form_stash: Option<ConnectForm>,
     /// The project last left for the project list; Esc there goes back to it.
-    pub(in crate::app) left_project: Option<String>,
+    pub(in crate::app) left_project: Option<ProjectId>,
     /// The active tab was opened, or disconnected, to pick a connection:
     /// leaving the panes drops it if it's still empty and unconnected.
     pub(in crate::app) drop_blank_tab: bool,
@@ -124,7 +125,7 @@ impl App {
     /// Opens project `id`: from another project as a switch (its tabs are
     /// saved, and a transaction asks first), and where it was left; with
     /// `panes`, on its connections.
-    fn enter_project(&mut self, id: String, panes: bool) {
+    fn enter_project(&mut self, id: ProjectId, panes: bool) {
         if self.current_project.is_some() {
             return self.switch_project(Some(id), panes);
         }
@@ -192,7 +193,7 @@ impl App {
                 self.manager.project_message = Some((tn!("projects.deleted", count, name = project.name), false));
                 // Its memory for models too (the gateway may keep it open: on
                 // Unix the file goes, and nothing asks for this project again).
-                let memory = self.data_dir.as_ref().map(|d| podelis_ai::memory::path(d, &id));
+                let memory = self.data_dir.as_ref().map(|d| podelis_ai::memory::path(d, id.as_str()));
                 let files = [self.history_path(&id), self.draft_path(&id), self.tabs_path(&id), memory];
                 for path in files.into_iter().flatten() {
                     let _ = std::fs::remove_file(path);
@@ -206,7 +207,7 @@ impl App {
                         }
                     });
                 }
-                if self.manager.left_project.as_deref() == Some(id.as_str()) {
+                if self.manager.left_project.as_ref() == Some(&id) {
                     self.manager.left_project = None;
                 }
                 let len = self.store.projects.len();

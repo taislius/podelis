@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::config::keys::Action;
+use crate::config::store::ProjectId;
 
 impl App {
     pub fn handle_db_event(&mut self, event: DbEvent) {
@@ -707,7 +708,7 @@ pub(super) enum Background {
     /// where, and how many of them it had (" (10 rows loaded)").
     ExportShownDone(PathBuf, Result<(), String>, String),
     /// A connection reopened at startup.
-    Restored { project_id: String, form: Box<ConnectForm>, result: Result<Database, String> },
+    Restored { project_id: ProjectId, form: Box<ConnectForm>, result: Result<Database, String> },
     /// The running database containers, or why they couldn't be listed.
     ContainersFound(ContainerRequestId, Result<Vec<crate::system::containers::Container>, String>),
     /// Characters of an answer being written, for ask `n`.
@@ -718,7 +719,7 @@ pub(super) enum Background {
     /// The locks a sandbox's session holds (or why that can't be seen).
     SandboxLocks(String),
     /// Ask `n`'s answer: the SQL and what the model said, or why not.
-    AskDone(query_screen::ask::AskId, Box<Result<serde_json::Value, query_screen::ask::AskFailure>>),
+    AskDone(query_screen::ask::AskId, Box<Result<crate::gateway::methods::AskResult, query_screen::ask::AskFailure>>),
     /// A gateway call's answer (the memory window's).
     GatewayDone(windows::memory::GatewayPurpose, Box<Result<serde_json::Value, query_screen::ask::AskFailure>>),
 }

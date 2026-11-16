@@ -467,7 +467,7 @@ pub struct ExportRun {
     paused_said: bool,
     /// The connection whose session it reads every row on (none: the rows
     /// already loaded): no query runs there meanwhile.
-    pub conn: Option<u64>,
+    pub conn: Option<ConnId>,
 }
 
 impl ExportRun {
@@ -475,7 +475,7 @@ impl ExportRun {
         stop: tokio::sync::oneshot::Sender<()>,
         path: PathBuf,
         resume: Option<std::sync::Arc<tokio::sync::Notify>>,
-        conn: Option<u64>,
+        conn: Option<ConnId>,
     ) -> Self {
         ExportRun { stop, path, resume, paused: None, paused_said: false, conn }
     }

@@ -6,7 +6,8 @@
 //!   people use that name none of them (`revenue`). Each has a stable id
 //!   (`table:public.orders`, `column:public.orders.status`, `term:revenue`)
 //!   and labels: its own name (preferred, as SKOS's `prefLabel`) and the
-//!   other names people use (`also called` facts: `altLabel`).
+//!   other names people use (`also called` facts: `altLabel`), which name
+//!   it in facts too (`client.email` is `customers.email`).
 //! - **Relations** between them: a table has its columns, a foreign key
 //!   references another table (by which columns), a partition is part of
 //!   its partitioned table.
@@ -18,11 +19,12 @@
 //! context builder asks it what a fact's subject names, and the
 //! interchange exports ([`Ontology::to_turtle`]) read it. Never rows.
 
-use std::collections::BTreeMap;
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use crate::context::Schema;
-use crate::memory::{ALSO_CALLED, DEFINED_AS, EXCLUDED_BY_DEFAULT, Fact};
+use crate::memory::{Fact, Relation as FactRelation};
 
 /// What a concept is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -36,7 +38,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    fn prefix(self) -> &'static str {
+    pub fn prefix(self) -> &'static str {
         match self {
             Kind::Table => "table",
             Kind::View => "view",
@@ -47,18 +49,57 @@ impl Kind {
 }
 
 /// A concept's stable id: its kind and its qualified name, lowercased
-/// (`table:public.orders`). Names are what facts and questions use;
-/// a rename is a new concept, and facts about the old one go stale.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ConceptId(String);
+/// (`table:public.orders` as text). Names are what facts and questions
+/// use; a rename is a new concept, and facts about the old one go stale.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConceptId {
+    kind: Kind,
+    name: String,
+}
 
 impl ConceptId {
     fn new(kind: Kind, name: &str) -> Self {
-        ConceptId(format!("{}:{}", kind.prefix(), name.to_lowercase()))
+        ConceptId { kind, name: name.to_lowercase() }
     }
 
-    pub fn as_str(&self) -> &str {
-        &self.0
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    /// Its qualified name, lowercased: `public.orders.status`.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// As text (`table:public.orders`), for tests.
+    #[cfg(test)]
+    pub(crate) fn parse(text: &str) -> Self {
+        let (prefix, name) = text.split_once(':').expect("kind:name");
+        let kind = [Kind::Table, Kind::View, Kind::Column, Kind::Term]
+            .into_iter()
+            .find(|k| k.prefix() == prefix)
+            .expect("a kind");
+        ConceptId::new(kind, name)
+    }
+}
+
+/// In the order of their text, as they were kept before they had parts:
+/// columns, tables, terms, views, each by name.
+impl Ord for ConceptId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.kind.prefix(), &self.name).cmp(&(other.kind.prefix(), &other.name))
+    }
+}
+
+impl PartialOrd for ConceptId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl std::fmt::Display for ConceptId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.kind.prefix(), self.name)
     }
 }
 
@@ -69,7 +110,7 @@ pub enum Origin {
     Catalog,
     /// A fact in the project's memory: its number, who said it (`user`,
     /// `model`, a migrations folder), and whether it's confirmed.
-    Fact { id: i64, source: String, confirmed: bool },
+    Fact { id: crate::memory::FactId, source: String, confirmed: bool },
 }
 
 impl Origin {
@@ -104,6 +145,8 @@ pub struct Concept {
     /// As SQL names it: `public.orders`, `public.orders.status`, `revenue`.
     pub name: String,
     pub labels: Vec<Label>,
+    /// A column's table (or view).
+    pub table: Option<ConceptId>,
 }
 
 /// How two concepts relate.
@@ -130,7 +173,8 @@ pub struct Relation {
 /// What a fact says of its concept.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Says {
-    /// What it means or is (`means`, `is`, `are`, `equals`: the word kept).
+    /// What it means or is (`means`, `is`, `are`, `equals`, or a word
+    /// Podėlis doesn't know: the word kept).
     Means { verb: String, what: String },
     /// A business term's formula or filter.
     DefinedAs(String),
@@ -143,12 +187,14 @@ pub enum Says {
 impl Says {
     fn of(fact: &Fact) -> Option<Self> {
         let value = fact.value.clone();
-        Some(match fact.relation.as_str() {
-            ALSO_CALLED => return None,
-            DEFINED_AS => Says::DefinedAs(value),
-            EXCLUDED_BY_DEFAULT => Says::ExcludedByDefault(value),
-            "history" => Says::History(value),
-            verb => Says::Means { verb: verb.to_string(), what: value },
+        Some(match FactRelation::of(&fact.relation) {
+            Some(FactRelation::AlsoCalled) => return None,
+            Some(FactRelation::DefinedAs) => Says::DefinedAs(value),
+            Some(FactRelation::ExcludedByDefault) => Says::ExcludedByDefault(value),
+            Some(FactRelation::History) => Says::History(value),
+            Some(FactRelation::Means | FactRelation::Is | FactRelation::Are | FactRelation::Equals) | None => {
+                Says::Means { verb: fact.relation.clone(), what: value }
+            }
         })
     }
 }
@@ -165,7 +211,8 @@ pub struct Assertion {
 /// What a fact's subject names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolved {
-    /// A table, view or column of this database.
+    /// A table, view or column of this database (or a term another name
+    /// is for).
     Concept(ConceptId),
     /// A single word that names none of them: a term.
     Term(String),
@@ -174,22 +221,42 @@ pub enum Resolved {
     Missing,
 }
 
+/// What a subject is, however it was written: `customer`, `Customers`
+/// and `public.customers` are one table. For matching facts.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SubjectKey {
+    /// A concept here, or a term.
+    Concept(ConceptId),
+    /// Nothing here: as it was written, lowercased.
+    Missing(String),
+}
+
 /// One database's ontology.
 #[derive(Debug, Default, Clone)]
 pub struct Ontology {
     pub concepts: BTreeMap<ConceptId, Concept>,
     pub relations: Vec<Relation>,
-    pub assertions: Vec<Assertion>,
+    /// What the facts say, indexed by concept in `said`: changed only by
+    /// `with_facts`, so the two stay in step.
+    assertions: Vec<Assertion>,
     /// Facts whose subject names a table or column that isn't here.
     pub stale: Vec<Fact>,
     /// `schema.table`, `table` and its singular, lowercased, to the tables
     /// they name: a bare name may name one in each of several schemas.
     tables: BTreeMap<String, Vec<ConceptId>>,
+    /// Other names (`also called`), lowercased, to what they name.
+    aliases: BTreeMap<String, Vec<ConceptId>>,
+    /// The `also called` facts taken in (what it names, the name, both
+    /// lowercased, and whether it's confirmed): taking them in again adds
+    /// nothing.
+    named_by: BTreeSet<(String, String, bool)>,
     /// Which of `relations` go from, and to, each concept: so a concept's
     /// relations are found without reading them all (a schema has a
     /// `HasColumn` per column).
     from: BTreeMap<ConceptId, Vec<usize>>,
     to: BTreeMap<ConceptId, Vec<usize>>,
+    /// Which of `assertions` are about each concept.
+    said: BTreeMap<ConceptId, Vec<usize>>,
 }
 
 impl Ontology {
@@ -201,7 +268,7 @@ impl Ontology {
         for (t, columns) in &schema.tables {
             let name = qualified(&t.schema, &t.name);
             let kind = if t.is_view { Kind::View } else { Kind::Table };
-            let table = o.add(kind, &name, &t.name, t.system);
+            let table = o.add(kind, &name, &t.name, t.system, None);
             o.index(&name, &table);
             // A bare name finds the table too (in each schema that has one),
             // and so does its singular (`customer` for `customers`), as facts
@@ -213,7 +280,7 @@ impl Ontology {
                 singulars.push((one, table.clone()));
             }
             for c in columns {
-                let column = o.add(Kind::Column, &format!("{name}.{}", c.name), &c.name, t.system);
+                let column = o.add(Kind::Column, &format!("{name}.{}", c.name), &c.name, t.system, Some(table.clone()));
                 o.relate(&table, &column, RelationKind::HasColumn);
             }
         }
@@ -244,51 +311,149 @@ impl Ontology {
         o
     }
 
-    /// The facts added: `also called` as another label of what it names,
-    /// the rest as assertions about it. A fact naming a table or column
-    /// that isn't here is kept aside as stale; one about a word that names
-    /// neither makes that word a term.
-    pub fn with_facts(mut self, facts: &[Fact]) -> Self {
-        for fact in facts {
-            let about = match self.resolve(&fact.subject) {
-                Resolved::Concept(id) => id,
-                Resolved::Term(word) => {
-                    let id = ConceptId::new(Kind::Term, &word);
-                    if !self.concepts.contains_key(&id) {
-                        self.add(Kind::Term, &word, &word, false);
-                    }
-                    id
-                }
-                Resolved::Missing => {
-                    self.stale.push(fact.clone());
-                    continue;
-                }
+    /// The facts added: `also called` as another name of what it names
+    /// (first, so the others may use it), the rest as assertions about
+    /// what they name. A fact naming a table or column that isn't here is
+    /// kept aside as stale; one about a word that names neither makes
+    /// that word a term.
+    pub fn with_facts(self, facts: &[Fact]) -> Self {
+        let mut o = self.with_names(facts);
+        for fact in facts.iter().filter(|f| FactRelation::of(&f.relation) != Some(FactRelation::AlsoCalled)) {
+            let Some(about) = o.concept_for(fact) else {
+                o.stale.push(fact.clone());
+                continue;
             };
-            match Says::of(fact) {
-                None => {
-                    if let Some(concept) = self.concepts.get_mut(&about) {
-                        concept.labels.push(Label {
-                            text: fact.value.trim().to_string(),
-                            kind: LabelKind::Alternative,
-                            origin: Origin::of(fact),
-                        });
-                    }
+            if let Some(says) = Says::of(fact) {
+                o.said.entry(about.clone()).or_default().push(o.assertions.len());
+                o.assertions.push(Assertion { about, says, origin: Origin::of(fact), at: fact.at.clone() });
+            }
+        }
+        o
+    }
+
+    /// With the other names (`also called`) among `facts`, so a subject
+    /// written by one resolves to what it names: this one as it is when
+    /// there are none (most questions), or it has them all already (the
+    /// gateway keeps one with them).
+    pub fn with_aliases(&self, facts: &[Fact]) -> Cow<'_, Ontology> {
+        // Every confirmed one taken in already (one whose subject is gone
+        // too, so it isn't taken in again for each question).
+        let mut names = Self::alias_names(facts).into_iter();
+        if names.any(|(subject, name)| !self.named_by.contains(&(subject, name, true))) {
+            Cow::Owned(self.clone().with_names(facts))
+        } else {
+            Cow::Borrowed(self)
+        }
+    }
+
+    /// The confirmed other names among `facts`: (what it's a name of,
+    /// the name), lowercased and sorted. What [`with_aliases`](Self::with_aliases)
+    /// takes in, for keeping one built with them.
+    pub fn alias_names(facts: &[Fact]) -> Vec<(String, String)> {
+        let mut names: Vec<(String, String)> = facts
+            .iter()
+            .filter(|f| f.confirmed && FactRelation::of(&f.relation) == Some(FactRelation::AlsoCalled))
+            .map(|f| (f.subject.trim().to_lowercase(), f.value.trim().to_lowercase()))
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// The `also called` facts as labels, and the confirmed ones as
+    /// aliases: a model's guess doesn't decide what other facts are about
+    /// until it's the team's. A name that's a table's own isn't taken from
+    /// it. One taken in already (by [`with_aliases`](Self::with_aliases))
+    /// adds nothing again.
+    fn with_names(mut self, facts: &[Fact]) -> Self {
+        for fact in facts.iter().filter(|f| FactRelation::of(&f.relation) == Some(FactRelation::AlsoCalled)) {
+            let taken = (fact.subject.trim().to_lowercase(), fact.value.trim().to_lowercase(), fact.confirmed);
+            if !self.named_by.insert(taken) {
+                continue;
+            }
+            let Some(about) = self.concept_for(fact) else {
+                if !self.stale.iter().any(|s| s.id == fact.id) {
+                    self.stale.push(fact.clone());
                 }
-                Some(says) => {
-                    self.assertions.push(Assertion { about, says, origin: Origin::of(fact), at: fact.at.clone() });
-                }
+                continue;
+            };
+            let name = fact.value.trim();
+            if let Some(concept) = self.concepts.get_mut(&about) {
+                concept.labels.push(Label {
+                    text: name.to_string(),
+                    kind: LabelKind::Alternative,
+                    origin: Origin::of(fact),
+                });
+            }
+            if !fact.confirmed {
+                continue;
+            }
+            let named = self.aliases.entry(name.to_lowercase()).or_default();
+            if !named.contains(&about) {
+                named.push(about);
             }
         }
         self
     }
 
+    /// The concept `fact` is about (a term made for a word that names
+    /// nothing else), or `None` when it's stale.
+    fn concept_for(&mut self, fact: &Fact) -> Option<ConceptId> {
+        match self.resolve_fact(fact) {
+            Resolved::Concept(id) => Some(id),
+            Resolved::Term(word) => {
+                let id = ConceptId::new(Kind::Term, &word);
+                if !self.concepts.contains_key(&id) {
+                    self.add(Kind::Term, &word, &word, false, None);
+                }
+                Some(id)
+            }
+            Resolved::Missing => None,
+        }
+    }
+
+    /// What `fact` is about: as [`resolve`](Self::resolve) reads its
+    /// subject, but a single word that names nothing here, with a relation
+    /// only a table has (`excluded by default`, `history`), is a table
+    /// that's gone: missing, not a term.
+    pub fn resolve_fact(&self, fact: &Fact) -> Resolved {
+        self.resolve_said(&fact.subject, &fact.relation)
+    }
+
+    /// What a fact about `subject` with `relation` is about (see
+    /// [`resolve_fact`](Self::resolve_fact)).
+    pub fn resolve_said(&self, subject: &str, relation: &str) -> Resolved {
+        let of_tables = FactRelation::of(relation).is_some_and(FactRelation::is_of_tables);
+        match self.resolve(subject) {
+            // A word, or a term by another name: no table.
+            Resolved::Term(_) if of_tables => Resolved::Missing,
+            Resolved::Concept(id) if of_tables && id.kind == Kind::Term => Resolved::Missing,
+            resolved => resolved,
+        }
+    }
+
     /// What `subject` names: `table`, `table.column`, `schema.table` or
-    /// `schema.table.column`, ignoring case. A table whose columns the
-    /// catalog didn't give has every column (nothing to check against).
+    /// `schema.table.column`, ignoring case, a table by its own name or by
+    /// another (`also called`). A table whose columns the catalog didn't
+    /// give has every column (nothing to check against).
     pub fn resolve(&self, subject: &str) -> Resolved {
         let subject = subject.trim();
         let parts: Vec<&str> = subject.split('.').collect();
-        let named = |name: &str| self.tables.get(&name.to_lowercase()).map_or(&[][..], Vec::as_slice);
+        // The tables a name names: by their own, else by another name.
+        let named = |name: &str| -> Vec<ConceptId> {
+            let name = name.to_lowercase();
+            match self.tables.get(&name) {
+                Some(tables) => tables.clone(),
+                None => self
+                    .aliases
+                    .get(&name)
+                    .into_iter()
+                    .flatten()
+                    .filter(|id| matches!(id.kind, Kind::Table | Kind::View))
+                    .cloned()
+                    .collect(),
+            }
+        };
         // The column of the first of `tables` that has it (a bare name may
         // name a table in several schemas).
         let column_of = |tables: &[ConceptId], column: &str| {
@@ -300,19 +465,26 @@ impl Ontology {
         };
         let found = match parts.as_slice() {
             [one] => {
-                return named(one)
-                    .first()
-                    .cloned()
-                    .map_or_else(|| Resolved::Term((*one).to_string()), Resolved::Concept);
+                let found = self.tables.get(&one.to_lowercase()).and_then(|t| t.first());
+                // Another name of anything: a table, a column, a term.
+                let found = found.or_else(|| self.aliases.get(&one.to_lowercase()).and_then(|a| a.first()));
+                return found.cloned().map_or_else(|| Resolved::Term((*one).to_string()), Resolved::Concept);
             }
-            [first, second] => match named(first) {
-                [] => named(subject).first().cloned(),
-                tables => column_of(tables, second),
+            // A table's own names first: `client.invoices` is that table
+            // even when `client` is another name of `customers`.
+            [first, second] => match (self.tables.get(&first.to_lowercase()), self.tables.get(&subject.to_lowercase()))
+            {
+                (Some(tables), _) => column_of(tables, second),
+                (None, Some(tables)) => tables.first().cloned(),
+                (None, None) => match named(first).as_slice() {
+                    [] => named(subject).first().cloned(),
+                    tables => column_of(tables, second),
+                },
             },
             // A schema the catalog doesn't name (`main.orders` where SQLite's
             // tables have none): the table by its own name.
-            [schema, table, column] => match named(&format!("{schema}.{table}")) {
-                [] => column_of(named(table), column),
+            [schema, table, column] => match named(&format!("{schema}.{table}")).as_slice() {
+                [] => column_of(&named(table), column),
                 tables => column_of(tables, column),
             },
             _ => None,
@@ -324,23 +496,45 @@ impl Ontology {
     /// a term, or what this database doesn't have.
     pub fn table_of(&self, subject: &str) -> Option<ConceptId> {
         let Resolved::Concept(id) = self.resolve(subject) else { return None };
-        let name = id.0.split_once(':').map_or("", |(_, name)| name);
-        match name.rsplit_once('.') {
-            Some((table, _)) if id.0.starts_with("column:") => [Kind::Table, Kind::View]
-                .into_iter()
-                .map(|kind| ConceptId::new(kind, table))
-                .find(|t| self.concepts.contains_key(t)),
-            _ => Some(id).filter(|id| !id.0.starts_with("term:")),
+        match id.kind {
+            Kind::Column => self.table_of_column(&id),
+            Kind::Term => None,
+            Kind::Table | Kind::View => Some(id),
         }
+    }
+
+    /// A column's table: as the catalog gave it, or for a column of a
+    /// table the catalog gave none for, by its name.
+    fn table_of_column(&self, id: &ConceptId) -> Option<ConceptId> {
+        if let Some(concept) = self.concepts.get(id) {
+            return concept.table.clone();
+        }
+        let (table, _) = id.name.rsplit_once('.')?;
+        [Kind::Table, Kind::View]
+            .into_iter()
+            .map(|kind| ConceptId::new(kind, table))
+            .find(|t| self.concepts.contains_key(t))
     }
 
     /// What a subject is, however it was written: `customer`, `Customers`
     /// and `public.customers` are one table. For matching facts.
-    pub fn subject_key(&self, subject: &str) -> String {
-        match self.resolve(subject) {
-            Resolved::Concept(id) => id.0,
-            Resolved::Term(word) => ConceptId::new(Kind::Term, &word).0,
-            Resolved::Missing => format!("missing:{}", subject.trim().to_lowercase()),
+    pub fn subject_key(&self, subject: &str) -> SubjectKey {
+        Self::key(self.resolve(subject), subject)
+    }
+
+    /// What a fact about `subject` with `relation` is about, as
+    /// [`subject_key`](Self::subject_key) says it, missing when it's stale
+    /// ([`resolve_fact`](Self::resolve_fact)). For matching facts, so a
+    /// gone table's are matched alike in the memory and in a file.
+    pub fn fact_key(&self, subject: &str, relation: &str) -> SubjectKey {
+        Self::key(self.resolve_said(subject, relation), subject)
+    }
+
+    fn key(resolved: Resolved, subject: &str) -> SubjectKey {
+        match resolved {
+            Resolved::Concept(id) => SubjectKey::Concept(id),
+            Resolved::Term(word) => SubjectKey::Concept(ConceptId::new(Kind::Term, &word)),
+            Resolved::Missing => SubjectKey::Missing(subject.trim().to_lowercase()),
         }
     }
 
@@ -350,7 +544,7 @@ impl Ontology {
     pub fn short_name(&self, id: &ConceptId) -> Option<(String, Option<String>)> {
         let concept = self.concepts.get(id)?;
         let table = match concept.kind {
-            Kind::Column => self.relations_to(id).find(|r| r.kind == RelationKind::HasColumn)?.from.clone(),
+            Kind::Column => concept.table.clone()?,
             _ => id.clone(),
         };
         let own = &self.concepts.get(&table)?.labels.first()?.text;
@@ -367,9 +561,21 @@ impl Ontology {
         self.concepts.values().filter(|c| c.labels.iter().any(|l| l.text.eq_ignore_ascii_case(label.trim()))).collect()
     }
 
+    /// What the facts say, in the order they came.
+    pub fn assertions(&self) -> &[Assertion] {
+        &self.assertions
+    }
+
+    /// A term's name as the file writes it: one spelling (as the fact that
+    /// made it wrote it), whichever of its names or spellings a fact uses.
+    pub fn term_name(&self, word: &str) -> String {
+        let id = ConceptId::new(Kind::Term, word);
+        self.concepts.get(&id).and_then(|c| c.labels.first()).map_or_else(|| word.to_string(), |l| l.text.clone())
+    }
+
     /// The assertions about a concept.
-    pub fn about(&self, id: &ConceptId) -> Vec<&Assertion> {
-        self.assertions.iter().filter(|a| a.about == *id).collect()
+    pub fn about(&self, id: &ConceptId) -> impl Iterator<Item = &Assertion> {
+        self.said.get(id).into_iter().flatten().map(|&i| &self.assertions[i])
     }
 
     /// As text: each concept with what's known of it, for `podelis
@@ -391,7 +597,7 @@ impl Ontology {
         for c in self.concepts.values().filter(|c| !c.system) {
             let other: Vec<&str> =
                 c.labels.iter().filter(|l| l.kind == LabelKind::Alternative).map(|l| l.text.as_str()).collect();
-            let said = self.about(&c.id);
+            let said: Vec<&Assertion> = self.about(&c.id).collect();
             let links: Vec<String> = self
                 .relations_from(&c.id)
                 .filter_map(|r| match &r.kind {
@@ -440,10 +646,7 @@ impl Ontology {
     /// Only confirmed facts: a suggestion isn't the team's yet.
     pub fn to_turtle(&self, base: &str) -> String {
         // `table/public.order%20items`: what an IRI can't hold, encoded.
-        let iri = |id: &ConceptId| {
-            let (kind, name) = id.as_str().split_once(':').unwrap_or(("", id.as_str()));
-            format!("<{base}{kind}/{}>", iri_part(name))
-        };
+        let iri = |id: &ConceptId| format!("<{base}{}/{}>", id.kind.prefix(), iri_part(&id.name));
         let mut out = String::from(
             "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .\n\
              @prefix podelis: <https://github.com/taislius/podelis/ns#> .\n",
@@ -461,8 +664,8 @@ impl Ontology {
                 lines.push(format!("{property} {}", literal(&l.text)));
             }
             lines.push(format!("podelis:sqlName {}", literal(&c.name)));
-            for r in self.relations_to(&c.id).filter(|r| r.kind == RelationKind::HasColumn) {
-                lines.push(format!("skos:broader {}", iri(&r.from)));
+            if let Some(table) = &c.table {
+                lines.push(format!("skos:broader {}", iri(table)));
             }
             for r in self.relations_from(&c.id) {
                 match r.kind {
@@ -487,10 +690,11 @@ impl Ontology {
         out
     }
 
-    fn add(&mut self, kind: Kind, name: &str, label: &str, system: bool) -> ConceptId {
+    fn add(&mut self, kind: Kind, name: &str, label: &str, system: bool, table: Option<ConceptId>) -> ConceptId {
         let id = ConceptId::new(kind, name);
         let labels = vec![Label { text: label.to_string(), kind: LabelKind::Preferred, origin: Origin::Catalog }];
-        self.concepts.insert(id.clone(), Concept { id: id.clone(), kind, system, name: name.to_string(), labels });
+        let concept = Concept { id: id.clone(), kind, system, name: name.to_string(), labels, table };
+        self.concepts.insert(id.clone(), concept);
         id
     }
 

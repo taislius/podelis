@@ -76,7 +76,7 @@ impl Context {
             return self;
         }
         let (facts, stale): (Vec<&super::memory::Fact>, Vec<&super::memory::Fact>) =
-            facts.iter().partition(|f| ontology.resolve(&f.subject) != crate::ontology::Resolved::Missing);
+            facts.iter().partition(|f| ontology.resolve_fact(f) != crate::ontology::Resolved::Missing);
         self.stale = stale.iter().map(|f| f.line()).collect();
         if facts.is_empty() || self.tables.is_empty() {
             return self;
@@ -647,8 +647,11 @@ pub fn for_question(
 ) -> Context {
     let built = build(schema, &format!("{question}{}", memory.words()));
     let tables: Vec<String> = built.tables.iter().map(|t| t.name.clone()).collect();
-    let facts = memory.about(catalog, &tables);
-    built.with_facts(&facts, catalog)
+    // The team's other names count: a fact about `client.email` is about
+    // `customers` when customers is also called client.
+    let ontology = catalog.with_aliases(memory.all());
+    let facts = memory.about(&ontology, &tables);
+    built.with_facts(&facts, &ontology)
 }
 
 #[cfg(test)]

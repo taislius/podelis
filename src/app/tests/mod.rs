@@ -46,7 +46,7 @@ pub(super) fn test_app() -> (App, tempfile::TempDir) {
     (app, dir)
 }
 
-pub(super) fn project_id(app: &App) -> String {
+pub(super) fn project_id(app: &App) -> crate::config::store::ProjectId {
     app.current_project.clone().unwrap()
 }
 

@@ -50,7 +50,7 @@ fn shop() -> Schema {
 
 fn fact(id: i64, subject: &str, relation: &str, value: &str, confirmed: bool) -> Fact {
     Fact {
-        id,
+        id: crate::memory::FactId::from_written(id),
         subject: subject.into(),
         relation: relation.into(),
         value: value.into(),
@@ -62,7 +62,7 @@ fn fact(id: i64, subject: &str, relation: &str, value: &str, confirmed: bool) ->
 }
 
 fn id(text: &str) -> ConceptId {
-    ConceptId(text.into())
+    ConceptId::parse(text)
 }
 
 #[test]
@@ -127,15 +127,91 @@ fn facts_become_labels_assertions_terms_or_stale() {
     // A word naming no table is a term, with what's said of it.
     let revenue = id("term:revenue");
     assert_eq!(o.concepts[&revenue].kind, Kind::Term);
-    assert_eq!(o.about(&revenue)[0].says, Says::DefinedAs("sum(orders.total)".into()));
-    assert_eq!(o.about(&id("table:public.orders"))[0].says, Says::ExcludedByDefault("status = 3".into()));
+    assert_eq!(o.about(&revenue).next().unwrap().says, Says::DefinedAs("sum(orders.total)".into()));
+    assert_eq!(o.about(&id("table:public.orders")).next().unwrap().says, Says::ExcludedByDefault("status = 3".into()));
     assert_eq!(
-        o.about(&id("column:public.orders.status"))[0].says,
+        o.about(&id("column:public.orders.status")).next().unwrap().says,
         Says::Means { verb: "means".into(), what: "3 = cancelled".into() }
     );
     // A column that isn't there: stale, not asserted.
-    assert_eq!(o.stale.iter().map(|f| f.id).collect::<Vec<_>>(), [5]);
-    assert_eq!(o.assertions.len(), 4);
+    assert_eq!(o.stale.iter().map(|f| f.id.get()).collect::<Vec<_>>(), [5]);
+    assert_eq!(o.assertions().len(), 4);
+}
+
+#[test]
+fn another_name_names_the_table_in_facts_too() {
+    let facts = [
+        fact(1, "customers", "also called", "client", true),
+        fact(2, "client.city", "means", "where they live", true),
+        fact(3, "client", "means", "someone who has ordered", true),
+        fact(4, "orders.total", "also called", "amount", true),
+        fact(5, "amount", "is", "with VAT", true),
+    ];
+    let o = Ontology::from_catalog(&shop()).with_facts(&facts);
+    // Not stale, and not a term of its own: about customers.
+    assert!(o.stale.is_empty(), "{:?}", o.stale);
+    assert!(!o.concepts.contains_key(&id("term:client")));
+    let city = id("column:public.customers.city");
+    assert_eq!(o.about(&city).count(), 1);
+    assert_eq!(o.about(&id("table:public.customers")).count(), 1);
+    assert_eq!(o.about(&id("column:public.orders.total")).count(), 1, "a column's other name too");
+    assert_eq!(o.table_of("client.city"), Some(id("table:public.customers")));
+    // A table's own name stays its own: another name can't take it.
+    let o = Ontology::from_catalog(&shop()).with_facts(&[fact(1, "customers", "also called", "orders", true)]);
+    assert_eq!(o.resolve("orders"), Resolved::Concept(id("table:public.orders")));
+    // The catalog alone, as a question sees it: the names are taken in only
+    // when there are some.
+    let catalog = Ontology::from_catalog(&shop());
+    assert!(matches!(catalog.with_aliases(&facts[1..3]), std::borrow::Cow::Borrowed(_)));
+    assert_eq!(catalog.with_aliases(&facts).table_of("client"), Some(id("table:public.customers")));
+}
+
+#[test]
+fn another_name_doesnt_take_a_schemas_tables() {
+    // Schema `client` has `invoices`; `client` is also another name of customers.
+    let mut schema = shop();
+    let (mut invoices, columns) = table("invoices", &["id", "total"]);
+    invoices.schema = "client".into();
+    schema.tables.push((invoices, columns));
+    let o = Ontology::from_catalog(&schema).with_facts(&[fact(1, "customers", "also called", "client", true)]);
+    assert_eq!(o.resolve("client.invoices"), Resolved::Concept(id("table:client.invoices")));
+    assert_eq!(o.resolve("client.invoices.total"), Resolved::Concept(id("column:client.invoices.total")));
+    assert_eq!(o.resolve("client.city"), Resolved::Concept(id("column:public.customers.city")));
+}
+
+#[test]
+fn names_taken_in_twice_add_nothing() {
+    let facts = [
+        fact(1, "customers", "also called", "client", true),
+        // About a table that's gone.
+        fact(2, "public.oldtable", "also called", "legacy", true),
+        fact(3, "client", "means", "someone who has ordered", true),
+    ];
+    let aliased = Ontology::from_catalog(&shop()).with_aliases(&facts).into_owned();
+    // Kept with them: asked again, it's that one, not a copy.
+    assert!(matches!(aliased.with_aliases(&facts), std::borrow::Cow::Borrowed(_)));
+    let o = aliased.with_facts(&facts);
+    let labels = &o.concepts[&id("table:public.customers")].labels;
+    assert_eq!(labels.iter().filter(|l| l.kind == LabelKind::Alternative).count(), 1, "{labels:?}");
+    assert_eq!(o.stale.len(), 1, "{:?}", o.stale);
+}
+
+#[test]
+fn what_only_a_table_has_said_of_a_word_that_names_none_is_stale() {
+    // `invoices` was dropped: its default filter and history are about a
+    // table that's gone, not a business term called "invoices".
+    let facts = [
+        fact(1, "invoices", "excluded by default", "void", true),
+        fact(2, "invoices", "history", "dropped in 007_cleanup.sql", true),
+        fact(3, "revenue", "means", "what customers paid", true),
+    ];
+    let o = Ontology::from_catalog(&shop()).with_facts(&facts);
+    assert_eq!(o.stale.iter().map(|f| f.id.get()).collect::<Vec<_>>(), [1, 2]);
+    assert!(!o.concepts.contains_key(&id("term:invoices")));
+    assert!(o.concepts.contains_key(&id("term:revenue")), "a word that means something is a term");
+    // A table that's here keeps them.
+    let o = Ontology::from_catalog(&shop()).with_facts(&[fact(1, "orders", "excluded by default", "void", true)]);
+    assert!(o.stale.is_empty());
 }
 
 #[test]
@@ -205,7 +281,7 @@ mod file {
         ];
         // About this database, but revenue: about every one.
         for f in &mut all {
-            if f.id != 5 {
+            if f.id.get() != 5 {
                 f.database = "shop".into();
             }
         }
@@ -219,6 +295,19 @@ mod file {
     fn exported() -> String {
         let o = Ontology::from_catalog(&shop()).with_facts(&facts());
         export(&o, &facts(), "shop", "Podėlis ontology · shop")
+    }
+
+    #[test]
+    fn a_term_is_written_once_however_its_facts_name_it() {
+        let facts = [
+            fact(1, "Revenue", "defined as", "sum(amount)", true),
+            fact(2, "revenue", "also called", "sales", true),
+            fact(3, "sales", "means", "gross", true),
+        ];
+        let o = Ontology::from_catalog(&shop()).with_facts(&facts);
+        let text = export(&o, &facts, "shop", "test");
+        assert_eq!(text.matches("evenue:").count(), 1, "one entry, all three facts under it: {text}");
+        assert!(!text.contains("sales:"), "not under its other name: {text}");
     }
 
     #[test]
@@ -275,13 +364,13 @@ mod file {
             .replace("      status:\n", "      total:\n        is: with VAT\n      status:\n")
             // The stale one forgotten.
             .replace("stale:\n- about: orders.discount\n  relation: means\n  value: percent off\n", "");
-        let wanted = read(&edited).unwrap().wanted;
-        let p = plan(&onto(), &facts(), &wanted, None);
+        let file = read(&edited).unwrap();
+        let p = plan(&onto(), &facts(), &file.wanted, file.exported.as_deref());
         let added: Vec<String> = p.add.iter().map(|w| format!("{} {} {}", w.subject, w.relation, w.value)).collect();
         assert_eq!(added, ["customers also called patron", "margin defined as revenue minus cost"], "{edited}");
         assert_eq!(p.add[1].everywhere, Some(false), "added under `terms`: this database's");
-        assert_eq!(p.confirm.iter().map(|f| f.id).collect::<Vec<_>>(), [6]);
-        assert_eq!(p.forget.iter().map(|f| f.id).collect::<Vec<_>>(), [7]);
+        assert_eq!(p.confirm.iter().map(|f| f.id.get()).collect::<Vec<_>>(), [6]);
+        assert_eq!(p.forget.iter().map(|f| f.id.get()).collect::<Vec<_>>(), [7]);
         assert!(p.moved.is_empty());
     }
 
@@ -293,7 +382,7 @@ mod file {
             .replace("database: shop\n", "database: shop\nterms:\n  revenue:\n    defined_as: sum(orders.total)\n");
         let wanted = read(&edited).unwrap().wanted;
         let p = plan(&onto(), &facts(), &wanted, None);
-        assert_eq!(p.moved.iter().map(|(f, every)| (f.id, *every)).collect::<Vec<_>>(), [(5, false)], "{edited}");
+        assert_eq!(p.moved.iter().map(|(f, every)| (f.id.get(), *every)).collect::<Vec<_>>(), [(5, false)], "{edited}");
         assert!(p.add.is_empty() && p.forget.is_empty(), "{p:?}");
     }
 
@@ -404,7 +493,7 @@ mod review {
         assert_ne!(edited, text);
         let file = read(&edited).unwrap();
         let p = plan(&onto(&facts), &facts, &file.wanted, file.exported.as_deref());
-        assert_eq!(p.forget.iter().map(|f| f.id).collect::<Vec<_>>(), [1], "{p:?}");
+        assert_eq!(p.forget.iter().map(|f| f.id.get()).collect::<Vec<_>>(), [1], "{p:?}");
         assert!(p.moved.is_empty() && p.add.is_empty());
     }
 
@@ -420,8 +509,89 @@ mod review {
         let p = plan(&onto(&now), &now, &file.wanted, file.exported.as_deref());
         assert!(p.forget.is_empty(), "{p:?}");
         assert_eq!(p.kept, 1);
-        // Without the export's time (a file written by hand): forgotten.
-        let p = plan(&onto(&now), &now, &file.wanted, None);
-        assert_eq!(p.forget.len(), 1);
+        assert!(!p.undated);
+        // Without the export's time (a file written by hand): what it lacks
+        // can't be told from what came since, so nothing is forgotten.
+        let p = plan(&onto(&now), &now, &[], None);
+        assert!(p.forget.is_empty() && p.undated, "{p:?}");
+        assert_eq!(p.kept, 2);
+    }
+}
+
+/// Whatever the facts say, a file exported and read back unchanged
+/// changes nothing: every fact finds its own line again, however its
+/// subject is written, wherever it's filed (tables, columns, terms, other
+/// names, suggestions, stale, other relations, this database or every one).
+mod round_trip_property {
+    use super::*;
+    use crate::ontology::file::{export, read};
+    use crate::ontology::plan::plan;
+    use proptest::prelude::*;
+
+    fn subject() -> impl Strategy<Value = String> {
+        prop::sample::select(vec![
+            "orders",
+            "Orders",
+            "order",
+            "public.orders",
+            "orders.status",
+            "Customers.City",
+            "customer.name",
+            "public.trips.to_city",
+            "revenue",
+            "Margin",
+            "client",
+            "client.city",
+            "invoices",
+            "orders.discount",
+            "other.orders.total",
+        ])
+        .prop_map(str::to_string)
+    }
+
+    fn relation() -> impl Strategy<Value = String> {
+        prop::sample::select(vec![
+            "means",
+            "is",
+            "are",
+            "equals",
+            "also called",
+            "defined as",
+            "excluded by default",
+            "history",
+            "note",
+        ])
+        .prop_map(str::to_string)
+    }
+
+    fn value() -> impl Strategy<Value = String> {
+        prop::sample::select(vec!["3", "y", "with VAT", "client", "sum(x) - 1", "a: b", "\"quoted\"", "x # y"])
+            .prop_map(str::to_string)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 200, ..ProptestConfig::default() })]
+
+        #[test]
+        fn an_unchanged_file_plans_nothing(
+            said in prop::collection::vec((subject(), relation(), value(), any::<bool>(), any::<bool>()), 0..12)
+        ) {
+            let facts: Vec<Fact> = said
+                .iter()
+                .enumerate()
+                .map(|(i, (subject, relation, value, confirmed, every))| {
+                    let mut f = fact(i64::try_from(i).unwrap() + 1, subject, relation, value, *confirmed);
+                    if !*every {
+                        f.database = "shop".into();
+                    }
+                    f
+                })
+                .collect();
+            let o = Ontology::from_catalog(&shop()).with_facts(&facts);
+            let text = export(&o, &facts, "shop", "test");
+            let file = read(&text).map_err(|e| TestCaseError::fail(format!("{e}\n{text}")))?;
+            let p = plan(&o, &facts, &file.wanted, file.exported.as_deref());
+            prop_assert!(p.is_empty(), "{p:?}\n{text}");
+        }
     }
 }

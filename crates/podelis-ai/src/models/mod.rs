@@ -139,15 +139,17 @@ pub struct ModelError {
     pub retry: bool,
     /// How long the provider asked to wait first.
     pub retry_after: Option<Duration>,
+    /// The provider refused the key: one kept isn't used again.
+    pub key_refused: bool,
 }
 
 impl ModelError {
-    fn fatal(message: impl Into<String>) -> Self {
-        ModelError { message: message.into(), retry: false, retry_after: None }
+    pub(crate) fn fatal(message: impl Into<String>) -> Self {
+        ModelError { message: message.into(), retry: false, retry_after: None, key_refused: false }
     }
 
     fn transient(message: impl Into<String>) -> Self {
-        ModelError { message: message.into(), retry: true, retry_after: None }
+        ModelError { message: message.into(), retry: true, retry_after: None, key_refused: false }
     }
 }
 
@@ -355,7 +357,12 @@ fn http_error(status: reqwest::StatusCode, retry_after: Option<Duration>, body: 
         _ => "the request was refused",
     };
     let retry = matches!(status.as_u16(), 408 | 409 | 429 | 500..=599);
-    ModelError { message: format!("{what} ({status}): {said}"), retry, retry_after }
+    ModelError {
+        message: format!("{what} ({status}): {said}"),
+        retry,
+        retry_after,
+        key_refused: status.as_u16() == 401,
+    }
 }
 
 /// The `retry-after` header, in seconds.

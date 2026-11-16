@@ -3288,6 +3288,7 @@ dependencies = [
  "futures-util",
  "insta",
  "podelis-core",
+ "proptest",
  "reqwest",
  "serde",
  "serde-saphyr",

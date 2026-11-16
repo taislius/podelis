@@ -39,6 +39,7 @@ mongodb = ["podelis-core/mongodb"]
 
 [dev-dependencies]
 insta.workspace = true
+proptest.workspace = true
 podelis-core = { path = "../podelis-core", default-features = false, features = ["test-support"] }
 tempfile.workspace = true
 

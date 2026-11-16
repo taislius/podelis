@@ -486,7 +486,7 @@ pub(in crate::db) async fn live_activity(engine: Engine, slow: &str, cancelled_i
     // Only this test's query (others may be sleeping in parallel).
     let busy = sessions.iter().find(|a| a.query.contains("podelis_activity_test")).expect("sees the slow query");
     assert!(!busy.own);
-    db.stop_session(&busy.id, false).await.unwrap();
+    db.stop_session(busy.id, false).await.unwrap();
     let result = tokio::time::timeout(Duration::from_secs(5), handle).await.expect("cancelled quickly").unwrap();
     if cancelled_is_an_error {
         assert!(result.is_err());

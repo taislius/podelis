@@ -1,3 +1,4 @@
+use crate::config::store::ProjectId;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -109,6 +110,23 @@ impl TabId {
     }
 }
 
+/// Identity of an open connection (its slot in `Conns`): what a tab on it
+/// keeps. Never reused while the app runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ConnId(u64);
+
+impl ConnId {
+    pub(in crate::app) fn next(&mut self) -> Self {
+        self.0 += 1;
+        *self
+    }
+
+    #[cfg(test)]
+    pub(in crate::app) const fn from_test_id(id: u64) -> Self {
+        Self(id)
+    }
+}
+
 /// Identity of the active connection state, incremented to invalidate its
 /// in-flight background work when the connection changes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -154,7 +172,7 @@ pub struct ContainerPicker {
 pub enum PromptKind {
     NewProject,
     /// Renaming the project with this id.
-    RenameProject(String),
+    RenameProject(ProjectId),
 }
 
 /// A one-line text input shown on the projects screen.
@@ -225,7 +243,7 @@ pub struct App {
     pub screen: Screen,
     pub store: ConnectionStore,
     /// Id of the open project.
-    pub current_project: Option<String>,
+    pub current_project: Option<ProjectId>,
     /// Config folder holding per-project history and editor drafts; `None`
     /// disables persistence (tests).
     data_dir: Option<PathBuf>,
@@ -482,7 +500,7 @@ impl App {
     }
 
     pub fn project(&self) -> Option<&Project> {
-        self.current_project.as_deref().and_then(|id| self.store.project(id))
+        self.current_project.as_ref().and_then(|id| self.store.project(id))
     }
 
     /// Connections of the open project.
@@ -506,13 +524,13 @@ impl App {
         Ok(())
     }
 
-    fn open_project(&mut self, id: &str) {
+    fn open_project(&mut self, id: &ProjectId) {
         if let Err(e) = self.store.set_last_project(id) {
             self.manager.connection_message = Some((format!("Couldn't save last project: {e:#}"), true));
         } else {
             self.manager.connection_message = None;
         }
-        if self.current_project.as_deref() != Some(id) {
+        if self.current_project.as_ref() != Some(id) {
             self.save_draft();
             self.close_all_connections();
             self.reset_agents();
@@ -521,7 +539,7 @@ impl App {
             self.manager.connection_selected = 0;
             self.manager.from_query = false;
         }
-        self.current_project = Some(id.to_string());
+        self.current_project = Some(id.clone());
         self.screen = Screen::Connections;
     }
 
@@ -531,12 +549,12 @@ impl App {
         self.data_dir = Some(dir);
     }
 
-    fn history_path(&self, project_id: &str) -> Option<PathBuf> {
+    fn history_path(&self, project_id: &ProjectId) -> Option<PathBuf> {
         let dir = self.data_dir.as_ref()?.join("history");
         Some(history::project_history_path(&dir, project_id))
     }
 
-    fn draft_path(&self, project_id: &str) -> Option<PathBuf> {
+    fn draft_path(&self, project_id: &ProjectId) -> Option<PathBuf> {
         Some(self.data_dir.as_ref()?.join("drafts").join(format!("{project_id}.sql")))
     }
 
@@ -582,8 +600,10 @@ impl App {
         }
     }
 
-    /// Call after any change to the editor text: stops history browsing,
-    /// clears the error marker and schedules a fresh syntax hint.
+    /// What follows a change to the text: the history's place starts over,
+    /// the error and hint marks go, the checks run once typing pauses.
+    /// Keys, the mouse and pastes do it themselves when the text changed
+    /// (`on_input`); a change from elsewhere (an answer arriving) calls it.
     fn edited(&mut self) {
         self.history.reset();
         self.tab.error_marker = None;
@@ -704,8 +724,20 @@ impl App {
     fn on_input(&mut self, handle: impl FnOnce(&mut Self)) {
         // A paste can be handled inside a key (Ctrl+V).
         let outer = std::mem::replace(&mut self.handling_input, true);
+        let before = (self.tabs[self.active_tab].id, self.tab.editor.version());
         handle(self);
         self.handling_input = outer;
+        // Whatever changed the text, what goes with a change follows: no
+        // edit by a key, the mouse or a paste can forget it.
+        let same_tab = self.tabs[self.active_tab].id == before.0;
+        if !outer && same_tab && self.tab.editor.version() != before.1 {
+            if self.editing.recalled == Some(self.tab.editor.version()) {
+                // From the history (↑/↓ there): its place in it is kept.
+                self.editing.lint_due = Some(Instant::now() + LINT_DELAY);
+            } else {
+                self.edited();
+            }
+        }
         self.recheck_lost_connection();
     }
 
