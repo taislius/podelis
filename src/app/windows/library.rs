@@ -28,6 +28,8 @@ pub struct LibraryView {
 
 impl App {
     pub(in crate::app) fn open_library(&mut self) {
+        // What another Podėlis on the project saved meanwhile, shown too.
+        self.refresh_library();
         self.popups.library_view = Some(LibraryView {
             query: LineInput::default(),
             selected: 0,
@@ -122,7 +124,9 @@ impl App {
     /// Deletes a saved query, and its tabs let go of it: only once that's
     /// saved, so a delete that fails leaves them tied to it.
     pub(in crate::app) fn delete_saved(&mut self, id: &SavedQueryId) -> Result<(), LibraryError> {
-        self.library.delete(id).inspect_err(|e| self.let_go_if_gone(id, e))?;
+        let deleted = self.library.delete(id);
+        self.name_tabs_as_saved();
+        deleted.inspect_err(|e| self.let_go_if_gone(id, e))?;
         self.let_go_of(id);
         Ok(())
     }
@@ -130,12 +134,29 @@ impl App {
     /// Renames (or regroups) a saved query from "group/name", and every tab
     /// tied to it takes its new name.
     pub(in crate::app) fn rename_saved(&mut self, id: &SavedQueryId, path: &str) -> Result<(), LibraryError> {
-        self.library.rename(id, path).inspect_err(|e| self.let_go_if_gone(id, e))?;
-        let name = self.library.get(id).map(|q| q.name.clone()).unwrap_or_default();
-        for tab in self.tabs.iter_mut().filter(|t| t.saved_id.as_ref() == Some(id)) {
-            tab.name.clone_from(&name);
+        let renamed = self.library.rename(id, path);
+        self.name_tabs_as_saved();
+        renamed.inspect_err(|e| self.let_go_if_gone(id, e))
+    }
+
+    /// Takes in what another Podėlis on the project saved meanwhile (see
+    /// `Library::refresh`), its renames in the tabs too.
+    pub(in crate::app) fn refresh_library(&mut self) {
+        if self.library.refresh() {
+            self.name_tabs_as_saved();
         }
-        Ok(())
+    }
+
+    /// Each tab tied to a saved query is called what it's saved as (a
+    /// rename in another Podėlis on the project, taken in).
+    pub(in crate::app) fn name_tabs_as_saved(&mut self) {
+        for tab in &mut self.tabs {
+            if let Some(q) = tab.saved_id.as_ref().and_then(|id| self.library.get(id))
+                && tab.name != q.name
+            {
+                tab.name.clone_from(&q.name);
+            }
+        }
     }
 
     /// A saved query found gone: its tabs become plain ones, so Ctrl+S
@@ -226,6 +247,8 @@ pub(in crate::app) fn said(e: &LibraryError) -> String {
         LibraryError::Gone => t!("library.gone").to_string(),
         LibraryError::SaveBlocked => t!("library.save_blocked").to_string(),
         LibraryError::SaveFailed(e) => t!("library.save_failed", e = e),
+        LibraryError::ChangedElsewhere(path) => t!("library.changed_elsewhere", name = path),
+        LibraryError::Spoilt(e) => t!("library.spoilt", e = e),
     }
 }
 

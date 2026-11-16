@@ -468,18 +468,26 @@ pub fn write_atomic(path: &Path, text: &str) -> Result<()> {
         fs::create_dir_all(parent).context("failed to create config directory")?;
         restrict(parent, 0o700);
     }
-    let tmp = path.with_extension("tmp");
-    // The user's alone from the start, not after it's written.
-    {
+    // A name of this write's own: two Podėlis writing the same file at once
+    // can't write into (or rename) each other's half-written temp file.
+    static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_extension(format!("tmp-{}-{n}", std::process::id()));
+    let written = (|| -> Result<()> {
+        // The user's alone from the start, not after it's written.
         use std::io::Write as _;
         use std::os::unix::fs::OpenOptionsExt as _;
-        let _ = fs::remove_file(&tmp);
         let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
         file.write_all(text.as_bytes())?;
+        drop(file);
+        restrict(&tmp, 0o600);
+        fs::rename(&tmp, path)?;
+        Ok(())
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
     }
-    restrict(&tmp, 0o600);
-    fs::rename(&tmp, path)?;
-    Ok(())
+    written
 }
 
 fn restrict(path: &Path, mode: u32) {

@@ -684,6 +684,8 @@ table = "lentelė"
 view = "rodinys"
 
 [library]
+changed_elsewhere = "„{name}“ nuo tada pakeista kitame Podėlio lange: dar kartą Ctrl+S įrašys jūsiškę ant jos"
+spoilt = "Išsaugotų užklausų failą kažkas pakeitė į ne užklausas ({e}): įrašyti į biblioteką išjungta, kol jis bus atkurtas"
 other_shape = "Išsaugotų užklausų failas ({path}) yra šiai versijai neskaitomo pavidalo ({e}): paliekamas kaip yra, įrašyti į biblioteką išjungta."
 unreadable = "Nepavyko nuskaityti išsaugotų užklausų ({path}): {e}. Įrašyti į biblioteką išjungta, kad failas nebūtų perrašytas."
 moved_aside = "Išsaugotų užklausų failas buvo netinkamas ({e}): perkeltas į {backup}"

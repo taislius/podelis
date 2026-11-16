@@ -540,7 +540,9 @@ impl App {
             self.popups.tab_prompt = Some(TabPrompt { kind: TabPromptKind::SaveAs, text: LineInput::new(text) });
             return;
         };
-        match self.library.update_sql(&id, &text) {
+        let saved = self.library.update_sql(&id, &text);
+        self.name_tabs_as_saved();
+        match saved {
             Ok(()) => {
                 let path = self.library.get(&id).map(library::SavedQuery::path).unwrap_or_default();
                 self.set_status(t!("tabs.saved", path = path), false);
@@ -630,6 +632,7 @@ impl App {
     /// there is one: else with everything (a search for a group that isn't
     /// there showed nothing to pick until it was cleared).
     pub(in crate::app) fn open_snippets(&mut self) {
+        self.refresh_library();
         let snippets = self.library.has_snippets();
         self.popups.library_view = Some(LibraryView {
             query: LineInput::new(if snippets { library::SNIPPETS } else { "" }),

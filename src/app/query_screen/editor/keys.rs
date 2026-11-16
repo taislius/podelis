@@ -183,6 +183,8 @@ impl App {
     }
 
     pub(in crate::app) fn open_completion(&mut self) {
+        // Snippets another Podėlis on the project saved, offered too.
+        self.refresh_library();
         self.popups.completion = self.compute_completion();
         if self.popups.completion.is_none() {
             let loading = self.connection.schema.as_ref().is_some_and(|s| s.loading);
