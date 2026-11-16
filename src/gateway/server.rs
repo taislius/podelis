@@ -216,13 +216,18 @@ async fn connection(stream: UnixStream, shared: Arc<Shared>) {
             }
         };
         let reply = match line {
-            Ok(true) => match watched(handle(&buf, &mut client, &shared, &mut write), &mut reader, &mut stopping).await
-            {
-                Some(reply) => reply,
-                // Gone, or the gateway is stopping: the work (a model
-                // call) was dropped, so it stops costing.
-                None => break,
-            },
+            // On the heap: a request's work (a model's conversation) is a
+            // large future, kept off the connection task's stack.
+            Ok(true) => {
+                match Box::pin(watched(handle(&buf, &mut client, &shared, &mut write), &mut reader, &mut stopping))
+                    .await
+                {
+                    Some(reply) => reply,
+                    // Gone, or the gateway is stopping: the work (a model
+                    // call) was dropped, so it stops costing.
+                    None => break,
+                }
+            }
             Ok(false) | Err(LineError::Io(_)) => break,
             Err(LineError::TooLong) => Reply::close(protocol::error(
                 &Value::Null,
