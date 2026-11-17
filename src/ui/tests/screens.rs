@@ -72,9 +72,37 @@ fn status_bar_shows_the_connection_heartbeat_and_lost_connection() {
     assert!(bar.contains("♥ prod") && bar.contains("MySQL"), "{bar}");
     // The top bar no longer repeats it.
     assert!(!render(&mut app, 120, 12).lines().next().unwrap().contains("prod /"));
-    app.connection.keepalive.mark_lost_for_tests();
+    app.connection.state.lose_for_tests();
     let lost = status_bar(&mut app);
     assert!(lost.contains("× prod") && lost.contains("connection lost"), "{lost}");
+    assert!(lost.contains("trying again in"), "when it's tried again: {lost}");
+}
+
+/// Each state of the connection is said in words where it isn't simply
+/// working, in the status bar and the navigator: never a green dot over
+/// a blank navigator.
+#[test]
+fn the_connections_state_is_said_in_words() {
+    use crate::app::ConnState;
+    let (mut app, _dir) = query_app();
+    app.notes.status.clear();
+    app.panes.schema_visible = true;
+    app.connection.schema = None;
+    let bar = |app: &mut App| render(app, 120, 16).lines().last().unwrap().to_string();
+    app.connection.state = ConnState::Ready { verified: false };
+    assert!(bar(&mut app).contains("prod · checking…"), "{}", bar(&mut app));
+    assert!(render(&mut app, 120, 16).contains("Loading…"), "the navigator isn't blank");
+    app.connection.state = ConnState::Degraded { why: "The tables didn't load in 30 s".into() };
+    assert!(bar(&mut app).contains("prod · tables didn't load"), "{}", bar(&mut app));
+    app.connection.state = ConnState::Failed { why: "can't reach db.internal:3306: connection refused".into() };
+    app.connection.form.name = "prod".into();
+    let screen = render(&mut app, 120, 16);
+    assert!(bar(&mut app).contains("prod didn't reconnect"), "{}", bar(&mut app));
+    assert!(screen.contains("Couldn't reconnect prod") && screen.contains("can't reach"), "{screen}");
+    app.connection.state = ConnState::Opening { attempt: 1 };
+    let screen = render(&mut app, 120, 16);
+    assert!(bar(&mut app).contains("reconnecting…"), "{}", bar(&mut app));
+    assert!(!screen.contains("● prod"), "{screen}");
 }
 
 #[test]

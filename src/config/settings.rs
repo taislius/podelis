@@ -93,6 +93,9 @@ pub struct Settings {
     /// Seconds between checks that an idle connection is still alive
     /// (and its latency); 0 turns them off.
     pub keepalive: u64,
+    /// Keep `connections.log` (what happened to the connections, for
+    /// looking into one that misbehaved): yours alone, passwords left out.
+    pub connection_log: bool,
     /// Space twice quickly in the editor opens the command menu (Ctrl+K).
     pub leader_double_space: bool,
     /// Ctrl+K shows its menu when no letter follows within half a second;
@@ -144,6 +147,7 @@ impl Default for Settings {
             viewer: None,
             viewers: HashMap::new(),
             keepalive: 0,
+            connection_log: true,
             leader_double_space: false,
             leader_menu: true,
             local_leader: "\\".to_string(),

@@ -260,3 +260,58 @@ pub(super) async fn until_memory_loaded(app: &mut App, facts: usize) {
     }
     panic!("the memory window didn't show {facts} facts");
 }
+
+/// A TCP proxy in front of a test server that can stall: what it passes
+/// on stops (both ways) while `stall` is set, the connections kept open.
+/// A server that let the login in but then doesn't answer: a network half
+/// up, a lock held.
+pub(super) struct StallProxy {
+    pub port: u16,
+    pub stall: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl StallProxy {
+    pub(super) async fn start(upstream: (String, u16)) -> Self {
+        use std::sync::atomic::Ordering;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stall = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stalled = std::sync::Arc::clone(&stall);
+        tokio::spawn(async move {
+            while let Ok((client, _)) = listener.accept().await {
+                let Ok(server) = tokio::net::TcpStream::connect((upstream.0.as_str(), upstream.1)).await else {
+                    continue;
+                };
+                let (client_read, client_write) = client.into_split();
+                let (server_read, server_write) = server.into_split();
+                for (mut from, mut to) in [
+                    (
+                        Box::new(client_read) as Box<dyn tokio::io::AsyncRead + Unpin + Send>,
+                        Box::new(server_write) as Box<dyn tokio::io::AsyncWrite + Unpin + Send>,
+                    ),
+                    (Box::new(server_read), Box::new(client_write)),
+                ] {
+                    let stalled = std::sync::Arc::clone(&stalled);
+                    tokio::spawn(async move {
+                        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+                        let mut buf = vec![0; 16 * 1024];
+                        loop {
+                            let Ok(n) = from.read(&mut buf).await else { return };
+                            if n == 0 {
+                                return;
+                            }
+                            // Held, not passed on, while stalled.
+                            while stalled.load(Ordering::SeqCst) {
+                                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                            }
+                            if to.write_all(&buf[..n]).await.is_err() {
+                                return;
+                            }
+                        }
+                    });
+                }
+            }
+        });
+        StallProxy { port, stall }
+    }
+}

@@ -2,6 +2,9 @@
 
 use crate::app::*;
 
+/// How long the catalog may take to load before it's said it didn't.
+const CATALOG_TIMEOUT: Duration = if cfg!(test) { Duration::from_secs(2) } else { Duration::from_secs(30) };
+
 impl App {
     pub(in crate::app) fn toggle_schema(&mut self) {
         self.panes.schema_visible = !self.panes.schema_visible;
@@ -19,24 +22,61 @@ impl App {
     /// visible meanwhile.
     pub(in crate::app) fn load_catalog(&mut self) {
         let Some(db) = self.connection.database.clone() else { return };
+        let Some(id) = self.connection.slots.active else { return };
         // The schema may have changed: the next ask has the gateway read it
         // again too.
         self.ask.gateway_current = false;
-        self.connection.schema.get_or_insert_with(SchemaPanel::default).loading = true;
-        let send = self.sender();
+        let panel = self.connection.schema.get_or_insert_with(SchemaPanel::default);
+        panel.loading = true;
+        panel.loading_since = Some(Instant::now());
+        panel.load += 1;
+        let load = panel.load;
+        let send = self.conn_sender(id);
         let system = self.settings.system_tables;
+        let name = self.connection.form.short_name();
         tokio::spawn(async move {
-            // A `SET sql_mode` may have changed what lint rules should see.
-            db.refresh_sql_mode().await;
-            send(DbEventKind::Catalog(db.catalog(system).await.map_err(|e| crate::db::error_message(&e))));
+            use crate::system::connection_log::record;
+            let started = Instant::now();
+            // A server that let the login in but doesn't answer this (a
+            // lock on its catalog, a network half up) is said, not waited
+            // for without end. The `sql_mode` read too: on MySQL it's the
+            // first thing asked of the session.
+            let catalog = async {
+                // A `SET sql_mode` may have changed what lint rules should see.
+                db.refresh_sql_mode().await;
+                db.catalog(system).await
+            };
+            let loaded = match tokio::time::timeout(CATALOG_TIMEOUT, catalog).await {
+                Ok(Ok(tables)) => {
+                    record("tables", &name, &format!("{} in {} ms", tables.len(), started.elapsed().as_millis()));
+                    Ok(tables)
+                }
+                Ok(Err(e)) => {
+                    record("tables failed", &name, &crate::db::error_details(&e));
+                    Err(crate::db::error_message(&e))
+                }
+                Err(_) => {
+                    record("tables timeout", &name, &format!("no answer in {} s", CATALOG_TIMEOUT.as_secs()));
+                    Err(t!("navigator.timed_out", s = CATALOG_TIMEOUT.as_secs()))
+                }
+            };
+            let answered = loaded.is_ok();
+            send(ConnEvent::Catalog { load, result: loaded });
+            // A server that didn't give the tables isn't asked more (each
+            // would wait as long, with the session held).
+            if !answered {
+                return;
+            }
             // Listing routines may need privileges the user lacks: then
-            // the section just stays empty.
-            send(DbEventKind::Routines(db.routines().await.unwrap_or_default()));
+            // the section just stays empty (as when they don't come in time).
+            let routines = tokio::time::timeout(CATALOG_TIMEOUT, db.routines()).await;
+            send(ConnEvent::Routines { load, routines: routines.ok().and_then(Result::ok).unwrap_or_default() });
             // Tables a rollback can't undo (MySQL's MyISAM, MEMORY): on a
             // connection of its own, as the catalog is read.
-            if let Some(sql) = db.engine().dialect().and_then(crate::db::SqlDialect::tables_without_rollback)
-                && let Ok(Some(found)) = db.run_aside(sql, 100_000).await
-            {
+            let Some(sql) = db.engine().dialect().and_then(crate::db::SqlDialect::tables_without_rollback) else {
+                return;
+            };
+            if let Ok(Ok(Some(found))) = tokio::time::timeout(CATALOG_TIMEOUT, db.run_aside(sql, 100_000)).await {
                 let cell = |r: &[Option<String>], i: usize| r.get(i).cloned().flatten().unwrap_or_default();
                 let tables = found
                     .rows
@@ -46,7 +86,7 @@ impl App {
                         table: cell(r, 1).to_lowercase(),
                     })
                     .collect();
-                send(DbEventKind::Unrollable(tables));
+                send(ConnEvent::Unrollable { load, tables });
             }
         });
     }

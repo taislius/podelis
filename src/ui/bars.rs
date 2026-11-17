@@ -3,6 +3,7 @@
 
 use super::splash::brand;
 use super::*;
+use crate::app::ConnState;
 use crate::config::keys::Action;
 use crate::config::settings::Hints;
 
@@ -92,6 +93,11 @@ fn home_short(path: &str) -> String {
 fn connection_status(app: &App, room: usize) -> Vec<Span<'static>> {
     let t = theme();
     if !app.connected() {
+        // Its connection couldn't be reopened: said in words, in the
+        // error's colour, until it opens.
+        if let Some((name, _)) = app.tab_connection_failure() {
+            return vec![Span::styled(format!("× {}  ", t!("bar.not_reconnected", name = name)), bold(t.error))];
+        }
         return if app.reconnecting().is_empty() {
             let key = app.keymap.short_label(Action::OpenConnection);
             vec![
@@ -102,18 +108,36 @@ fn connection_status(app: &App, room: usize) -> Vec<Span<'static>> {
             vec![Span::styled(format!("◌ {}  ", t!("bar.reconnecting")), bold(t.warn))]
         };
     }
-    let (dot, name_style) =
-        if app.connection.keepalive.connection_lost() { (fg(t.error), bold(t.error)) } else { (fg(t.ok), bold(t.ok)) };
-    let indicator = if app.connection.keepalive.connection_lost() {
-        "× "
-    } else if app.settings.keepalive > 0 {
-        "♥ "
-    } else {
-        "● "
+    // Where it stands, in words where it isn't simply working: a dot's
+    // colour alone doesn't say what's wrong.
+    let state = &app.connection.state;
+    let (dot, name_style) = match state {
+        ConnState::Lost { .. } => (fg(t.error), bold(t.error)),
+        ConnState::Degraded { .. } => (fg(t.warn), bold(t.warn)),
+        ConnState::Ready { verified: false } => (fg(t.warn), bold(t.ok)),
+        _ => (fg(t.ok), bold(t.ok)),
+    };
+    let indicator = match state {
+        ConnState::Lost { .. } => "× ",
+        ConnState::Ready { verified: false } => "◌ ",
+        _ if app.settings.keepalive > 0 => "♥ ",
+        _ => "● ",
     };
     let mut spans = vec![Span::styled(indicator, dot), Span::styled(app.connection.form.short_name(), name_style)];
-    if app.connection.keepalive.connection_lost() {
-        spans.push(Span::styled(format!(" · {}", t!("bar.connection_lost")), bold(t.error)));
+    match state {
+        ConnState::Lost { .. } => {
+            spans.push(Span::styled(format!(" · {}", t!("bar.connection_lost")), bold(t.error)));
+            // When it's tried again (each wait longer, up to a minute).
+            let keepalive = &app.connection.keepalive;
+            let next = match keepalive.lost_check_in() {
+                0 => t!("bar.checking").to_string(),
+                s => t!("bar.next_check", s = s),
+            };
+            spans.push(Span::styled(format!(" · {next}"), muted()));
+        }
+        ConnState::Degraded { .. } => spans.push(Span::styled(format!(" · {}", t!("bar.no_tables")), bold(t.warn))),
+        ConnState::Ready { verified: false } => spans.push(Span::styled(format!(" · {}", t!("bar.checking")), muted())),
+        _ => {}
     }
     match app.connection.mode {
         ConnectionMode::Production => spans.extend([Span::raw(" "), badge(t!("bar.production"), t.on_accent, t.error)]),

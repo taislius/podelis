@@ -21,6 +21,7 @@ impl App {
                 };
                 self.apply_in_tab(tab, |app| app.apply_run_shown(kind));
             }
+            DbEventPayload::Conn { id, kind } => self.apply_conn_event(id, kind),
             DbEventPayload::Connection { generation, kind } if generation != self.generation => {
                 // A connection that finished after being cancelled is still open.
                 if let DbEventKind::Connected(db) = kind {
@@ -37,10 +38,114 @@ impl App {
         }
     }
 
+    /// What's learnt about connection `id`. The shown one takes all of it;
+    /// a parked one keeps where it stands (its tables load again as its
+    /// tab is shown, a check's word is for the shown one's).
+    fn apply_conn_event(&mut self, id: ConnId, kind: ConnEvent) {
+        let current_load = |schema: &Option<SchemaPanel>, load: u64| schema.as_ref().is_some_and(|p| p.load == load);
+        if self.connection.slots.active == Some(id) {
+            match kind {
+                ConnEvent::Catalog { load, result } if current_load(&self.connection.schema, load) => {
+                    self.unswap_plan_grid();
+                    self.apply_catalog(result);
+                    self.sync_plan_grid();
+                }
+                ConnEvent::Routines { load, routines } if current_load(&self.connection.schema, load) => {
+                    if let Some(panel) = &mut self.connection.schema {
+                        panel.routines = routines;
+                    }
+                }
+                ConnEvent::Unrollable { load, tables } if current_load(&self.connection.schema, load) => {
+                    self.connection.unrollable = tables;
+                }
+                ConnEvent::Pinged(result) => self.pinged(result),
+                // An earlier load's.
+                ConnEvent::Catalog { .. } | ConnEvent::Routines { .. } | ConnEvent::Unrollable { .. } => {}
+            }
+            return;
+        }
+        match kind {
+            ConnEvent::Pinged(result) => self.parked_pinged(id, &result),
+            ConnEvent::Catalog { load, result } => {
+                if let Some(slot) = self.connection.slot_mut(id)
+                    && current_load(&slot.schema, load)
+                {
+                    slot.state.tables_loaded(result.as_ref().map(|_| ()).map_err(String::as_str));
+                }
+            }
+            ConnEvent::Routines { .. } | ConnEvent::Unrollable { .. } => {}
+        }
+    }
+
+    /// A check of a hidden tab's connection came back: as for the shown
+    /// one (`pinged`), but what it says waits for its tab, except what
+    /// mustn't go unsaid: a reconnect that lost an open transaction.
+    fn parked_pinged(&mut self, id: ConnId, result: &Result<(Duration, bool), (String, Ping)>) {
+        let in_use = self.conn_in_use(id);
+        let Some(slot) = self.connection.slot_mut(id) else { return };
+        slot.keepalive.finish_check();
+        let was_lost = slot.state.is_lost();
+        if result.is_ok() {
+            slot.state.answered();
+        } else {
+            slot.state.lose();
+        }
+        let lost = slot.state.is_lost();
+        slot.keepalive.checked(lost);
+        let name = slot.form.short_name();
+        let mut said = None;
+        match result {
+            Ok((latency, reconnected)) => {
+                slot.latency = Some(*latency);
+                if *reconnected {
+                    crate::system::connection_log::record(
+                        "reconnected",
+                        &name,
+                        "the session was reopened (a hidden tab's)",
+                    );
+                    let had_transaction = slot.txn != TxnState::Idle;
+                    slot.txn = TxnState::Idle;
+                    let mut message = format!("{name}: {}: {}", t!("info.reconnected"), t!("info.settings_reset"));
+                    if had_transaction {
+                        slot.sandbox = None;
+                        let _ = write!(message, " · {}", t!("info.transaction_lost"));
+                    }
+                    said = Some((message, had_transaction));
+                } else if was_lost {
+                    crate::system::connection_log::record("back", &name, "(a hidden tab's)");
+                }
+            }
+            Err((e, ping)) => {
+                if !was_lost && lost {
+                    crate::system::connection_log::record("check failed", &name, e);
+                }
+                // No answer while lost: its session is given up, so the next
+                // check opens a new one rather than waiting on a dead link;
+                // not with a transaction open, or a query on it.
+                if matches!(ping, Ping::NoAnswer)
+                    && was_lost
+                    && !in_use
+                    && slot.txn == TxnState::Idle
+                    && let Some(db) = &slot.database
+                {
+                    db.abandon_session();
+                }
+            }
+        }
+        if let Some((message, is_error)) = said {
+            self.log(message.clone(), is_error);
+            if is_error {
+                self.set_status(message, true);
+            }
+        }
+    }
+
     /// See [`Background`]: each kind finds what it's for on its own.
     fn apply_background(&mut self, event: Background) {
         match event {
-            Background::Restored { project_id, form, result } => self.apply_restored(&project_id, *form, result),
+            Background::Restored { project_id, id, attempt, form, result } => {
+                self.apply_restored(&project_id, id, attempt, *form, result);
+            }
             Background::ContainersFound(request, result) => self.containers_found(request, result),
             Background::ExportProgress { rows, size, free } => self.export_progress(rows, size, free),
             Background::ExportEstimated { request, format, rows, row_bytes } => {
@@ -196,8 +301,6 @@ impl App {
                     self.tab.syntax_hint = hint;
                 }
             }
-            DbEventKind::Catalog(result) => self.apply_catalog(result),
-            DbEventKind::Pinged(result) => self.pinged(result),
             DbEventKind::SandboxCopied(copied) => self.sandbox_copied(copied),
             DbEventKind::ActivityLoaded(result) => self.activity_loaded(result),
             DbEventKind::SessionStopped(result) => self.session_stopped(result),
@@ -206,12 +309,6 @@ impl App {
                 self.popups.cell_view = Some(CellView::new(title, report));
             }
             DbEventKind::PipeDone(command, result) => self.pipe_done(&command, result),
-            DbEventKind::Unrollable(tables) => self.connection.unrollable = tables,
-            DbEventKind::Routines(routines) => {
-                if let Some(panel) = &mut self.connection.schema {
-                    panel.routines = routines;
-                }
-            }
             DbEventKind::TableDetails { schema, table, result } => self.apply_details(&schema, &table, result),
             DbEventKind::SchemaCompared { other, result } => self.schema_compared(&other, result),
             DbEventKind::SnapshotSaved(result) => self.snapshot_saved(result),
@@ -246,7 +343,7 @@ impl App {
         let stuck = self.tab.run.executing && unreachable;
         self.tab.run.cancel_failed = stuck;
         if stuck {
-            self.connection.keepalive.mark_lost();
+            self.connection.state.lose();
         }
         let again = if stuck { format!("{} · ", t!("run.esc_again")) } else { String::new() };
         let status = t!("run.cancel_failed", again = again, err = one_line(err));
@@ -279,6 +376,12 @@ impl App {
         let ms =
             self.connection.latency.map(|d| format!(" {}", t!("run.in_ms", ms = d.as_millis()))).unwrap_or_default();
         self.log(t!("run.connected", summary = self.connection.form.summary(), ms = ms), false);
+        let version = self.connection.database.as_ref().map(|d| d.version().to_string()).unwrap_or_default();
+        crate::system::connection_log::record(
+            "connected",
+            &self.connection.form.short_name(),
+            &format!("{version}{ms}"),
+        );
         self.set_status(String::new(), false);
         if let Some((said, is_error)) = self.keep_new_connection() {
             self.connection.summary = format!("[{project}] {}", self.connection.form.summary());
@@ -299,6 +402,8 @@ impl App {
     }
 
     pub(super) fn on_query_done(&mut self, outcome: QueryOutcome, txn: Option<TxnState>, stream: Option<RowStream>) {
+        // A reconnect loses an open transaction: said, never quietly.
+        let had_transaction = self.connection.txn != TxnState::Idle;
         self.tab.run.sql.clear();
         self.tab.run.db = None;
         self.tab.run.task = None;
@@ -310,7 +415,7 @@ impl App {
         }
         self.connection.txn = txn.unwrap_or_else(|| self.tracked_txn_state());
         let rows_affected = outcome.rows_affected.unwrap_or(0);
-        self.connection.keepalive.mark_healthy();
+        self.connection.state.answered();
         self.tab.run.cancel_failed = false;
         tracing::debug!(
             rows = outcome.rows.len(),
@@ -367,6 +472,11 @@ impl App {
         }
         if reconnected {
             let _ = write!(self.notes.status, " · {}", t!("run.reconnected"));
+            if had_transaction {
+                let _ = write!(self.notes.status, " · {}", t!("info.transaction_lost"));
+                self.notes.status_is_error = true;
+                self.log(t!("info.transaction_lost").to_string(), true);
+            }
         }
         if std::mem::take(&mut self.tab.run.extra.reviewing) {
             self.open_review(rows_affected);
@@ -395,7 +505,7 @@ impl App {
         let ran_on = self.tab.run.db.take();
         self.stop_watch(&format!(": {}", t!("run.query_failed")));
         if err.contains("couldn't reconnect") || err.contains("the server doesn't answer") {
-            self.connection.keepalive.mark_lost();
+            self.connection.state.lose();
         }
         self.tab.run.cancel_failed = false;
         tracing::debug!(error = err, "query failed");
@@ -478,6 +588,7 @@ impl App {
     pub(super) fn apply_catalog(&mut self, result: Result<Vec<(TableInfo, Vec<ColumnInfo>)>, String>) {
         let Some(panel) = &mut self.connection.schema else { return };
         panel.loading = false;
+        panel.loading_since = None;
         match result {
             Ok(tables) => {
                 // Keep expanded tables expanded across a refresh.
@@ -497,6 +608,7 @@ impl App {
                     .collect();
                 panel.error = None;
                 panel.selected = query_screen::navigator::step_selectable(&panel.nodes(), panel.selected, 1);
+                self.connection.state.tables_loaded(Ok(()));
                 self.restore_expanded_tables();
                 let Some(panel) = &mut self.connection.schema else { return };
                 // Details were dropped with the old list: reload the open ones.
@@ -505,7 +617,10 @@ impl App {
                     self.request_details(t);
                 }
             }
-            Err(e) => panel.error = Some(e),
+            Err(e) => {
+                panel.error = Some(e.clone());
+                self.connection.state.tables_loaded(Err(&e));
+            }
         }
     }
 
@@ -564,6 +679,10 @@ impl DbEvent {
         Self { payload: DbEventPayload::Connection { generation, kind } }
     }
 
+    pub(in crate::app) fn conn(id: ConnId, kind: ConnEvent) -> Self {
+        Self { payload: DbEventPayload::Conn { id, kind } }
+    }
+
     pub(in crate::app) fn run(id: RunId, kind: RunEvent) -> Self {
         Self { payload: DbEventPayload::Run { id, kind } }
     }
@@ -572,7 +691,7 @@ impl DbEvent {
     pub(in crate::app) fn as_connection_kind(&self) -> Option<&DbEventKind> {
         match &self.payload {
             DbEventPayload::Connection { kind, .. } => Some(kind),
-            DbEventPayload::Run { .. } => None,
+            DbEventPayload::Run { .. } | DbEventPayload::Conn { .. } => None,
         }
     }
 }
@@ -580,8 +699,33 @@ impl DbEvent {
 enum DbEventPayload {
     /// A result about the active connection. Old generations are discarded.
     Connection { generation: ConnectionGeneration, kind: DbEventKind },
+    /// A result about connection `id`, wherever it is now (shown, or
+    /// parked behind another tab); none for one closed since.
+    Conn { id: ConnId, kind: ConnEvent },
     /// A result owned by one query run, routed to the tab that started it.
     Run { id: RunId, kind: RunEvent },
+}
+
+/// What's learnt about one connection: for it, shown or not. The tables'
+/// results carry which load they're of (`SchemaPanel::load`): an earlier
+/// load's, finishing late, is dropped.
+pub(super) enum ConnEvent {
+    Catalog {
+        load: u64,
+        result: Result<Vec<(TableInfo, Vec<ColumnInfo>)>, String>,
+    },
+    Routines {
+        load: u64,
+        routines: Vec<RoutineInfo>,
+    },
+    /// The connection's tables a rollback doesn't undo.
+    Unrollable {
+        load: u64,
+        tables: Vec<super::session::Unrollable>,
+    },
+    /// A connection check: its latency and whether it reconnected, or why
+    /// not and whether it got no answer at all (`Ping::NoAnswer`).
+    Pinged(Result<(Duration, bool), (String, Ping)>),
 }
 
 pub(super) enum RunEvent {
@@ -604,10 +748,6 @@ pub(super) enum DbEventKind {
     },
     Connected(Database),
     ConnectFailed(String),
-    Catalog(Result<Vec<(TableInfo, Vec<ColumnInfo>)>, String>),
-    Routines(Vec<RoutineInfo>),
-    /// The connection's tables a rollback doesn't undo.
-    Unrollable(Vec<super::session::Unrollable>),
     TableDetails {
         schema: String,
         table: String,
@@ -617,10 +757,6 @@ pub(super) enum DbEventKind {
     ActivityLoaded(Result<Vec<crate::db::Activity>, String>),
     /// A session's query was cancelled or the session ended.
     SessionStopped(Result<String, String>),
-    /// A keep-alive check: latency and whether it had to reconnect.
-    /// A connection check: its latency and whether it reconnected, or why
-    /// not and whether it got no answer at all (`Ping::NoAnswer`).
-    Pinged(Result<(Duration, bool), (String, Ping)>),
     /// A connection test's report.
     Diagnosed {
         title: String,
@@ -708,7 +844,13 @@ pub(super) enum Background {
     /// where, and how many of them it had (" (10 rows loaded)").
     ExportShownDone(PathBuf, Result<(), String>, String),
     /// A connection reopened at startup.
-    Restored { project_id: ProjectId, form: Box<ConnectForm>, result: Result<Database, String> },
+    Restored {
+        project_id: ProjectId,
+        id: ConnId,
+        attempt: u64,
+        form: Box<ConnectForm>,
+        result: Result<Database, String>,
+    },
     /// The running database containers, or why they couldn't be listed.
     ContainersFound(ContainerRequestId, Result<Vec<crate::system::containers::Container>, String>),
     /// Characters of an answer being written, for ask `n`.
@@ -737,7 +879,7 @@ mod event_identity_tests {
 
     #[test]
     fn connection_and_run_events_keep_distinct_payloads() {
-        let connection = DbEvent::connection(ConnectionGeneration::default(), DbEventKind::Routines(vec![]));
+        let connection = DbEvent::connection(ConnectionGeneration::default(), DbEventKind::ConnectFailed("no".into()));
         let run = DbEvent::run(
             RunId::default(),
             RunEvent::QueryFailed { message: "failed".into(), position: None, txn: None, missing_feature: false },

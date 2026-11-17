@@ -123,10 +123,8 @@ impl App {
             return Some(t!("tab_list.running", time = mm_ss(secs)));
         }
         let Some(id) = tab.conn else { return Some(t!("tab_list.no_connection").to_string()) };
-        if self.connection.slots.active == Some(id) && self.connection.keepalive.connection_lost() {
-            return Some(t!("tab_list.lost").to_string());
-        }
-        (self.conn_txn(id) == Some(TxnState::Open)).then(|| t!("tab_list.in_transaction").to_string())
+        self.conn_state_said(id)
+            .or_else(|| (self.conn_txn(id) == Some(TxnState::Open)).then(|| t!("tab_list.in_transaction").to_string()))
     }
 
     /// Ctrl+K g: every tab in a list to search and pick from, the shown
@@ -171,6 +169,18 @@ impl App {
         self.popups.palette = Some(Palette::new(PaletteMode::Connections(conn_texts), 0, Vec::new()));
     }
 
+    /// Where connection `id` stands, in words, when it isn't simply
+    /// working (shown or parked: a hidden tab's too).
+    fn conn_state_said(&self, id: ConnId) -> Option<String> {
+        Some(match self.connection.state_of(id)? {
+            ConnState::Lost { .. } => t!("tab_list.lost").to_string(),
+            ConnState::Opening { .. } => t!("bar.reconnecting").to_string(),
+            ConnState::Failed { .. } => t!("tab_list.not_reconnected").to_string(),
+            ConnState::Degraded { .. } => t!("bar.no_tables").to_string(),
+            ConnState::Ready { .. } => return None,
+        })
+    }
+
     /// An open connection as its list shows it: its name, engine and
     /// address, its tabs, and how it is (a query running, a transaction
     /// open, lost).
@@ -182,8 +192,8 @@ impl App {
         let running = tabs.iter().find_map(|&i| self.tab_run(i).filter(|r| r.executing).map(|r| (i, r)));
         let status = if let Some((_, run)) = running {
             Some(t!("tab_list.running", time = mm_ss(run.since.map_or(0, |s| s.elapsed().as_secs()))))
-        } else if self.connection.slots.active == Some(id) && self.connection.keepalive.connection_lost() {
-            Some(t!("tab_list.lost").to_string())
+        } else if let Some(said) = self.conn_state_said(id) {
+            Some(said)
         } else {
             (self.conn_txn(id) == Some(TxnState::Open)).then(|| t!("tab_list.in_transaction").to_string())
         };

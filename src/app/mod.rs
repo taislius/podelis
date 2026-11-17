@@ -40,6 +40,7 @@ pub use windows::library::{LibraryItem, LibraryView};
 
 pub mod commands;
 mod confirm;
+mod conn_state;
 mod events;
 mod hits;
 mod input;
@@ -58,7 +59,7 @@ pub use query_screen::results::export_form;
 
 use crate::config::draft::{ConnectionDraft, looks_like_url};
 pub use confirm::{Confirm, ConfirmAction};
-use events::{Background, DbEventKind, RunEvent};
+use events::{Background, ConnEvent, DbEventKind, RunEvent};
 pub use events::{DbEvent, Ping};
 pub use manager::connections::{ConnectField, ConnectForm, fields_for};
 pub use query_screen::navigator::details::{SchemaNode, SchemaPanel, SchemaSection, SchemaSort, SchemaTable};
@@ -67,6 +68,7 @@ pub use query_screen::results::view::{NULL_TEXT, display_prefix, format_elapsed,
 use query_screen::results::view::{column_widths, compute_view, one_line, pretty_value, widen_columns};
 pub use query_screen::review::TxMode;
 pub use query_screen::{Dest, Format, Run, RunPurpose};
+pub use session::ConnState;
 #[cfg(test)]
 pub use session::Splash;
 pub use windows::cell::CellView;
@@ -578,6 +580,15 @@ impl App {
         }
     }
 
+    /// For what's learnt about connection `id`, applied to it wherever it
+    /// is then.
+    fn conn_sender(&self, id: ConnId) -> impl Fn(ConnEvent) + Send + 'static {
+        let tx = self.db_tx.clone();
+        move |kind| {
+            let _ = tx.send(DbEvent::conn(id, kind));
+        }
+    }
+
     /// For the running query's outcome, applied to its tab by run id.
     fn run_sender(&self) -> impl Fn(RunEvent) + Send + 'static {
         let tx = self.db_tx.clone();
@@ -589,9 +600,8 @@ impl App {
 
     fn invalidate_tasks(&mut self) {
         self.tab.run.db = None;
-        // A check on its way is for the connection before: its answer will
-        // be dropped (another generation), so it's no longer awaited.
-        self.connection.keepalive.cancel_check();
+        // (A check on its way is its connection's: its answer still finds
+        // it, by id, so it's still awaited.)
         self.generation.bump();
         self.tab.run.id = self.next_run_id();
         self.tab.run.queued_plan = None;

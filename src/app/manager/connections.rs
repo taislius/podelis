@@ -690,10 +690,15 @@ impl App {
         self.connection.form.error = None;
         self.connection.form.info = None;
         let send = self.sender();
+        let name = self.connection.form.short_name();
+        crate::system::connection_log::record("connecting", &name, &self.connection.form.summary());
         self.tab.run.task = Some(tokio::spawn(async move {
             match Database::connect(params).await {
                 Ok(db) => send(DbEventKind::Connected(db)),
-                Err(e) => send(DbEventKind::ConnectFailed(crate::db::error_message(&e))),
+                Err(e) => {
+                    crate::system::connection_log::record("connect failed", &name, &crate::db::error_details(&e));
+                    send(DbEventKind::ConnectFailed(crate::db::error_message(&e)));
+                }
             }
         }));
     }

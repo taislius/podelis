@@ -102,6 +102,7 @@ pub async fn run(
 
     let mut out = crate::db::report(&steps);
     let mut failed = steps.iter().any(|s| s.state == StepState::Failed);
+    out.push_str(&recent_connections(&crate::system::connection_log::path()));
     if connections {
         failed |= test_connections(store, project, &mut out).await;
     }
@@ -163,6 +164,21 @@ fn environment_checks(settings: &Settings) -> Vec<Step> {
         Err(_) => step("Crashes", StepState::Ok, "none logged", None),
     });
     steps
+}
+
+/// What happened to the connections lately (`connections.log`): what a
+/// misbehaving one did, with the libraries' own words the screen leaves
+/// out.
+fn recent_connections(path: &std::path::Path) -> String {
+    let lines = crate::system::connection_log::last_lines(path, 20);
+    if lines.is_empty() {
+        return String::new();
+    }
+    let mut out = format!("\nLately ({}):\n", path.display());
+    for line in lines {
+        let _ = writeln!(out, "  {line}");
+    }
+    out
 }
 
 /// Tests each saved connection of the project; true if any failed.

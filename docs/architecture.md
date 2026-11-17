@@ -191,18 +191,36 @@ everywhere:
   earlier tabs close.
 - **Project connections** (`session.rs`, `ProjectConnections`): owns the
   active `Connection` and the parked slots together. Tabs refer to stable
-  connection IDs; they don't own these values. Each `Connection` carries its
-  own health state. The owner allocates IDs, switches and drains slots as one
-  transition; `App::switch_conn` coordinates generation invalidation and
-  catalog effects around it. `KeepAlive` owns health transitions; last-known
-  health remains separate from whether a check is in progress.
+  connection IDs; they don't own these values. Each `Connection` carries
+  where it stands as a `ConnState`, a state machine with its own steps:
+  `Opening { attempt }` → `Ready { verified }` (verified once its tables, a
+  check or a query answered) or `Failed { why }`; an open one can become
+  `Degraded { why }` (its tables didn't load) or `Lost` (a check got no
+  answer) and comes back by answering. The status bar, the navigator, the
+  tabs and the reopening card all read it, and say each state that isn't
+  simply working in words. A connection being opened again (the last
+  session's, or a retry) gets its slot at once, in `Opening`, and its tabs
+  point at it from then; what arrives is for that slot and that attempt
+  (`Background::Restored { id, attempt }`), never matched by name. The
+  owner allocates IDs, switches and drains slots as one transition;
+  `App::switch_conn` coordinates generation invalidation and catalog effects
+  around it. `ConnState` and `KeepAlive` (only a check's timing, whether one
+  runs, and how long a lost one waits for the next: 5 s doubling to a
+  minute) are in `conn_state.rs`. The other tabs' connections are checked as
+  the shown one is. A reconnect that lost an open transaction says so.
   The optional heartbeat (`settings.keepalive`, off by default) checks idle
   connections and updates the status bar; `Reconnect` runs that check on
   demand. Query failures also mark an unreachable connection, and a later
   successful check or query clears the lost state. With the heartbeat off,
   the status bar can only learn about a loss when an operation checks the
-  server. Connection generations discard heartbeat replies from a connection
-  that is no longer shown.
+  server. A check's answer, and a catalog load's, are `ConnEvent`s for
+  their connection by id (`DbEvent::conn`), wherever it is then: a hidden
+  tab's connection keeps where it stands; a load's results carry which load
+  they're of (`SchemaPanel::load`), so a late one is dropped. The catalog
+  load gives up after 30 s and says so. What happens to connections is
+  also kept in `connections.log` in the config folder (`system::connection_log`,
+  the libraries' own words included, which the screen leaves out);
+  `podelis doctor` shows its last lines.
 - **Kept results** (`results/runs.rs`): each query run opens a `KeptRun` in the
   tab's `runs`. The one shown lives in the tab (`grid`, `last_sql`, its
   infos and parameters, its error), so every key works on it unchanged;
@@ -218,8 +236,9 @@ everywhere:
   Key handling, drawing (back to front), mouse blocking and "is the user
   typing" all read it, so a new popup is a field there and a line in
   `overlay_states`.
-- **Background events** (`events.rs`): `DbEvent` is either connection-owned
-  (`ConnectionGeneration`) or run-owned (`RunId`); the event kind is part of
+- **Background events** (`events.rs`): `DbEvent` is connection-owned
+  (`ConnectionGeneration`), about one connection (`ConnId`: its tables, a
+  check of it) or run-owned (`RunId`); the event kind is part of
   that variant, so a connection event cannot carry a query outcome. Old
   connection generations are dropped; run outcomes find their tab even after
   another tab is shown. Tab-specific connection work uses `TabId` and is

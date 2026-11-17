@@ -58,14 +58,28 @@ pub(in crate::ui) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    let Some(panel) = &app.connection.schema else { return };
+    // Never a blank tree: where things stand, in words.
+    let Some(panel) = &app.connection.schema else {
+        let (said, style) = match app.tab_connection_failure() {
+            Some((name, why)) => (t!("navigator.no_connection", name = name, e = why), fg(t.error)),
+            None if app.connected() => (t!("navigator.loading_tables").to_string(), dim()),
+            None if !app.reconnecting().is_empty() => (t!("bar.reconnecting").to_string(), dim()),
+            None => (t!("navigator.not_connected").to_string(), dim()),
+        };
+        f.render_widget(Paragraph::new(format!(" {said}")).style(style).wrap(Wrap { trim: true }), tree);
+        return;
+    };
     if let Some(e) = &panel.error {
-        f.render_widget(Paragraph::new(e.as_str()).style(fg(t.error)).wrap(Wrap { trim: true }), tree);
+        let lines = vec![Line::styled(e.clone(), fg(t.error)), Line::styled(t!("navigator.retry").to_string(), dim())];
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), tree);
         return;
     }
     if panel.tables.is_empty() {
-        let msg =
-            format!(" {}", if panel.loading { t!("navigator.loading_tables") } else { t!("navigator.no_tables") });
+        let loading = match panel.loading_since.map(|s| s.elapsed().as_secs()) {
+            Some(s) if s >= 2 => t!("navigator.loading_for", s = s),
+            _ => t!("navigator.loading_tables").to_string(),
+        };
+        let msg = format!(" {}", if panel.loading { loading } else { t!("navigator.no_tables").to_string() });
         f.render_widget(Paragraph::new(msg).style(dim()), tree);
         return;
     }

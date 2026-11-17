@@ -37,7 +37,7 @@ pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, port: u16
         .idle_timeout(POOL_IDLE)
         .connect_with(opts)
         .await
-        .context("failed to connect to database")?;
+        .context("couldn't connect")?;
     let conn = pool.acquire().await.context("failed to open session")?;
     Ok((Pool::Postgres(pool), Session::Postgres(conn)))
 }

@@ -14,20 +14,27 @@ pub(super) fn error_facts(
     cause: &(dyn std::error::Error + 'static),
     server: impl Fn(&dyn sqlx::error::DatabaseError) -> Option<ServerError>,
 ) -> Option<ErrorFacts> {
-    // rustls reports a rejected protocol version or cipher as an I/O error.
-    let looks_tls = |text: &str| {
-        let text = text.to_ascii_lowercase();
-        ["handshake", "alert", "tls", "ssl", "protocol version"].iter().any(|w| text.contains(w))
-    };
+    use super::errors::{io_words, looks_tls, tls_words};
     Some(match cause.downcast_ref::<sqlx::Error>()? {
-        sqlx::Error::Tls(tls) => ErrorFacts { broken: true, tls: Some(tls.to_string()), ..ErrorFacts::default() },
+        sqlx::Error::Tls(tls) => {
+            // Broken, as any TLS failure (a session the pool hands out after
+            // the server's certificate changed is reopened, or said lost).
+            let said = tls_words(&tls.to_string());
+            ErrorFacts { broken: true, tls: Some(said.clone()), said: Some(said), ..ErrorFacts::default() }
+        }
         sqlx::Error::Io(io) => {
             let text = io.to_string();
-            ErrorFacts { broken: true, tls: looks_tls(&text).then_some(text), ..ErrorFacts::default() }
+            let tls = looks_tls(&text).then(|| tls_words(&text));
+            ErrorFacts { broken: true, tls, said: Some(io_words(io)), ..ErrorFacts::default() }
         }
-        sqlx::Error::Protocol(_) => ErrorFacts { broken: true, ..ErrorFacts::default() },
-        sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => {
-            ErrorFacts { no_connection: true, ..ErrorFacts::default() }
+        sqlx::Error::Protocol(text) => ErrorFacts { broken: true, said: protocol_words(text), ..ErrorFacts::default() },
+        sqlx::Error::PoolTimedOut => ErrorFacts {
+            no_connection: true,
+            said: Some("no connection in time: the server didn't answer (timed out)".into()),
+            ..ErrorFacts::default()
+        },
+        sqlx::Error::PoolClosed => {
+            ErrorFacts { no_connection: true, said: Some("the connection was closed".into()), ..ErrorFacts::default() }
         }
         sqlx::Error::Database(db) => {
             let server = server(db.as_ref())?;
@@ -38,6 +45,33 @@ pub(super) fn error_facts(
         }
         _ => return None,
     })
+}
+
+/// A protocol error in a user's words. Another program on the port (the
+/// server's first answer isn't this database's) is said as such; any
+/// other keeps its own words (an authentication method the client and the
+/// server disagree on, a pooler's), without the driver's wrapping and
+/// where in its code it was (`(sqlx_postgres::connection::tls:95)`).
+fn protocol_words(text: &str) -> Option<String> {
+    let t = text.to_ascii_lowercase();
+    if t.contains("response from sslrequest") || t.contains("expected to read") || t.contains("unknown message type") {
+        return Some(
+            "the server answered in a way this database's protocol doesn't: is that host and port this database's?"
+                .into(),
+        );
+    }
+    let mut plain = text.trim();
+    for wrapping in ["encountered unexpected or invalid data: ", "protocol error: "] {
+        if plain.to_ascii_lowercase().starts_with(wrapping) {
+            plain = &plain[wrapping.len()..];
+        }
+    }
+    // Where in the driver's code: no one else's business.
+    let plain = match plain.rfind(" (sqlx") {
+        Some(at) if plain.ends_with(')') => &plain[..at],
+        _ => plain,
+    };
+    (plain != text).then(|| plain.to_string())
 }
 
 /// An sqlx engine's `driver` module: what `db` asks of a connection, for
@@ -188,13 +222,58 @@ mod tests {
     fn tls_failures_are_told_from_other_connect_errors() {
         let io = |text: &str| sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, text.to_string()));
         let handshake = facts(&io("received fatal alert: HandshakeFailure"));
-        assert_eq!(handshake.tls.as_deref(), Some("received fatal alert: HandshakeFailure"));
+        assert_eq!(handshake.tls.as_deref(), Some("the TLS handshake failed"));
         assert!(handshake.broken);
         assert!(facts(&io("Connection refused (os error 111)")).tls.is_none());
         let denied = facts(&sqlx::Error::Protocol("Access denied for user".into()));
         assert!(denied.tls.is_none() && denied.broken);
         assert!(facts(&sqlx::Error::PoolTimedOut).no_connection);
         assert!(error_facts(&sqlx::Error::RowNotFound, |_| None).is_none(), "nothing to say");
+    }
+
+    #[test]
+    fn the_drivers_errors_are_said_in_a_users_words() {
+        let io = |kind, text: &str| sqlx::Error::Io(std::io::Error::new(kind, text.to_string()));
+        use std::io::ErrorKind as K;
+        let said = |e: &sqlx::Error| facts(e).said.unwrap();
+        assert_eq!(
+            said(&io(K::InvalidData, "invalid peer certificate: UnknownIssuer")),
+            "the server's TLS certificate isn't signed by an authority this computer trusts"
+        );
+        assert_eq!(
+            said(&io(K::InvalidData, "invalid peer certificate: NotValidForName")),
+            "the server's TLS certificate is for another host name"
+        );
+        assert_eq!(
+            said(&io(K::InvalidData, "invalid peer certificate: Expired")),
+            "the server's TLS certificate has expired"
+        );
+        assert_eq!(
+            said(&io(K::Other, "failed to lookup address information: nodename nor servname provided")),
+            "no such host"
+        );
+        assert_eq!(said(&io(K::ConnectionReset, "Connection reset by peer (os error 54)")), "the connection was cut");
+        assert_eq!(
+            said(&io(K::UnexpectedEof, "expected to read 5526600 bytes, got 24 bytes at EOF")),
+            "the server closed the connection",
+            "mid-session too: not said as the login's"
+        );
+        assert!(
+            said(&sqlx::Error::Protocol(
+                "unexpected response from SSLRequest: 0x48 (sqlx_postgres::connection::tls:95)".into()
+            ))
+            .contains("this database's")
+        );
+        // A server's message that came as a protocol error is its own; one
+        // about the login method keeps its words, without the wrapping.
+        assert!(facts(&sqlx::Error::Protocol("Access denied for user".into())).said.is_none());
+        assert_eq!(
+            said(&sqlx::Error::Protocol(
+                "encountered unexpected or invalid data: expected AuthenticationSaslFinal (sqlx_postgres::connection::sasl:120)".into()
+            )),
+            "expected AuthenticationSaslFinal"
+        );
+        assert!(said(&sqlx::Error::PoolTimedOut).contains("timed out"), "the timeout's hint still finds it");
     }
 
     /// Through `errors`: the driver's error found under context added on

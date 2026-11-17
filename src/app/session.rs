@@ -10,68 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::*;
 
-/// Keeping an idle connection alive, and noticing it's gone.
-pub struct KeepAlive {
-    /// When the connection was last used.
-    pub(super) last_activity: Instant,
-    /// A check is running.
-    pinging: bool,
-    /// The user explicitly asked to check a lost connection.
-    reconnect_requested: bool,
-    /// The last check of the connection failed (shown in the top bar).
-    connection_lost: bool,
-}
-
-impl KeepAlive {
-    pub fn connection_lost(&self) -> bool {
-        self.connection_lost
-    }
-
-    pub(super) fn pinging(&self) -> bool {
-        self.pinging
-    }
-
-    pub(super) fn mark_lost(&mut self) {
-        self.connection_lost = true;
-    }
-
-    #[cfg(test)]
-    pub fn mark_lost_for_tests(&mut self) {
-        self.mark_lost();
-    }
-
-    pub(super) fn mark_healthy(&mut self) {
-        self.connection_lost = false;
-    }
-
-    pub(super) fn begin_check(&mut self) {
-        self.pinging = true;
-    }
-
-    pub(super) fn cancel_check(&mut self) {
-        self.pinging = false;
-        self.reconnect_requested = false;
-    }
-
-    pub(super) fn begin_reconnect(&mut self) {
-        self.reconnect_requested = true;
-    }
-
-    /// Completes a check and returns the health and intent that preceded it.
-    pub(super) fn finish_check(&mut self, succeeded: bool) -> (bool, bool) {
-        self.pinging = false;
-        let was_lost = self.connection_lost;
-        let reconnect_requested = std::mem::take(&mut self.reconnect_requested);
-        self.connection_lost = !succeeded;
-        (was_lost, reconnect_requested)
-    }
-}
-
-impl Default for KeepAlive {
-    fn default() -> Self {
-        Self { last_activity: Instant::now(), pinging: false, reconnect_requested: false, connection_lost: false }
-    }
-}
+pub use super::conn_state::{ConnState, KeepAlive};
 
 /// A connection and what goes with it: its form, modes, transaction,
 /// navigator, health, summary and connect time. The active value is
@@ -85,7 +24,9 @@ pub struct Connection {
     /// What happens to writes on it (Ctrl+K w).
     pub tx_mode: TxMode,
     pub txn: TxnState,
-    /// The health and heartbeat timing for this connection's session.
+    /// Where it stands: opening, open, lost, failed.
+    pub state: ConnState,
+    /// The heartbeat's timing and check for this connection's session.
     pub keepalive: KeepAlive,
     /// The schema navigator's catalog and state.
     pub schema: Option<SchemaPanel>,
@@ -136,8 +77,8 @@ pub struct Conns {
     pub tab_connections: Vec<Option<String>>,
     /// UI state saved with the tabs.
     pub saved_session: SessionUi,
-    /// Connections being reopened at startup, by name.
-    pub restoring: Vec<String>,
+    /// The last opening's number ([`ConnState::Opening`]'s `attempt`).
+    last_attempt: u64,
     /// A run asked for on a tab whose connection is being opened again
     /// (`retry_tab_connection`): done once it's open.
     pub after_reconnect: Option<crate::config::keys::Action>,
@@ -167,6 +108,26 @@ impl ProjectConnections {
 
     pub(super) fn attach_active(&mut self, slot: Connection) -> ConnId {
         self.slots.attach_active(&mut self.active, slot)
+    }
+
+    /// Connection `id`: the shown one, or a parked one.
+    pub(super) fn slot_mut(&mut self, id: ConnId) -> Option<&mut Connection> {
+        if self.slots.active == Some(id) { Some(&mut self.active) } else { self.slots.parked.get_mut(&id) }
+    }
+
+    /// Where connection `id` stands (the shown one's, or a parked one's).
+    pub(super) fn state_of(&self, id: ConnId) -> Option<&ConnState> {
+        if self.slots.active == Some(id) {
+            Some(&self.active.state)
+        } else {
+            self.slots.parked.get(&id).map(|s| &s.state)
+        }
+    }
+
+    /// Every connection slot: the shown one first.
+    pub(super) fn all(&self) -> impl Iterator<Item = (ConnId, &Connection)> {
+        let shown = self.slots.active.map(|id| (id, &self.active));
+        shown.into_iter().chain(self.slots.parked.iter().map(|(id, slot)| (*id, slot)))
     }
 }
 
@@ -287,13 +248,15 @@ impl App {
 
     /// Whether the active tab has a connection.
     pub fn connected(&self) -> bool {
-        self.connection.slots.active.is_some()
+        self.connection.slots.active.is_some() && self.connection.state.is_open()
     }
 
     /// Marks the active tab connected without a database, for UI tests.
     #[cfg(test)]
     pub fn pretend_connected(&mut self) {
         self.connection.slots.active = Some(ConnId::from_test_id(u64::MAX));
+        // As one whose tables loaded (a test of the states sets its own).
+        self.connection.state = ConnState::Ready { verified: true };
         self.tabs[self.active_tab].conn = Some(ConnId::from_test_id(u64::MAX));
     }
 
@@ -358,9 +321,20 @@ impl App {
         self.screen = Screen::Projects;
     }
 
-    /// Connections still being reopened at startup.
-    pub fn reconnecting(&self) -> &[String] {
-        &self.connection.slots.restoring
+    /// Connections being opened again (the last session's, or a retry),
+    /// by name.
+    pub fn reconnecting(&self) -> Vec<String> {
+        let mut names: Vec<String> =
+            self.connection.all().filter(|(_, c)| c.state.is_opening()).map(|(_, c)| c.form.name.clone()).collect();
+        names.sort();
+        names
+    }
+
+    /// The shown tab's connection, when it couldn't be opened again: its
+    /// name, and why.
+    pub fn tab_connection_failure(&self) -> Option<(&str, &str)> {
+        self.connection.slots.active?;
+        self.connection.state.failure().map(|why| (self.connection.form.name.as_str(), why))
     }
 
     /// Makes connection `target` the active one, parking the current one.
@@ -370,16 +344,11 @@ impl App {
     }
 
     pub(super) fn switch_conn(&mut self, target: Option<ConnId>) {
-        let previous = self.connection.slots.active;
         if !self.connection.switch_active(target) {
             return;
         }
-        if let Some(id) = previous
-            && let Some(slot) = self.connection.slots.parked.get_mut(&id)
-        {
-            slot.keepalive.cancel_check();
-        }
-        self.connection.keepalive.cancel_check();
+        // (A check on its way is its connection's, and still awaited: its
+        // answer finds it, shown or parked, so none starts beside it.)
         // Events from the other connection's background work no longer
         // apply; restart what was cut short.
         // (A check on its way is for the connection before: see `pinging`.)
@@ -565,7 +534,6 @@ impl App {
         for db in self.connection.drain().into_iter().filter_map(|slot| slot.database) {
             tokio::spawn(async move { db.close().await });
         }
-        self.connection.slots.restoring.clear();
         self.splash = None;
         for tab in &mut self.tabs {
             tab.conn = None;
@@ -646,17 +614,10 @@ impl App {
 
     /// The saved connection tab `i` uses, by name (unsaved ones have none).
     pub(super) fn tab_connection_name(&self, i: usize) -> Option<String> {
+        // (A connection being opened again, or that couldn't be, has its
+        // slot: its name is kept.)
         let name = match self.tabs.get(i)?.conn {
-            None => {
-                return self
-                    .connection
-                    .slots
-                    .tab_connections
-                    .get(i)
-                    .cloned()
-                    .flatten()
-                    .filter(|n| self.connection.slots.restoring.contains(n));
-            }
+            None => return None,
             Some(id) if Some(id) == self.connection.slots.active => &self.active_form().name,
             Some(id) => &self.connection.slots.parked.get(&id)?.form.name,
         };
@@ -807,13 +768,17 @@ impl App {
     /// opening it again then failed (the server was down, the VPN off):
     /// a run there tries it again rather than saying "not connected".
     pub(super) fn tab_connection_to_retry(&self) -> Option<ConnectionProfile> {
-        if self.connection.database.is_some()
-            || !self.connection.slots.restoring.is_empty()
-            || self.tabs[self.active_tab].conn.is_some()
-        {
+        if self.connection.database.is_some() || !self.reconnecting().is_empty() {
             return None;
         }
-        let name = self.connection.slots.tab_connections.get(self.active_tab)?.as_ref()?;
+        // Its slot says it failed; or it has none, but had one last time.
+        let name = if self.connection.state.failure().is_some() && self.connection.slots.active.is_some() {
+            &self.connection.form.name
+        } else if self.tabs[self.active_tab].conn.is_none() {
+            self.connection.slots.tab_connections.get(self.active_tab)?.as_ref()?
+        } else {
+            return None;
+        };
         self.profiles().iter().find(|p| &p.name == name).cloned()
     }
 
@@ -824,85 +789,130 @@ impl App {
         self.connect_saved(vec![profile]);
     }
 
-    /// Opens `profiles` in the background, as the session had them: each
-    /// arrives as `Restored`, for the tabs that used it.
+    /// Opens `profiles` in the background, as the session had them. Each
+    /// gets its slot at once ([`ConnState::Opening`]), which the tabs that
+    /// used it point at from then: what arrives (`Restored`) is for that
+    /// slot and that attempt, or for nothing (closed, or tried again since).
     fn connect_saved(&mut self, profiles: Vec<ConnectionProfile>) {
         let Some(project_id) = self.current_project.clone() else { return };
-        self.connection.slots.restoring = profiles.iter().map(|p| p.name.clone()).collect();
-        self.set_status(t!("session.reconnecting", names = self.connection.slots.restoring.join(", ")), false);
+        let project = self.project().map(|p| p.name.clone()).unwrap_or_default();
         for profile in profiles {
+            crate::system::connection_log::record("reopening", &profile.name, profile.engine.label());
+            self.connection.slots.last_attempt += 1;
+            let attempt = self.connection.slots.last_attempt;
+            // A retry opens the slot its tabs have; else a new one.
+            let failed = self.connection.all().find(|(_, c)| c.form.name == profile.name && !c.state.is_open());
+            let id = if let Some((id, _)) = failed {
+                id
+            } else {
+                let form = ConnectForm::from_profile(&profile, String::new());
+                self.connection.slots.park_new(Connection {
+                    mode: form.mode,
+                    tx_mode: form.tx_mode(),
+                    summary: format!("[{project}] {}", form.summary()),
+                    form,
+                    ..Connection::default()
+                })
+            };
+            if let Some(slot) = self.connection.slot_mut(id) {
+                slot.state = ConnState::Opening { attempt };
+            }
+            for (tab, saved_name) in self.tabs.iter_mut().zip(&self.connection.slots.tab_connections) {
+                if tab.conn.is_none() && saved_name.as_deref() == Some(profile.name.as_str()) {
+                    tab.conn = Some(id);
+                }
+            }
             let send = self.sender();
             let project_id = project_id.clone();
             tokio::spawn(async move {
-                let (id, saved) = (project_id.clone(), profile.clone());
+                let (for_password, saved) = (project_id.clone(), profile.clone());
                 let (password, note) =
-                    tokio::task::spawn_blocking(move || store::saved_password(&id, &saved)).await.unwrap_or_default();
+                    tokio::task::spawn_blocking(move || store::saved_password(&for_password, &saved))
+                        .await
+                        .unwrap_or_default();
                 let mut form = ConnectForm::from_profile(&profile, password);
                 form.keychain_note = note;
                 let result = match form.params() {
                     // Don't recreate a database file that was moved or deleted.
                     Ok(params) if params.file_to_create().is_some() => Err(t!("session.file_gone", path = params.host)),
-                    Ok(params) => Database::connect(params).await.map_err(|e| crate::db::error_message(&e)),
+                    Ok(params) => Database::connect(params).await.map_err(|e| {
+                        crate::system::connection_log::record(
+                            "reopen failed",
+                            &profile.name,
+                            &crate::db::error_details(&e),
+                        );
+                        crate::db::error_message(&e)
+                    }),
                     Err(e) => Err(e),
                 };
-                send(Background::Restored { project_id, form: Box::new(form), result }.into());
+                send(Background::Restored { project_id, id, attempt, form: Box::new(form), result }.into());
             });
         }
+        // The shown tab's connection is the one opening for it.
+        if let Some(id) = self.tabs[self.active_tab].conn
+            && self.connection.slots.active != Some(id)
+        {
+            self.switch_conn(Some(id));
+        }
+        self.set_status(t!("session.reconnecting", names = self.reconnecting().join(", ")), false);
     }
 
-    /// A connection reopened by [`restore_session`] arrived.
+    /// What opening connection `id` again (attempt `attempt`) came to.
     pub(super) fn apply_restored(
         &mut self,
         project_id: &ProjectId,
+        id: ConnId,
+        attempt: u64,
         form: ConnectForm,
         result: Result<Database, String>,
     ) {
-        if self.current_project.as_ref() != Some(project_id) || !self.connection.slots.restoring.contains(&form.name) {
+        let awaited = self.current_project.as_ref() == Some(project_id)
+            && self.connection.slot_mut(id).is_some_and(|slot| slot.state == ConnState::Opening { attempt });
+        if !awaited {
             if let Ok(db) = result {
                 tokio::spawn(async move { db.close().await });
             }
             return;
         }
-        self.connection.slots.restoring.retain(|n| *n != form.name);
         if let Some(splash) = &mut self.splash {
             splash.done.push((form.name.clone(), result.as_ref().err().cloned()));
         }
-        // All reopened: the card's job is done (failures stay in the status bar).
-        if self.connection.slots.restoring.is_empty() {
-            self.splash = None;
-        }
+        let name = form.name.clone();
+        let Some(slot) = self.connection.slot_mut(id) else { return };
         let db = match result {
             Ok(db) => db,
             Err(e) => {
+                tracing::info!(connection = %name, error = %e, "couldn't reopen the connection");
+                crate::system::connection_log::record("not reopened", &name, &e);
+                let why = form.connect_failure(&e);
+                slot.state = ConnState::Failed { why: why.clone() };
+                slot.form = form;
+                self.after_reopening();
                 self.connection.slots.after_reconnect = None;
-                let again = t!("session.again");
-                let msg = t!("session.reconnect_failed", name = form.name, e = form.connect_failure(&e), again = again);
+                let msg = t!("session.reconnect_failed", name = name, e = why, again = t!("session.again"));
                 self.log(msg.clone(), true);
                 return self.set_status(msg, true);
             }
         };
-        let connection_name = form.name.clone();
+        tracing::info!(connection = %name, "reopened the connection");
+        crate::system::connection_log::record("reopened", &name, db.version());
         let summary = form.summary();
         let project = self.project().map(|p| p.name.clone()).unwrap_or_default();
+        let Some(slot) = self.connection.slot_mut(id) else { return };
+        slot.database = Some(db);
+        slot.state = ConnState::default();
+        slot.mode = form.mode;
+        slot.tx_mode = form.tx_mode();
+        slot.summary = format!("[{project}] {summary}");
+        slot.form = form;
         self.log(t!("session.reconnected", summary = summary), false);
-        let id = self.connection.slots.park_new(Connection {
-            database: Some(db),
-            mode: form.mode,
-            tx_mode: form.tx_mode(),
-            summary: format!("[{project}] {}", form.summary()),
-            form,
-            ..Connection::default()
-        });
-        for (tab, saved_name) in self.tabs.iter_mut().zip(&self.connection.slots.tab_connections) {
-            if saved_name.as_deref() == Some(connection_name.as_str()) {
-                tab.conn = Some(id);
-            }
+        // Shown: its tables now (a parked one's load as its tab is shown).
+        if self.connection.slots.active == Some(id) {
+            self.load_catalog();
         }
-        if self.tabs[self.active_tab].conn == Some(id) {
-            self.switch_conn(Some(id));
-        }
+        self.after_reopening();
         // (A retry for a run: the run says how it went.)
-        if self.connection.slots.restoring.is_empty()
+        if self.reconnecting().is_empty()
             && !self.notes.status_is_error
             && self.connection.slots.after_reconnect.is_none()
         {
@@ -912,6 +922,22 @@ impl App {
             self.connection.slots.after_reconnect.take().filter(|_| self.connection.database.is_some())
         {
             self.run_action(action);
+        }
+    }
+
+    /// One reopened (or not): once none is left opening, the card's job is
+    /// done, unless one failed: then it stays (shown at once) until a key,
+    /// saying which and why.
+    fn after_reopening(&mut self) {
+        if !self.reconnecting().is_empty() {
+            return;
+        }
+        if let Some(splash) = &mut self.splash {
+            if splash.done.iter().any(|(_, e)| e.is_some()) {
+                splash.shown = true;
+            } else {
+                self.splash = None;
+            }
         }
     }
 
@@ -982,45 +1008,6 @@ mod conns_tests {
         assert_eq!(slots.len(), 2);
         assert!(conns.active.is_none() && conns.parked.is_empty());
         assert_eq!(active.summary, "");
-    }
-}
-
-#[cfg(test)]
-mod keepalive_tests {
-    use super::*;
-
-    #[test]
-    fn checks_keep_last_health_and_check_in_progress_separate() {
-        let mut keepalive = KeepAlive::default();
-        keepalive.mark_lost();
-        keepalive.begin_check();
-        keepalive.begin_reconnect();
-
-        assert!(keepalive.pinging());
-        assert!(keepalive.connection_lost());
-        assert_eq!(keepalive.finish_check(false), (true, true));
-        assert!(!keepalive.pinging());
-        assert!(keepalive.connection_lost());
-
-        keepalive.begin_check();
-        assert_eq!(keepalive.finish_check(true), (true, false));
-        assert!(!keepalive.connection_lost());
-    }
-
-    #[test]
-    fn canceling_a_check_keeps_known_health_and_clears_reconnect_intent() {
-        let mut keepalive = KeepAlive::default();
-        keepalive.mark_lost();
-        keepalive.begin_check();
-        keepalive.begin_reconnect();
-
-        keepalive.cancel_check();
-
-        assert!(keepalive.connection_lost());
-        assert!(!keepalive.pinging());
-        keepalive.begin_check();
-        assert_eq!(keepalive.finish_check(true), (true, false));
-        assert!(!keepalive.connection_lost());
     }
 }
 

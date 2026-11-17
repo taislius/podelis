@@ -21,6 +21,7 @@ export_dir = "~/Downloads"  # where exports go (default: current directory)
 restore_session = true      # reopen the last project's tabs and connections
 mouse = true                # clicks and the wheel (false: terminal selection without Shift)
 keepalive = 0               # seconds between checks of an idle connection (0: off)
+connection_log = true       # keep connections.log here: what happened to the connections (yours alone, mode 600; no passwords, nor a password command's output)
 leader_double_space = false # Space twice quickly in the editor opens the Ctrl+K menu
 leader_menu = true          # Ctrl+K shows its menu after half a second without a letter (false: only `?` or Ctrl+Shift+K show it)
 local_leader = "\\"         # in vim's Normal mode, the key before the editor's own commands: `\r` runs, `\f` formats… ("": off)

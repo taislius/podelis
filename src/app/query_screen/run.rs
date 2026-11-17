@@ -72,10 +72,11 @@ impl App {
     }
 
     pub(in crate::app) fn not_connected_message(&self) -> String {
-        if self.connection.slots.restoring.is_empty() {
+        let opening = self.reconnecting();
+        if opening.is_empty() {
             t!("run.not_connected").to_string()
         } else {
-            t!("run.still_reconnecting", names = self.connection.slots.restoring.join(", "))
+            t!("run.still_reconnecting", names = opening.join(", "))
         }
     }
 
@@ -285,8 +286,8 @@ impl App {
         // After a quiet while (or a lost connection), the server is asked
         // to answer first: a link that died meanwhile fails in seconds
         // rather than leaving the run waiting.
-        let check_first = self.connection.keepalive.connection_lost()
-            || self.connection.keepalive.last_activity.elapsed() >= CHECK_AFTER_IDLE;
+        let check_first =
+            self.connection.state.is_lost() || self.connection.keepalive.last_activity.elapsed() >= CHECK_AFTER_IDLE;
         self.connection.keepalive.last_activity = Instant::now();
         self.tab.run.extra.timed_out = None;
         self.tab.run.extra.started = Some(Instant::now());

@@ -45,7 +45,7 @@ pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, port: u16
         })
         .connect_with(opts)
         .await
-        .context("failed to connect to database")?;
+        .context("couldn't connect")?;
     let conn = pool.acquire().await.context("failed to open session")?;
     Ok((Pool::MySql(pool), Session::MySql(conn)))
 }
@@ -75,10 +75,21 @@ pub(in crate::db) async fn try_login(opts: &MySqlConnectOptions) -> Result<()> {
             let _ = conn.close().await;
             Ok(())
         }
-        // The network's reasons as `reach` words them; the server's own
-        // (a wrong password) as they come.
-        Ok(Err(sqlx::Error::Io(e))) => Err(unreachable(opts, &crate::db::io_reason(&e))),
-        Ok(Err(e)) => Err(anyhow::Error::new(e).context("failed to connect to database")),
+        // The network's reasons as `reach` words them; a server that was
+        // reached but failed the login (TLS, another protocol on the port)
+        // and the server's own (a wrong password) as `error_message` says.
+        Ok(Err(sqlx::Error::Io(e))) if crate::db::errors::is_unreachable_io(&e) => {
+            Err(unreachable(opts, &crate::db::io_reason(&e)))
+        }
+        // Closed before the login was through: likely not MySQL there.
+        Ok(Err(sqlx::Error::Io(e))) if crate::db::errors::is_closed(&e) => {
+            let at = crate::db::address_text(opts.get_host(), opts.get_port());
+            tracing::info!(error = %e, "closed during the login");
+            Err(anyhow::anyhow!(
+                "couldn't connect: {at} closed the connection during the login: is it MySQL there (the host and port)?"
+            ))
+        }
+        Ok(Err(e)) => Err(anyhow::Error::new(e).context("couldn't connect")),
         Err(_) => Err(unreachable(opts, &format!("no answer: timed out after {} s", CONNECT_TIMEOUT.as_secs()))),
     }
 }

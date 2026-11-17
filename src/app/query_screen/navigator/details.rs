@@ -278,6 +278,12 @@ impl SchemaNode {
 pub struct SchemaPanel {
     pub tables: Vec<SchemaTable>,
     pub loading: bool,
+    /// When the load running now started: shown after a moment, and given
+    /// up at `CATALOG_TIMEOUT`.
+    pub loading_since: Option<std::time::Instant>,
+    /// Which load the one running now is (its results carry it: a late
+    /// one from before is dropped).
+    pub load: u64,
     pub error: Option<String>,
     pub selected: usize,
     /// Only tables whose name contains this (case-insensitive) are shown.

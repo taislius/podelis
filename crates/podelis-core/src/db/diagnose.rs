@@ -70,7 +70,15 @@ fn network_hint(m: &str) -> Option<&'static str> {
 /// TLS's disagreements, and SSH missing (`m` in lower case).
 fn tls_hint(m: &str) -> Option<&'static str> {
     let has = |s: &str| m.contains(s);
-    Some(if has("certificate") || has("unknownissuer") || has("invalid peer") {
+    Some(if has("doesn't offer tls") {
+        "the server has TLS turned off: use SSL mode `prefer` or `disable`, or turn TLS on at the server"
+    } else if has("for another host name") {
+        "connect by the name the certificate was issued for, or use SSL mode `verify-ca` (it checks who signed it, not the name)"
+    } else if has("certificate has expired") {
+        "the server's certificate needs renewing: until then, SSL mode `require` encrypts without verifying it"
+    } else if has("tls version too old") {
+        "the server needs a newer TLS (1.2 or later): upgrade it, or use SSL mode `disable` on a network you trust"
+    } else if has("certificate") || has("unknownissuer") || has("invalid peer") {
         "the server's TLS certificate isn't trusted: SSL mode `require` encrypts without verifying it, or trust its CA"
     } else if has("ssl") && (has("required") || has("not support") || has("rejected")) {
         "the server and the SSL mode disagree: try another SSL mode (`require` to insist on TLS, `disable` for none)"

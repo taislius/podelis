@@ -15,21 +15,21 @@ async fn connection_health_follows_the_connection_when_hidden_tabs_are_applied()
     connect_profile(&mut app, &b).await;
     assert_eq!(app.active_tab, 1);
 
-    app.connection.keepalive.mark_lost();
+    app.connection.state.lose();
     let mut alpha_lost = true;
     app.in_tab(0, |app| {
-        app.connection.keepalive.mark_healthy();
-        alpha_lost = app.connection.keepalive.connection_lost();
+        app.connection.state.answered();
+        alpha_lost = app.connection.state.is_lost();
     });
-    assert!(app.connection.keepalive.connection_lost(), "alpha's success must not clear beta's lost state");
+    assert!(app.connection.state.is_lost(), "alpha's success must not clear beta's lost state");
     assert!(!alpha_lost);
 
-    app.connection.keepalive.mark_healthy();
+    app.connection.state.answered();
     app.in_tab(0, |app| {
-        app.connection.keepalive.mark_lost();
-        alpha_lost = app.connection.keepalive.connection_lost();
+        app.connection.state.lose();
+        alpha_lost = app.connection.state.is_lost();
     });
-    assert!(!app.connection.keepalive.connection_lost(), "alpha's failure must not mark beta as lost");
+    assert!(!app.connection.state.is_lost(), "alpha's failure must not mark beta as lost");
     assert!(alpha_lost);
 }
 

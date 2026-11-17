@@ -2,9 +2,9 @@
 
 use crate::app::*;
 
-/// How often a lost connection is checked again.
-const LOST_RECHECK: Duration = Duration::from_secs(5);
-/// … and how soon after the last check something the user does checks it.
+/// How soon after the last check something the user does checks a lost
+/// connection again (the checks on their own wait longer each time:
+/// `KeepAlive::next_lost_check`).
 const LOST_RECHECK_AFTER_INPUT: Duration = Duration::from_secs(2);
 /// How long a check waits for the server.
 const PING_WITHIN: Duration = Duration::from_secs(5);
@@ -144,7 +144,11 @@ impl App {
             || self.connection.sandbox.is_some()
             || (self.settings.keepalive > 0 && self.connection.database.is_some())
             // A lost connection, checked again until it's back.
-            || (self.connection.keepalive.connection_lost() && self.connection.database.is_some())
+            || (self.connection.state.is_lost() && self.connection.database.is_some())
+            // The other tabs' connections, checked as the shown one is.
+            || self.connection.all().any(|(_, slot)| {
+                slot.database.is_some() && (self.settings.keepalive > 0 || slot.state.is_lost())
+            })
             // A plan's age, kept current.
             || (self.tab.result_tab == ResultTab::Plan && self.tab.plan_source.is_some())
             // What agents did, for the status bar's note.
@@ -160,8 +164,8 @@ impl App {
     pub(in crate::app) fn keepalive_tick(&mut self) {
         // A lost connection is checked again every few seconds, heartbeat
         // or not, so it's said as soon as it's back (and reconnected).
-        let every = if self.connection.keepalive.connection_lost() {
-            LOST_RECHECK
+        let every = if self.connection.state.is_lost() {
+            self.connection.keepalive.next_lost_check()
         } else {
             Duration::from_secs(self.settings.keepalive)
         };
@@ -170,15 +174,49 @@ impl App {
             || self.connection.keepalive.pinging()
             || self.connection.keepalive.last_activity.elapsed() < every
         {
-            return;
+            return self.check_hidden_connections();
         }
         self.ping();
+        self.check_hidden_connections();
+    }
+
+    /// The other tabs' connections are checked as the shown one is (with
+    /// the heartbeat on, and a lost one every few seconds until it's
+    /// back), unless one of their tabs is using it: so a tab shown again
+    /// says how its connection is, rather than finding out then.
+    fn check_hidden_connections(&mut self) {
+        let heartbeat = Duration::from_secs(self.settings.keepalive);
+        let shown = self.connection.slots.active;
+        let due: Vec<ConnId> = self
+            .connection
+            .all()
+            .filter(|(id, slot)| {
+                let every = if slot.state.is_lost() { slot.keepalive.next_lost_check() } else { heartbeat };
+                Some(*id) != shown
+                    && slot.database.is_some()
+                    && !every.is_zero()
+                    && !slot.keepalive.pinging()
+                    && slot.keepalive.last_activity.elapsed() >= every
+            })
+            .map(|(id, _)| id)
+            .collect();
+        let due: Vec<ConnId> = due.into_iter().filter(|&id| !self.conn_in_use(id)).collect();
+        for id in due {
+            self.ping_conn(id);
+        }
+    }
+
+    /// A query, or an export of every row, is on connection `id`'s
+    /// session (a check would wait behind it).
+    pub(in crate::app) fn conn_in_use(&self, id: ConnId) -> bool {
+        (0..self.tabs.len()).any(|i| self.tabs[i].conn == Some(id) && self.tab_run(i).is_some_and(|r| r.executing))
+            || self.exports.task.as_ref().is_some_and(|run| run.conn == Some(id))
     }
 
     /// Something done while the connection is lost (a key, a click):
     /// checks it again now rather than at the next tick, once in a while.
     pub(in crate::app) fn recheck_lost_connection(&mut self) {
-        if self.connection.keepalive.connection_lost()
+        if self.connection.state.is_lost()
             && !self.conn_busy()
             && !self.connection.keepalive.pinging()
             && self.connection.keepalive.last_activity.elapsed() >= LOST_RECHECK_AFTER_INPUT
@@ -191,10 +229,18 @@ impl App {
     /// query). No answer within `PING_WITHIN` is said as such; whether the
     /// session is given up for it is `pinged`'s to decide.
     fn ping(&mut self) {
-        let Some(db) = self.connection.database.clone() else { return };
-        self.connection.keepalive.begin_check();
-        self.connection.keepalive.last_activity = Instant::now();
-        let send = self.sender();
+        let Some(id) = self.connection.slots.active else { return };
+        self.ping_conn(id);
+    }
+
+    /// Checks connection `id`, shown or parked: its answer is for it,
+    /// wherever it is then.
+    fn ping_conn(&mut self, id: ConnId) {
+        let Some(slot) = self.connection.slot_mut(id) else { return };
+        let Some(db) = slot.database.clone() else { return };
+        slot.keepalive.begin_check();
+        slot.keepalive.last_activity = Instant::now();
+        let send = self.conn_sender(id);
         tokio::spawn(async move {
             let started = Instant::now();
             let result =
@@ -205,7 +251,7 @@ impl App {
                 } else {
                     Err((t!("info.no_answer", s = PING_WITHIN.as_secs()), Ping::NoAnswer))
                 };
-            send(DbEventKind::Pinged(result));
+            send(ConnEvent::Pinged(result));
         });
     }
 
@@ -230,7 +276,15 @@ impl App {
     }
 
     pub(in crate::app) fn pinged(&mut self, result: Result<(Duration, bool), (String, Ping)>) {
-        let (was_lost, reconnect_requested) = self.connection.keepalive.finish_check(result.is_ok());
+        let was_lost = self.connection.state.is_lost();
+        let reconnect_requested = self.connection.keepalive.finish_check();
+        if result.is_ok() {
+            self.connection.state.answered();
+        } else {
+            self.connection.state.lose();
+        }
+        let lost = self.connection.state.is_lost();
+        self.connection.keepalive.checked(lost);
         // No answer while rechecking a lost connection: the session is
         // given up (the next check opens a new one rather than waiting on
         // a dead link), unless a query now runs on it or a transaction is
@@ -248,14 +302,27 @@ impl App {
         match result {
             Ok((latency, reconnected)) => {
                 self.connection.latency = Some(latency);
+                let name = self.connection.form.short_name();
+                if was_lost {
+                    crate::system::connection_log::record("back", &name, &format!("{} ms", latency.as_millis()));
+                }
+                if reconnected {
+                    crate::system::connection_log::record("reconnected", &name, "the session was reopened");
+                }
                 if (was_lost || reconnect_requested) && !reconnected {
                     let message = if was_lost { t!("info.back") } else { t!("info.check_ok") }.to_string();
                     self.log(message.clone(), false);
                     self.connection_check_status(message, false, reconnect_requested);
                 }
                 if reconnected {
+                    // A reconnect loses an open transaction: said, never quietly.
+                    let lost = if self.connection.txn == TxnState::Idle {
+                        String::new()
+                    } else {
+                        format!(" · {}", t!("info.transaction_lost"))
+                    };
                     self.connection.txn = TxnState::Idle;
-                    let message = format!("{}: {}", t!("info.reconnected"), t!("info.settings_reset"));
+                    let message = format!("{}: {}{lost}", t!("info.reconnected"), t!("info.settings_reset"));
                     self.log(t!("info.reconnected").to_string(), true);
                     self.connection_check_status(message, true, reconnect_requested);
                 }
@@ -264,6 +331,7 @@ impl App {
             // keep quiet (the status bar says "connection lost").
             Err(_) if was_lost && !reconnect_requested => {}
             Err(e) => {
+                crate::system::connection_log::record("check failed", &self.connection.form.short_name(), &e);
                 let msg = t!("info.check_failed", e = crate::db::with_hint(&e).replace('\n', " · "));
                 self.log(msg.clone(), true);
                 self.connection_check_status(msg, true, reconnect_requested);

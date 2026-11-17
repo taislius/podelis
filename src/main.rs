@@ -99,6 +99,9 @@ async fn main() -> Result<()> {
         config::history::migrate_legacy(&config_dir.join("history.jsonl"), &config_dir.join("history"), id);
     }
     let (settings, settings_warning) = config::settings::Settings::load(&config::store::config_dir());
+    if settings.connection_log {
+        system::connection_log::init();
+    }
     config::theme::set_theme(settings.theme);
     i18n::choose(&settings.language, i18n::system().as_deref());
     let (keymap, key_warnings) = config::keys::KeyMap::new(&settings.keys);

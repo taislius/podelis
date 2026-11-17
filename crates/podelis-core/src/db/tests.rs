@@ -896,3 +896,75 @@ async fn live_server_load() {
         }
     }
 }
+
+/// Words the user mustn't see: the libraries' own (rustls', sqlx's, the
+/// operating system's resolver's).
+fn says_no_library_words(message: &str) {
+    for word in [
+        "UnknownIssuer",
+        "peer certificate",
+        "sqlx",
+        "SSLRequest",
+        "0x",
+        "expected to read",
+        "pool timed out",
+        "nodename",
+        "lookup address",
+        "error returned from database",
+        "attempting to establish",
+    ] {
+        assert!(!message.contains(word), "{word:?} in {message:?}");
+    }
+}
+
+/// Something that isn't the database listens on the port (a web server):
+/// each engine says so in a user's words, not its driver's.
+#[tokio::test]
+async fn another_protocol_on_the_port_is_said_in_plain_words() {
+    use tokio::io::AsyncWriteExt as _;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = listener.accept().await {
+            let _ = s.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").await;
+        }
+    });
+    for engine in Engine::BUILT.into_iter().filter(|e| matches!(e, Engine::Postgres | Engine::MySql)) {
+        let params = ConnectParams {
+            engine,
+            host: "127.0.0.1".into(),
+            port,
+            user: "nobody".into(),
+            password: "x".into(),
+            database: String::new(),
+            ssl_mode: SslMode::Disable,
+            read_only: false,
+            ssh: None,
+            password_command: Vec::new(),
+            for_agents: false,
+        };
+        let err = Database::connect(params).await.err().expect("not a database");
+        let said = error_message(&err);
+        says_no_library_words(&said);
+        assert!(
+            said.contains("this database's") || said.contains("was cut") || said.contains("is it MySQL there"),
+            "{engine:?}: {said}"
+        );
+    }
+}
+
+/// A certificate the test server signed itself, checked (MySQL's image
+/// makes one; PostgreSQL's has TLS off): in a user's words, and not
+/// "can't reach" (it answered).
+#[tokio::test]
+async fn a_certificate_that_isnt_trusted_is_said_in_plain_words() {
+    for engine in Engine::BUILT {
+        let Some(mut params) = live_params(engine) else { continue };
+        params.ssl_mode = SslMode::VerifyFull;
+        let err = Database::connect(params).await.err().expect("an untrusted certificate");
+        let said = error_message(&err);
+        says_no_library_words(&said);
+        assert!(said.contains("TLS"), "{engine:?}: {said}");
+        assert!(!said.contains("can't reach"), "{engine:?}: it answered: {said}");
+    }
+}

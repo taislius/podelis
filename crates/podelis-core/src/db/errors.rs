@@ -102,6 +102,84 @@ pub struct ErrorFacts {
     pub tls: Option<String>,
     /// What the server said, if it's the server's error.
     pub server: Option<ServerError>,
+    /// What went wrong, in a user's words, where it's the driver's or the
+    /// network's error rather than the server's: no library's own wording
+    /// (rustls', sqlx's) reaches the user.
+    pub said: Option<String>,
+}
+
+/// Why TLS failed, from a TLS library's text, in a user's words.
+pub(crate) fn tls_words(text: &str) -> String {
+    let t = text.to_ascii_lowercase();
+    let has = |s: &str| t.contains(s);
+    if has("unknownissuer") || has("unknown issuer") || has("self-signed") || has("self signed") {
+        "the server's TLS certificate isn't signed by an authority this computer trusts".into()
+    } else if has("notvalidforname") || has("not valid for name") || has("hostname mismatch") {
+        "the server's TLS certificate is for another host name".into()
+    } else if has("expired") {
+        "the server's TLS certificate has expired".into()
+    } else if has("does not support tls") || has("doesn't support tls") || has("does not support ssl") {
+        "the server doesn't offer TLS, which this SSL mode needs".into()
+    } else if has("protocol version") {
+        "the server only speaks a TLS version too old to use (TLS 1.0 or 1.1)".into()
+    } else if has("certificate") {
+        "the server's TLS certificate wasn't accepted".into()
+    } else {
+        "the TLS handshake failed".into()
+    }
+}
+
+/// Whether a library's text is about TLS (rustls reports a rejected
+/// protocol version or cipher as an I/O error).
+pub(crate) fn looks_tls(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    ["handshake", "alert", "tls", "ssl", "protocol version", "certificate"].iter().any(|w| text.contains(w))
+}
+
+/// Whether an I/O error means the server's address didn't answer at all
+/// (refused, no route, no such host, no answer), not that it answered
+/// and the login failed.
+pub(crate) fn is_unreachable_io(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind as K;
+    !looks_tls(&e.to_string())
+        && (matches!(e.kind(), K::ConnectionRefused | K::HostUnreachable | K::NetworkUnreachable | K::TimedOut)
+            || io_words(e) == "no such host")
+}
+
+/// Why a connection to a server failed, from its I/O error, in a user's
+/// words (the operating system's and libraries' own left for the log).
+pub(crate) fn io_words(e: &std::io::Error) -> String {
+    use std::io::ErrorKind as K;
+    let text = e.to_string();
+    let t = text.to_ascii_lowercase();
+    if looks_tls(&text) {
+        return tls_words(&text);
+    }
+    let dns = ["failed to lookup address", "nodename nor servname", "name or service not known", "no such host"]
+        .iter()
+        .chain(&["temporary failure in name resolution", "no address associated"])
+        .any(|w| t.contains(w));
+    match e.kind() {
+        _ if dns => "no such host".into(),
+        K::ConnectionRefused => "connection refused".into(),
+        K::HostUnreachable | K::NetworkUnreachable => "no route to the host".into(),
+        K::TimedOut => "no answer: timed out".into(),
+        K::ConnectionReset | K::ConnectionAborted | K::BrokenPipe => "the connection was cut".into(),
+        _ if is_closed(e) => "the server closed the connection".into(),
+        // The operating system's own words are plain ("Too many open
+        // files"): kept, without its error number.
+        _ => {
+            let plain = text.split(" (os error").next().unwrap_or(&text).trim();
+            format!("the connection failed: {plain}")
+        }
+    }
+}
+
+/// Whether the other end closed the connection (in the middle of what it
+/// was saying, or before it said anything).
+pub(crate) fn is_closed(e: &std::io::Error) -> bool {
+    let t = e.to_string().to_ascii_lowercase();
+    e.kind() == std::io::ErrorKind::UnexpectedEof || t.contains("at eof") || t.contains("expected to read")
 }
 
 /// A server's error, as its engine reads it.
@@ -157,12 +235,25 @@ pub fn is_broken(err: &anyhow::Error) -> bool {
 /// A readable message for an error from `run`/`connect`: the server's own
 /// message, as its engine words it, rather than the driver's wrapping;
 /// context added on top kept ("connection lost; reconnected").
+/// A driver's or the network's error is said in a user's words
+/// ([`ErrorFacts::said`]); [`error_details`] has the libraries' own.
 pub fn error_message(err: &anyhow::Error) -> String {
-    let Some((before, ErrorFacts { server: Some(server), .. })) = facts(err) else {
+    let Some((before, facts)) = facts(err) else {
         return format!("{err:#}");
     };
+    let message = match (facts.server, facts.said) {
+        (Some(server), _) => server.message,
+        (None, Some(said)) => said,
+        (None, None) => return format!("{err:#}"),
+    };
     let context: Vec<String> = err.chain().take(before).map(ToString::to_string).collect();
-    if context.is_empty() { server.message } else { format!("{}: {}", context.join(": "), server.message) }
+    if context.is_empty() { message } else { format!("{}: {}", context.join(": "), message) }
+}
+
+/// Everything `err` says, the libraries' own words too: for the log, not
+/// the user.
+pub fn error_details(err: &anyhow::Error) -> String {
+    format!("{err:#}")
 }
 
 /// Whether `err` is a server's syntax error or unknown function (by its

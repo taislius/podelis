@@ -44,8 +44,8 @@ pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint
 pub use dialect::PlanNote;
 pub use dialect::{LexerRules, Plan, SqlDialect, TxEnd, human_bytes, human_rows};
 pub use errors::{
-    CheckOutcome, ErrorPos, error_message, error_position, is_broken, is_reconnected, is_unreachable, missing_feature,
-    sql_literal, value_literal,
+    CheckOutcome, ErrorPos, error_details, error_message, error_position, is_broken, is_reconnected, is_unreachable,
+    missing_feature, sql_literal, value_literal,
 };
 pub use options::{AgentAccess, ConnectParams, ConnectionMode, PasswordSource, SslMode, TxMode};
 pub use run::RunError;
@@ -231,11 +231,7 @@ pub struct ColumnInfo {
 
 /// Why a connection to a server failed, in a user's words.
 fn io_reason(e: &std::io::Error) -> String {
-    match e.kind() {
-        std::io::ErrorKind::ConnectionRefused => "connection refused".into(),
-        std::io::ErrorKind::HostUnreachable | std::io::ErrorKind::NetworkUnreachable => "no route to the host".into(),
-        _ => e.to_string(),
-    }
+    errors::io_words(e)
 }
 
 /// `host:port` as written in messages (an IPv6 address in brackets).

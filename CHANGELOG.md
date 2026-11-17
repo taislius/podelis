@@ -28,6 +28,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Each connection says where it stands, in words where it isn't simply working: `checking…` until something answered on it (its tables, a check, a query), `tables didn't load`, `connection lost`, `<name> didn't reconnect`, `reconnecting…`; the navigator says the same (with the reason, and how to try again) and is never blank. Connections being reopened have their place from the start, each answer matched to its connection and attempt rather than by name.
+- Connection errors are said in plain words, not the libraries' (`invalid peer certificate: UnknownIssuer`, `pool timed out while waiting for an open connection`, `unexpected response from SSLRequest: 0x48 (sqlx_postgres::…)`, the resolver's `nodename nor servname provided`): the certificate isn't signed by an authority this computer trusts, is for another host name or has expired; the server doesn't offer TLS; no such host; no answer in time; the connection was cut; another protocol on the port. A refused certificate is no longer said as "can't reach" (the server answered). The libraries' own words go to `connections.log`.
+- What happens to connections (opening, reopening, failing with the libraries' own words, the tables loading or not, checks finding one lost or back) is kept in `connections.log` in the config folder; `podelis doctor` shows its last lines. It's yours alone (mode 600), with passwords in URLs and settings, and what a failing password command printed, left out; `connection_log = false` in config.toml keeps none.
+- A lost connection is tried again less often the longer it stays lost (5 s, doubling to a minute) and the status bar says when (`trying again in 12 s`); a key still checks it at once. With the heartbeat on, the other tabs' connections are checked too, and the tab list (`Ctrl+K g`, `Ctrl+K j`) says how each is (lost, reconnecting, didn't reconnect, tables didn't load).
+- A reconnect that lost an open transaction says so (`the open transaction was lost: its changes weren't committed`), in the error's colour and in MESSAGES.
 - `F5`, `F6`, `F7`, undo, redo, find, the history and completion work while the editor has the keys only: in the navigator or the results they no longer act on the editor's text.
 - A saved query that changed is shown by its name underlined in orange (and *edited* in `Ctrl+K`'s tabs), not a `!`.
 - The ask pop-up is gone: questions are asked in the editor.
@@ -42,6 +47,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Reopening the last session: a connection whose tables didn't load (a server that let the login in, then didn't answer) left the navigator blank under a green dot, and nothing said why; now its tables are given up after 30 s, said with the reason and `r` to try again, and the status bar says `tables didn't load`. A connection that couldn't be reopened is said on its tab until it opens (the next key used to clear the only message), and the reopening card stays, with each failure and why, until a key.
 - Another name counts in facts: with `customers also called client`, a fact about `client.city` is about customers' `city` (it was taken as stale), and one about `client` is about the table (it was a term of its own), for models and in the ontology alike. A model's suggested name counts only once it's confirmed.
 - A default filter or history said of a table that's been dropped is stale, not a business term with that table's name.
 - An ontology file loaded back unchanged changes nothing in more cases: a fact both suggested and confirmed, a term's facts written by another of its names, a dropped table's facts.
