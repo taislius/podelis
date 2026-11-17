@@ -19,6 +19,10 @@ ignore = [
     # file pair someone else made. sqlx 0.9.0 (the latest) pins
     # libsqlite3-sys 0.37; remove this once a sqlx takes 0.39.
     { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys 0.37 pinned by sqlx 0.9.0, the latest; needs a sqlx on 0.39" },
+    # chrono declared unmaintained (no vulnerability; no release fixes it):
+    # sqlx, arrow/parquet, rmcp and schemars all depend on it. Drop this
+    # once they've moved (to jiff or time), with Podėlis's own use of it.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained: sqlx, arrow/parquet, rmcp and schemars depend on it" },
 ]
 
 [licenses]

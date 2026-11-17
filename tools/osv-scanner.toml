@@ -17,3 +17,7 @@ reason = "zvariant_derive: unmaintained, merged into zbus 6; secret-service stil
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0459"
 reason = "libsqlite3-sys 0.37 pinned by sqlx 0.9.0, the latest; needs a sqlx on libsqlite3-sys 0.39"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+reason = "chrono unmaintained (no vulnerability, no fixed release): sqlx, arrow/parquet, rmcp and schemars depend on it"
