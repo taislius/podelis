@@ -947,7 +947,11 @@ async fn another_protocol_on_the_port_is_said_in_plain_words() {
         let said = error_message(&err);
         says_no_library_words(&said);
         assert!(
-            said.contains("this database's") || said.contains("was cut") || said.contains("is it MySQL there"),
+            // (How the other end goes differs by system: reset on macOS,
+            // closed on Linux.)
+            ["this database's", "was cut", "closed the connection", "is it MySQL there"]
+                .iter()
+                .any(|w| said.contains(w)),
             "{engine:?}: {said}"
         );
     }
