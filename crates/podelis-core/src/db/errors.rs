@@ -246,8 +246,33 @@ pub fn error_message(err: &anyhow::Error) -> String {
         (None, Some(said)) => said,
         (None, None) => return format!("{err:#}"),
     };
+    let message = with_proxysql_words(message);
     let context: Vec<String> = err.chain().take(before).map(ToString::to_string).collect();
     if context.is_empty() { message } else { format!("{}: {}", context.join(": "), message) }
+}
+
+/// ProxySQL's "connection is locked to hostgroup N but trying to reach
+/// hostgroup M", with what it means and what works: a statement such as
+/// `SET @id = …` tied the session to one group of servers (ProxySQL can't
+/// carry the variable to another), and its rules send this statement to
+/// another.
+fn with_proxysql_words(message: String) -> String {
+    if !message.contains(PROXYSQL_LOCKED) {
+        return message;
+    }
+    format!(
+        "{message} · ProxySQL tied this session to one group of servers (a SET @variable, a temporary table or \
+         a lock does) and sends this statement to another: run them in one transaction (BEGIN … COMMIT), or put \
+         the value in the query itself. The next run gets a new session (its @variables are gone)"
+    )
+}
+
+const PROXYSQL_LOCKED: &str = "is locked to hostgroup";
+
+/// ProxySQL refused a statement: the session is tied to one group of
+/// servers (see [`with_proxysql_words`]), for as long as it lives.
+pub(super) fn is_proxysql_locked(err: &anyhow::Error) -> bool {
+    err.chain().any(|e| e.to_string().contains(PROXYSQL_LOCKED))
 }
 
 /// Everything `err` says, the libraries' own words too: for the log, not

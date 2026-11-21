@@ -197,6 +197,11 @@ pub(in crate::db) async fn connections(_db: &Database) -> Option<String> {
 }
 
 
+/// A file is its one database: none to pick among.
+pub(in crate::db) async fn databases(_db: &Database) -> Result<Option<Vec<String>>> {
+    Ok(None)
+}
+
 /// … and no network to encrypt.
 pub(in crate::db) async fn tls_info(_db: &Database) -> Option<String> {
     None

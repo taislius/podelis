@@ -796,6 +796,7 @@ title = "DUOMENŲ EKSPORTAS"
 to = "Kur"
 
 [menu]
+databases = "Duomenų bazės…"
 reconnect = "Patikrinti ryšį arba prisijungti iš naujo"
 group_server = "serveris…"
 group_ai = "DI…"
@@ -901,6 +902,7 @@ production = "veiklos aplinka (PROD)"
 read_only = "tik skaitymas"
 
 [navigator]
+pick_database = "D: duomenų bazės"
 table_title = "LENTELĖ"
 view_title = "RODINYS"
 by_name = "pavadinimą"
@@ -931,6 +933,13 @@ view = "rodinys"
 views = "RODINIAI"
 
 [palette]
+open_database = "Atverti šią duomenų bazę"
+databases_title = "DUOMENŲ BAZĖS"
+databases_failed = "Nepavyko gauti duomenų bazių sąrašo: {e}"
+no_databases = "Failas yra viena duomenų bazė: nėra ko rinktis"
+opening_database = "Atveriama {name}…"
+database_failed = "Nepavyko atverti {name}: {e}"
+database_here = "{name} jau yra šio skirtuko duomenų bazė"
 reconnect = "Patikrinti duomenų bazės ryšį arba prisijungti iš naujo"
 pipe = "Perduoti eilutes komandai (grep, sort, jq…)"
 open_rows = "Atverti eilutes programoje: CSV, JSON, SQL… (arba peržiūros programoje šiame terminale)"

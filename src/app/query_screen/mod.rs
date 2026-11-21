@@ -10,6 +10,7 @@
 
 pub mod ask;
 pub(in crate::app) mod compare;
+mod databases;
 pub mod editor;
 mod info;
 mod keys;

@@ -139,6 +139,14 @@ pub(in crate::db) async fn stop_session(_db: &Database, _id: i64, _terminate: bo
     anyhow::bail!("MongoDB's operations aren't listed yet")
 }
 
+/// The server's databases this user may list.
+pub(in crate::db) async fn databases(db: &Database) -> Result<Option<Vec<String>>> {
+    let Pool::MongoDb(p) = &db.0.pool else { unreachable!("engine matches pool") };
+    let mut names = p.client.list_database_names().await?;
+    names.sort();
+    Ok(Some(names))
+}
+
 /// Connections in use, and how many the server takes in all (`serverStatus`:
 /// those in use and those still free); `None` where this user may not ask.
 pub(in crate::db) async fn connections(db: &Database) -> Option<String> {

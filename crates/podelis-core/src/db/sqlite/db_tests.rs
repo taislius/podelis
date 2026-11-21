@@ -28,6 +28,15 @@ pub static TEST_SQL: TestSql = TestSql {
     without_rollback: None,
 };
 
+/// A file is its one database: none to pick among.
+#[tokio::test]
+async fn a_file_has_no_databases_to_pick() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::connect(file_params(&dir.path().join("one.db"), false)).await.unwrap();
+    assert!(db.databases().await.unwrap().is_none());
+    db.close().await;
+}
+
 #[tokio::test]
 async fn a_sqlite_path_keeps_its_brackets() {
     // Brackets are stripped from IPv6 hosts, not from file names.

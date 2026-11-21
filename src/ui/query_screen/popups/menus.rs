@@ -219,6 +219,8 @@ pub(super) fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
         t!("conn_list.title")
     } else if palette.tabs_only() {
         t!("tab_list.title")
+    } else if palette.databases_only() {
+        t!("palette.databases_title")
     } else {
         t!("palette.title")
     };

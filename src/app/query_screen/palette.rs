@@ -25,6 +25,8 @@ pub enum PaletteMode {
     /// Only the open connections (Ctrl+K j), with their text to search
     /// (name, address, its tabs' names), lowercased.
     Connections(Vec<(ConnId, String)>),
+    /// The server's databases (`D` in the navigator), by name.
+    Databases(Vec<String>),
 }
 
 pub struct Palette {
@@ -62,6 +64,21 @@ impl Palette {
 
     pub fn tabs_only(&self) -> bool {
         matches!(self.mode, PaletteMode::Tabs(_))
+    }
+
+    /// A list of its own to pick from, `selected` picked: no letters to go
+    /// back to.
+    pub(in crate::app) fn listing(mode: PaletteMode, selected: usize) -> Self {
+        Palette::new(mode, selected, Vec::new())
+    }
+
+    pub fn databases_only(&self) -> bool {
+        matches!(self.mode, PaletteMode::Databases(_))
+    }
+
+    /// Database `i` of the list.
+    pub(in crate::app) fn database(&self, i: usize) -> Option<&String> {
+        if let PaletteMode::Databases(names) = &self.mode { names.get(i) } else { None }
     }
 
     pub fn conns_only(&self) -> bool {
@@ -232,6 +249,12 @@ impl App {
                 .map(|(id, _)| Command::GoToConnection(*id))
                 .collect();
         }
+        if let Some(PaletteMode::Databases(names)) = self.popups.palette.as_ref().map(|p| &p.mode) {
+            return (names.iter().enumerate())
+                .filter(|(_, name)| query.split_whitespace().all(|w| name.to_lowercase().contains(w)))
+                .map(|(i, _)| Command::OpenDatabase(i))
+                .collect();
+        }
         if let Some(PaletteMode::Tabs(texts)) = self.popups.palette.as_ref().map(|p| &p.mode) {
             // A tab by its name, its connection, or the SQL in it.
             return (texts.iter().enumerate())
@@ -293,7 +316,12 @@ impl App {
             KeyCode::Esc => self.popups.palette = None,
             // Back to the letters.
             // (Not from the tab list: it has no letters to go back to.)
-            KeyCode::Backspace if palette.query.is_empty() && !palette.tabs_only() && !palette.conns_only() => {
+            KeyCode::Backspace
+                if palette.query.is_empty()
+                    && !palette.tabs_only()
+                    && !palette.conns_only()
+                    && !palette.databases_only() =>
+            {
                 palette.mode = PaletteMode::Leader { menu: true, group: None };
             }
             KeyCode::Enter => {
@@ -307,7 +335,10 @@ impl App {
                     let name = self.conn_name(id).unwrap_or_default();
                     return self.set_status(t!("conn_list.here", name = name), false);
                 }
-                self.popups.palette = None;
+                // A database: its list goes once it's opened (it needs the list).
+                if !matches!(chosen, Some(Command::OpenDatabase(_))) {
+                    self.popups.palette = None;
+                }
                 if let Some(command) = chosen {
                     self.run_command(command);
                 }

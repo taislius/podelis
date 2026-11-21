@@ -352,6 +352,19 @@ pub(in crate::db) const SESSION_INFO: (&str, &[&str]) = (
 /// query that fails there can't spoil an open transaction. Before
 /// PostgreSQL 10 (no `backend_type`) every row of `pg_stat_activity` is a
 /// client's.
+/// The databases this user may connect to (templates and those that
+/// take no connections left out), on a pool connection.
+pub(in crate::db) async fn databases(db: &Database) -> Result<Option<Vec<String>>> {
+    let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
+    let names: Vec<String> = sqlx::query_scalar(
+        "SELECT datname::text FROM pg_database \
+         WHERE datallowconn AND NOT datistemplate AND has_database_privilege(datname, 'CONNECT') ORDER BY 1",
+    )
+    .fetch_all(p)
+    .await?;
+    Ok(Some(names))
+}
+
 pub(in crate::db) async fn connections(db: &Database) -> Option<String> {
     const SQL: &str = r"
         SELECT {in_use}::text

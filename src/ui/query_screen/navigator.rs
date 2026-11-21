@@ -104,7 +104,7 @@ pub(in crate::ui) fn draw_schema(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// The database the tables belong to, like the design's tree root.
-fn draw_database_line(f: &mut Frame, app: &App, database: Rect, focused: bool) {
+fn draw_database_line(f: &mut Frame, app: &mut App, database: Rect, focused: bool) {
     let t = theme();
     let form = &app.connection.form;
     let db_name = if form.engine.is_file_based() {
@@ -114,15 +114,21 @@ fn draw_database_line(f: &mut Frame, app: &App, database: Rect, focused: bool) {
     } else {
         form.database.clone()
     };
-    // The status bar shows the server and version.
-    let name = truncate(&db_name, (database.width as usize).saturating_sub(4));
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" ▼ ", dim()),
-            Span::styled(name, if focused { bold(t.ident) } else { muted() }),
-        ])),
-        database,
-    );
+    // The status bar shows the server and version. The databases to pick
+    // from, where there are (a file has its one), said on the right.
+    let width = database.width as usize;
+    let hint = if form.engine.is_file_based() { String::new() } else { t!("navigator.pick_database").to_string() };
+    let hint_width = hint.chars().count() + 1;
+    let name = truncate(&db_name, width.saturating_sub(4));
+    let mut spans =
+        vec![Span::styled(" ▼ ", dim()), Span::styled(name.clone(), if focused { bold(t.ident) } else { muted() })];
+    let used = 3 + name.chars().count();
+    if !hint.is_empty() && used + hint_width <= width {
+        spans.push(Span::raw(" ".repeat(width - used - hint_width + 1)));
+        spans.push(Span::styled(hint, dim()));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), database);
+    app.hits.schema_database = database;
 }
 
 /// One row of the tree: a name on the left, details right-aligned.

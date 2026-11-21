@@ -550,6 +550,39 @@ impl App {
         self.tabs[self.active_tab].conn = Some(id);
     }
 
+    /// The shown connection was opened by hand: the tabs of a slot that
+    /// failed to open the same saved connection use it too (the failure
+    /// isn't theirs any more), and the failed slot goes.
+    pub(super) fn take_over_failed_slots(&mut self) {
+        let Some(opened) = self.connection.slots.active else { return };
+        let name = self.connection.form.name.clone();
+        if name.is_empty() {
+            return;
+        }
+        // The slot's name, or the tab's from the last session: a failed
+        // slot shown in the tab where it was opened by hand gave that its
+        // form, name and all.
+        let failed: Vec<ConnId> = self
+            .connection
+            .all()
+            .filter(|(id, slot)| *id != opened && slot.state.failure().is_some())
+            .map(|(id, _)| id)
+            .collect();
+        let mut moved = false;
+        for (i, tab) in self.tabs.iter_mut().enumerate() {
+            let Some(conn) = tab.conn.filter(|c| failed.contains(c)) else { continue };
+            let slot_name = self.connection.all().find(|(id, _)| *id == conn).map(|(_, s)| s.form.name.as_str());
+            let tab_name = self.connection.slots.tab_connections.get(i).and_then(Option::as_deref);
+            if slot_name == Some(name.as_str()) || tab_name == Some(name.as_str()) {
+                tab.conn = Some(opened);
+                moved = true;
+            }
+        }
+        if moved {
+            self.release_unused_conns();
+        }
+    }
+
     /// Ctrl+D: disconnects this tab. The connection stays open while other
     /// tabs use it.
     pub(super) fn disconnect(&mut self) {

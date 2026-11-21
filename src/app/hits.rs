@@ -12,6 +12,8 @@ pub struct Hits {
     pub schema_filter: Rect,
     /// The filter's `×`, while it has text.
     pub schema_filter_clear: Option<Rect>,
+    /// The database line over the tree (a click lists the databases).
+    pub schema_database: Rect,
     /// The schema tree's rows, and the index of the first one shown.
     pub schema_list: Rect,
     pub schema_offset: usize,

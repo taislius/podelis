@@ -31,6 +31,12 @@ impl Database {
         out
     }
 
+    /// The server's databases this user may open, by name: `None` where
+    /// the engine has none to pick among (a file is its one database).
+    pub async fn databases(&self) -> Result<Option<Vec<String>>> {
+        on_driver!(self.0.engine, engine::queries::databases(self).await)
+    }
+
     /// The server's load, as its own views say it (`SqlDialect::load_queries`):
     /// each value, or why it isn't there (busy, or not readable by this
     /// user). Empty where the engine has nothing to read.

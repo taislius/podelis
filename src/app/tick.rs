@@ -67,8 +67,7 @@ impl App {
     /// session that's gone, or that's waited for a statement all along,
     /// means the link dropped without a word (a VPN, a laptop's sleep, a
     /// firewall's idle timeout): the run would otherwise wait for good.
-    /// PostgreSQL and MySQL, which list their
-    /// sessions.
+    /// PostgreSQL and MySQL, which list their sessions.
     fn watch_session_tick(&mut self) {
         let extra = &self.tab.run.extra;
         let ran = self.tab.run.since.map_or(Duration::ZERO, |s| s.elapsed());

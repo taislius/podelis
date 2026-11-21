@@ -87,6 +87,10 @@ pub enum Command {
     SwitchTab(usize),
     /// An open connection (`Ctrl+K j`), by its id: goes to a tab on it.
     GoToConnection(ConnId),
+    /// The server's databases, to open this tab's connection on another.
+    PickDatabase,
+    /// One of them, by its place in the list.
+    OpenDatabase(usize),
     /// Compare with another tab's connection (or the only other one).
     CompareSchema(Option<ConnId>),
     /// Run the last query again every this many seconds.
@@ -198,6 +202,7 @@ const PLAN_KEYS: Keys = &[(KeyCode::Char('y'), Command::CopyPlanLines), (KeyCode
 const NAVIGATOR_KEYS: Keys = &[
     (KeyCode::Enter, Command::Expand),
     (KeyCode::Char('d'), Command::Definition),
+    (KeyCode::Char('D'), Command::PickDatabase),
     (KeyCode::Char('f'), Command::Related),
     (KeyCode::Char('s'), Command::SelectFrom),
     (KeyCode::Char('a'), Command::AnalyzeTable),
@@ -413,6 +418,7 @@ impl Command {
             Command::OrderNames,
             Command::SystemTables,
             Command::RefreshSchema,
+            Command::PickDatabase,
             Command::AgentActivity,
             Command::CopyDiagnostics,
             Command::Help,
@@ -490,6 +496,8 @@ impl Command {
             Command::Quit => t!("palette.quit"),
             Command::SwitchTab(_) => t!("palette.switch_tab"),
             Command::GoToConnection(_) => t!("menu.connection_list"),
+            Command::PickDatabase => t!("menu.databases"),
+            Command::OpenDatabase(_) => t!("palette.open_database"),
             Command::CompareSchema(_) => t!("palette.compare_schema"),
             Command::SnapshotSchema => t!("palette.snapshot"),
             Command::Watch(_) => t!("palette.watch"),
@@ -549,6 +557,7 @@ impl Command {
                 format!("{}: {}", t!("palette.switch_tab"), app.tabs.get(i).map_or("", |t| t.name.as_str()))
             }
             Command::GoToConnection(id) => app.connection_entry(id),
+            Command::OpenDatabase(i) => app.database_entry(i),
             Command::Watch(0) => t!("palette.stop_watch").to_string(),
             Command::Watch(s) => t!("palette.watch_every", s = s),
             Command::CompareSnapshot(i) => match app.popups.palette.as_ref().and_then(|p| p.snapshot(i)) {
@@ -743,7 +752,7 @@ impl App {
             }
             C::CopyPlanLines | C::CopyWholePlan => no(self.tab.plan.is_none(), t!("commands.no_plan")),
             // Loading it makes the panel: a connection is all it needs.
-            C::RefreshSchema => no(self.connection.database.is_none(), t!("info.not_connected")),
+            C::RefreshSchema | C::PickDatabase => no(self.connection.database.is_none(), t!("info.not_connected")),
             // Its keys would go to a navigator that isn't drawn.
             C::FilterNames | C::Expand if self.hits.navigator_too_narrow => {
                 Can::not_now(t!("commands.navigator_too_narrow"))
@@ -955,6 +964,8 @@ impl App {
             C::Quit => self.request_quit(),
             C::SwitchTab(i) => self.switch_tab(i),
             C::GoToConnection(id) => self.go_to_connection(id),
+            C::PickDatabase => self.open_database_list(),
+            C::OpenDatabase(i) => self.open_database(i),
             // Several to compare with: they're picked from the palette's list.
             C::CompareSchema(None) if self.other_connections().len() > 1 => {
                 self.open_command_list(t!("palette.compare_schema_with", name = "").trim());

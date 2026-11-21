@@ -159,6 +159,49 @@ async fn live_begin_in_script_mysql() {
     live_begin_in_script(&db, "podelis_review").await;
 }
 
+/// Behind ProxySQL (`PODELIS_TEST_PROXYSQL_PORT`, its user and password):
+/// a cancel stops the query, by ProxySQL's session id, not
+/// `CONNECTION_ID()`'s, which `KILL` through ProxySQL doesn't mean (the
+/// cancel missed: "the server didn't take the cancel").
+#[tokio::test]
+async fn live_cancel_behind_proxysql() {
+    let Some(params) = server_params(Engine::MySql, "PODELIS_TEST_PROXYSQL", "app") else { return };
+    let db = Database::connect(params).await.expect("connect through ProxySQL");
+    let databases = db.databases().await.unwrap().expect("a server has databases to pick");
+    assert!(databases.iter().any(|d| d == "information_schema"), "{databases:?}");
+    live_cancel(&db, "SELECT SLEEP(10)", |r| {
+        assert_eq!(cells(&r.expect("SLEEP ends with a result")), vec![vec![Some("1")]], "interrupted");
+    })
+    .await;
+}
+
+/// Behind ProxySQL with reads sent to other servers than writes: `SET
+/// @id` ties the session to the writers' group, and a SELECT after it
+/// fails, said in words; the next run has a new session, not one that
+/// fails every SELECT until the app is closed.
+/// Run in one transaction, they work.
+#[tokio::test]
+async fn live_a_session_proxysql_tied_is_said_and_replaced() {
+    let Some(params) = server_params(Engine::MySql, "PODELIS_TEST_PROXYSQL", "app") else { return };
+    let db = Database::connect(params).await.expect("connect through ProxySQL");
+    // One batch goes where its first statement goes: the SELECT after it
+    // in a run of its own is what fails.
+    db.run("SET @id = 1", DEFAULT_ROW_LIMIT).await.unwrap();
+    let err = db.run("SELECT @id", DEFAULT_ROW_LIMIT).await.unwrap_err();
+    let said = crate::db::error_message(&err);
+    assert!(said.contains("locked to hostgroup") && said.contains("BEGIN … COMMIT"), "{said}");
+    assert_eq!(cells(&db.run("SELECT 7", DEFAULT_ROW_LIMIT).await.unwrap()), vec![vec![Some("7")]], "a new session");
+    let o = db.run("BEGIN; SET @id = 8; SELECT @id; COMMIT", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert_eq!(cells(&o), vec![vec![Some("8")]], "in one transaction");
+}
+
+#[test]
+fn proxysqls_session_id_is_read_from_its_json() {
+    let json = "{\n  \"age_ms\": 17,\n  \"client\": {\"encrypted\": true},\n  \"thread_session_id\": 15\n}";
+    assert_eq!(super::connect::proxysql_thread_session_id(json), Some(15));
+    assert_eq!(super::connect::proxysql_thread_session_id("not json"), None);
+}
+
 #[tokio::test]
 async fn live_reconnect_mysql() {
     let Some(db) = live_db(Engine::MySql).await else { return };

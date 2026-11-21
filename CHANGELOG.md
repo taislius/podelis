@@ -15,6 +15,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Another database on the same server for a tab: `D` in the navigator, a click on its database line, or `Ctrl+K` "Databases…" lists the server's databases to search; the one picked opens as the tab's connection with that database (a reconnect keeps it; other tabs stay on theirs). A connection with no database set is no longer stuck with the server's default.
 - `R` in the results checks the connection at once and reconnects a lost one; a lost connection shows `×` in the status bar.
 - Each database's ontology: its tables, views, columns and keys, with what the project's memory says of them, as one graph. `Ctrl+K y k` on a saved connection shows it by table, column and term, with a model's suggestions and stale facts apart; `a` on a line adds a fact about it.
 - `E` there opens it in your editor (`$VISUAL`, `$EDITOR`, else `vi`) as YAML; when you close it, Podėlis lists what loading it back would change (added, confirmed, moved, forgotten) and changes nothing until you've scrolled through it and pressed `y`. Edits that don't load are kept, to open again.
@@ -47,6 +48,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- MySQL behind ProxySQL: cancelling a query (Esc) stopped nothing and said "the server didn't take the cancel"; it could even stop another of your sessions' query. The cancel now uses ProxySQL's own session id.
+- MySQL behind ProxySQL: after `SET @variable` ProxySQL ties the session to one group of servers, and every later SELECT it routes elsewhere failed ("connection is locked to hostgroup…") until the app was closed. The error is said in words (with what works: one transaction, or the value in the query), and the next run gets a new session.
+- A connection that didn't reopen, then opened by hand (`Ctrl+O`) in one of its tabs: its other tabs went on saying it couldn't reconnect (after closing a tab, say) while it worked. They now use the one opened.
 - Reopening the last session: a connection whose tables didn't load (a server that let the login in, then didn't answer) left the navigator blank under a green dot, and nothing said why; now its tables are given up after 30 s, said with the reason and `r` to try again, and the status bar says `tables didn't load`. A connection that couldn't be reopened is said on its tab until it opens (the next key used to clear the only message), and the reopening card stays, with each failure and why, until a key.
 - Another name counts in facts: with `customers also called client`, a fact about `client.city` is about customers' `city` (it was taken as stale), and one about `client` is about the table (it was a term of its own), for models and in the ontology alike. A model's suggested name counts only once it's confirmed.
 - A default filter or history said of a table that's been dropped is stale, not a business term with that table's name.

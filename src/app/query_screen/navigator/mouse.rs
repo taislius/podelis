@@ -16,6 +16,9 @@ impl App {
             }
             return;
         }
+        if inside(hits.schema_database, x, y) {
+            return self.open_database_list();
+        }
         if inside(hits.schema_filter, x, y) {
             if let Some(panel) = &mut self.connection.schema {
                 panel.filter_editing = true;

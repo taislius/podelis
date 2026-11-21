@@ -215,6 +215,17 @@ impl Database {
                 reconnected = true;
                 session.run(sql, row_limit).await?
             }
+            // ProxySQL tied the session to one group of servers, and won't
+            // let it reach another for as long as it lives: every read its
+            // rules route elsewhere fails from now on. A new session for the
+            // next run; the tied one goes out of the pool, not back into it.
+            Err(e) if errors::is_proxysql_locked(&e) => {
+                on_session!(std::mem::replace(&mut *session, Session::Closed), |c| engine::driver::detach(c), closed => {});
+                if self.reopen_session(&mut session).await.is_err() {
+                    self.0.stale.store(true, Ordering::SeqCst);
+                }
+                return Err(e);
+            }
             Err(e) => return Err(e),
         };
 
@@ -346,8 +357,9 @@ impl Database {
     /// from when the session is free: one busy elsewhere (a schema load,
     /// an earlier result's rows being stopped) isn't a dead one, and the
     /// run waits its turn; but not for ever: a session held for
-    /// `SESSION_HELD` is one stuck on a link that's gone (an earlier result's rows, stopped on a dead link, kept
-    /// it while the check let the run go on to wait for good).
+    /// `SESSION_HELD` is one stuck on a link that's gone (an earlier
+    /// result's rows, stopped on a dead link, kept it while the check let
+    /// the run go on to wait for good).
     pub async fn answers_within(&self, limit: Duration) -> Result<()> {
         // A file always answers.
         if self.0.engine.capabilities().file_based {

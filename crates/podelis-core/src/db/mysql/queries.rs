@@ -318,6 +318,17 @@ pub(in crate::db) async fn tls_info(db: &Database) -> Option<String> {
     Some(format!("{}, {}", get("Ssl_version")?, get("Ssl_cipher").unwrap_or_default()))
 }
 
+/// The databases this user can see (MySQL lists only those), on a pool
+/// connection: the session may be busy.
+pub(in crate::db) async fn databases(db: &Database) -> Result<Option<Vec<String>>> {
+    let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
+    let names: Vec<String> =
+        sqlx::query_scalar("SELECT CAST(schema_name AS CHAR) FROM information_schema.schemata ORDER BY 1")
+            .fetch_all(p)
+            .await?;
+    Ok(Some(names))
+}
+
 /// Cancels connection `id`'s running query.
 /// (A session gone already has nothing running: done, not "Unknown thread
 /// id".)

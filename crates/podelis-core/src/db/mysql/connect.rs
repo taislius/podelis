@@ -100,12 +100,43 @@ fn unreachable(opts: &MySqlConnectOptions, why: &str) -> anyhow::Error {
 }
 
 /// The session's connection id (for cancelling its queries).
+///
+/// Behind ProxySQL it's ProxySQL's own session id: `KILL QUERY` sent
+/// through it means one of its sessions, while `CONNECTION_ID()` names
+/// whichever server connection answered that statement (not necessarily
+/// the one that runs the next: ProxySQL shares them), so a cancel by it
+/// would miss, or stop another of the user's sessions' query.
 pub(in crate::db) async fn backend_id(c: &mut PoolConnection<MySql>) -> Result<i64> {
+    if let Some(id) = proxysql_session_id(c).await {
+        return Ok(id);
+    }
     let id: u64 = sqlx::query_scalar("SELECT CONNECTION_ID()")
         .fetch_one(&mut **c)
         .await
         .context("failed to read connection id")?;
     Ok(id as i64)
+}
+
+/// ProxySQL's id for this session, if it's ProxySQL that answers: it says
+/// `(ProxySQL)` to exactly `select @@version_comment limit 1` (MySQL
+/// gives its own comment), and its session as JSON to `PROXYSQL INTERNAL
+/// SESSION`. Text protocol: ProxySQL answers these itself only so.
+async fn proxysql_session_id(c: &mut PoolConnection<MySql>) -> Option<i64> {
+    use sqlx::Row as _;
+    let text = async |c: &mut PoolConnection<MySql>, sql: &'static str| -> Option<String> {
+        let row = sqlx::raw_sql(sql).fetch_optional(&mut **c).await.ok()??;
+        row.try_get::<String, _>(0).ok()
+    };
+    if text(c, "select @@version_comment limit 1").await? != "(ProxySQL)" {
+        return None;
+    }
+    let session = text(c, "PROXYSQL INTERNAL SESSION").await?;
+    proxysql_thread_session_id(&session)
+}
+
+/// `thread_session_id` from `PROXYSQL INTERNAL SESSION`'s JSON.
+pub(super) fn proxysql_thread_session_id(json: &str) -> Option<i64> {
+    serde_json::from_str::<serde_json::Value>(json).ok()?.get("thread_session_id")?.as_i64()
 }
 
 /// The server is told to cancel (`queries::cancel`): nothing to watch here.

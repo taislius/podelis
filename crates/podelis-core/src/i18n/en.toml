@@ -779,6 +779,7 @@ title = "EXPORT DATA"
 to = "To"
 
 [menu]
+databases = "Databases…"
 group_server = "server…"
 group_ai = "AI…"
 group_other = "more…"
@@ -884,6 +885,7 @@ production = "production"
 read_only = "read-only"
 
 [navigator]
+pick_database = "D: databases"
 table_title = "TABLE"
 view_title = "VIEW"
 by_name = "name"
@@ -914,6 +916,13 @@ view = "view"
 views = "VIEWS"
 
 [palette]
+open_database = "Open this database"
+databases_title = "DATABASES"
+databases_failed = "Couldn't list the databases: {e}"
+no_databases = "A file is its one database: none to pick"
+opening_database = "Opening {name}…"
+database_failed = "Couldn't open {name}: {e}"
+database_here = "{name} is this tab's database already"
 pipe = "Pipe rows through a command (grep, sort, jq…)"
 open_rows = "Open rows in an app: CSV, JSON, SQL… (or a viewer in this terminal)"
 refresh = "Refresh the navigator"

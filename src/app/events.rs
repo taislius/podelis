@@ -24,7 +24,7 @@ impl App {
             DbEventPayload::Conn { id, kind } => self.apply_conn_event(id, kind),
             DbEventPayload::Connection { generation, kind } if generation != self.generation => {
                 // A connection that finished after being cancelled is still open.
-                if let DbEventKind::Connected(db) = kind {
+                if let DbEventKind::Connected(db) | DbEventKind::DatabaseOpened(db, _) = kind {
                     tokio::spawn(async move { db.close().await });
                 }
             }
@@ -274,6 +274,12 @@ impl App {
                 }
             }
             DbEventKind::Connected(db) => self.on_connected(db),
+            DbEventKind::DatabasesListed(listed) => self.on_databases_listed(listed),
+            DbEventKind::DatabaseOpened(db, form) => self.on_connected_with(db, *form),
+            DbEventKind::DatabaseFailed { name, error } => {
+                self.connect_started = None;
+                self.set_status(t!("palette.database_failed", name = name, e = crate::db::with_hint(&error)), true);
+            }
             DbEventKind::ConnectFailed(err) => {
                 tracing::info!(error = %err, "connect failed");
                 self.tab.run.task = None;
@@ -353,10 +359,19 @@ impl App {
 
     /// The connect form's connection is open: make it the tab's.
     fn on_connected(&mut self, db: Database) {
+        // The connection shown keeps its own form (a failed one, still its
+        // other tabs', its name): the new one gets a copy.
+        let form = self.connection.form.duplicate();
+        self.connection.form.connecting = false;
+        self.connection.form.error = None;
+        self.on_connected_with(db, form);
+    }
+
+    /// `db` is open with `form`'s settings: made the tab's.
+    fn on_connected_with(&mut self, db: Database, form: ConnectForm) {
         tracing::info!(engine = ?db.engine(), version = db.version(), "connected");
         self.tab.run.task = None;
         let project = self.project().map(|p| p.name.clone()).unwrap_or_default();
-        let form = std::mem::take(&mut self.connection.form);
         self.attach_connection(db);
         self.connection.form = form;
         self.connection.summary = format!("[{project}] {}", self.connection.form.summary());
@@ -387,6 +402,7 @@ impl App {
             self.connection.summary = format!("[{project}] {}", self.connection.form.summary());
             self.set_status(said, is_error);
         }
+        self.take_over_failed_slots();
         // SSL mode `prefer` gave up on TLS: say so, it's not what was asked.
         let tls_failed = self.connection.database.as_ref().and_then(|db| db.tls_failed().map(str::to_string));
         if let Some(why) = tls_failed {
@@ -748,6 +764,14 @@ pub(super) enum DbEventKind {
     },
     Connected(Database),
     ConnectFailed(String),
+    /// The server's databases (`None`: a file, the one database).
+    DatabasesListed(Result<Option<Vec<String>>, String>),
+    /// Another database opened for the tab, with its form.
+    DatabaseOpened(Database, Box<ConnectForm>),
+    DatabaseFailed {
+        name: String,
+        error: String,
+    },
     TableDetails {
         schema: String,
         table: String,

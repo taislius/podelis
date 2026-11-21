@@ -1293,7 +1293,8 @@ async fn closing_a_connection_says_its_transaction_goes() {
     assert!(confirm.danger && confirm.message.contains("rolled back"), "{}", confirm.message);
 }
 
-/// `Ctrl+K s l`: the server's load, as its own views say it (a diagnostics window).
+/// `Ctrl+K s l`: the server's load, as its own views say it (a
+/// diagnostics window).
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn the_servers_load_is_shown() {
@@ -1424,6 +1425,38 @@ async fn a_reopened_connection_is_for_its_slot_and_attempt() {
     assert_eq!(app.connection.state, crate::app::ConnState::Ready { verified: true }, "its tables answered");
 }
 
+/// A connection that didn't reopen, then opened by hand in one of its
+/// tabs: its other tabs use that one too, not the failed one, so closing
+/// a tab doesn't land on one saying it couldn't reconnect while the
+/// connection works.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_connection_opened_by_hand_is_its_failed_tabs_too() {
+    let (mut app, dir) = test_app();
+    let project = project_id(&app);
+    let a = file_profile("alpha", &dir.path().join("a.db"));
+    app.store.upsert(&project, None, a.clone()).unwrap();
+    std::fs::write(dir.path().join("a.db"), "").unwrap();
+    app.new_tab(None, "", None);
+    app.switch_tab(0);
+    app.connection.slots.tab_connections = vec![Some("alpha".into()), Some("alpha".into())];
+    app.retry_tab_connection(a.clone(), crate::config::keys::Action::Run);
+    let failed = app.tabs[0].conn.unwrap();
+    assert_eq!(app.tabs[1].conn, Some(failed), "both tabs on the one being reopened");
+    let crate::app::ConnState::Opening { attempt } = app.connection.state else { panic!() };
+    let form = crate::app::ConnectForm::from_profile(&a, String::new());
+    app.apply_restored(&project, failed, attempt, form, Err("connection refused".into()));
+    assert!(app.tab_connection_failure().is_some());
+    // Opened by hand (Ctrl+O) in the first tab.
+    connect_profile(&mut app, &a).await;
+    let opened = app.tabs[0].conn.unwrap();
+    assert_ne!(opened, failed);
+    assert_eq!(app.tabs[1].conn, Some(opened), "the other tab uses it too");
+    assert!(app.connection.state_of(failed).is_none(), "the failed one is gone");
+    app.close_tab();
+    assert!(app.tab_connection_failure().is_none() && app.connected(), "{:?}", app.connection.state);
+}
+
 /// With the heartbeat on, the other tabs' connections are checked too,
 /// and what's found is theirs: shown in the tab list, and in the status
 /// bar once the tab is shown.
@@ -1469,4 +1502,34 @@ async fn a_hidden_tabs_connection_is_checked_too() {
     app.connection.slot_mut(hidden).unwrap().state.lose_for_tests();
     app.handle_key(alt('2'));
     assert!(app.connection.state.is_lost());
+}
+
+/// `D` in the navigator lists the server's databases, this tab's picked;
+/// the one picked opens as the tab's connection, with that database, and
+/// its tables are listed. The connection before stays the other tabs'.
+#[cfg(feature = "mysql")]
+#[tokio::test]
+async fn live_another_database_opens_for_the_tab() {
+    let Some((mut app, _dir)) = live_app(Engine::MySql, "podelis_pick_a").await else { return };
+    let Some((other, _)) = crate::db::tests::own_live_db(Engine::MySql, "podelis_pick_b").await else { return };
+    other.run("CREATE TABLE IF NOT EXISTS only_in_b (x int)", 1).await.unwrap();
+    other.close().await;
+    finish_catalog(&mut app).await;
+    let before = app.tabs[0].conn;
+    app.focus = Focus::Schema;
+    app.handle_key(key(KeyCode::Char('D')));
+    until_event(&mut app, |k| matches!(k, DbEventKind::DatabasesListed(_))).await;
+    let palette = app.popups.palette.as_ref().expect("the databases, listed");
+    assert!(palette.databases_only());
+    let entries: Vec<String> = app.palette_items().into_iter().map(|c| c.text(&app)).collect();
+    let here = &entries[app.popups.palette.as_ref().unwrap().selected];
+    assert!(here.starts_with("podelis_pick_a") && here.contains("this one"), "{entries:?}");
+    type_text(&mut app, "podelis_pick_b");
+    app.handle_key(key(KeyCode::Enter));
+    until_event(&mut app, |k| matches!(k, DbEventKind::DatabaseOpened(..))).await;
+    finish_catalog(&mut app).await;
+    assert!(app.popups.palette.is_none());
+    assert_eq!(app.connection.form.database, "podelis_pick_b");
+    assert_ne!(app.tabs[0].conn, before, "a connection of its own");
+    assert_eq!(table_names(&app), ["only_in_b"]);
 }

@@ -109,6 +109,17 @@ impl ConnectForm {
         ConnectionDraft::new().into()
     }
 
+    /// The same connection's settings and name, as a form of its own (the
+    /// form's own state, its focus and what it said, starts afresh).
+    pub(in crate::app) fn duplicate(&self) -> Self {
+        Self {
+            original_name: self.original_name.clone(),
+            original_legacy: self.original_legacy,
+            keychain_note: self.keychain_note.clone(),
+            ..self.draft.clone().into()
+        }
+    }
+
     pub(crate) fn from_profile(profile: &ConnectionProfile, password: String) -> Self {
         Self {
             original_name: Some(profile.name.clone()),
