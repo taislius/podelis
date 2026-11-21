@@ -2,7 +2,7 @@
 source: src/ui/tests/editor.rs
 expression: screen
 ---
-" >_  PODĖLIS v0.0.0   │  project  shop ▼                                                            "
+"   PODĖLIS v0.0.0     │  project  shop ▼                                                            "
 "┌ NAVIGATOR ────── 3 objects ┐┎ QUERY ──────┰──────────────────────────────────────────────────────┐"
 "│ / filter b┌ TABS · CONNECTIONS · RUNNING QUERIES ────────────────────────────────────┐F7 Explain │"
 "│ ▼ (default│ › █                                                                      │           │"

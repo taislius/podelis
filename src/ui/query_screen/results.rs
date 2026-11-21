@@ -431,7 +431,8 @@ fn draw_run_source(f: &mut Frame, app: &mut App, area: Rect) -> Rect {
             let pin = if run.pinned { format!("  {}", t!("results.pinned")) } else { String::new() };
             let room = usize::from(line.width)
                 .saturating_sub(1 + place.chars().count() + when.chars().count() + pin.chars().count() + 3);
-            spans.extend(fading(&one_line(&source.sql), room, |t| t.text));
+            // As quiet as the tabs' names: the rows are what's read here.
+            spans.extend(fading(&one_line(&source.sql), room, |t| t.muted));
             spans.push(Span::raw("  "));
             spans.push(Span::styled(place, place_style));
             spans.push(Span::styled(when, dim()));

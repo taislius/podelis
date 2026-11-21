@@ -10,9 +10,15 @@ const VERSION: &str = if cfg!(test) { "0.0.0" } else { env!("CARGO_PKG_VERSION")
 /// The app's badge: `>_  PODĖLIS v1.2.3`, dark on green.
 pub(super) fn brand() -> Vec<Span<'static>> {
     let t = theme();
+    // As wide as it always was (" >_  PODĖLIS v… "), the name and version
+    // in its middle.
+    let width = " >_  PODĖLIS ".chars().count() + VERSION.chars().count() + 2;
+    let inside = "PODĖLIS".chars().count() + 1 + VERSION.chars().count() + 1;
+    let left = (width - inside) / 2;
+    let right = width - inside - left;
     vec![
-        Span::styled(" >_  PODĖLIS ", bold(t.on_accent).bg(t.accent)),
-        Span::styled(format!("v{VERSION} "), fg(t.on_accent).bg(t.accent)),
+        Span::styled(format!("{}PODĖLIS ", " ".repeat(left)), bold(t.on_accent).bg(t.accent)),
+        Span::styled(format!("v{VERSION}{}", " ".repeat(right)), fg(t.on_accent).bg(t.accent)),
     ]
 }
 

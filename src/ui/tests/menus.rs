@@ -424,8 +424,8 @@ fn a_groups_menu_shows_after_the_pause_and_with_a_question_mark() {
     assert!(app.palette_menu_due().is_some(), "after the same pause");
     app.handle_key(key(KeyCode::Char('?')));
     let screen = render(&mut app, 90, 30);
-    assert!(screen.contains("CTRL+K S") && screen.contains("s sessions") && screen.contains("i info"), "{screen}");
-    assert!(!screen.contains("TABS") && !screen.contains("x mode"), "{screen}");
+    assert!(screen.contains("CTRL+K S") && screen.contains("s  sessions") && screen.contains("i  info"), "{screen}");
+    assert!(!screen.contains("TABS") && !screen.contains("x  mode"), "{screen}");
     assert_snapshot!(screen);
     // `?` again is every key, as everywhere.
     app.handle_key(key(KeyCode::Char('?')));
@@ -766,7 +766,7 @@ fn a_letter_taken_from_a_group_is_listed_once() {
     app.handle_key(ctrl_k());
     app.show_palette_menu();
     let screen = render(&mut app, 90, 30);
-    assert!(screen.contains("s zoom") && !screen.contains("server…"), "{screen}");
+    assert!(screen.contains("s  zoom") && !screen.contains("server…"), "{screen}");
 }
 
 #[test]

@@ -143,15 +143,17 @@ pub(super) fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
         let mut spans = vec![Span::styled(format!(" {:<title_w$}  ", group.title().to_uppercase()), bold(t.text))];
         let mut used = title_w + 3;
         for (key, brief, dim_it) in items {
-            let wide = key.chars().count() + brief.chars().count() + 3;
+            // The letter as a key cap, apart from its words in any theme.
+            let wide = key.chars().count() + brief.chars().count() + 5;
             if used + wide > inner && used > title_w + 3 {
                 lines.push(Line::from(std::mem::take(&mut spans)));
                 spans.push(Span::raw(" ".repeat(title_w + 3)));
                 used = title_w + 3;
             }
-            let (key_style, what_style) = if *dim_it { (dim(), dim()) } else { (bold(t.accent), fg(t.text)) };
-            spans.push(Span::styled(format!("{key} "), key_style));
-            spans.push(Span::styled(format!("{brief}  "), what_style));
+            let (key_style, what_style) =
+                if *dim_it { (dim(), dim()) } else { (bold(t.on_accent).bg(t.accent), fg(t.text)) };
+            spans.push(Span::styled(format!(" {key} "), key_style));
+            spans.push(Span::styled(format!(" {brief}  "), what_style));
             used += wide;
         }
         lines.push(Line::from(spans));

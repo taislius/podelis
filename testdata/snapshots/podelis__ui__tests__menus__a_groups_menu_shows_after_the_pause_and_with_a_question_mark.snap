@@ -2,11 +2,11 @@
 source: src/ui/tests/menus.rs
 expression: screen
 ---
-" >_  PODĖLIS v0.0.0   │  project  shop ▼                                                  "
+"   PODĖLIS v0.0.0     │  project  shop ▼                                                  "
 "┌ NAVIGATOR ────── 3 objects ┐┎ QUERY ──────┰────────────────────────────────────────────┐"
 "│ /┌ CTRL+K S ────────────────────────────────────────────────────────────────────────┐t │"
 "│ ▼│ THEN PRESS                                                                       │  │"
-"│ T│ CONNECTION  s sessions  i info  h heartbeat  l server load                       │  │"
+"│ T│ CONNECTION   s  sessions   i  info   h  heartbeat   l  server load               │  │"
 "│  │                                                                                  │  │"
 "│  │ ⌫ back · m this pane's menu · Esc closes                                         │  │"
 "│  └──────────────────────────────────────────────────────────────────────────────────┘  │"

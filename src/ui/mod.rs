@@ -208,14 +208,18 @@ pub(super) fn truncate(s: &str, max: usize) -> String {
 }
 
 /// `s` in `max` chars, in `color`: whole if it fits, else cut with its
-/// last few chars fading into the pane's background before the `…`, so
-/// the cut reads as "more here" rather than as the statement's end.
+/// last chars fading into the pane's background before the `…`, so the
+/// cut reads as "more here" rather than as the statement's end. The fade
+/// starts gently (each char a little fainter than the one before, more so
+/// towards the end) over a dozen chars.
 pub(super) fn fading(
     s: &str,
     max: usize,
     color: fn(&crate::config::theme::Theme) -> ratatui::style::Color,
 ) -> Vec<Span<'static>> {
-    const STEPS: usize = 6;
+    const STEPS: usize = 12;
+    /// The shades the fade picks from.
+    const SHADES: usize = 48;
     let t = theme();
     if s.chars().count() <= max {
         return vec![Span::styled(s.to_string(), fg(color(t)))];
@@ -224,7 +228,19 @@ pub(super) fn fading(
     let steps = STEPS.min(kept.len() / 3);
     let (plain, faded) = kept.split_at(kept.len() - steps);
     let mut spans = vec![Span::styled(plain.iter().collect::<String>(), fg(color(t)))];
-    let colors = crate::config::theme::fade(color, |t| t.panel, steps + 1);
+    let shades = crate::config::theme::fade(color, |t| t.panel, SHADES);
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "a place among a few dozen shades"
+    )]
+    let colors: Vec<_> = (1..=steps + 1)
+        .map(|i| {
+            let k = (i as f32 / (steps + 1) as f32).powf(1.6);
+            shades[((k * SHADES as f32) as usize).clamp(1, SHADES) - 1]
+        })
+        .collect();
     spans.extend(faded.iter().zip(&colors).map(|(c, &shade)| Span::styled(c.to_string(), fg(shade))));
     if max > 0 {
         spans.push(Span::styled("…", fg(colors.last().copied().unwrap_or(t.dim))));

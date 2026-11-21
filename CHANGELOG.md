@@ -29,6 +29,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The query over a result fades out over a dozen characters, gently at first, and is as quiet as the tabs' names (it competed with the rows).
+- The mark in the top bar is the name and version, centred, without `>_`.
+- Ctrl+K's menu shows its letters as key caps, apart from what they do in any theme.
+- "Rename this project…" is in Ctrl+K's list; the projects screen says it renames (`r`) and deletes (`d`).
 - Each connection says where it stands, in words where it isn't simply working: `checking…` until something answered on it (its tables, a check, a query), `tables didn't load`, `connection lost`, `<name> didn't reconnect`, `reconnecting…`; the navigator says the same (with the reason, and how to try again) and is never blank. Connections being reopened have their place from the start, each answer matched to its connection and attempt rather than by name.
 - Connection errors are said in plain words, not the libraries' (`invalid peer certificate: UnknownIssuer`, `pool timed out while waiting for an open connection`, `unexpected response from SSLRequest: 0x48 (sqlx_postgres::…)`, the resolver's `nodename nor servname provided`): the certificate isn't signed by an authority this computer trusts, is for another host name or has expired; the server doesn't offer TLS; no such host; no answer in time; the connection was cut; another protocol on the port. A refused certificate is no longer said as "can't reach" (the server answered). The libraries' own words go to `connections.log`.
 - What happens to connections (opening, reopening, failing with the libraries' own words, the tables loading or not, checks finding one lost or back) is kept in `connections.log` in the config folder; `podelis doctor` shows its last lines. It's yours alone (mode 600), with passwords in URLs and settings, and what a failing password command printed, left out; `connection_log = false` in config.toml keeps none.

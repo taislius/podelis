@@ -1582,3 +1582,19 @@ async fn a_tab_without_its_connection_reads_sql_as_its_engine() {
     check_syntax_now(&mut app).await;
     assert_eq!(app.tab.syntax_hint, None);
 }
+
+/// Renaming the open project is in Ctrl+K's list: it asks for the name on
+/// the projects screen, the project picked, and Enter renames it.
+#[test]
+fn the_open_project_is_renamed_from_the_command_list() {
+    let (mut app, _dir) = test_app();
+    let before = app.project().unwrap().name.clone();
+    app.run_command_for_tests(crate::app::commands::Command::RenameProject);
+    assert_eq!(app.screen, Screen::Projects);
+    let prompt = app.manager.project_prompt.as_ref().expect("asks for the name");
+    assert_eq!(prompt.text.text(), before);
+    app.handle_key(ctrl('u'));
+    type_text(&mut app, "renamed");
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.project().unwrap().name, "renamed");
+}

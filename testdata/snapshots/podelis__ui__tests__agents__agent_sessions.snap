@@ -2,7 +2,7 @@
 source: src/ui/tests/agents.rs
 expression: "render(&mut app, 120, 14)"
 ---
-" >_  PODĖLIS v0.0.0   │  project  shop ▼                                                                                "
+"   PODĖLIS v0.0.0     │  project  shop ▼                                                                                "
 "┌ NAVIGATOR ────── 3 objects ┐┎ QUERY ──────┰──────────────────────────────────────────────────────────────────────────┐"
 "│ /┌ AGENT ACTIVITY ────────────────────────────────────────────────────────────────────────────────────────────────┐n │"
 "│ ▼│ /    2 of 2 sessions                                                                                           │  │"

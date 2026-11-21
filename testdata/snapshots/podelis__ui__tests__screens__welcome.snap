@@ -2,14 +2,14 @@
 source: src/ui/tests/screens.rs
 expression: screen
 ---
-" >_  PODĖLIS v0.0.0   │  projects & connections                                           "
+"   PODĖLIS v0.0.0     │  projects & connections                                           "
 "                                                                                          "
 "                                                                                          "
 "                                                                                          "
 "                                                                                          "
 "   ┌ Welcome ─────────────────────────────────────────────────────────────────────────┐   "
 "   │                                                                                  │   "
-"   │                                >_  PODĖLIS v0.0.0                                │   "
+"   │                                  PODĖLIS v0.0.0                                  │   "
 "   │                                                                                  │   "
 "   │                            A terminal database client                            │   "
 "   │                                                                                  │   "

@@ -91,6 +91,8 @@ pub enum Command {
     PickDatabase,
     /// One of them, by its place in the list.
     OpenDatabase(usize),
+    /// The open project's name, to change.
+    RenameProject,
     /// Compare with another tab's connection (or the only other one).
     CompareSchema(Option<ConnId>),
     /// Run the last query again every this many seconds.
@@ -422,6 +424,7 @@ impl Command {
             Command::SystemTables,
             Command::RefreshSchema,
             Command::PickDatabase,
+            Command::RenameProject,
             Command::AgentActivity,
             Command::CopyDiagnostics,
             Command::Help,
@@ -501,6 +504,7 @@ impl Command {
             Command::GoToConnection(_) => t!("menu.connection_list"),
             Command::PickDatabase => t!("menu.databases"),
             Command::OpenDatabase(_) => t!("palette.open_database"),
+            Command::RenameProject => t!("palette.rename_project"),
             Command::CompareSchema(_) => t!("palette.compare_schema"),
             Command::SnapshotSchema => t!("palette.snapshot"),
             Command::Watch(_) => t!("palette.watch"),
@@ -969,6 +973,7 @@ impl App {
             C::GoToConnection(id) => self.go_to_connection(id),
             C::PickDatabase => self.open_database_list(),
             C::OpenDatabase(i) => self.open_database(i),
+            C::RenameProject => self.rename_open_project(),
             // Several to compare with: they're picked from the palette's list.
             C::CompareSchema(None) if self.other_connections().len() > 1 => {
                 self.open_command_list(t!("palette.compare_schema_with", name = "").trim());

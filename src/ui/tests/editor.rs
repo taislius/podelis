@@ -206,9 +206,9 @@ fn ctrl_k_menu_shows_its_letters_by_group() {
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
     app.show_palette_menu();
     let screen = render(&mut app, 90, 30);
-    assert!(screen.contains("TRANSACTION") && screen.contains("z zoom"), "{screen}");
+    assert!(screen.contains("TRANSACTION") && screen.contains("z  zoom"), "{screen}");
     // The pane's own keys are in its menu, not here.
-    assert!(!screen.contains("REFRESH") && screen.contains("m this pane's menu"), "{screen}");
+    assert!(!screen.contains("REFRESH") && screen.contains("m  this pane's menu"), "{screen}");
     // The editor's own keys are there from everywhere, dimmed, in their place.
     assert!(screen.contains("format SQL") && screen.contains("rename tab"), "{screen}");
     assert_snapshot!(screen);
@@ -233,14 +233,14 @@ fn ctrl_k_menu_shows_its_letters_by_group() {
         screen.contains("format SQL")
             && screen.contains("explain analyze")
             && screen.contains("rename tab")
-            && screen.contains("x mode"),
+            && screen.contains("x  mode"),
         "{screen}"
     );
     // Commit and roll back keep their places, dimmed with no transaction.
-    assert!(screen.contains("c commit") && screen.contains("r roll back"), "{screen}");
+    assert!(screen.contains("c  commit") && screen.contains("r  roll back"), "{screen}");
     app.connection.txn = TxnState::Open;
     let screen = render(&mut app, 90, 30);
-    assert!(screen.contains("c commit") && screen.contains("r roll back"), "{screen}");
+    assert!(screen.contains("c  commit") && screen.contains("r  roll back"), "{screen}");
 }
 
 #[test]

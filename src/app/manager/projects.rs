@@ -151,6 +151,16 @@ impl App {
         }
     }
 
+    /// The open project's name, asked for again on the projects screen.
+    pub(in crate::app) fn rename_open_project(&mut self) {
+        let Some(id) = self.current_project.clone() else { return };
+        let Some(index) = self.store.projects.iter().position(|p| p.id == id) else { return };
+        let name = self.store.projects[index].name.clone();
+        self.open_manager(Screen::Projects);
+        self.manager.project_selected = index;
+        self.start_prompt(PromptKind::RenameProject(id), name);
+    }
+
     pub(in crate::app) fn start_prompt(&mut self, kind: PromptKind, text: String) {
         self.manager.project_message = None;
         self.manager.project_prompt = Some(Prompt { kind, text: LineInput::new(text) });
