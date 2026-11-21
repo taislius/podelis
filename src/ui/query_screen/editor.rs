@@ -420,6 +420,41 @@ type TabHits = Vec<(u16, u16, usize)>;
 type Cols = (u16, u16);
 
 /// Returns where each tab, and the `+`, ended up.
+/// Whether the tabs are on more than one connection (each then says its).
+fn tabs_on_several_connections(app: &App) -> bool {
+    let mut conns = app.tabs.iter().filter_map(|t| t.conn);
+    conns.next().is_some_and(|first| conns.any(|c| c != first))
+}
+
+/// Tab `i`'s spans with its name cut to `cols` screen columns: " SQL ", its
+/// name, its connection's (with `connections`, when they're several) and
+/// " …" (running while hidden).
+fn tab_spans(app: &App, i: usize, cols: usize, connections: bool) -> Vec<Span<'static>> {
+    let t = theme();
+    let tab = &app.tabs[i];
+    let active = i == app.active_tab;
+    // No background: the thick line and the brighter name mark the active tab.
+    let bg = t.inset;
+    // Orange warns that the tab isn't in the library; saved tabs stay quiet.
+    let saved_marker = if tab.saved_id.is_some() { muted() } else { fg(t.warn) };
+    let mut name_style = if active { fg(t.text_bright) } else { muted() };
+    if tab.saved_id.is_some() && app.tab_dirty(i) {
+        name_style = name_style.add_modifier(Modifier::UNDERLINED).underline_color(t.warn);
+    }
+    let mut spans = vec![
+        Span::styled(" SQL ", saved_marker.bg(bg)),
+        Span::styled(truncate_cols(&tab.name, cols), name_style.bg(bg)),
+    ];
+    if connections && let Some(name) = tab.conn.and_then(|id| app.conn_name(id)) {
+        spans.push(Span::styled(format!(" · {}", truncate_cols(&name, 14)), dim().bg(bg)));
+    }
+    if !active && app.tab_running(i) {
+        spans.push(Span::styled(" …", fg(t.accent).bg(bg)));
+    }
+    spans.push(Span::styled(" ", Style::default().bg(bg)));
+    spans
+}
+
 fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Vec<Cols>, Option<Cols>) {
     let t = theme();
     f.render_widget(Block::default().style(Style::default().bg(t.inset)), area);
@@ -444,29 +479,8 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Vec<Cols>, Optio
         }
     };
     let width = |spans: &[Span]| spans.iter().map(Span::width).sum::<usize>();
-    // A tab's spans with its name cut to `cols` screen columns: " SQL ",
-    // its name and " …" (running while hidden).
-    let tab_spans = |i: usize, cols: usize| -> Vec<Span<'static>> {
-        let tab = &app.tabs[i];
-        let active = i == app.active_tab;
-        // No background: the thick line and the brighter name mark the active tab.
-        let bg = t.inset;
-        // Orange warns that the tab isn't in the library; saved tabs stay quiet.
-        let saved_marker = if tab.saved_id.is_some() { muted() } else { fg(t.warn) };
-        let mut name_style = if active { fg(t.text_bright) } else { muted() };
-        if tab.saved_id.is_some() && app.tab_dirty(i) {
-            name_style = name_style.add_modifier(Modifier::UNDERLINED).underline_color(t.warn);
-        }
-        let mut spans = vec![
-            Span::styled(" SQL ", saved_marker.bg(bg)),
-            Span::styled(truncate_cols(&tab.name, cols), name_style.bg(bg)),
-        ];
-        if !active && app.tab_running(i) {
-            spans.push(Span::styled(" …", fg(t.accent).bg(bg)));
-        }
-        spans.push(Span::styled(" ", Style::default().bg(bg)));
-        spans
-    };
+    let several_connections = tabs_on_several_connections(app);
+    let tab_spans = |i: usize, cols: usize| tab_spans(app, i, cols, several_connections);
     if tab_count == 0 {
         f.render_widget(Paragraph::new(Span::styled(" + ", dim())), area);
         return (Vec::new(), Vec::new(), Some((area.x, area.x + 3)));

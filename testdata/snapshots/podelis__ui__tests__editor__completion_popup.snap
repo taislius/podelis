@@ -2,7 +2,7 @@
 source: src/ui/tests/editor.rs
 expression: "render(&mut app, 80, 20)"
 ---
-"   PODĖLIS v0.0.0     │  project  shop ▼                                        "
+"   PODĖLIS v0.0.0     │  project  shop ▼  · connection  prod ▼                  "
 "┎ QUERY ──────┰────────────────────────────────────────────────────────────────┐"
 "┃ SQL Query 1 ┃ +                         ▶ F5 Run   F6 Statement   F7 Explain │"
 "│  1  select em                                                                │"

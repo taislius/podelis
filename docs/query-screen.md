@@ -32,7 +32,7 @@ before groups: `Ctrl+K s s`, `Ctrl+K y y`.
 | `m` | Menu of what you can do in the focused pane (also right-click) |
 | `l` / `t` | Search saved queries and history / rename the tab |
 | `g` | Every tab, with its connection and what runs there (see *Tabs and the query library*) |
-| `o` / `d` | Pick a connection for this tab (opens a new tab if this one is connected) / disconnect this tab (asks first, and says so when that rolls back a transaction or cancels the query running here) |
+| `o` / `d` | Pick a connection: `Enter` makes it this tab's, `t` opens it in a new tab / disconnect this tab (asks first, and says so when that rolls back a transaction or cancels the query running here) |
 | `p` | Projects and connections (or click the project's name in the top bar): see [Projects and connections](connections.md) |
 | `s`, then `s` / `i` / `h` | The server: its sessions / connection info / connection heartbeat on or off |
 | `q` | Ask in plain language: a model writes the SQL for your question (see *Asking in plain language* below) |

@@ -224,3 +224,37 @@ fn the_connection_form_says_its_keys_and_unsaved_changes() {
     let screen = render(&mut app, 140, 30);
     assert!(screen.contains("unsaved changes"), "{screen}");
 }
+
+/// The top bar names the project and the tab's connection, each a
+/// drop-down: a click lists the projects to switch to (with the projects
+/// window after them), or the project's connections for this tab (with its
+/// databases and the connections window after them), hanging under it.
+#[test]
+fn the_top_bar_has_the_project_and_the_connection_as_drop_downs() {
+    use crate::app::commands::Command;
+    let (mut app, _dir) = query_app();
+    let screen = render(&mut app, 120, 24);
+    let top = screen.lines().next().unwrap();
+    assert!(top.contains("project") && top.contains("connection") && top.matches('▼').count() == 2, "{top}");
+    let conn = app.hits.conn_menu;
+    assert!(conn.width > 0);
+    // A click on it, as the mouse does.
+    app.open_connection_menu((conn.x, conn.y + 1));
+    let items = app.palette_items();
+    assert!(items.iter().any(|c| matches!(c, Command::OpenSaved(_))), "{items:?}");
+    assert!(items.contains(&Command::PickDatabase));
+    let screen = render(&mut app, 120, 24);
+    let below = screen.lines().nth(1).unwrap();
+    assert!(below.contains("CONNECTIONS"), "hangs under the bar: {below}");
+    assert!(
+        screen.contains("prod  · PostgreSQL") || screen.contains("prod  · MySQL") || screen.contains("prod  · "),
+        "{screen}"
+    );
+    app.popups.palette = None;
+    app.open_project_menu((app.hits.project.x, 1));
+    let items = app.palette_items();
+    assert!(matches!(items[0], Command::SwitchProject(_)), "{items:?}");
+    assert_eq!(items.last(), Some(&Command::Action(crate::config::keys::Action::Projects)));
+    let screen = render(&mut app, 120, 24);
+    assert!(screen.contains("PROJECTS") && screen.contains("· open"), "{screen}");
+}

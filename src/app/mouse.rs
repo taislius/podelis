@@ -36,9 +36,17 @@ impl App {
             self.panes.drag_out = None;
         }
         let click = matches!(ev.kind, MouseEventKind::Down(MouseButton::Left));
-        // The project's name in the top bar opens the projects pane.
+        // The project's name in the top bar: on the tabs, the projects to
+        // switch to, hanging under it; elsewhere, the projects pane.
         if click && inside(self.hits.project, x, y) && self.screen != Screen::Projects && !self.busy_for_clicks() {
+            if self.screen == Screen::Query {
+                return self.open_project_menu((self.hits.project.x, self.hits.project.y + 1));
+            }
             return self.open_manager(Screen::Projects);
+        }
+        // The tab's connection: the project's connections, for this tab.
+        if click && self.screen == Screen::Query && inside(self.hits.conn_menu, x, y) && !self.busy_for_clicks() {
+            return self.open_connection_menu((self.hits.conn_menu.x, self.hits.conn_menu.y + 1));
         }
         if !matches!(self.screen, Screen::Query) {
             if click {

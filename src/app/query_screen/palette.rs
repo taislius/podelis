@@ -27,6 +27,10 @@ pub enum PaletteMode {
     Connections(Vec<(ConnId, String)>),
     /// The server's databases (`D` in the navigator), by name.
     Databases(Vec<String>),
+    /// The projects, to switch to (the top bar's project ▼).
+    Projects,
+    /// The project's saved connections, for this tab (its connection ▼).
+    Saved,
 }
 
 pub struct Palette {
@@ -34,6 +38,9 @@ pub struct Palette {
     pub selected: usize,
     pub mode: PaletteMode,
     opened: Instant,
+    /// Where it hangs from, as a drop-down (under what was clicked); `None`
+    /// in the middle of the screen.
+    pub anchor: Option<(u16, u16)>,
     /// The saved schema snapshots, read once when it opens (it's searched
     /// on every key).
     snapshots: Vec<crate::transfer::snapshots::Saved>,
@@ -41,7 +48,7 @@ pub struct Palette {
 
 impl Palette {
     fn new(mode: PaletteMode, selected: usize, snapshots: Vec<crate::transfer::snapshots::Saved>) -> Self {
-        Palette { query: LineInput::default(), selected, mode, opened: Instant::now(), snapshots }
+        Palette { query: LineInput::default(), selected, mode, opened: Instant::now(), anchor: None, snapshots }
     }
 
     /// A list to search (false: the menu of letters).
@@ -72,8 +79,16 @@ impl Palette {
         Palette::new(mode, selected, Vec::new())
     }
 
-    pub fn databases_only(&self) -> bool {
-        matches!(self.mode, PaletteMode::Databases(_))
+    /// A list of its own (no letters to go back to).
+    pub fn own_list(&self) -> bool {
+        matches!(
+            self.mode,
+            PaletteMode::Tabs(_)
+                | PaletteMode::Connections(_)
+                | PaletteMode::Databases(_)
+                | PaletteMode::Projects
+                | PaletteMode::Saved
+        )
     }
 
     /// Database `i` of the list.
@@ -156,6 +171,60 @@ impl App {
             })
             .collect();
         self.popups.palette = Some(Palette::new(PaletteMode::Tabs(texts), self.active_tab, Vec::new()));
+    }
+
+    /// The top bar's project ▼: the projects to switch to, the open one
+    /// picked, and the whole projects window after them.
+    pub fn open_project_menu(&mut self, anchor: (u16, u16)) {
+        let here = self.store.projects.iter().position(|p| Some(&p.id) == self.current_project.as_ref());
+        let mut palette = Palette::listing(PaletteMode::Projects, here.unwrap_or(0));
+        palette.anchor = Some(anchor);
+        self.popups.palette = Some(palette);
+    }
+
+    /// The top bar's connection ▼: the project's connections, for this tab
+    /// (its own picked), then its databases and the connections window.
+    pub fn open_connection_menu(&mut self, anchor: (u16, u16)) {
+        let here = self
+            .connection
+            .slots
+            .active
+            .and_then(|_| self.profiles().iter().position(|p| p.name == self.connection.form.name));
+        let mut palette = Palette::listing(PaletteMode::Saved, here.unwrap_or(0));
+        palette.anchor = Some(anchor);
+        self.popups.palette = Some(palette);
+    }
+
+    /// A project as its drop-down shows it.
+    pub fn project_entry(&self, i: usize) -> String {
+        let Some(project) = self.store.projects.get(i) else { return String::new() };
+        if Some(&project.id) == self.current_project.as_ref() {
+            format!("{}  · {}", project.name, t!("palette.this_project"))
+        } else {
+            project.name.clone()
+        }
+    }
+
+    /// A saved connection as its drop-down shows it: whether it's this
+    /// tab's, or open in other tabs.
+    pub fn saved_entry(&self, i: usize) -> String {
+        let Some(profile) = self.profiles().get(i) else { return String::new() };
+        let slots: Vec<ConnId> = self
+            .connection
+            .all()
+            .filter(|(_, s)| s.form.name == profile.name && s.database.is_some())
+            .map(|(id, _)| id)
+            .collect();
+        let here = self.tabs[self.active_tab].conn.is_some_and(|c| slots.contains(&c));
+        let tabs = self.tabs.iter().filter(|t| t.conn.is_some_and(|c| slots.contains(&c))).count();
+        let said = if here {
+            format!("  · {}", t!("palette.in_this_tab"))
+        } else if tabs > 0 {
+            format!("  · {}", t!("palette.in_tabs", n = tabs))
+        } else {
+            String::new()
+        };
+        format!("{}  · {}{said}", profile.name, profile.engine.label())
     }
 
     /// Ctrl+K j: the open connections, to go to or close; the shown tab's
@@ -249,6 +318,22 @@ impl App {
                 .map(|(id, _)| Command::GoToConnection(*id))
                 .collect();
         }
+        let matches = |text: &str| query.split_whitespace().all(|w| text.to_lowercase().contains(w));
+        if let Some(PaletteMode::Projects) = self.popups.palette.as_ref().map(|p| &p.mode) {
+            return (self.store.projects.iter().enumerate())
+                .filter(|(_, p)| matches(&p.name))
+                .map(|(i, _)| Command::SwitchProject(i))
+                .chain(std::iter::once(Command::Action(Action::Projects)).filter(|_| query.is_empty()))
+                .collect();
+        }
+        if let Some(PaletteMode::Saved) = self.popups.palette.as_ref().map(|p| &p.mode) {
+            let more = [Command::PickDatabase, Command::Action(Action::OpenConnection)];
+            return (self.profiles().iter().enumerate())
+                .filter(|(_, p)| matches(&p.name))
+                .map(|(i, _)| Command::OpenSaved(i))
+                .chain(more.into_iter().filter(|_| query.is_empty()))
+                .collect();
+        }
         if let Some(PaletteMode::Databases(names)) = self.popups.palette.as_ref().map(|p| &p.mode) {
             return (names.iter().enumerate())
                 .filter(|(_, name)| query.split_whitespace().all(|w| name.to_lowercase().contains(w)))
@@ -316,12 +401,7 @@ impl App {
             KeyCode::Esc => self.popups.palette = None,
             // Back to the letters.
             // (Not from the tab list: it has no letters to go back to.)
-            KeyCode::Backspace
-                if palette.query.is_empty()
-                    && !palette.tabs_only()
-                    && !palette.conns_only()
-                    && !palette.databases_only() =>
-            {
+            KeyCode::Backspace if palette.query.is_empty() && !palette.own_list() => {
                 palette.mode = PaletteMode::Leader { menu: true, group: None };
             }
             KeyCode::Enter => {

@@ -97,7 +97,7 @@ OS and the server version when something is off.
 - [ ] `Ctrl+K p` (or a click on the project's name): projects, connections
   and settings side by side. `→`/`←`
   move between the panes, the settings follow the selected connection,
-  `Enter` on a connection connects (a new tab if this one is connected),
+  `Enter` on a connection makes it this tab's (`t`: in a new tab),
   `e` edits it in place, `Esc` goes back to the tabs unchanged. At 80
   columns two panes show, and they don't overlap.
 - [ ] Paste a URL into the connection form: the fields fill in.

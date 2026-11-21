@@ -85,6 +85,7 @@ pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String
                 t!("help.connections"),
                 vec![
                     ("↵", t!("help.connect")),
+                    ("t", t!("help.new_tab")),
                     ("e · →", t!("help.edit_settings")),
                     ("n · d · m", t!("help.new_delete_move")),
                     ("c", t!("help.containers")),

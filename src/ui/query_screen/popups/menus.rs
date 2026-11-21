@@ -196,6 +196,19 @@ pub(super) fn draw_which_key(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines).block(popup(&title, t.accent)), rect);
 }
 
+/// The list's title: what it lists.
+fn palette_title(palette: &crate::app::query_screen::palette::Palette) -> &'static str {
+    use crate::app::query_screen::palette::PaletteMode;
+    match palette.mode {
+        PaletteMode::Connections(_) => t!("conn_list.title"),
+        PaletteMode::Tabs(_) => t!("tab_list.title"),
+        PaletteMode::Databases(_) => t!("palette.databases_title"),
+        PaletteMode::Projects => t!("palette.projects_title"),
+        PaletteMode::Saved => t!("palette.connections_title"),
+        PaletteMode::Leader { .. } | PaletteMode::Commands => t!("palette.title"),
+    }
+}
+
 pub(super) fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
     let Some(palette) = &app.popups.palette else { return };
@@ -207,26 +220,24 @@ pub(super) fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
     let items = app.palette_items();
-    let width = fit(76, 30, area.width);
+    let width = if palette.anchor.is_some() { fit(52, 30, area.width) } else { fit(76, 30, area.width) };
     // The connections list says its keys under it (Ctrl+D closes).
     let help = u16::from(palette.conns_only()) * 2;
     let rows = (area.height.saturating_sub(6 + help) as usize).clamp(1, 14).min(items.len().max(1));
-    // Two rows down from the top: no taller than what's left below that.
-    let rect = Rect {
-        y: area.y + 2,
-        ..centered_box(area, width, (rows as u16 + 4 + help).min(area.height.saturating_sub(2)))
+    let height = (rows as u16 + 4 + help).min(area.height.saturating_sub(2));
+    let rect = match palette.anchor {
+        // A drop-down: under what was clicked, kept on the screen.
+        Some((x, y)) => Rect {
+            x: x.min(area.right().saturating_sub(width)),
+            y: y.min(area.bottom().saturating_sub(height)),
+            width,
+            height,
+        },
+        // Two rows down from the top: no taller than what's left below that.
+        None => Rect { y: area.y + 2, ..centered_box(area, width, height) },
     };
     f.render_widget(Clear, rect);
-    let title = if palette.conns_only() {
-        t!("conn_list.title")
-    } else if palette.tabs_only() {
-        t!("tab_list.title")
-    } else if palette.databases_only() {
-        t!("palette.databases_title")
-    } else {
-        t!("palette.title")
-    };
-    let block = popup(title, t.accent);
+    let block = popup(palette_title(palette), t.accent);
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     let [search, list, keys] = Layout::default()

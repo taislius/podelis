@@ -2,7 +2,7 @@
 source: src/ui/tests/menus.rs
 expression: screen
 ---
-"   PODĖLIS v0.0.0     │  project  shop ▼                                                  "
+"   PODĖLIS v0.0.0     │  project  shop ▼  · connection  prod ▼                            "
 "┌ NAVIGATOR ────── 3 objects ┐┎ QUERY ──────┰────────────────────────────────────────────┐"
 "│ /┌ CTRL+K S ────────────────────────────────────────────────────────────────────────┐t │"
 "│ ▼│ THEN PRESS                                                                       │  │"

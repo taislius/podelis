@@ -303,6 +303,10 @@ impl App {
             // Into the settings pane, to change them.
             KeyCode::Right | KeyCode::Char('l' | 'e') | KeyCode::Tab => self.edit_selected_connection(),
             KeyCode::Enter if on_profile => {
+                let profile = self.profiles()[self.manager.connection_selected].clone();
+                self.open_saved_here(profile);
+            }
+            KeyCode::Char('t') if on_profile => {
                 self.free_tab_for_form();
                 self.connection.slots.auto_connect = true;
                 self.load_profile(self.profiles()[self.manager.connection_selected].clone());
@@ -310,6 +314,43 @@ impl App {
             KeyCode::Char('n') | KeyCode::Enter => self.new_connection(),
             _ => {}
         }
+    }
+
+    /// Enter on a saved connection: this tab's from now on. Already open
+    /// (another tab's): this tab joins it; otherwise it's opened. The tab's
+    /// connection before stays open for its other tabs. Not while this tab
+    /// has a transaction open or a query running: `t` opens it in a new tab.
+    pub(in crate::app) fn open_saved_here(&mut self, profile: ConnectionProfile) {
+        let connected = self.connection.slots.active.is_some();
+        if connected && (self.tab.run.executing || self.connection.txn == TxnState::Open) {
+            if self.screen == Screen::Query {
+                return self.set_status(t!("session.busy_here").to_string(), true);
+            }
+            self.manager.connection_message = Some((t!("session.busy_here").to_string(), true));
+            return;
+        }
+        let open = self
+            .connection
+            .all()
+            .find(|(_, slot)| slot.form.name == profile.name && slot.database.is_some())
+            .map(|(id, _)| id);
+        if let Some(id) = open {
+            self.tabs[self.active_tab].conn = Some(id);
+            self.switch_conn(Some(id));
+            self.release_unused_conns();
+            self.manager.connection_message = None;
+            self.screen = Screen::Query;
+            self.focus = Focus::Editor;
+            self.save_draft();
+            return;
+        }
+        if connected {
+            self.tabs[self.active_tab].conn = None;
+            self.switch_conn(None);
+            self.release_unused_conns();
+        }
+        self.connection.slots.auto_connect = true;
+        self.load_profile(profile);
     }
 
     /// Lists the running database containers, off the UI thread (it runs

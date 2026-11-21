@@ -29,6 +29,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Picking a connection (Ctrl+O, the connections pane): `Enter` makes it this tab's (one already open in another tab is joined; not while this tab has a transaction open), `t` opens it in a new tab. It used to open in a new tab whenever this one was connected, so switching from stage to prod left the tabs behind.
+- The top bar names the project and the tab's connection, each a drop-down: the projects to switch to (then the projects window), or the project's connections for this tab (then its databases and the connections window). With tabs on more than one connection, each tab says its.
 - The query over a result fades out over a dozen characters, gently at first, and is as quiet as the tabs' names (it competed with the rows).
 - The mark in the top bar is the name and version, centred, without `>_`.
 - Ctrl+K's menu shows its letters as key caps, apart from what they do in any theme.

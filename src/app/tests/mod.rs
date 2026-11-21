@@ -165,6 +165,13 @@ pub(super) async fn connect_profile(app: &mut App, profile: &ConnectionProfile) 
     finish_catalog(app).await;
 }
 
+/// Ctrl+O, then what `t` on a connection does first: a new tab for it
+/// (`connect_profile` then opens it there).
+pub(super) fn open_in_new_tab(app: &mut App) {
+    app.handle_key(ctrl('o'));
+    app.free_tab_for_form();
+}
+
 pub(super) async fn finish_catalog(app: &mut App) {
     while app.connection.schema.as_ref().is_none_or(|s| s.loading) || app.tab.run.executing {
         let event = app.poll_db_event().await.unwrap();

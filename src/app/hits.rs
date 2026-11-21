@@ -22,8 +22,10 @@ pub struct Hits {
     /// The note about what agents did, in the status bar (a click opens
     /// the agent window).
     pub agent_note: Rect,
-    /// The project's name in the top bar (a click switches project).
+    /// The project's name in the top bar (a click lists the projects).
     pub project: Rect,
+    /// The tab's connection in the top bar (a click lists the connections).
+    pub conn_menu: Rect,
     pub editor: Rect,
     pub editor_text: Rect,
     /// The write modes in the editor's footer.

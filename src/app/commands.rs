@@ -93,6 +93,10 @@ pub enum Command {
     OpenDatabase(usize),
     /// The open project's name, to change.
     RenameProject,
+    /// A project, by its place in the store: switch to it.
+    SwitchProject(usize),
+    /// A saved connection of the project, by its place: this tab's.
+    OpenSaved(usize),
     /// Compare with another tab's connection (or the only other one).
     CompareSchema(Option<ConnId>),
     /// Run the last query again every this many seconds.
@@ -505,6 +509,8 @@ impl Command {
             Command::PickDatabase => t!("menu.databases"),
             Command::OpenDatabase(_) => t!("palette.open_database"),
             Command::RenameProject => t!("palette.rename_project"),
+            Command::SwitchProject(_) => t!("palette.projects_title"),
+            Command::OpenSaved(_) => t!("palette.connections_title"),
             Command::CompareSchema(_) => t!("palette.compare_schema"),
             Command::SnapshotSchema => t!("palette.snapshot"),
             Command::Watch(_) => t!("palette.watch"),
@@ -565,6 +571,8 @@ impl Command {
             }
             Command::GoToConnection(id) => app.connection_entry(id),
             Command::OpenDatabase(i) => app.database_entry(i),
+            Command::SwitchProject(i) => app.project_entry(i),
+            Command::OpenSaved(i) => app.saved_entry(i),
             Command::Watch(0) => t!("palette.stop_watch").to_string(),
             Command::Watch(s) => t!("palette.watch_every", s = s),
             Command::CompareSnapshot(i) => match app.popups.palette.as_ref().and_then(|p| p.snapshot(i)) {
@@ -974,6 +982,18 @@ impl App {
             C::PickDatabase => self.open_database_list(),
             C::OpenDatabase(i) => self.open_database(i),
             C::RenameProject => self.rename_open_project(),
+            C::SwitchProject(i) => {
+                if let Some(id) = self.store.projects.get(i).map(|p| p.id.clone())
+                    && Some(&id) != self.current_project.as_ref()
+                {
+                    self.switch_project(Some(id), false);
+                }
+            }
+            C::OpenSaved(i) => {
+                if let Some(profile) = self.profiles().get(i).cloned() {
+                    self.open_saved_here(profile);
+                }
+            }
             // Several to compare with: they're picked from the palette's list.
             C::CompareSchema(None) if self.other_connections().len() > 1 => {
                 self.open_command_list(t!("palette.compare_schema_with", name = "").trim());

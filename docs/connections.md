@@ -44,7 +44,8 @@ Another project selected shows its connections, to look at; `→` opens it.
 | Key | Action |
 |---|---|
 | `↑`/`↓` | Move selection; the settings pane shows the selected connection |
-| `Enter` | Connect (in a new tab if this one is connected), or add a new connection |
+| `Enter` | Connect this tab to it (one already open in another tab is joined), or add a new connection |
+| `t` | Connect in a new tab |
 | `e` / `→` | Edit the connection's settings in the settings pane (your tab keeps its connection) |
 | `n` | New connection |
 | `d` | Delete selected connection (asks for confirmation) |
@@ -62,7 +63,8 @@ While editing or adding a connection:
 |---|---|
 | `↑`/`↓` | Move between fields (or click one) |
 | `←`/`→` | Change Engine, SSL mode, Mode or Transaction when that field is focused |
-| `Enter` | Connect (in a new tab if this one is connected; the tab you were on keeps its connection) |
+| `Enter` | Connect this tab to it (its connection before stays for its other tabs; not while it has a transaction open) |
+| `t` | Connect in a new tab |
 | `Ctrl+S` | Save this connection (settings locally; password in the OS keychain, unless a password command supplies it). Changing the name and saving renames the profile. A new connection is also saved once it connects (unnamed: after its host/database or file) |
 | `Ctrl+T` | Test the connection step by step: SSH, DNS, TCP, login, TLS, session, latency — each with its timing, the failing step with a hint |
 | `Ctrl+Y` | Copy the focused field's value (not the password) |

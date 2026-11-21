@@ -373,7 +373,7 @@ impl App {
 
     /// A connection's name, by its id (the shown one's or a parked one's):
     /// its saved name, else its file's name or `host/database`.
-    pub(super) fn conn_name(&self, id: ConnId) -> Option<String> {
+    pub fn conn_name(&self, id: ConnId) -> Option<String> {
         if self.connection.slots.active == Some(id) {
             return Some(self.connection.form.short_name());
         }
@@ -609,14 +609,12 @@ impl App {
         self.manager.connection_message = Some(("Disconnected".to_string(), false));
     }
 
-    /// Ctrl+O: picks a connection for this tab, or for a new tab if this
-    /// one is connected.
+    /// Ctrl+O: picks a connection, for this tab (Enter) or a new one (`t`).
     pub(super) fn open_connection(&mut self) {
         if self.tab.run.executing {
             return self.set_status(t!("session.wait").into(), true);
         }
         self.open_manager(Screen::Connections);
-        self.free_tab_for_form();
         self.manager.connection_message = Some((t!("session.pick").to_string(), false));
     }
 

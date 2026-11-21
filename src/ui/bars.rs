@@ -52,6 +52,20 @@ pub(super) fn draw_app_bar(f: &mut Frame, app: &mut App, area: Rect) {
         }
         left.push(if i == last { Span::styled(crumb, bold(t.text)) } else { Span::styled(crumb, muted()) });
     }
+    // On the tabs, the tab's connection beside the project: a drop-down too.
+    app.hits.conn_menu = Rect::default();
+    if app.screen == Screen::Query && named_project {
+        let name = if app.tabs[app.active_tab].conn.is_some() {
+            app.connection.form.short_name()
+        } else {
+            t!("bar.no_connection").to_string()
+        };
+        left.push(Span::styled(format!(" · {} ", t!("bar.connection")), muted()));
+        let x = area.x + Line::from(left.clone()).width() as u16;
+        let label = format!(" {name} ▼ ");
+        app.hits.conn_menu = Rect { x, width: label.chars().count() as u16, ..area };
+        left.push(Span::styled(label, muted().bg(t.inset)));
+    }
 
     // Connecting from the form; on the query screen the status bar has
     // the connection.
@@ -292,6 +306,7 @@ fn key_hints(app: &App, width: u16) -> Vec<Span<'static>> {
         ]),
         Screen::Connections => owned(&[
             ("↵", t!("hint.connect")),
+            ("t", t!("hint.new_tab")),
             ("e", t!("hint.edit")),
             ("n", t!("hint.new")),
             ("m", t!("hint.move")),

@@ -11,7 +11,7 @@ async fn connection_health_follows_the_connection_when_hidden_tabs_are_applied()
     app.store.upsert(&project, None, b.clone()).unwrap();
     app.load_tabs(&project);
     connect_profile(&mut app, &a).await;
-    app.handle_key(ctrl('o'));
+    open_in_new_tab(&mut app);
     connect_profile(&mut app, &b).await;
     assert_eq!(app.active_tab, 1);
 
@@ -75,7 +75,7 @@ async fn tabs_on_different_connections_run_at_once_and_esc_stops_only_its_own() 
     app.store.upsert(&project, None, b.clone()).unwrap();
     app.load_tabs(&project);
     connect_profile(&mut app, &a).await;
-    app.handle_key(ctrl('o'));
+    open_in_new_tab(&mut app);
     connect_profile(&mut app, &b).await;
     // A read that never ends, in alpha's tab.
     app.handle_key(alt('1'));
@@ -573,7 +573,7 @@ async fn a_hidden_tabs_finished_query_is_announced() {
     app.store.upsert(&project, None, b.clone()).unwrap();
     app.load_tabs(&project);
     connect_profile(&mut app, &a).await;
-    app.handle_key(ctrl('o'));
+    open_in_new_tab(&mut app);
     connect_profile(&mut app, &b).await;
     app.set_terminal_focus(true);
     app.settings.notify_after = 1;

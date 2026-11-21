@@ -636,10 +636,11 @@ async fn each_tab_keeps_its_own_connection() {
     run_sql(&mut app, "create table in_alpha (x int)").await;
     finish_catalog(&mut app).await;
 
-    // Ctrl+T shares the connection; Ctrl+O opens another in a new tab.
+    // Ctrl+T shares the connection; Ctrl+O, then `t`, opens another in a
+    // new tab.
     app.handle_key(ctrl('t'));
     assert_eq!(app.tabs[1].conn, app.tabs[0].conn);
-    app.handle_key(ctrl('o'));
+    open_in_new_tab(&mut app);
     assert!(matches!(app.screen, Screen::Connections));
     assert_eq!((app.tabs.len(), app.active_tab), (3, 2));
     assert!(app.connection.database.is_none());
@@ -681,7 +682,7 @@ async fn a_read_finishes_in_its_tab_while_one_on_another_connection_is_shown() {
     connect_profile(&mut app, &a).await;
     run_sql(&mut app, "create table here (x int); insert into here values (1)").await;
     finish_catalog(&mut app).await;
-    app.handle_key(ctrl('o'));
+    open_in_new_tab(&mut app);
     connect_profile(&mut app, &b).await;
     app.handle_key(alt('1'));
     assert_eq!(app.connection.form.name, "alpha");
@@ -714,7 +715,7 @@ async fn comparing_from_the_menu_with_several_picks_from_the_list() {
         let profile = file_profile(name, &dir.path().join(format!("{name}.db")));
         app.store.upsert(&project, None, profile.clone()).unwrap();
         if i > 0 {
-            app.handle_key(ctrl('o'));
+            open_in_new_tab(&mut app);
         }
         connect_profile(&mut app, &profile).await;
     }
@@ -742,7 +743,7 @@ async fn compare_schemas_and_rows_with_another_tabs_connection() {
 
     run_sql(&mut app, "create table users (id integer primary key, email text, plan text); create index users_email on users (email); insert into users values (1, 'a', 'free'), (2, 'b', 'pro'), (3, 'c', 'pro')").await;
     finish_catalog(&mut app).await;
-    app.handle_key(ctrl('o'));
+    open_in_new_tab(&mut app);
     connect_profile(&mut app, &b).await;
     run_sql(&mut app, "create table users (id integer primary key, email text); insert into users values (1, 'a'), (2, 'bb'), (4, 'd')").await;
     finish_catalog(&mut app).await;
@@ -803,7 +804,7 @@ async fn session_is_restored_on_startup() {
     let panel = app.connection.schema.as_mut().unwrap();
     let t2 = panel.tables.iter().position(|t| t.info.name == "t2").unwrap();
     panel.tables[t2].expanded = true;
-    app.handle_key(ctrl('o'));
+    open_in_new_tab(&mut app);
     connect_profile(&mut app, &b).await;
     app.tab.editor.set_text("select 'beta'");
     app.handle_key(alt('1'));
@@ -1081,10 +1082,10 @@ async fn the_connections_pane_connects_edits_and_goes_back() {
     app.handle_key(key(KeyCode::Tab));
     assert!(matches!(app.screen, Screen::Connections));
 
-    // Enter on a connection connects it right away, in a new tab since this
-    // one is connected.
+    // `t` on a connection connects it right away, in a new tab (Enter
+    // would make it this tab's).
     app.manager.connection_selected = 1;
-    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(key(KeyCode::Char('t')));
     while app.connection.database.is_none() || app.connection.form.connecting || app.manager.loading_profile {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
@@ -1225,7 +1226,7 @@ async fn open_connections_are_listed_gone_to_and_closed() {
     app.tabs[0].name = "orders".into();
     app.handle_key(ctrl('t'));
     app.tabs[1].name = "refunds".into();
-    app.handle_key(ctrl('o'));
+    open_in_new_tab(&mut app);
     connect_profile(&mut app, &b).await;
     app.tabs[2].name = "users".into();
     // More rows than are fetched at first: its result is open (holding a
@@ -1296,7 +1297,7 @@ async fn every_open_connection_is_closed_at_once() {
     app.store.upsert(&project, None, a.clone()).unwrap();
     app.store.upsert(&project, None, b.clone()).unwrap();
     connect_profile(&mut app, &a).await;
-    app.handle_key(ctrl('o'));
+    open_in_new_tab(&mut app);
     connect_profile(&mut app, &b).await;
     app.handle_key(ctrl('k'));
     app.handle_key(key(KeyCode::Char('j')));
@@ -1499,7 +1500,7 @@ async fn a_hidden_tabs_connection_is_checked_too() {
     app.store.upsert(&project, None, a.clone()).unwrap();
     app.store.upsert(&project, None, b.clone()).unwrap();
     connect_profile(&mut app, &a).await;
-    app.handle_key(ctrl('o'));
+    open_in_new_tab(&mut app);
     connect_profile(&mut app, &b).await;
     app.handle_key(alt('1'));
     finish_catalog(&mut app).await;
@@ -1550,7 +1551,7 @@ async fn live_another_database_opens_for_the_tab() {
     app.handle_key(key(KeyCode::Char('D')));
     until_event(&mut app, |k| matches!(k, DbEventKind::DatabasesListed(_))).await;
     let palette = app.popups.palette.as_ref().expect("the databases, listed");
-    assert!(palette.databases_only());
+    assert!(matches!(palette.mode, crate::app::query_screen::palette::PaletteMode::Databases(_)));
     let entries: Vec<String> = app.palette_items().into_iter().map(|c| c.text(&app)).collect();
     let here = &entries[app.popups.palette.as_ref().unwrap().selected];
     assert!(here.starts_with("podelis_pick_a") && here.contains("this one"), "{entries:?}");
@@ -1597,4 +1598,49 @@ fn the_open_project_is_renamed_from_the_command_list() {
     type_text(&mut app, "renamed");
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.project().unwrap().name, "renamed");
+}
+
+/// Ctrl+O, then Enter on a connection: this tab's from now on (the one it
+/// had stays for its other tabs); one open already in another tab is
+/// joined, not opened again. Not while this tab has a transaction open:
+/// `t` opens it in a new tab then.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn enter_on_a_connection_makes_it_this_tabs() {
+    let (mut app, dir) = test_app();
+    let project = project_id(&app);
+    std::fs::write(dir.path().join("b.db"), "").unwrap();
+    let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
+    app.store.upsert(&project, None, a.clone()).unwrap();
+    app.store.upsert(&project, None, b.clone()).unwrap();
+    connect_profile(&mut app, &a).await;
+    app.handle_key(ctrl('t'));
+    let alpha = app.tabs[0].conn;
+    // The second tab moves to beta; the first keeps alpha.
+    app.handle_key(ctrl('o'));
+    app.manager.connection_selected = 1;
+    app.handle_key(key(KeyCode::Enter));
+    while app.connection.database.is_none() || app.connection.form.connecting || app.manager.loading_profile {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    assert_eq!(app.tabs.len(), 2, "no new tab");
+    assert_eq!(app.connection.form.name, "beta");
+    assert_eq!(app.tabs[0].conn, alpha);
+    let beta = app.tabs[1].conn;
+    assert_ne!(beta, alpha);
+    // Back to alpha in this tab: the open one is joined.
+    app.handle_key(ctrl('o'));
+    app.manager.connection_selected = 0;
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(app.screen, Screen::Query));
+    assert_eq!(app.tabs[1].conn, alpha, "joined, not opened again");
+    // With a transaction open here, Enter doesn't take the tab away from it.
+    app.connection.txn = TxnState::Open;
+    app.handle_key(ctrl('o'));
+    app.manager.connection_selected = 1;
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.tabs[1].conn, alpha);
+    let said = app.manager.connection_message.as_ref().map(|(m, _)| m.as_str()).unwrap_or_default();
+    assert!(said.contains("t opens"), "{said}");
 }

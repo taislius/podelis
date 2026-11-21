@@ -221,6 +221,11 @@ fn clicking_the_project_in_the_top_bar_switches_project() {
         row: r.y,
         modifiers: KeyModifiers::NONE,
     });
+    // The projects hang under it; the last entry is the whole window.
+    let items = app.palette_items();
+    assert!(app.popups.palette.as_ref().is_some_and(|p| p.anchor.is_some()), "a drop-down");
+    app.popups.palette.as_mut().unwrap().selected = items.len() - 1;
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     // The projects pane, beside the project's connections and settings.
     assert!(matches!(app.screen, Screen::Projects));
     assert_snapshot!(render(&mut app, 120, 20));
