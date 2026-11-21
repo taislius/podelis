@@ -45,8 +45,17 @@ impl App {
         if name == self.connection.form.database {
             return self.set_status(t!("palette.database_here", name = name), false);
         }
+        // Its connection goes from this tab: not under a query or an open
+        // transaction (closing it would roll that back).
+        if self.tab.run.executing || self.connection.txn == TxnState::Open {
+            return self.set_status(t!("palette.database_busy").to_string(), true);
+        }
         let mut form = self.connection.form.duplicate();
+        // Another database than the saved connection's: not that one.
+        let saved = self.profiles().iter().find(|p| p.name == form.name).map(|p| p.database.clone());
+        form.other_database = saved.is_some_and(|db| db != name);
         form.database.clone_from(&name);
+        let tab = self.tabs[self.active_tab].id;
         let params = match form.params() {
             Ok(p) => p,
             Err(e) => return self.set_status(t!("palette.database_failed", name = name, e = e), true),
@@ -58,7 +67,7 @@ impl App {
         self.connect_started = Some(std::time::Instant::now());
         tokio::spawn(async move {
             match Database::connect(params).await {
-                Ok(db) => send(DbEventKind::DatabaseOpened(db, Box::new(form))),
+                Ok(db) => send(DbEventKind::DatabaseOpened(db, Box::new(form), tab)),
                 Err(e) => {
                     crate::system::connection_log::record("connect failed", &short, &crate::db::error_details(&e));
                     send(DbEventKind::DatabaseFailed { name, error: crate::db::error_message(&e) });

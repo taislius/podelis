@@ -1644,3 +1644,69 @@ async fn enter_on_a_connection_makes_it_this_tabs() {
     let said = app.manager.connection_message.as_ref().map(|(m, _)| m.as_str()).unwrap_or_default();
     assert!(said.contains("t opens"), "{said}");
 }
+
+/// Enter on another connection lets go of this tab's only once the new one
+/// is open: leaving without it (Esc), the tab has its own back, still open.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_tab_keeps_its_connection_until_the_one_picked_opens() {
+    let (mut app, dir) = test_app();
+    let project = project_id(&app);
+    let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
+    app.store.upsert(&project, None, a.clone()).unwrap();
+    app.store.upsert(&project, None, b.clone()).unwrap();
+    connect_profile(&mut app, &a).await;
+    let alpha = app.tabs[0].conn;
+    app.handle_key(ctrl('o'));
+    app.manager.connection_selected = 1;
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.tabs[0].conn, None, "let go of while beta opens");
+    // Esc stops opening it, Esc again leaves.
+    app.handle_key(key(KeyCode::Esc));
+    app.handle_key(key(KeyCode::Esc));
+    assert!(matches!(app.screen, Screen::Query));
+    assert_eq!(app.tabs[0].conn, alpha, "its own back");
+    assert!(app.connected());
+}
+
+/// Another database can't take a tab's connection under a query or an open
+/// transaction (closing it would roll that back), nor arrive in a tab other
+/// than the one it was asked in.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn another_database_waits_for_the_tab_to_be_free() {
+    use crate::app::query_screen::palette::PaletteMode;
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    let before = app.tabs[0].conn;
+    app.connection.txn = TxnState::Open;
+    app.popups.palette = Some(crate::app::query_screen::palette::Palette::listing(
+        PaletteMode::Databases(vec!["one".into(), "two".into()]),
+        0,
+    ));
+    app.run_command_for_tests(crate::app::commands::Command::OpenDatabase(1));
+    assert!(said(&app).contains("Not while"), "{}", said(&app));
+    assert_eq!(app.tabs[0].conn, before);
+    // One arriving for another tab is closed, not put here.
+    app.connection.txn = TxnState::Idle;
+    let other = app.connection.database.clone().unwrap();
+    let mut form = app.connection.form.duplicate();
+    form.database = "two".into();
+    let generation = app.generation;
+    let mut elsewhere = app.tabs[0].id;
+    let elsewhere = elsewhere.next();
+    app.handle_db_event(DbEvent::connection(generation, DbEventKind::DatabaseOpened(other, Box::new(form), elsewhere)));
+    assert_eq!(app.tabs[0].conn, before);
+}
+
+/// A connection opened on another database of a saved one keeps its name
+/// but isn't it: labelled with its database, never joined for it.
+#[test]
+fn another_database_is_not_its_saved_connection() {
+    let mut form = ConnectForm::new();
+    form.name = "prod".into();
+    form.database = "archive".into();
+    assert!(form.is_saved("prod") && form.label() == "prod");
+    form.other_database = true;
+    assert!(!form.is_saved("prod"));
+    assert_eq!(form.label(), "prod/archive");
+}

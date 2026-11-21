@@ -211,7 +211,7 @@ pub(super) fn truncate(s: &str, max: usize) -> String {
 /// last chars fading into the pane's background before the `…`, so the
 /// cut reads as "more here" rather than as the statement's end. The fade
 /// starts gently (each char a little fainter than the one before, more so
-/// towards the end) over a dozen chars.
+/// towards the end) over a dozen chars, and stops short of the background.
 pub(super) fn fading(
     s: &str,
     max: usize,
@@ -237,7 +237,8 @@ pub(super) fn fading(
     )]
     let colors: Vec<_> = (1..=steps + 1)
         .map(|i| {
-            let k = (i as f32 / (steps + 1) as f32).powf(1.6);
+            // Up to 7/8 of the way: the `…` after it stays in sight.
+            let k = (i as f32 / (steps + 1) as f32).powf(1.6) * 0.875;
             shades[((k * SHADES as f32) as usize).clamp(1, SHADES) - 1]
         })
         .collect();

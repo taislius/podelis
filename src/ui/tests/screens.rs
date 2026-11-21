@@ -258,3 +258,16 @@ fn the_top_bar_has_the_project_and_the_connection_as_drop_downs() {
     let screen = render(&mut app, 120, 24);
     assert!(screen.contains("PROJECTS") && screen.contains("· open"), "{screen}");
 }
+
+/// A changed password is an unsaved change; a saved connection as it is
+/// isn't one (a transaction saved as its mode's default too).
+#[test]
+fn a_changed_password_is_unsaved_and_nothing_else_is() {
+    let (app, _dir) = app();
+    let mut saved = app.profiles()[0].clone();
+    saved.transaction = Some(crate::app::TxMode::for_connection(saved.mode));
+    let mut form = crate::app::ConnectForm::from_profile(&saved, "pw".into());
+    assert!(!form.unsaved(Some(&saved)), "as saved");
+    form.password = "new".into();
+    assert!(form.unsaved(Some(&saved)), "a new password");
+}

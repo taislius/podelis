@@ -50,6 +50,10 @@ pub struct Manager {
     /// The active tab was opened, or disconnected, to pick a connection:
     /// leaving the panes drops it if it's still empty and unconnected.
     pub(in crate::app) drop_blank_tab: bool,
+    /// The connection the active tab let go of to open another (Enter on a
+    /// saved one): still open, it's the tab's again if the new one isn't
+    /// opened after all.
+    pub(in crate::app) previous_conn: Option<ConnId>,
 }
 
 impl App {

@@ -24,7 +24,7 @@ impl App {
             DbEventPayload::Conn { id, kind } => self.apply_conn_event(id, kind),
             DbEventPayload::Connection { generation, kind } if generation != self.generation => {
                 // A connection that finished after being cancelled is still open.
-                if let DbEventKind::Connected(db) | DbEventKind::DatabaseOpened(db, _) = kind {
+                if let DbEventKind::Connected(db) | DbEventKind::DatabaseOpened(db, ..) = kind {
                     tokio::spawn(async move { db.close().await });
                 }
             }
@@ -275,7 +275,17 @@ impl App {
             }
             DbEventKind::Connected(db) => self.on_connected(db),
             DbEventKind::DatabasesListed(listed) => self.on_databases_listed(listed),
-            DbEventKind::DatabaseOpened(db, form) => self.on_connected_with(db, *form),
+            // For the tab it was asked in, if that's still the one shown and
+            // free (a tab switched to since, or a query started there, keeps
+            // its connection).
+            DbEventKind::DatabaseOpened(db, form, tab) => {
+                let busy = self.tab.run.executing || self.connection.txn == TxnState::Open;
+                if self.tabs[self.active_tab].id != tab || busy {
+                    tokio::spawn(async move { db.close().await });
+                    return self.set_status(t!("palette.database_busy").to_string(), true);
+                }
+                self.on_connected_with(db, *form);
+            }
             DbEventKind::DatabaseFailed { name, error } => {
                 self.connect_started = None;
                 self.set_status(t!("palette.database_failed", name = name, e = crate::db::with_hint(&error)), true);
@@ -371,6 +381,9 @@ impl App {
     fn on_connected_with(&mut self, db: Database, form: ConnectForm) {
         tracing::info!(engine = ?db.engine(), version = db.version(), "connected");
         self.tab.run.task = None;
+        // The connection the tab let go of for this one goes (unless other
+        // tabs use it: `attach_connection` releases the unused).
+        self.manager.previous_conn = None;
         let project = self.project().map(|p| p.name.clone()).unwrap_or_default();
         self.attach_connection(db);
         self.connection.form = form;
@@ -766,8 +779,8 @@ pub(super) enum DbEventKind {
     ConnectFailed(String),
     /// The server's databases (`None`: a file, the one database).
     DatabasesListed(Result<Option<Vec<String>>, String>),
-    /// Another database opened for the tab, with its form.
-    DatabaseOpened(Database, Box<ConnectForm>),
+    /// Another database opened for tab `TabId`, with its form.
+    DatabaseOpened(Database, Box<ConnectForm>, super::TabId),
     DatabaseFailed {
         name: String,
         error: String,

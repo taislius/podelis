@@ -212,7 +212,7 @@ impl App {
         let slots: Vec<ConnId> = self
             .connection
             .all()
-            .filter(|(_, s)| s.form.name == profile.name && s.database.is_some())
+            .filter(|(_, s)| s.form.is_saved(&profile.name) && s.database.is_some())
             .map(|(id, _)| id)
             .collect();
         let here = self.tabs[self.active_tab].conn.is_some_and(|c| slots.contains(&c));

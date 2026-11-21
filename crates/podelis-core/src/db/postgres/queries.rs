@@ -344,14 +344,6 @@ pub(in crate::db) const SESSION_INFO: (&str, &[&str]) = (
     ],
 );
 
-/// Connections in use, and how many this user may open: the server's
-/// limit, less what's kept back for superusers unless the user is one, and
-/// PostgreSQL 16's reserved slots unless the user may use them (only the
-/// result is said, never what's kept back); the role's and the database's
-/// own limits where they're set. On a pool connection, not the session: a
-/// query that fails there can't spoil an open transaction. Before
-/// PostgreSQL 10 (no `backend_type`) every row of `pg_stat_activity` is a
-/// client's.
 /// The databases this user may connect to (templates and those that
 /// take no connections left out), on a pool connection.
 pub(in crate::db) async fn databases(db: &Database) -> Result<Option<Vec<String>>> {
@@ -365,6 +357,14 @@ pub(in crate::db) async fn databases(db: &Database) -> Result<Option<Vec<String>
     Ok(Some(names))
 }
 
+/// Connections in use, and how many this user may open: the server's
+/// limit, less what's kept back for superusers unless the user is one, and
+/// PostgreSQL 16's reserved slots unless the user may use them (only the
+/// result is said, never what's kept back); the role's and the database's
+/// own limits where they're set. On a pool connection, not the session: a
+/// query that fails there can't spoil an open transaction. Before
+/// PostgreSQL 10 (no `backend_type`) every row of `pg_stat_activity` is a
+/// client's.
 pub(in crate::db) async fn connections(db: &Database) -> Option<String> {
     const SQL: &str = r"
         SELECT {in_use}::text

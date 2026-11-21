@@ -375,9 +375,9 @@ impl App {
     /// its saved name, else its file's name or `host/database`.
     pub fn conn_name(&self, id: ConnId) -> Option<String> {
         if self.connection.slots.active == Some(id) {
-            return Some(self.connection.form.short_name());
+            return Some(self.connection.form.label());
         }
-        self.connection.slots.parked.get(&id).map(|slot| slot.form.short_name())
+        self.connection.slots.parked.get(&id).map(|slot| slot.form.label())
     }
 
     /// Where connection `id` goes (`PostgreSQL db.example.com:5432/shop`),
@@ -556,7 +556,8 @@ impl App {
     pub(super) fn take_over_failed_slots(&mut self) {
         let Some(opened) = self.connection.slots.active else { return };
         let name = self.connection.form.name.clone();
-        if name.is_empty() {
+        // Another database than the saved connection's isn't it.
+        if name.is_empty() || self.connection.form.other_database {
             return;
         }
         // The slot's name, or the tab's from the last session: a failed
@@ -624,6 +625,16 @@ impl App {
         self.manager.connection_message = None;
         self.restore_active_form();
         self.screen = Screen::Query;
+        // The tab let go of its connection for one that didn't open: it's
+        // the tab's again.
+        if let Some(previous) = self.manager.previous_conn.take()
+            && self.tabs[self.active_tab].conn.is_none()
+            && self.connection.state_of(previous).is_some()
+        {
+            self.tabs[self.active_tab].conn = Some(previous);
+            self.switch_conn(Some(previous));
+            return;
+        }
         let blank = self.tab.editor.is_empty() && self.tabs[self.active_tab].saved_id.is_none();
         if std::mem::take(&mut self.manager.drop_blank_tab)
             && self.connection.slots.active.is_none()

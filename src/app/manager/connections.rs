@@ -67,6 +67,12 @@ pub struct ConnectForm {
     /// Where the cursor is in the focused field (a byte offset; `None`:
     /// at its end, as when a field is moved to).
     pub cursor: Option<usize>,
+    /// Opened on another database than its saved connection's (`D` in the
+    /// navigator): not that saved connection, whose name it keeps.
+    pub other_database: bool,
+    /// The password it was opened with (from the keychain), to tell a
+    /// changed one.
+    pub(in crate::app) opened_password: Option<String>,
     pub error: Option<String>,
     pub info: Option<String>,
     pub connecting: bool,
@@ -99,6 +105,8 @@ impl From<ConnectionDraft> for ConnectForm {
             original_legacy: false,
             focus: ConnectField::Name,
             cursor: None,
+            other_database: false,
+            opened_password: None,
             error: None,
             info: None,
             connecting: false,
@@ -120,6 +128,7 @@ impl ConnectForm {
             original_name: self.original_name.clone(),
             original_legacy: self.original_legacy,
             keychain_note: self.keychain_note.clone(),
+            other_database: self.other_database,
             ..self.draft.clone().into()
         }
     }
@@ -128,6 +137,7 @@ impl ConnectForm {
         Self {
             original_name: Some(profile.name.clone()),
             original_legacy: profile.legacy_keychain,
+            opened_password: Some(password.clone()),
             ..ConnectionDraft::from_profile(profile, password).into()
         }
     }
@@ -178,6 +188,18 @@ impl ConnectForm {
         })
     }
 
+    /// Whether it's saved connection `name` as saved (not another database
+    /// of it).
+    pub fn is_saved(&self, name: &str) -> bool {
+        self.name == name && !self.other_database
+    }
+
+    /// Its name as the tabs and the top bar say it: another database's
+    /// with that database (`prod/archive`).
+    pub fn label(&self) -> String {
+        if self.other_database { format!("{}/{}", self.short_name(), self.database) } else { self.short_name() }
+    }
+
     /// A failed connect's message, plus why the saved password is missing
     /// if the keychain couldn't be read: the likelier cause then.
     pub fn connect_failure(&self, err: &str) -> String {
@@ -217,13 +239,11 @@ impl ConnectForm {
         match saved {
             // As it would be saved; what isn't the form's (unknown keys,
             // where the password is kept) as it was.
+            // Both as the form makes them (a transaction saved as its mode's
+            // default reads back as none), and the password as opened.
             Some(saved) => {
-                let now = ConnectionProfile {
-                    unknown: saved.unknown.clone(),
-                    legacy_keychain: saved.legacy_keychain,
-                    ..self.to_profile()
-                };
-                now != *saved
+                let as_saved = ConnectionDraft::from_profile(saved, String::new()).to_profile();
+                self.to_profile() != as_saved || self.opened_password.as_ref().is_some_and(|p| *p != self.password)
             }
             None => !self.host.is_empty() || !self.name.is_empty(),
         }
@@ -332,7 +352,7 @@ impl App {
         let open = self
             .connection
             .all()
-            .find(|(_, slot)| slot.form.name == profile.name && slot.database.is_some())
+            .find(|(_, slot)| slot.form.is_saved(&profile.name) && slot.database.is_some())
             .map(|(id, _)| id);
         if let Some(id) = open {
             self.tabs[self.active_tab].conn = Some(id);
@@ -344,10 +364,11 @@ impl App {
             self.save_draft();
             return;
         }
+        // The tab lets go of its connection, which stays open (not released)
+        // until the new one is: leaving without it, the tab has it back.
         if connected {
-            self.tabs[self.active_tab].conn = None;
+            self.manager.previous_conn = self.tabs[self.active_tab].conn.take();
             self.switch_conn(None);
-            self.release_unused_conns();
         }
         self.connection.slots.auto_connect = true;
         self.load_profile(profile);

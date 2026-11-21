@@ -46,7 +46,7 @@ pub(super) fn draw_app_bar(f: &mut Frame, app: &mut App, area: Rect) {
         if named_project && i == 0 {
             let x = area.x + Line::from(left.clone()).width() as u16;
             let label = format!(" {crumb} ▼ ");
-            app.hits.project = Rect { x, width: label.chars().count() as u16, ..area };
+            app.hits.project = clickable(area, x, &label);
             left.push(Span::styled(label, muted().bg(t.inset)));
             continue;
         }
@@ -56,14 +56,14 @@ pub(super) fn draw_app_bar(f: &mut Frame, app: &mut App, area: Rect) {
     app.hits.conn_menu = Rect::default();
     if app.screen == Screen::Query && named_project {
         let name = if app.tabs[app.active_tab].conn.is_some() {
-            app.connection.form.short_name()
+            app.connection.form.label()
         } else {
             t!("bar.no_connection").to_string()
         };
         left.push(Span::styled(format!(" · {} ", t!("bar.connection")), muted()));
         let x = area.x + Line::from(left.clone()).width() as u16;
         let label = format!(" {name} ▼ ");
-        app.hits.conn_menu = Rect { x, width: label.chars().count() as u16, ..area };
+        app.hits.conn_menu = clickable(area, x, &label);
         left.push(Span::styled(label, muted().bg(t.inset)));
     }
 
@@ -81,6 +81,13 @@ pub(super) fn draw_app_bar(f: &mut Frame, app: &mut App, area: Rect) {
         .areas(area);
     f.render_widget(Paragraph::new(Line::from(left)), l);
     f.render_widget(Paragraph::new(Line::from(right)).alignment(Alignment::Right), r);
+}
+
+/// Where `label`, drawn at `x` in `bar`, can be clicked: as wide as it is
+/// on the screen (wide characters count twice), and no further than the bar.
+fn clickable(bar: Rect, x: u16, label: &str) -> Rect {
+    let width = u16::try_from(Span::raw(label).width()).unwrap_or(u16::MAX).min(bar.right().saturating_sub(x));
+    Rect { x, width, ..bar }
 }
 
 /// Where the connection goes: `user@host:port` (and the SSH host), or the

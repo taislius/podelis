@@ -419,7 +419,6 @@ type TabHits = Vec<(u16, u16, usize)>;
 /// An x range in the tab row.
 type Cols = (u16, u16);
 
-/// Returns where each tab, and the `+`, ended up.
 /// Whether the tabs are on more than one connection (each then says its).
 fn tabs_on_several_connections(app: &App) -> bool {
     let mut conns = app.tabs.iter().filter_map(|t| t.conn);
@@ -455,6 +454,7 @@ fn tab_spans(app: &App, i: usize, cols: usize, connections: bool) -> Vec<Span<'s
     spans
 }
 
+/// Returns where each tab, and the `+`, ended up.
 fn draw_tabs(f: &mut Frame, app: &App, area: Rect) -> (TabHits, Vec<Cols>, Option<Cols>) {
     let t = theme();
     f.render_widget(Block::default().style(Style::default().bg(t.inset)), area);
@@ -611,8 +611,18 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
     }
     let right = Line::from(tx_status(app, area.width));
     let right_w = right.width() as u16;
+    // The cursor's statement, worked out once for the frame: which one F6
+    // runs, and whether a problem is in it.
+    let (position, here) = with_statements(app, |s, cursor| Some((s.position(cursor), s.at(cursor)))).unzip();
+    let (position, here) = (position.flatten(), here.flatten());
+    // A hint at `offset` is said in the footer only if it's in the cursor's
+    // statement (one with no place is about the whole text): it mustn't
+    // seem to be about what just ran. The others keep their marks in the
+    // text, and `Ctrl+K w` goes to each.
+    let hint_is_here =
+        |offset: Option<usize>| offset.is_none_or(|o| here.as_ref().is_none_or(|r| r.contains(&o) || o == r.end));
     // Which statement F6 runs, when there's more than one and no selection.
-    let position = statement_position(app)
+    let position = position
         .filter(|&(_, total)| total > 1 && area.width >= 60 && app.tab.editor.selection().is_none())
         .map(|(nth, total)| format!("{}   ", t!("editor.statement_of", nth = nth, total = total)))
         .unwrap_or_default();
@@ -631,7 +641,7 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
         let style = if app.notes.editor_note_is_error { bold(t.error) } else { fg(t.text) };
         let room = usize::from(l.width.saturating_sub(1));
         Line::from(Span::styled(format!(" {}", truncate_cols(&one_line(note), room)), style))
-    } else if let Some(hint) = app.tab.syntax_hint.as_ref().filter(|h| hint_is_here(app, h.offset)) {
+    } else if let Some(hint) = app.tab.syntax_hint.as_ref().filter(|h| hint_is_here(h.offset)) {
         let (label, color, rule) = match hint.source {
             HintSource::Server => (t!("hint.server"), t.error, ""),
             HintSource::Parser => (t!("hint.parser"), t.warn, ""),
@@ -669,7 +679,7 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
     }
     // Clicking a hint goes to where it points.
     if app.notes.editor_note.is_none()
-        && app.tab.syntax_hint.as_ref().is_some_and(|h| h.offset.is_some() && hint_is_here(app, h.offset))
+        && app.tab.syntax_hint.as_ref().is_some_and(|h| h.offset.is_some() && hint_is_here(h.offset))
     {
         app.hits.syntax_hint = l;
     }
@@ -699,22 +709,8 @@ thread_local! {
     static STATEMENTS: RefCell<Option<CachedStatements>> = const { RefCell::new(None) };
 }
 
-/// Which statement the cursor is in, and how many there are.
-fn statement_position(app: &App) -> Option<(usize, usize)> {
-    with_statements(app, crate::language::Statements::position)
-}
-
-/// Whether a hint at `offset` is about the statement the cursor is in (one
-/// with no place is about the whole text): the footer says only those, so
-/// it doesn't seem to be about what just ran. The others keep their marks
-/// in the text, and `Ctrl+K w` goes to each.
-fn hint_is_here(app: &App, offset: Option<usize>) -> bool {
-    let Some(offset) = offset else { return true };
-    with_statements(app, crate::language::Statements::at).is_none_or(|r| r.contains(&offset) || offset == r.end)
-}
-
 /// The text's statements (worked out again only when it's changed), and the
-/// cursor's place in it.
+/// cursor's place in it: once a frame (the text is copied to compare).
 fn with_statements<T>(app: &App, ask: impl FnOnce(&crate::language::Statements, usize) -> Option<T>) -> Option<T> {
     let text = app.tab.editor.text();
     let engine = app.engine();
