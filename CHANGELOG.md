@@ -48,6 +48,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The connection form's fields had no cursor and were edited only at their end (Delete and the arrows did nothing): a field now has a cursor, drawn, that ←/→, Home and End move, and typing, Delete, Backspace and a paste work there. The form always says its keys (Ctrl+S save · Ctrl+T test · ↵ connect · Esc drop the changes) and marks unsaved changes; Ctrl+←/→ move its border as on the connections.
 - A tab with no connection open (one that didn't reopen, say) checked its SQL as PostgreSQL: MySQL's `SET @id = 1` was flagged ("Expected: identifier, found: @"). It's read as its connection's engine (the one it had, or the project's).
 - The editor's footer said a problem only while the cursor is in its statement: after running the next one, an error about the one before looked like it was about what just ran (its mark stays in the text; `Ctrl+K w` goes to it).
 - F6 on an empty line ran the nearest statement; it now runs nothing and says so.

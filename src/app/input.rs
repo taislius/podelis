@@ -35,6 +35,14 @@ impl LineInput {
         LineInput { text, cursor }
     }
 
+    /// `text`, with the cursor at byte `cursor` (the end if `None`, past
+    /// the end, or inside a character).
+    pub fn at(text: impl Into<String>, cursor: Option<usize>) -> Self {
+        let text = text.into();
+        let cursor = cursor.filter(|&c| text.is_char_boundary(c)).unwrap_or(text.len());
+        LineInput { text, cursor }
+    }
+
     pub fn text(&self) -> &str {
         &self.text
     }
@@ -135,6 +143,24 @@ impl LineInput {
         self.cursor = at;
         InputResult::Moved
     }
+}
+
+/// Edits a form's field with `LineInput`'s keys at `cursor` (a byte
+/// offset; `None`, or past the end: the end), which follows the edit.
+pub fn edit_at(text: &mut String, cursor: &mut Option<usize>, key: KeyEvent) -> InputResult {
+    let mut input = LineInput::at(std::mem::take(text), *cursor);
+    let result = input.handle(key);
+    *cursor = Some(input.cursor);
+    *text = input.text;
+    result
+}
+
+/// Pastes into a form's field at `cursor`, which goes after what's pasted.
+pub fn paste_at(text: &mut String, cursor: &mut Option<usize>, pasted: &str) {
+    let mut input = LineInput::at(std::mem::take(text), *cursor);
+    input.insert_str(pasted);
+    *cursor = Some(input.cursor);
+    *text = input.text;
 }
 
 /// Edits a form's field with `LineInput`'s keys, at its end.

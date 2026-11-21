@@ -366,12 +366,37 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
         let lines = form_lines(&Settings::from(form), Some(form.focus), &mask);
         let n = lines.len() as u16;
         f.render_widget(Paragraph::new(lines), inner);
+        // The cursor in the field being typed in.
+        let row = form.visible_fields().iter().position(|&field| field == form.focus);
+        if let (Some(row), Some(before)) = (row, form.before_cursor())
+            && (row as u16) < inner.height
+        {
+            let x = inner.x as usize + 1 + super::connect::label_width() + 2 + before.chars().count();
+            let x = (x as u16).min(inner.right().saturating_sub(1));
+            f.set_cursor_position((x, inner.y + row as u16));
+        }
+        // What saving and connecting do, always in sight: Enter connects
+        // with the form as it is, Ctrl+S keeps it.
+        let saved = form.original_name.as_ref().and_then(|name| app.profiles().iter().find(|p| &p.name == name));
+        let mut keys = Vec::new();
+        if saved.is_some() && form.unsaved(saved) {
+            keys.push(Span::styled(format!("{} ", t!("form.unsaved")), bold(theme().warn)));
+        }
+        keys.push(Span::styled(t!("form.keys"), dim()));
+        let keys = Paragraph::new(Line::from(keys)).wrap(Wrap { trim: true });
+        let keys_width = inner.width.saturating_sub(2);
+        let keys_height = u16::try_from(keys.line_count(keys_width)).unwrap_or(u16::MAX);
+        let keys_shown = inner.height > n + 1 + keys_height;
+        if keys_shown {
+            let at = Rect { x: inner.x + 1, y: inner.bottom() - keys_height, width: keys_width, height: keys_height };
+            f.render_widget(keys, at);
+        }
         let (message, style) = form_message(form);
         let rest = Rect {
             x: inner.x + 1,
             y: inner.y + n + 1,
             width: inner.width.saturating_sub(2),
-            height: inner.height.saturating_sub(n + 1),
+            height: inner.height.saturating_sub(n + 1 + if keys_shown { keys_height } else { 0 }),
         };
         f.render_widget(Paragraph::new(message).style(style).wrap(Wrap { trim: true }), rest);
         return;

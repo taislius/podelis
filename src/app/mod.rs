@@ -795,10 +795,7 @@ impl App {
                     }
                     return;
                 }
-                let focus = self.connection.form.focus;
-                if let Some(field) = self.connection.form.field_mut(focus) {
-                    input::paste_at_end(field, text);
-                }
+                self.connection.form.paste_into_field(text);
             }
             _ => {}
         }
@@ -869,7 +866,7 @@ impl App {
         }
 
         if key.modifiers == KeyModifiers::CONTROL
-            && matches!(self.screen, Screen::Projects | Screen::Connections)
+            && matches!(self.screen, Screen::Projects | Screen::Connections | Screen::Connect)
             && self.resize_manager(key.code)
         {
             return;

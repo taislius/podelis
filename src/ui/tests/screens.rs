@@ -201,4 +201,26 @@ fn ctrl_arrows_resize_the_managers_panes() {
     app.handle_key(ctrl(KeyCode::Right));
     render(&mut app, 140, 16);
     assert_eq!(app.hits.manager_panes.1.unwrap().width, before - 2, "the border moved right: settings narrower");
+    // Editing a connection: the same border.
+    app.screen = Screen::Connect;
+    render(&mut app, 140, 16);
+    let before = app.hits.manager_panes.1.unwrap().width;
+    app.handle_key(ctrl(KeyCode::Left));
+    render(&mut app, 140, 16);
+    assert_eq!(app.hits.manager_panes.1.unwrap().width, before + 2, "the form wider");
+}
+
+/// The connection being edited says what saving and connecting do, and
+/// whether it differs from what's saved; the cursor is in its field.
+#[test]
+fn the_connection_form_says_its_keys_and_unsaved_changes() {
+    let (mut app, _dir) = app();
+    let saved = app.profiles()[0].clone();
+    app.connection.form = crate::app::ConnectForm::from_profile(&saved, String::new());
+    app.screen = Screen::Connect;
+    let screen = render(&mut app, 140, 30);
+    assert!(screen.contains("Ctrl+S save") && !screen.contains("unsaved changes"), "{screen}");
+    app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    let screen = render(&mut app, 140, 30);
+    assert!(screen.contains("unsaved changes"), "{screen}");
 }

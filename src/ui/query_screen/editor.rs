@@ -696,8 +696,7 @@ fn statement_position(app: &App) -> Option<(usize, usize)> {
 /// in the text, and `Ctrl+K w` goes to each.
 fn hint_is_here(app: &App, offset: Option<usize>) -> bool {
     let Some(offset) = offset else { return true };
-    with_statements(app, crate::language::Statements::at)
-        .is_none_or(|r| r.contains(&offset) || offset == r.end)
+    with_statements(app, crate::language::Statements::at).is_none_or(|r| r.contains(&offset) || offset == r.end)
 }
 
 /// The text's statements (worked out again only when it's changed), and the

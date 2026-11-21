@@ -330,6 +330,7 @@ impl App {
                 let field = y.checked_sub(top).and_then(|row| self.connection.form.visible_fields().get(row as usize));
                 if let Some(&field) = field {
                     self.connection.form.focus = field;
+                    self.connection.form.cursor = None;
                 }
             }
             ManagerHit::Settings => self.edit_selected_connection(),
@@ -363,8 +364,9 @@ impl App {
 impl App {
     /// Ctrl+←/→ on the projects and connections screens move a border,
     /// from where it's drawn: on the projects, the projects pane's; on the
-    /// connections, the one with the connection's settings. Not while a
-    /// name is typed (there they move by word). True if handled.
+    /// connections and the connection being edited, the one with the
+    /// connection's settings. Not while a project's name is typed. True if
+    /// handled.
     pub(in crate::app) fn resize_manager(&mut self, code: KeyCode) -> bool {
         let grow = match code {
             KeyCode::Right => true,
@@ -379,7 +381,9 @@ impl App {
         match (self.screen, projects, settings) {
             (Screen::Projects, Some(p), _) => self.manager.projects_width = Some(step(p.width, grow)),
             // The border moves right: the settings get narrower.
-            (Screen::Connections, _, Some(s)) => self.manager.settings_width = Some(step(s.width, !grow)),
+            (Screen::Connections | Screen::Connect, _, Some(s)) => {
+                self.manager.settings_width = Some(step(s.width, !grow));
+            }
             _ => return false,
         }
         true

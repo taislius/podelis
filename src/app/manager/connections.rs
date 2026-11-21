@@ -64,6 +64,9 @@ pub struct ConnectForm {
     /// The original profile's password is under the pre-projects keychain key.
     pub(in crate::app) original_legacy: bool,
     pub focus: ConnectField,
+    /// Where the cursor is in the focused field (a byte offset; `None`:
+    /// at its end, as when a field is moved to).
+    pub cursor: Option<usize>,
     pub error: Option<String>,
     pub info: Option<String>,
     pub connecting: bool,
@@ -95,6 +98,7 @@ impl From<ConnectionDraft> for ConnectForm {
             original_name: None,
             original_legacy: false,
             focus: ConnectField::Name,
+            cursor: None,
             error: None,
             info: None,
             connecting: false,
@@ -148,6 +152,32 @@ impl ConnectForm {
         }
     }
 
+    /// The focused field's text before the cursor, as it's shown (the
+    /// password as as many dots): where to draw the cursor. `None` for a
+    /// field of options, or the password while a command supplies it.
+    pub fn before_cursor(&self) -> Option<String> {
+        let d = &self.draft;
+        let text = match self.focus {
+            ConnectField::Name => &d.name,
+            ConnectField::Ssh => &d.ssh,
+            ConnectField::Timeout => &d.timeout,
+            ConnectField::Host => &d.host,
+            ConnectField::Port => &d.port,
+            ConnectField::User => &d.user,
+            ConnectField::Password if !d.password_command.trim().is_empty() => return None,
+            ConnectField::Password => &d.password,
+            ConnectField::PasswordCommand => &d.password_command,
+            ConnectField::Database => &d.database,
+            _ => return None,
+        };
+        let at = self.cursor.filter(|&c| text.is_char_boundary(c)).unwrap_or(text.len());
+        Some(if self.focus == ConnectField::Password {
+            "•".repeat(text[..at].chars().count())
+        } else {
+            text[..at].to_string()
+        })
+    }
+
     /// A failed connect's message, plus why the saved password is missing
     /// if the keychain couldn't be read: the likelier cause then.
     pub fn connect_failure(&self, err: &str) -> String {
@@ -163,16 +193,54 @@ impl ConnectForm {
         fields_for(self.engine)
     }
 
+    /// A key in the focused field, at its cursor.
+    pub(in crate::app) fn edit_field(&mut self, key: KeyEvent) {
+        let mut cursor = self.cursor;
+        if let Some(field) = self.field_mut(self.focus) {
+            input::edit_at(field, &mut cursor, key);
+        }
+        self.cursor = cursor;
+    }
+
+    /// Text pasted into the focused field, at its cursor.
+    pub(in crate::app) fn paste_into_field(&mut self, text: &str) {
+        let mut cursor = self.cursor;
+        if let Some(field) = self.field_mut(self.focus) {
+            input::paste_at(field, &mut cursor, text);
+        }
+        self.cursor = cursor;
+    }
+
+    /// Whether the form differs from the saved connection it was opened
+    /// from (a new one: whether anything's typed).
+    pub fn unsaved(&self, saved: Option<&ConnectionProfile>) -> bool {
+        match saved {
+            // As it would be saved; what isn't the form's (unknown keys,
+            // where the password is kept) as it was.
+            Some(saved) => {
+                let now = ConnectionProfile {
+                    unknown: saved.unknown.clone(),
+                    legacy_keychain: saved.legacy_keychain,
+                    ..self.to_profile()
+                };
+                now != *saved
+            }
+            None => !self.host.is_empty() || !self.name.is_empty(),
+        }
+    }
+
     pub(in crate::app) fn next_field(&mut self) {
         let fields = self.visible_fields();
         let idx = fields.iter().position(|f| *f == self.focus).unwrap_or(0);
         self.focus = fields[(idx + 1) % fields.len()];
+        self.cursor = None;
     }
 
     pub(in crate::app) fn prev_field(&mut self) {
         let fields = self.visible_fields();
         let idx = fields.iter().position(|f| *f == self.focus).unwrap_or(0);
         self.focus = fields[(idx + fields.len() - 1) % fields.len()];
+        self.cursor = None;
     }
 }
 
@@ -483,12 +551,7 @@ impl App {
                     }
                 },
                 // Clearing and deleting a word, as in every input.
-                KeyCode::Char('u' | 'w') => {
-                    let form = &mut self.connection.form;
-                    if let Some(field) = form.field_mut(form.focus) {
-                        input::edit_at_end(field, key);
-                    }
-                }
+                KeyCode::Char('u' | 'w') => self.connection.form.edit_field(key),
                 _ => {}
             }
             return;
@@ -516,11 +579,7 @@ impl App {
             KeyCode::Left if form.focus == ConnectField::Ssl => form.ssl_mode = form.ssl_mode.cycle(false),
             KeyCode::Right if form.focus == ConnectField::Ssl => form.ssl_mode = form.ssl_mode.cycle(true),
             KeyCode::Enter => self.start_connect(),
-            _ => {
-                if let Some(field) = form.field_mut(form.focus) {
-                    input::edit_at_end(field, key);
-                }
-            }
+            _ => form.edit_field(key),
         }
     }
 

@@ -65,12 +65,10 @@ impl<'a> From<&'a ConnectionProfile> for Settings<'a> {
     }
 }
 
-/// The settings as rows. `focus` is the field being edited (`None` shows
-/// them read-only); `password` is how to show the password.
-pub(super) fn form_lines(form: &Settings, focus: Option<ConnectField>, password: &str) -> Vec<Line<'static>> {
-    let t = theme();
-    // The labels line up on the right, as wide as the language's longest.
-    let label_w = [
+/// How wide the labels are: the language's longest (they line up on the
+/// right).
+pub(super) fn label_width() -> usize {
+    [
         t!("form.name"),
         t!("form.engine"),
         t!("form.file"),
@@ -90,7 +88,14 @@ pub(super) fn form_lines(form: &Settings, focus: Option<ConnectField>, password:
     .iter()
     .map(|l| l.chars().count())
     .max()
-    .unwrap_or(11);
+    .unwrap_or(11)
+}
+
+/// The settings as rows. `focus` is the field being edited (`None` shows
+/// them read-only); `password` is how to show the password.
+pub(super) fn form_lines(form: &Settings, focus: Option<ConnectField>, password: &str) -> Vec<Line<'static>> {
+    let t = theme();
+    let label_w = label_width();
     let file_based = form.engine.is_file_based();
     fields_for(form.engine)
         .iter()

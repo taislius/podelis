@@ -12,6 +12,36 @@ fn toggling_engine_updates_default_port_only() {
     assert_eq!((form.engine, form.port.as_str()), (first, "13306"), "a typed port stays");
 }
 
+/// A field of the connection form is edited at its cursor: the arrows,
+/// Home and End move it, Delete and Backspace work there, a paste goes in
+/// there, and moving to another field puts it at that one's end.
+#[test]
+fn a_form_field_is_edited_at_its_cursor() {
+    let mut form = ConnectForm::new();
+    form.focus = ConnectField::Host;
+    form.host = "db.internal".into();
+    let press = |form: &mut ConnectForm, code| form.edit_field(key(code));
+    press(&mut form, KeyCode::Home);
+    press(&mut form, KeyCode::Char('x'));
+    assert_eq!(form.host, "xdb.internal");
+    press(&mut form, KeyCode::Delete);
+    assert_eq!(form.host, "xb.internal");
+    press(&mut form, KeyCode::Backspace);
+    assert_eq!(form.host, "b.internal");
+    form.paste_into_field("my-d");
+    assert_eq!(form.host, "my-db.internal");
+    assert_eq!(form.before_cursor().as_deref(), Some("my-d"), "where the cursor is drawn");
+    press(&mut form, KeyCode::End);
+    press(&mut form, KeyCode::Left);
+    press(&mut form, KeyCode::Backspace);
+    assert_eq!(form.host, "my-db.internl");
+    form.next_field();
+    assert_eq!(form.cursor, None, "another field: at its end");
+    form.password = "pw".into();
+    form.focus = ConnectField::Password;
+    assert_eq!(form.before_cursor().as_deref(), Some("••"), "the password's dots");
+}
+
 /// SQLite, and a server engine either side of it (the engines wrap round).
 #[cfg(all(feature = "sqlite", any(feature = "postgres", feature = "mysql")))]
 #[test]
