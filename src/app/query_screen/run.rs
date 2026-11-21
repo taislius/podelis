@@ -29,6 +29,12 @@ impl App {
         if self.tab.editor.selection().is_some() {
             return self.execute_all();
         }
+        // On an empty line: none, not the nearest one (which may not be the
+        // one meant).
+        let (row, _) = self.tab.editor.cursor();
+        if self.tab.editor.lines().get(row).is_some_and(|l| l.trim().is_empty()) {
+            return self.set_status(t!("editor.no_statement").to_string(), true);
+        }
         let text = self.tab.editor.text();
         match crate::language::statement_at(&text, self.tab.editor.cursor_offset(), self.engine()) {
             Some(stmt) => {

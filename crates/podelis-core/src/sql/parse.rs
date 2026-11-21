@@ -138,6 +138,16 @@ mod tests {
         assert!(offset.unwrap() >= script.find("select *").unwrap());
     }
 
+    /// MySQL's user variables are SQL it understands: `SET @id = …`, and
+    /// `@id` in a query.
+    #[cfg(feature = "mysql")]
+    #[test]
+    fn mysql_user_variables_parse() {
+        for sql in ["SET @id = 123456", "SET @id = 123456;", "SELECT * FROM t WHERE id = @id", "SET @a = 1, @b = 'x'"] {
+            assert_eq!(parse(sql, Engine::MySql).statements[0].error(), None, "{sql}");
+        }
+    }
+
     #[test]
     fn line_col_to_offset() {
         assert_eq!(line_col_offset("ab\ncdž", 2, 3), Some(5));

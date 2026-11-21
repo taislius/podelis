@@ -156,6 +156,9 @@ const RESULTS_KEYS: Keys = &[
     (KeyCode::Char('p'), Command::Pin),
 ];
 
+/// Where a result would be, with none (a failed run's error shown there).
+const EMPTY_KEYS: Keys = &[(KeyCode::Char('y'), Command::CopyMessage)];
+
 const fn shown(format: Format) -> Command {
     Command::Rows { to: Dest::ExportShown, format }
 }
@@ -240,7 +243,7 @@ fn keys_of(here: Here) -> &'static [Keys] {
         Here::Rows | Here::PlanTable => &[GRID_KEYS, RESULTS_KEYS],
         Here::Messages => &[MESSAGES_KEYS, RESULTS_KEYS],
         Here::PlanText => &[PLAN_KEYS, RESULTS_KEYS],
-        Here::Empty => &[RESULTS_KEYS],
+        Here::Empty => &[EMPTY_KEYS, RESULTS_KEYS],
         Here::Navigator => &[NAVIGATOR_KEYS],
         Here::Editor => &[],
     }

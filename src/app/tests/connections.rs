@@ -1533,3 +1533,22 @@ async fn live_another_database_opens_for_the_tab() {
     assert_ne!(app.tabs[0].conn, before, "a connection of its own");
     assert_eq!(table_names(&app), ["only_in_b"]);
 }
+
+/// A tab with no connection open (one that didn't reopen, say) reads its
+/// SQL as its connection's engine would, not the blank form's default:
+/// MySQL's `SET @id = …` isn't flagged as wrong.
+#[cfg(all(feature = "mysql", feature = "sqlite"))]
+#[tokio::test]
+async fn a_tab_without_its_connection_reads_sql_as_its_engine() {
+    let (mut app, dir) = test_app();
+    let project = project_id(&app);
+    let mut work = crate::config::store::file_profile("work", &dir.path().join("w.db"));
+    work.engine = Engine::MySql;
+    work.host = "127.0.0.1".into();
+    app.store.upsert(&project, None, work).unwrap();
+    app.connection.form.engine = Engine::Postgres;
+    assert_eq!(app.engine(), Engine::MySql, "the project's one engine");
+    app.tab.editor.set_text("SET @id = 123456;\nSELECT @id");
+    check_syntax_now(&mut app).await;
+    assert_eq!(app.tab.syntax_hint, None);
+}

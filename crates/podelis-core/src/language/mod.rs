@@ -215,7 +215,7 @@ impl Statements {
     }
 
     /// The byte range of the statement at `offset`.
-    fn at(&self, offset: usize) -> Option<Range<usize>> {
+    pub fn at(&self, offset: usize) -> Option<Range<usize>> {
         self.segments[self.pick(offset)?].1.clone()
     }
 

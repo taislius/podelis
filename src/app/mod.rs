@@ -474,8 +474,28 @@ impl App {
         });
     }
 
+    /// The engine the tab's SQL is for: its connection's. With none open
+    /// (one that didn't reopen, say), the form's if it's a connection's,
+    /// else the one the tab had last time, else the project's if all its
+    /// connections are on one: not the blank form's default, which would
+    /// read MySQL's `SET @id = 1` as wrong.
     pub fn engine(&self) -> Engine {
-        self.connection.database.as_ref().map_or(self.connection.form.engine, Database::engine)
+        if let Some(db) = &self.connection.database {
+            return db.engine();
+        }
+        let form = &self.connection.form;
+        if !form.name.is_empty() {
+            return form.engine;
+        }
+        let profiles = self.profiles();
+        let last = self.connection.slots.tab_connections.get(self.active_tab).and_then(Option::as_ref);
+        if let Some(profile) = last.and_then(|name| profiles.iter().find(|p| &p.name == name)) {
+            return profile.engine;
+        }
+        match profiles.split_first() {
+            Some((first, rest)) if rest.iter().all(|p| p.engine == first.engine) => first.engine,
+            _ => form.engine,
+        }
     }
 
     /// The engine's SQL dialect; `None` where its language isn't SQL, the

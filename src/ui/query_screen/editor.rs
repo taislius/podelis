@@ -617,7 +617,7 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
         let style = if app.notes.editor_note_is_error { bold(t.error) } else { fg(t.text) };
         let room = usize::from(l.width.saturating_sub(1));
         Line::from(Span::styled(format!(" {}", truncate_cols(&one_line(note), room)), style))
-    } else if let Some(hint) = &app.tab.syntax_hint {
+    } else if let Some(hint) = app.tab.syntax_hint.as_ref().filter(|h| hint_is_here(app, h.offset)) {
         let (label, color, rule) = match hint.source {
             HintSource::Server => (t!("hint.server"), t.error, ""),
             HintSource::Parser => (t!("hint.parser"), t.warn, ""),
@@ -654,7 +654,9 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
         app.hits.editor_note = l;
     }
     // Clicking a hint goes to where it points.
-    if app.notes.editor_note.is_none() && app.tab.syntax_hint.as_ref().is_some_and(|h| h.offset.is_some()) {
+    if app.notes.editor_note.is_none()
+        && app.tab.syntax_hint.as_ref().is_some_and(|h| h.offset.is_some() && hint_is_here(app, h.offset))
+    {
         app.hits.syntax_hint = l;
     }
     // Clicking the write modes cycles them; the `?` at their end explains them.
@@ -685,6 +687,22 @@ thread_local! {
 
 /// Which statement the cursor is in, and how many there are.
 fn statement_position(app: &App) -> Option<(usize, usize)> {
+    with_statements(app, crate::language::Statements::position)
+}
+
+/// Whether a hint at `offset` is about the statement the cursor is in (one
+/// with no place is about the whole text): the footer says only those, so
+/// it doesn't seem to be about what just ran. The others keep their marks
+/// in the text, and `Ctrl+K w` goes to each.
+fn hint_is_here(app: &App, offset: Option<usize>) -> bool {
+    let Some(offset) = offset else { return true };
+    with_statements(app, crate::language::Statements::at)
+        .is_none_or(|r| r.contains(&offset) || offset == r.end)
+}
+
+/// The text's statements (worked out again only when it's changed), and the
+/// cursor's place in it.
+fn with_statements<T>(app: &App, ask: impl FnOnce(&crate::language::Statements, usize) -> Option<T>) -> Option<T> {
     let text = app.tab.editor.text();
     let engine = app.engine();
     STATEMENTS.with_borrow_mut(|cache| {
@@ -693,7 +711,7 @@ fn statement_position(app: &App) -> Option<(usize, usize)> {
             *cache = Some(CachedStatements { engine, text, statements });
         }
         let cached = cache.as_ref()?;
-        cached.statements.position(app.tab.editor.cursor_offset())
+        ask(&cached.statements, app.tab.editor.cursor_offset())
     })
 }
 

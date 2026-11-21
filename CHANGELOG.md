@@ -48,6 +48,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A tab with no connection open (one that didn't reopen, say) checked its SQL as PostgreSQL: MySQL's `SET @id = 1` was flagged ("Expected: identifier, found: @"). It's read as its connection's engine (the one it had, or the project's).
+- The editor's footer said a problem only while the cursor is in its statement: after running the next one, an error about the one before looked like it was about what just ran (its mark stays in the text; `Ctrl+K w` goes to it).
+- F6 on an empty line ran the nearest statement; it now runs nothing and says so.
+- A failed run's error can be copied with `y` where its result would be; the message window says Shift+drag selects a part (Option on macOS).
 - MySQL behind ProxySQL: cancelling a query (Esc) stopped nothing and said "the server didn't take the cancel"; it could even stop another of your sessions' query. The cancel now uses ProxySQL's own session id.
 - MySQL behind ProxySQL: after `SET @variable` ProxySQL ties the session to one group of servers, and every later SELECT it routes elsewhere failed ("connection is locked to hostgroup…") until the app was closed. The error is said in words (with what works: one transaction, or the value in the query), and the next run gets a new session.
 - A connection that didn't reopen, then opened by hand (`Ctrl+O`) in one of its tabs: its other tabs went on saying it couldn't reconnect (after closing a tab, say) while it worked. They now use the one opened.

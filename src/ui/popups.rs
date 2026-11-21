@@ -15,7 +15,9 @@ fn text_view_keys(view: &crate::app::CellView) -> Vec<&'static str> {
     } else if view.sql.is_some() {
         vec![t!("cell_view.scroll"), t!("cell_view.copy_sql"), t!("cell_view.open_tab_there"), t!("cell_view.close")]
     } else {
-        vec![t!("cell_view.scroll"), t!("cell_view.copy"), t!("cell_view.close")]
+        // A message: copied whole with `y`, or a part of it with the
+        // terminal's own selection (the app has the mouse otherwise).
+        vec![t!("cell_view.scroll"), t!("cell_view.copy"), t!("cell_view.select"), t!("cell_view.close")]
     }
 }
 

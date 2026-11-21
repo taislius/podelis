@@ -365,3 +365,20 @@ async fn the_query_timeout_for_every_connection() {
     assert!(app.tab.run.extra.deadline.is_none());
     finish(&mut app).await;
 }
+
+/// F6 on an empty line runs nothing (not the nearest statement), and says
+/// so; on a statement's line it runs that one.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn f6_on_an_empty_line_runs_nothing() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    app.tab.editor.set_text("select 1;\n\nselect 2");
+    app.focus = Focus::Editor;
+    app.tab.editor.set_cursor((1, 0));
+    app.handle_key(key(KeyCode::F(6)));
+    assert!(!app.tab.run.executing);
+    assert!(said(&app).contains("No statement"), "{}", said(&app));
+    app.tab.editor.set_cursor((2, 0));
+    app.handle_key(key(KeyCode::F(6)));
+    assert!(app.tab.run.executing, "on its line, it runs");
+}

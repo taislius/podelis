@@ -536,3 +536,27 @@ fn questions_in_the_editor_are_drawn_in_the_accent() {
     assert_eq!(at("omega"), Some(accent));
     assert_ne!(at("SELECT 2"), Some(accent));
 }
+
+/// The footer says a problem only while the cursor is in its statement:
+/// after running the next one, the error about the one before isn't shown
+/// as if it were about what just ran (its mark stays in the text).
+#[test]
+fn the_footer_says_only_the_cursors_statements_problem() {
+    let (mut app, _dir) = query_app();
+    app.tab.editor.set_text("select * from nope;\nselect * from users;");
+    app.tab.syntax_hint = Some(SyntaxHint {
+        message: "Table 'shop.nope' doesn't exist".into(),
+        offset: Some(14),
+        len: Some(4),
+        source: HintSource::Server,
+        nth: None,
+    });
+    let footer = |app: &mut App| {
+        let screen = render(app, 100, 20);
+        screen.lines().find(|l| l.contains("Transaction")).unwrap_or_default().to_string()
+    };
+    app.tab.editor.set_cursor((0, 3));
+    assert!(footer(&mut app).contains("SERVER line 1"), "{}", footer(&mut app));
+    app.tab.editor.set_cursor((1, 3));
+    assert!(!footer(&mut app).contains("SERVER"), "{}", footer(&mut app));
+}
