@@ -149,7 +149,7 @@ impl App {
         offset: usize,
         infos: Vec<StatementInfo>,
         filled: Option<Filled>,
-        scans: &[(String, f64)],
+        scans: &Result<Vec<(String, f64)>, String>,
     ) {
         self.tab.run.executing = false;
         if std::mem::take(&mut self.tab.run.cancelling) {
@@ -157,18 +157,26 @@ impl App {
         }
         #[expect(clippy::cast_precision_loss, reason = "a threshold")]
         let limit = self.settings.guard_rows as f64;
-        let heavy: Vec<String> = scans
-            .iter()
-            .filter(|(_, rows)| *rows >= limit)
-            .map(|(table, rows)| t!("run.full_scan", table = table, rows = crate::db::human_rows(*rows)))
-            .collect();
-        if heavy.is_empty() {
+        // Its plan couldn't be had: how much it reads isn't known, so it's
+        // asked, not let through.
+        let (message, details) = match scans {
+            Ok(scans) => (
+                t!("run.big_read").to_string(),
+                scans
+                    .iter()
+                    .filter(|(_, rows)| *rows >= limit)
+                    .map(|(table, rows)| t!("run.full_scan", table = table, rows = crate::db::human_rows(*rows)))
+                    .collect::<Vec<String>>(),
+            ),
+            Err(why) => (t!("run.unplanned_read").to_string(), vec![why.clone()]),
+        };
+        if details.is_empty() {
             return self.run_writes(sql, offset, infos, RunPurpose::Query, filled);
         }
         self.set_status(String::new(), false);
         self.popups.confirm = Some(Confirm {
-            message: t!("run.big_read").to_string(),
-            details: heavy,
+            message,
+            details,
             danger: true,
             action: ConfirmAction::RunHeavy { sql, offset, infos, filled },
             offer_transaction: false,
@@ -292,9 +300,8 @@ impl App {
         // After a quiet while (or a lost connection), the server is asked
         // to answer first: a link that died meanwhile fails in seconds
         // rather than leaving the run waiting.
-        let check_first =
-            self.connection.state.is_lost() || self.connection.keepalive.last_activity.elapsed() >= CHECK_AFTER_IDLE;
-        self.connection.keepalive.last_activity = Instant::now();
+        let idle = self.connection.database.as_ref().map_or(Duration::ZERO, crate::db::Database::idle_for);
+        let check_first = self.connection.state.is_lost() || idle >= CHECK_AFTER_IDLE;
         self.tab.run.extra.timed_out = None;
         self.tab.run.extra.started = Some(Instant::now());
         // The connection's own timeout (0 there lets its queries run), else
@@ -432,6 +439,7 @@ impl App {
             None,
             None,
         );
+        self.tab.run_error_link = self.tab.run_error.is_some();
     }
 
     /// Disconnects, always asking first while connected (`d` is also the

@@ -16,17 +16,22 @@ type TextRows = Vec<Vec<Option<String>>>;
 
 /// `sql`'s rows as text, on the session, its `?`s bound to `params`.
 async fn rows(db: &Database, sql: &str, params: &[&str]) -> Result<TextRows> {
-    let session = db.0.session.lock().await;
-    db.clear_interrupt();
-    let Session::DuckDb(c) = &*session else { anyhow::bail!("the connection is closed") };
     let sql = sql.to_string();
     let params: Vec<String> = params.iter().map(ToString::to_string).collect();
-    driver::blocking(c, move |conn| {
-        let mut stmt = conn.prepare(&sql)?;
-        let arrow = stmt.query_arrow(::duckdb::params_from_iter(params.iter()))?;
-        Ok(arrow.flat_map(|batch| (0..batch.num_rows()).map(move |r| cells::row(&batch, r)).collect::<Vec<_>>()).collect())
+    let on = db.clone();
+    db.with_session(move |session| {
+        Box::pin(async move {
+            on.clear_interrupt();
+            let Session::DuckDb(c) = &*session else { anyhow::bail!("the connection is closed") };
+            driver::blocking(c, move |conn| {
+                let mut stmt = conn.prepare(&sql)?;
+                let arrow = stmt.query_arrow(::duckdb::params_from_iter(params.iter()))?;
+                Ok(arrow.flat_map(|batch| (0..batch.num_rows()).map(move |r| cells::row(&batch, r)).collect::<Vec<_>>()).collect())
+            })
+            .await
+        })
     })
-    .await
+    .await?
 }
 
 /// Cell `i` as text (empty for NULL).
@@ -234,16 +239,16 @@ pub(in crate::db) async fn routine_definition(_db: &Database, _routine: &Routine
 /// The sequential scans of its drawn plan, but those its filters narrow
 /// by the table's key (`id=5`): on a small table DuckDB scans rather than
 /// use the key's index, skipping blocks by their least and greatest values.
-pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Option<Vec<Scan>> {
+pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Result<Vec<Scan>> {
     let dialect = super::sql();
-    let plan = db.run(&dialect.explain(statement, db.version()), 10_000).await.ok()?;
+    let plan = db.run_own(&dialect.explain(statement, db.version()), 10_000).await?;
     let text: Vec<&str> = plan.rows.iter().filter_map(|r| r.last()?.as_deref()).collect();
     let text = text.join("\n");
     let found = super::scans_with_filters(&text);
     // One table read under a limit that stops it (not a TOP_N, which sorts
     // all of it, or a join's side, which is read whole): not read in full.
     if found.len() == 1 && text.contains("STREAMING_LIMIT") && !text.contains("JOIN") {
-        return Some(Vec::new());
+        return Ok(Vec::new());
     }
     let mut scans = Vec::new();
     for (scan, filters) in found {
@@ -264,7 +269,7 @@ pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Opti
             scans.push(scan);
         }
     }
-    Some(scans)
+    Ok(scans)
 }
 
 pub(in crate::db) async fn estimated_rows(db: &Database, scans: Vec<Scan>) -> Vec<(String, f64)> {

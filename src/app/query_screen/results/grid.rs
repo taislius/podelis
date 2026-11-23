@@ -11,6 +11,9 @@ use crate::db::QueryOutcome;
 #[derive(Default)]
 pub struct ResultGrid {
     pub results: Option<QueryOutcome>,
+    /// The connection the result came from: its rows are edited only on
+    /// it (a tab switched to another database since would write there).
+    pub from: Option<crate::db::DatabaseId>,
     /// A script's result sets when more than one statement returned rows:
     /// `None` at `result_set`, the one in `results`.
     pub result_sets: Vec<Option<QueryOutcome>>,

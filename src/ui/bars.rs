@@ -148,11 +148,17 @@ fn connection_status(app: &App, room: usize) -> Vec<Span<'static>> {
     match state {
         ConnState::Lost { .. } => {
             spans.push(Span::styled(format!(" · {}", t!("bar.connection_lost")), bold(t.error)));
-            // When it's tried again (each wait longer, up to a minute).
-            let keepalive = &app.connection.keepalive;
-            let next = match keepalive.lost_check_in() {
-                0 => t!("bar.checking").to_string(),
-                s => t!("bar.next_check", s = s),
+            // When it's tried again (each wait longer, up to a minute), as
+            // its supervisor said; paused after a few tries, until `r`.
+            let health = app.connection.health.as_ref();
+            let paused = health.is_some_and(|h| matches!(h.state, crate::db::HealthState::Paused(_)));
+            let next = match health.and_then(|h| h.next_check) {
+                _ if paused => app.paused_said(),
+                Some(at) => match at.saturating_duration_since(std::time::Instant::now()).as_secs() {
+                    0 => t!("bar.checking").to_string(),
+                    s => t!("bar.next_check", s = s),
+                },
+                None => t!("bar.checking").to_string(),
             };
             spans.push(Span::styled(format!(" · {next}"), muted()));
         }

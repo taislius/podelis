@@ -350,11 +350,15 @@ pub async fn import(
     let Some(dialect) = db.engine().dialect() else {
         anyhow::bail!("{} has no SQL: importing writes INSERT statements", db.engine().label());
     };
-    db.run(dialect.begin(false), 1).await?;
+    let create = (!exists).then(|| {
+        let defs: Vec<String> = cols.iter().zip(&types).map(|(c, t)| format!("{c} {}", t.sql(dialect))).collect();
+        format!("CREATE TABLE {quoted} ({})", defs.join(", "))
+    });
+    let ddl_commits = engine.capabilities().ddl_commits;
+    begin_import(db, dialect, create.as_deref().filter(|_| ddl_commits), &quoted).await?;
     let result = async {
-        if !exists {
-            let defs: Vec<String> = cols.iter().zip(&types).map(|(c, t)| format!("{c} {}", t.sql(dialect))).collect();
-            db.run(&format!("CREATE TABLE {quoted} ({})", defs.join(", ")), 1).await?;
+        if !ddl_commits && let Some(create) = &create {
+            db.run(create, 1).await?;
         }
         // Second pass: the rows.
         let (_, mut rows) = Rows::open(path, format)?;
@@ -402,15 +406,59 @@ pub async fn import(
         anyhow::Ok(done)
     }
     .await;
-    match result {
-        Ok(rows) => {
-            db.run(dialect.end(crate::db::TxEnd::Commit), 1).await?;
-            Ok(Imported { rows, created: !exists })
-        }
+    let rows = end_import(db, dialect, result, ddl_commits && create.is_some(), &quoted).await?;
+    Ok(Imported { rows, created: !exists })
+}
+
+/// Ends an import's transaction: committed if its load went well, else
+/// rolled back. A table made outside it (`made`) is dropped if nothing of
+/// the load stays (it failed, or its COMMIT did).
+async fn end_import(
+    db: &Database,
+    dialect: &dyn crate::db::SqlDialect,
+    loaded: Result<u64>,
+    made: bool,
+    quoted: &str,
+) -> Result<u64> {
+    let ended = match loaded {
+        Ok(rows) => db.run(dialect.end(crate::db::TxEnd::Commit), 1).await.map(|_| rows),
         Err(e) => {
             let _ = db.run(dialect.end(crate::db::TxEnd::Rollback), 1).await;
             Err(e)
         }
+    };
+    if ended.is_err() {
+        drop_made(db, made, quoted).await;
+    }
+    ended
+}
+
+/// Begins an import's transaction. Where DDL commits (MySQL), a CREATE in
+/// it would end it, and every row after would stay whatever came of the
+/// rest: the table's made first (`create_first`), and dropped if the load
+/// fails (as a rollback does elsewhere).
+async fn begin_import(
+    db: &Database,
+    dialect: &dyn crate::db::SqlDialect,
+    create_first: Option<&str>,
+    quoted: &str,
+) -> Result<()> {
+    if let Some(create) = create_first {
+        db.run(create, 1).await?;
+    }
+    if let Err(e) = db.run(dialect.begin(false), 1).await {
+        drop_made(db, create_first.is_some(), quoted).await;
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Drops the table an import made outside its transaction (`made`), its
+/// load having failed: nothing of it is left, as where a rollback undoes
+/// the CREATE too.
+async fn drop_made(db: &Database, made: bool, quoted: &str) {
+    if made {
+        let _ = db.run(&format!("DROP TABLE {quoted}"), 1).await;
     }
 }
 
@@ -685,5 +733,15 @@ pub(crate) mod tests {
         let count = db.run("SELECT count(*) FROM pets_types", 1).await.unwrap();
         assert_eq!(count.rows[0][0].as_deref(), Some("3"));
         db.run("DROP TABLE pets_types", 1).await.unwrap();
+        // A new table whose load fails in a later batch: none of its rows
+        // stay (MySQL's CREATE commits), nor the table.
+        // (Its last row's text is longer than MySQL's TEXT holds.)
+        let csv: String = std::iter::once("id,note\n".to_string())
+            .chain((0..BATCH + 10).map(|i| format!("{i},n{i}\n")))
+            .chain(std::iter::once(format!("{},{}\n", BATCH + 10, "x".repeat(70_000))))
+            .collect();
+        import_failing(&db, &csv, "podelis_half").await;
+        let left = db.run("SELECT count(*) FROM information_schema.TABLES WHERE TABLE_NAME = 'podelis_half'", 1).await;
+        assert_eq!(left.unwrap().rows[0][0].as_deref(), Some("0"), "no table, no rows");
     }
 }

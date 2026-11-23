@@ -45,9 +45,9 @@ impl App {
         if name == self.connection.form.database {
             return self.set_status(t!("palette.database_here", name = name), false);
         }
-        // Its connection goes from this tab: not under a query or an open
-        // transaction (closing it would roll that back).
-        if self.tab.run.executing || self.connection.txn == TxnState::Open {
+        // Its connection goes from this tab: not under a query or a
+        // transaction, open or failed (closing it would roll that back).
+        if self.tab.run.executing || self.connection.txn != TxnState::Idle {
             return self.set_status(t!("palette.database_busy").to_string(), true);
         }
         let mut form = self.connection.form.duplicate();
@@ -55,7 +55,6 @@ impl App {
         let saved = self.profiles().iter().find(|p| p.name == form.name).map(|p| p.database.clone());
         form.other_database = saved.is_some_and(|db| db != name);
         form.database.clone_from(&name);
-        let tab = self.tabs[self.active_tab].id;
         let params = match form.params() {
             Ok(p) => p,
             Err(e) => return self.set_status(t!("palette.database_failed", name = name, e = e), true),
@@ -64,13 +63,13 @@ impl App {
         let send = self.sender();
         let short = form.short_name();
         crate::system::connection_log::record("connecting", &short, &form.summary());
-        self.connect_started = Some(std::time::Instant::now());
+        let swap = self.new_swap();
         tokio::spawn(async move {
             match Database::connect(params).await {
-                Ok(db) => send(DbEventKind::DatabaseOpened(db, Box::new(form), tab)),
+                Ok(db) => send(DbEventKind::DatabaseOpened(db, Box::new(form), swap)),
                 Err(e) => {
                     crate::system::connection_log::record("connect failed", &short, &crate::db::error_details(&e));
-                    send(DbEventKind::DatabaseFailed { name, error: crate::db::error_message(&e) });
+                    send(DbEventKind::DatabaseFailed { name, error: crate::db::error_message(&e), swap });
                 }
             }
         });

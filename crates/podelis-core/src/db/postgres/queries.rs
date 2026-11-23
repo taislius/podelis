@@ -421,10 +421,20 @@ pub(in crate::db) async fn cancel(db: &Database, id: i64) -> Result<()> {
 /// The full scans `statement` would make, planned on a pool connection of
 /// its own: one that fails would otherwise abort the session's open
 /// transaction.
-pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Option<Vec<Scan>> {
+pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Result<Vec<Scan>> {
     let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
-    let json = guard_plan(p, statement).await?;
-    Some(super::sql().full_scans(&[], &[vec![Some(json)]]))
+    let json = match guard_plan(p, statement).await {
+        Ok(json) => json,
+        // A connection of the pool's hasn't what the session has (its
+        // temporary tables, `search_path`, role): planned on the session,
+        // with no transaction open there for a failing plan to abort.
+        Err(e) if !db.in_transaction() => {
+            let plan = db.run_own(&format!("{GUARD_EXPLAIN} {statement}"), 1).await.map_err(|_| e)?;
+            plan.rows.first().and_then(|r| r.first().cloned().flatten()).unwrap_or_default()
+        }
+        Err(e) => return Err(e),
+    };
+    Ok(super::sql().full_scans(&[], &[vec![Some(json)]]))
 }
 
 /// Each scan's rows: the plan's, else the catalog's estimate for that
@@ -444,10 +454,13 @@ pub(in crate::db) async fn estimated_rows(db: &Database, scans: Vec<Scan>) -> Ve
     out
 }
 
-async fn guard_plan(p: &PgPool, statement: &str) -> Option<String> {
-    let sql = format!("EXPLAIN (FORMAT JSON, VERBOSE) {statement}");
-    let row = sqlx::raw_sql(AssertSqlSafe(sql)).fetch_one(p).await.ok()?;
-    row.try_get::<serde_json::Value, _>(0).ok().map(|v| v.to_string())
+/// How the guard asks for a plan.
+const GUARD_EXPLAIN: &str = "EXPLAIN (FORMAT JSON, VERBOSE)";
+
+async fn guard_plan(p: &PgPool, statement: &str) -> Result<String> {
+    let sql = format!("{GUARD_EXPLAIN} {statement}");
+    let row = sqlx::raw_sql(AssertSqlSafe(sql)).fetch_one(p).await?;
+    Ok(row.try_get::<serde_json::Value, _>(0)?.to_string())
 }
 
 /// A table's row count as the planner estimates it (none before it was

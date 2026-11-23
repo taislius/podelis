@@ -14,9 +14,9 @@ pub(super) async fn run_query(
     check_first: bool,
     send: impl Fn(RunEvent) + Send + 'static,
 ) {
-    // A session that didn't answer is given up on: the run then opens a new
-    // one (a read runs on it and says it reconnected; anything else isn't
-    // run, and says so), or says the server can't be reached.
+    // A session that didn't answer, or whose link broke, is given up on:
+    // the run then opens a new one and isn't sent on it (it says so, to run
+    // again), or says the server can't be reached.
     if check_first && let Err(e) = db.answers_within(ANSWER_WITHIN).await {
         send(RunEvent::SessionReplaced(crate::db::error_message(&e)));
     }
@@ -62,14 +62,15 @@ pub(super) async fn check_guarded_read(
     filled: Option<Filled>,
     send: impl Fn(DbEventKind) + Send + 'static,
 ) {
-    let scans = db.full_scans(&sql).await.unwrap_or_default();
+    let scans = db.full_scans(&sql).await.map_err(|e| crate::db::error_message(&e));
     send(DbEventKind::Guarded { sql, offset, infos, filled, scans });
 }
 
 fn failed(e: &anyhow::Error, engine: crate::db::Engine, txn: Option<TxnState>) -> RunEvent {
     let message = crate::db::error_message(e);
     let position = crate::db::error_position(e).or_else(|| engine.backend().position_in_message(&message));
-    RunEvent::QueryFailed { message, position, txn, missing_feature: crate::db::missing_feature(e) }
+    let link = crate::db::is_link_failure(e);
+    RunEvent::QueryFailed { message, position, txn, missing_feature: crate::db::missing_feature(e), link }
 }
 
 async fn after_error(db: &Database, err: &anyhow::Error) -> Option<TxnState> {

@@ -150,7 +150,7 @@ async fn live_transactions_mongodb() {
     let replica_set = hello.columns.iter().any(|c| c == "setName" || c == "msg");
     // Said to be one (`PODELIS_TEST_MONGO_REPLICA_SET`): it must be.
     assert!(replica_set || std::env::var_os("PODELIS_TEST_MONGO_REPLICA_SET").is_none(), "not a replica set");
-    let begun = db.run_once("db.startTransaction()", 1).await;
+    let begun = db.run("db.startTransaction()", 1).await;
     if !replica_set {
         let said = crate::db::error_message(&begun.unwrap_err());
         assert!(said.contains("replica set") && said.contains("standalone"), "{said}");
@@ -159,26 +159,26 @@ async fn live_transactions_mongodb() {
         return;
     }
     begun.unwrap();
-    let again = db.run_once("db.startTransaction()", 1).await.unwrap_err();
+    let again = db.run("db.startTransaction()", 1).await.unwrap_err();
     assert!(crate::db::error_message(&again).contains("open already"));
-    let changed = db.run_once("db.t.updateMany({x: 1}, {$set: {x: 2}})", 1).await.unwrap();
+    let changed = db.run("db.t.updateMany({x: 1}, {$set: {x: 2}})", 1).await.unwrap();
     assert_eq!(changed.rows_affected, Some(1));
-    let inside = db.run_once("db.t.find({x: 2})", 10).await.unwrap();
+    let inside = db.run("db.t.find({x: 2})", 10).await.unwrap();
     assert_eq!(inside.total_rows, 1, "seen in it");
     // No limit (the command line's) is a limit, not a stream.
-    let unlimited = db.run_once("db.t.find({x: 2})", usize::MAX).await.unwrap();
+    let unlimited = db.run("db.t.find({x: 2})", usize::MAX).await.unwrap();
     assert_eq!(unlimited.rows.len(), 1, "read whole");
     // Streamed too, page by page, in the transaction.
     let (first, stream) = db.run_streaming("db.t.find({x: 2})", 10).await.unwrap();
     assert_eq!(first.rows.len(), 1, "streamed in it");
     drop(stream);
-    db.run_once("db.abortTransaction()", 1).await.unwrap();
+    db.run("db.abortTransaction()", 1).await.unwrap();
     assert_eq!(db.run("db.t.countDocuments({x: 2})", 1).await.unwrap().rows[0][0].as_deref(), Some("0"));
-    db.run_once("db.startTransaction()", 1).await.unwrap();
-    db.run_once("db.t.insertOne({_id: 3})", 1).await.unwrap();
-    db.run_once("db.commitTransaction()", 1).await.unwrap();
+    db.run("db.startTransaction()", 1).await.unwrap();
+    db.run("db.t.insertOne({_id: 3})", 1).await.unwrap();
+    db.run("db.commitTransaction()", 1).await.unwrap();
     assert_eq!(db.run("db.t.countDocuments({})", 1).await.unwrap().rows[0][0].as_deref(), Some("2"));
-    let none = db.run_once("db.commitTransaction()", 1).await.unwrap_err();
+    let none = db.run("db.commitTransaction()", 1).await.unwrap_err();
     assert!(crate::db::error_message(&none).contains("no transaction is open"));
 }
 

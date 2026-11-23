@@ -192,3 +192,154 @@ async fn live_own_session_postgres() {
 async fn live_dead_link_postgres() {
     crate::db::tests::live_dead_link(Engine::Postgres, "SELECT generate_series(1, 1000000)").await;
 }
+
+#[tokio::test]
+async fn live_supervisor_keeps_the_connection_postgres() {
+    crate::db::tests::live_supervisor_keeps_the_connection(Engine::Postgres).await;
+}
+
+/// What the session had (`search_path`, a setting, a temporary table) is
+/// said gone after a reconnect, and not run again; what was `RESET`, or
+/// rolled back, isn't said.
+#[tokio::test]
+async fn live_session_memory_postgres() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    let Some(other) = live_db(Engine::Postgres).await else { return };
+    db.run("SET search_path TO pg_catalog, public; SET application_name = 'podelis_memory'", 1).await.unwrap();
+    db.run("SET work_mem = '8MB'; RESET work_mem", 1).await.unwrap();
+    // Undone by a ROLLBACK: not kept. Committed: kept.
+    db.run("BEGIN; SET statement_timeout = '5s'; ROLLBACK", 1).await.unwrap();
+    db.run("BEGIN; SET lock_timeout = '3s'; COMMIT", 1).await.unwrap();
+    db.run("CREATE TEMP TABLE podelis_tmp (x int)", 1).await.unwrap();
+    let pid = db.run("SELECT pg_backend_pid()::text", 1).await.unwrap().rows[0][0].clone().unwrap();
+    other.run(&format!("SELECT pg_terminate_backend({pid})"), 1).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Nothing's run again: the new session has the connection's own
+    // settings, and what the old one had is said, as gone.
+    let o = crate::db::tests::rerun(&db, "SELECT current_setting('search_path'), current_setting('application_name')", 1)
+        .await;
+    assert_ne!(cells(&o), vec![vec![Some("pg_catalog, public"), Some("podelis_memory")]]);
+    let health = db.health().borrow().clone();
+    assert_eq!(health.lost, ["search_path", "application_name", "lock_timeout", "temporary tables"]);
+}
+
+#[tokio::test]
+async fn live_a_run_after_a_killed_session_reconnects_postgres() {
+    crate::db::tests::live_a_run_after_a_killed_session_reconnects(Engine::Postgres, "SELECT pg_backend_pid()::text", "SELECT pg_terminate_backend({pid})").await;
+}
+
+#[tokio::test]
+async fn live_a_check_reopens_a_killed_session_in_a_transaction_postgres() {
+    crate::db::tests::live_a_check_reopens_a_killed_session_in_a_transaction(Engine::Postgres, "SELECT pg_backend_pid()::text", "SELECT pg_terminate_backend({pid})").await;
+}
+
+#[tokio::test]
+async fn live_a_check_cut_short_while_reopening_postgres() {
+    crate::db::tests::live_a_check_cut_short_while_reopening(Engine::Postgres).await;
+}
+
+/// An import stopped half way (its task dropped) aborts its `COPY`: nothing
+/// of it is kept, where finishing it would keep half the file.
+#[tokio::test]
+async fn live_a_stopped_copy_keeps_nothing() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    db.run("CREATE TEMP TABLE podelis_copied (x int)", 1).await.unwrap();
+    let copying = db.clone();
+    let import = tokio::spawn(async move {
+        let rows = std::iter::repeat_with(|| Ok(b"1\n".to_vec()));
+        copying.copy_in("COPY podelis_copied FROM STDIN", 1, rows).await
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    import.abort();
+    let _ = import.await;
+    let counted = db.run("SELECT count(*)::text FROM podelis_copied", 1).await.expect("the session free again");
+    assert_eq!(cells(&counted), vec![vec![Some("0")]]);
+}
+
+#[tokio::test]
+async fn live_an_unanswered_copy_abort_gives_the_session_up() {
+    crate::db::tests::live_an_unanswered_copy_abort_gives_the_session_up().await;
+}
+
+#[tokio::test]
+async fn live_a_lost_transaction_isnt_reopened_behind_its_back_postgres() {
+    crate::db::tests::live_a_lost_transaction_isnt_reopened_behind_its_back(Engine::Postgres).await;
+}
+
+#[tokio::test]
+async fn live_a_broken_stream_reopens_its_session_postgres() {
+    // More than the link holds on its way: the kill is met mid-read.
+    let big = "SELECT g FROM generate_series(1, 5000000) g";
+    crate::db::tests::live_a_broken_stream_reopens_its_session(Engine::Postgres, big, "SELECT pg_backend_pid()::text", "SELECT pg_terminate_backend({pid})").await;
+}
+
+
+/// A close stops what the session runs on the server too: its backend is
+/// gone soon after, not left running the query.
+#[tokio::test]
+async fn live_a_close_stops_what_the_session_runs() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    let Some(other) = live_db(Engine::Postgres).await else { return };
+    let pid = db.run("SELECT pg_backend_pid()::text", 1).await.unwrap().rows[0][0].clone().unwrap();
+    let sleeping = db.clone();
+    let run = tokio::spawn(async move { sleeping.run("SELECT pg_sleep(30)", 1).await });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    tokio::time::timeout(Duration::from_secs(5), db.close()).await.expect("not behind the sleep");
+    assert!(run.await.unwrap().is_err());
+    let left = format!("SELECT count(*)::text FROM pg_stat_activity WHERE pid = {pid}");
+    for _ in 0..20 {
+        if cells(&other.run(&left, 1).await.unwrap()) == vec![vec![Some("0")]] {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the session's backend still runs");
+}
+
+/// A COMMIT in a failed transaction ends it and keeps nothing (the server
+/// rolls it back), and the transaction is said failed before it: what the
+/// app goes by to refuse the commit key, and to say a typed COMMIT rolled
+/// back.
+#[tokio::test]
+async fn live_a_commit_of_a_failed_transaction_keeps_nothing() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    db.run("CREATE TEMP TABLE podelis_kept (x int)", 1).await.unwrap();
+    db.run("BEGIN; INSERT INTO podelis_kept VALUES (1)", 1).await.unwrap();
+    assert!(db.run("SELECT 1/0", 1).await.is_err());
+    assert_eq!(db.transaction_state().await, Some(TxnState::Aborted));
+    db.run("COMMIT", 1).await.unwrap();
+    assert_eq!(db.transaction_state().await, Some(TxnState::Idle));
+    let counted = db.run("SELECT count(*)::text FROM podelis_kept", 1).await.unwrap();
+    assert_eq!(cells(&counted), vec![vec![Some("0")]]);
+}
+
+/// A read of what only the session has (a temporary table) is planned on
+/// the session when a pool connection can't: no "couldn't plan" for it.
+#[tokio::test]
+async fn live_a_temp_tables_read_is_planned_postgres() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    db.run("CREATE TEMP TABLE podelis_planned (x int)", 1).await.unwrap();
+    db.full_scans("SELECT * FROM podelis_planned").await.expect("planned on the session");
+    // In a transaction, a failing plan would abort it: not tried there (the
+    // table a pool connection can't see, as if not there: not asked about).
+    db.run("BEGIN", 1).await.unwrap();
+    db.note_transaction(true);
+    assert_eq!(db.full_scans("SELECT * FROM podelis_planned").await.unwrap(), []);
+    assert_eq!(db.transaction_state().await, Some(TxnState::Open), "not aborted");
+    db.run("ROLLBACK", 1).await.unwrap();
+}
+
+/// What a run changed on the session is read against the transaction as it
+/// was before the run: a `SET` rolled back in the same run isn't kept, and
+/// one made before the run's own `BEGIN` is.
+#[tokio::test]
+async fn live_a_runs_settings_are_read_against_the_transaction_before_it() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    let lost = |db: &Database| db.0.memory.lock().unwrap().lost();
+    db.run("BEGIN", 1).await.unwrap();
+    db.run("SET search_path = pg_catalog; ROLLBACK", 1).await.unwrap();
+    assert!(!lost(&db).iter().any(|l| l.contains("search_path")), "{:?}", lost(&db));
+    db.run("SET application_name = 'podelis_before'; BEGIN", 1).await.unwrap();
+    assert!(lost(&db).iter().any(|l| l.contains("application_name")), "{:?}", lost(&db));
+    db.run("ROLLBACK", 1).await.unwrap();
+}

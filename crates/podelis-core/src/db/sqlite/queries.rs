@@ -5,18 +5,28 @@
 use super::super::catalog::{ColumnRow, TableRow};
 use super::super::details::{ForeignKey, IndexInfo};
 use super::super::*;
-use sqlx::pool::PoolConnection;
-use sqlx::sqlite::Sqlite;
 use super::DriverConnection;
 use super::super::dialect::Scan;
 
 impl Database {
-    /// The SQLite session connection, waited for (SQLite has one).
-    pub(in crate::db) async fn sqlite_session(&self) -> Result<MappedMutexGuard<'_, PoolConnection<Sqlite>>> {
-        let session = self.0.session.lock().await;
-        self.clear_interrupt();
-        MutexGuard::try_map(session, |s| if let Session::Sqlite(c) = s { Some(c) } else { None })
-        .map_err(|_| anyhow::anyhow!("the connection is closed"))
+    /// Runs `work` on the SQLite session connection, in its turn (SQLite
+    /// has one: an in-memory database is that connection's alone).
+    pub(in crate::db) async fn on_sqlite<T, F>(&self, work: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: for<'c> FnOnce(&'c mut sqlx::SqliteConnection) -> SessionFuture<'c, Result<T>> + Send + 'static,
+    {
+        let db = self.clone();
+        self.with_session(move |session| {
+            Box::pin(async move {
+                db.clear_interrupt();
+                match session {
+                    Session::Sqlite(c) => work(c).await,
+                    _ => Err(anyhow::anyhow!("the connection is closed")),
+                }
+            })
+        })
+        .await?
     }
 }
 
@@ -24,60 +34,68 @@ impl Database {
 type SqliteIndexRow = (String, i64, String, Option<String>, Option<String>);
 
 pub(in crate::db) async fn column_rows(db: &Database, system: bool) -> Result<Vec<ColumnRow>> {
-    Ok({
-        let mut c = db.sqlite_session().await?;
-        let rows: Vec<(String, String, String, i64, i64)> = sqlx::query_as(
-            r#"SELECT m.name, p.name, p.type, p."notnull", p.pk
-                     FROM (SELECT name FROM sqlite_master
-                           WHERE type IN ('table', 'view') AND (?1 OR name NOT LIKE 'sqlite_%')
-                           UNION ALL SELECT 'sqlite_schema' WHERE ?1) m
-                     JOIN pragma_table_info(m.name) p
-                     ORDER BY m.name, p.cid"#,
-        )
-        .bind(system)
-        .fetch_all(&mut **c)
-        .await?;
-        rows.into_iter()
-            .map(|(t, c, ty, nn, pk)| {
-                let nullable = if nn == 0 { "YES" } else { "NO" };
-                ("main".into(), t, c, ty, nullable.into(), if pk > 0 { "PRI" } else { "" }.into())
-            })
-            .collect()
+    db.on_sqlite(move |c| {
+        Box::pin(async move {
+        Ok({
+            let rows: Vec<(String, String, String, i64, i64)> = sqlx::query_as(
+                r#"SELECT m.name, p.name, p.type, p."notnull", p.pk
+                         FROM (SELECT name FROM sqlite_master
+                               WHERE type IN ('table', 'view') AND (?1 OR name NOT LIKE 'sqlite_%')
+                               UNION ALL SELECT 'sqlite_schema' WHERE ?1) m
+                         JOIN pragma_table_info(m.name) p
+                         ORDER BY m.name, p.cid"#,
+            )
+            .bind(system)
+            .fetch_all(&mut *c)
+            .await?;
+            rows.into_iter()
+                .map(|(t, c, ty, nn, pk)| {
+                    let nullable = if nn == 0 { "YES" } else { "NO" };
+                    ("main".into(), t, c, ty, nullable.into(), if pk > 0 { "PRI" } else { "" }.into())
+                })
+                .collect()
+        })
+        })
     })
+    .await
 }
 
 /// Tables and views; each table's rows where `ANALYZE` counted them (the
 /// first number of its `sqlite_stat1` rows), for the heavy-query guard and
 /// the navigator's order by rows. SQLite keeps no sizes.
 pub(in crate::db) async fn table_rows(db: &Database, system: bool) -> Result<Vec<TableRow>> {
-    let mut c = db.sqlite_session().await?;
-    let counted: Option<i64> = sqlx::query_scalar("SELECT 1 FROM sqlite_master WHERE name = 'sqlite_stat1'")
-        .fetch_optional(&mut **c)
-        .await?;
-    macro_rules! tables {
-        ($rows:literal) => {
-            concat!(
-                "SELECT 'main', m.name, m.type, ",
-                $rows,
-                ", CAST(NULL AS INTEGER) FROM sqlite_master m
-                 WHERE m.type IN ('table', 'view') AND (?1 OR m.name NOT LIKE 'sqlite_%')
-                 UNION ALL SELECT 'main', 'sqlite_schema', 'table', NULL, NULL WHERE ?1
-                 ORDER BY 2"
+    db.on_sqlite(move |c| {
+        Box::pin(async move {
+        let counted: Option<i64> = sqlx::query_scalar("SELECT 1 FROM sqlite_master WHERE name = 'sqlite_stat1'")
+            .fetch_optional(&mut *c)
+            .await?;
+        macro_rules! tables {
+            ($rows:literal) => {
+                concat!(
+                    "SELECT 'main', m.name, m.type, ",
+                    $rows,
+                    ", CAST(NULL AS INTEGER) FROM sqlite_master m
+                     WHERE m.type IN ('table', 'view') AND (?1 OR m.name NOT LIKE 'sqlite_%')
+                     UNION ALL SELECT 'main', 'sqlite_schema', 'table', NULL, NULL WHERE ?1
+                     ORDER BY 2"
+                )
+            };
+        }
+        let sql = if counted.is_some() {
+            tables!(
+                "(SELECT CAST(substr(s.stat, 1, instr(s.stat || ' ', ' ') - 1) AS INTEGER)
+                  FROM sqlite_stat1 s WHERE s.tbl = m.name LIMIT 1)"
             )
+        } else {
+            tables!("CAST(NULL AS INTEGER)")
         };
-    }
-    let sql = if counted.is_some() {
-        tables!(
-            "(SELECT CAST(substr(s.stat, 1, instr(s.stat || ' ', ' ') - 1) AS INTEGER)
-              FROM sqlite_stat1 s WHERE s.tbl = m.name LIMIT 1)"
-        )
-    } else {
-        tables!("CAST(NULL AS INTEGER)")
-    };
-    Ok(sqlx::query_as(sql)
-    .bind(system)
-    .fetch_all(&mut **c)
-    .await?)
+        Ok(sqlx::query_as(sql)
+        .bind(system)
+        .fetch_all(&mut *c)
+        .await?)
+        })
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -86,81 +104,95 @@ pub(in crate::db) async fn column_info_rows(
     _schema: &str,
     table: &str,
 ) -> Result<Vec<(String, String, String)>> {
-    Ok({
-        let mut c = db.sqlite_session().await?;
-        let rows: Vec<(String, String, i64)> =
-            sqlx::query_as(r#"SELECT name, type, "notnull" FROM pragma_table_info(?)"#)
-                .bind(table)
-                .fetch_all(&mut **c)
-                .await?;
-        rows.into_iter()
-            .map(|(name, ty, notnull)| (name, ty, if notnull == 0 { "YES" } else { "NO" }.to_string()))
-            .collect()
+    let table = table.to_string();
+    db.on_sqlite(move |c| {
+        Box::pin(async move {
+        let table = table.as_str();
+        Ok({
+            let rows: Vec<(String, String, i64)> =
+                sqlx::query_as(r#"SELECT name, type, "notnull" FROM pragma_table_info(?)"#)
+                    .bind(table)
+                    .fetch_all(&mut *c)
+                    .await?;
+            rows.into_iter()
+                .map(|(name, ty, notnull)| (name, ty, if notnull == 0 { "YES" } else { "NO" }.to_string()))
+                .collect()
+        })
+        })
     })
+    .await
 }
 
 pub(in crate::db) async fn link_rows(
     db: &Database,
 ) -> Result<Vec<(String, String, String, String, String, Option<String>)>> {
-    let mut c = db.sqlite_session().await?;
-    let c: &mut sqlx::SqliteConnection = &mut c;
-    Ok(sqlx::query_as(
-        r#"SELECT 'main', m.name, p."from", 'main', p."table", p."to"
-             FROM sqlite_schema m JOIN pragma_foreign_key_list(m.name) p
-             WHERE m.type = 'table'
-             ORDER BY m.name, p.id, p.seq"#,
-    )
-    .fetch_all(&mut *c)
-    .await?)
+    db.on_sqlite(move |c| {
+        Box::pin(async move {
+        Ok(sqlx::query_as(
+            r#"SELECT 'main', m.name, p."from", 'main', p."table", p."to"
+                 FROM sqlite_schema m JOIN pragma_foreign_key_list(m.name) p
+                 WHERE m.type = 'table'
+                 ORDER BY m.name, p.id, p.seq"#,
+        )
+        .fetch_all(&mut *c)
+        .await?)
+        })
+    })
+    .await
 }
 
 pub(in crate::db) async fn table_details(db: &Database, _schema: &str, table: &str) -> Result<TableDetails> {
-    let mut c = db.sqlite_session().await?;
-    let c: &mut sqlx::SqliteConnection = &mut c;
-    let indexes: Vec<SqliteIndexRow> = sqlx::query_as(
-        r#"SELECT il.name, il."unique", il.origin,
-                    (SELECT group_concat(name, ', ') FROM pragma_index_info(il.name)),
-                    (SELECT sql FROM sqlite_master WHERE type = 'index' AND name = il.name)
-             FROM pragma_index_list(?1) il
-             ORDER BY il.origin = 'pk' DESC, il.name"#,
-    )
-    .bind(table)
-    .fetch_all(&mut *c)
-    .await?;
-    let fks: Vec<(String, String, Option<String>)> =
-        sqlx::query_as(r#"SELECT "from", "table", "to" FROM pragma_foreign_key_list(?1) ORDER BY id, seq"#)
-            .bind(table)
-            .fetch_all(&mut *c)
-            .await?;
-    let definition: Option<(Option<String>,)> =
-        sqlx::query_as("SELECT sql FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?1")
-            .bind(table)
-            .fetch_optional(&mut *c)
-            .await?;
-    Ok(TableDetails {
-        indexes: indexes
-            .into_iter()
-            .map(|(name, unique, origin, columns, def)| IndexInfo {
-                name,
-                columns: columns.unwrap_or_default(),
-                unique: unique != 0,
-                primary: origin == "pk",
-                definition: def,
-            })
-            .collect(),
-        foreign_keys: fks
-            .into_iter()
-            .map(|(column, t, to)| ForeignKey {
-                column,
-                // No target column means the target's primary key.
-                target: format!("{t}.{}", to.as_deref().unwrap_or("(primary key)")),
-                target_schema: "main".into(),
-                target_table: t,
-                target_column: to,
-            })
-            .collect(),
-        definition: definition.and_then(|(d,)| d),
+    let table = table.to_string();
+    db.on_sqlite(move |c| {
+        Box::pin(async move {
+        let table = table.as_str();
+        let indexes: Vec<SqliteIndexRow> = sqlx::query_as(
+            r#"SELECT il.name, il."unique", il.origin,
+                        (SELECT group_concat(name, ', ') FROM pragma_index_info(il.name)),
+                        (SELECT sql FROM sqlite_master WHERE type = 'index' AND name = il.name)
+                 FROM pragma_index_list(?1) il
+                 ORDER BY il.origin = 'pk' DESC, il.name"#,
+        )
+        .bind(table)
+        .fetch_all(&mut *c)
+        .await?;
+        let fks: Vec<(String, String, Option<String>)> =
+            sqlx::query_as(r#"SELECT "from", "table", "to" FROM pragma_foreign_key_list(?1) ORDER BY id, seq"#)
+                .bind(table)
+                .fetch_all(&mut *c)
+                .await?;
+        let definition: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT sql FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?1")
+                .bind(table)
+                .fetch_optional(&mut *c)
+                .await?;
+        Ok(TableDetails {
+            indexes: indexes
+                .into_iter()
+                .map(|(name, unique, origin, columns, def)| IndexInfo {
+                    name,
+                    columns: columns.unwrap_or_default(),
+                    unique: unique != 0,
+                    primary: origin == "pk",
+                    definition: def,
+                })
+                .collect(),
+            foreign_keys: fks
+                .into_iter()
+                .map(|(column, t, to)| ForeignKey {
+                    column,
+                    // No target column means the target's primary key.
+                    target: format!("{t}.{}", to.as_deref().unwrap_or("(primary key)")),
+                    target_schema: "main".into(),
+                    target_table: t,
+                    target_column: to,
+                })
+                .collect(),
+            definition: definition.and_then(|(d,)| d),
+        })
+        })
     })
+    .await
 }
 
 /// The session-info query and the name of each column it returns.
@@ -214,9 +246,9 @@ pub(in crate::db) async fn routine_definition(_db: &Database, _routine: &Routine
 /// Its plans are made on the session (it has one connection). Its plan
 /// doesn't show a LIMIT: a plain read of one table that a LIMIT stops
 /// early (nothing that needs every row first) reads no table in full.
-pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Option<Vec<Scan>> {
+pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Result<Vec<Scan>> {
     let scans = db.scans_by_explain(statement).await?;
-    Some(if stopped_by_limit(statement) && scans.len() == 1 { Vec::new() } else { scans })
+    Ok(if stopped_by_limit(statement) && scans.len() == 1 { Vec::new() } else { scans })
 }
 
 /// A LIMIT, and nothing that needs every row before it: no WHERE, ORDER

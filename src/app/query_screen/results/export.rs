@@ -97,12 +97,21 @@ impl App {
             }
             return;
         }
-        let path = self.export_target(format);
         let Some(text) = self.rows_text(format, rows) else { return };
         if !self.export_fits(text.len() as u64, false) {
             return;
         }
+        // (The name tried said, if it can't be made: not a new one.)
+        let wanted = self.export_target(format);
+        let path = match claim_new(&wanted) {
+            Ok(path) => path,
+            Err(e) => return self.export_said(&wanted, Err(e.to_string()), &note),
+        };
         let written = std::fs::write(&path, text);
+        // Its own file only (claimed above): nothing else is touched.
+        if written.is_err() {
+            let _ = std::fs::remove_file(&path);
+        }
         self.export_said(&path, written.map_err(|e| e.to_string()), &note);
     }
 
@@ -113,7 +122,6 @@ impl App {
         if self.exports.task.is_some() {
             return self.set_status(t!("export.already_running").to_string(), true);
         }
-        let path = self.export_target(Format::Parquet);
         let engine = self.engine();
         let Some(results) = &self.tab.grid.results else { return };
         let shown = crate::db::QueryOutcome {
@@ -121,6 +129,12 @@ impl App {
             column_types: results.column_types.clone(),
             rows: rows.iter().filter_map(|&i| results.rows.get(i).cloned()).collect(),
             ..crate::db::QueryOutcome::default()
+        };
+        // Claimed once there's something to write in it.
+        let wanted = self.export_target(Format::Parquet);
+        let path = match claim_new(&wanted) {
+            Ok(path) => path,
+            Err(e) => return self.export_said(&wanted, Err(e.to_string()), &note),
         };
         let send = self.sender();
         let target = path.clone();
@@ -397,7 +411,14 @@ impl App {
         // The stream holds its session until the export ends.
         let conn = self.tabs.get(self.active_tab).and_then(|t| t.conn);
         let (columns, types, loaded) = (results.columns.clone(), results.column_types.clone(), results.rows.clone());
-        let path = name.unwrap_or_else(|| self.export_path(format));
+        let wanted = name.unwrap_or_else(|| self.export_path(format));
+        let path = match claim_new(&wanted) {
+            Ok(path) => path,
+            Err(e) => {
+                self.tab.run.set_stream(Some(stream));
+                return self.set_status(format!("{}: {e}", wanted.display()), true);
+            }
+        };
         let send = self.sender();
         let target = path.clone();
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -739,10 +760,35 @@ fn open_sink(
 /// Names a finished file as the part it is, and says so. (If it can't be
 /// renamed it's still there, under its own name.)
 fn keep_partial(target: &std::path::Path, rows: u64, why: &str) -> anyhow::Error {
-    let partial = partial_path(target);
-    let kept = if std::fs::rename(target, &partial).is_ok() { partial } else { target.to_path_buf() };
+    // Under a name of its own: not over another export's partial file.
+    let renamed = claim_new(&partial_path(target)).and_then(|partial| match std::fs::rename(target, &partial) {
+        Ok(()) => Ok(partial),
+        Err(e) => {
+            let _ = std::fs::remove_file(&partial);
+            Err(e)
+        }
+    });
+    let kept = renamed.unwrap_or_else(|_| target.to_path_buf());
     let shown = std::fs::canonicalize(&kept).unwrap_or(kept);
     anyhow::anyhow!(t!("export.kept_partial", why = why, rows = rows, path = shown.display()))
+}
+
+/// `path`, or the first of `name-2.ext`, `name-3.ext`… that isn't there,
+/// made (empty) at once so it's this export's: an export never writes over
+/// a file it didn't make (one put there since it was named, another
+/// export's in the same second), and removes only its own.
+fn claim_new(path: &std::path::Path) -> std::io::Result<PathBuf> {
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+    let ext = path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    let mut n = 1;
+    loop {
+        let candidate = if n == 1 { path.to_path_buf() } else { path.with_file_name(format!("{stem}-{n}{ext}")) };
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(_) => return Ok(candidate),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && n < 1000 => n += 1,
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 /// Where an export cut short is kept: `a.csv` as `a.partial.csv`.
@@ -923,6 +969,20 @@ impl<W: std::io::Write + Send> Sink<W> {
 
 #[cfg(test)]
 mod tests {
+    /// A name that's taken gets `-2`, `-3`…; the file is made at once.
+    #[test]
+    fn an_exports_file_is_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.csv");
+        assert_eq!(super::claim_new(&path).unwrap(), path);
+        assert!(path.exists(), "made at once");
+        assert_eq!(super::claim_new(&path).unwrap(), dir.path().join("a-2.csv"));
+        assert_eq!(super::claim_new(&path).unwrap(), dir.path().join("a-3.csv"));
+        let bare = dir.path().join("noext");
+        super::claim_new(&bare).unwrap();
+        assert_eq!(super::claim_new(&bare).unwrap(), dir.path().join("noext-2"));
+    }
+
     use super::*;
 
     #[test]

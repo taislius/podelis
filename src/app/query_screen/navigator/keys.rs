@@ -60,11 +60,15 @@ impl App {
                     Err(t!("navigator.timed_out", s = CATALOG_TIMEOUT.as_secs()))
                 }
             };
-            let answered = loaded.is_ok();
+            let unrollable_sql = db.engine().dialect().and_then(crate::db::SqlDialect::tables_without_rollback);
+            let failed = loaded.as_ref().err().cloned();
             send(ConnEvent::Catalog { load, result: loaded });
             // A server that didn't give the tables isn't asked more (each
             // would wait as long, with the session held).
-            if !answered {
+            if let Some(why) = failed {
+                if unrollable_sql.is_some() {
+                    send(ConnEvent::Unrollable { load, tables: Err(why) });
+                }
                 return;
             }
             // Listing routines may need privileges the user lacks: then
@@ -73,21 +77,32 @@ impl App {
             send(ConnEvent::Routines { load, routines: routines.ok().and_then(Result::ok).unwrap_or_default() });
             // Tables a rollback can't undo (MySQL's MyISAM, MEMORY): on a
             // connection of its own, as the catalog is read.
-            let Some(sql) = db.engine().dialect().and_then(crate::db::SqlDialect::tables_without_rollback) else {
-                return;
+            let Some(sql) = unrollable_sql else { return };
+            // Every database's tables, whatever the session's settings: on
+            // the session where a connection aside wouldn't do (after `USE`).
+            let lookup = async {
+                match db.run_aside(sql, 100_000).await {
+                    Ok(None) => db.run(sql, 100_000).await.map(Some),
+                    other => other,
+                }
             };
-            if let Ok(Ok(Some(found))) = tokio::time::timeout(CATALOG_TIMEOUT, db.run_aside(sql, 100_000)).await {
-                let cell = |r: &[Option<String>], i: usize| r.get(i).cloned().flatten().unwrap_or_default();
-                let tables = found
-                    .rows
-                    .iter()
-                    .map(|r| crate::app::session::Unrollable {
-                        schema: cell(r, 0).to_lowercase(),
-                        table: cell(r, 1).to_lowercase(),
-                    })
-                    .collect();
-                send(ConnEvent::Unrollable { load, tables });
-            }
+            let tables = match tokio::time::timeout(CATALOG_TIMEOUT, lookup).await {
+                Ok(Ok(Some(found))) => {
+                    let cell = |r: &[Option<String>], i: usize| r.get(i).cloned().flatten().unwrap_or_default();
+                    Ok(found
+                        .rows
+                        .iter()
+                        .map(|r| crate::app::session::Unrollable {
+                            schema: cell(r, 0).to_lowercase(),
+                            table: cell(r, 1).to_lowercase(),
+                        })
+                        .collect())
+                }
+                Ok(Ok(None)) => Err("no connection to read them on".to_string()),
+                Ok(Err(e)) => Err(crate::db::error_message(&e)),
+                Err(_) => Err(t!("navigator.timed_out", s = CATALOG_TIMEOUT.as_secs())),
+            };
+            send(ConnEvent::Unrollable { load, tables });
         });
     }
 

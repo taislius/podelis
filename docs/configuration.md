@@ -61,7 +61,7 @@ Ctrl+PageUp, Ctrl+K ] / Ctrl+K [), `save_tab` (Ctrl+S), `rename_tab` (Ctrl+K t, 
 `find` (Ctrl+F), `comment` (Ctrl+K -, Alt+/; Ctrl+/ and Ctrl+7 work but aren't shown), `format` (Ctrl+K f,
 F9), `palette` (Ctrl+K), `explain_analyze` (Shift+F7, Ctrl+K a),
 `connection_info` (Ctrl+K s i), `activity` (Ctrl+K s s), `heartbeat`
-(Ctrl+K s h), `server_load` (Ctrl+K s l), `insert_snippet` (Ctrl+K i, Ctrl+E), `menu` (Ctrl+K m,
+(Ctrl+K s h), `server_load` (Ctrl+K s l), `check_connection` (Ctrl+K s c), `insert_snippet` (Ctrl+K i, Ctrl+E), `menu` (Ctrl+K m,
 Shift+F10, F10), `zoom` (Ctrl+K z, F12), `zoom_statement` (Ctrl+K b,
 Shift+F12), `select_statement` (Ctrl+K v), `select_word` (Alt+W; a double click too), `projects` (Ctrl+K p),
 `transaction_mode` (Ctrl+K x), `messages` (Ctrl+K Space), `next_warning` (Ctrl+K w), `ask` (Ctrl+K q, Ctrl+K y q),

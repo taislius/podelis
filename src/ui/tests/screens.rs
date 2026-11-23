@@ -73,9 +73,19 @@ fn status_bar_shows_the_connection_heartbeat_and_lost_connection() {
     // The top bar no longer repeats it.
     assert!(!render(&mut app, 120, 12).lines().next().unwrap().contains("prod /"));
     app.connection.state.lose_for_tests();
+    // When its supervisor tries again, as it reported.
+    let next = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    app.connection.health = Some(crate::db::Health {
+        next_check: Some(next),
+        ..crate::db::Health::of(crate::db::HealthState::Lost("no answer".into()))
+    });
     let lost = status_bar(&mut app);
     assert!(lost.contains("× prod") && lost.contains("connection lost"), "{lost}");
     assert!(lost.contains("trying again in"), "when it's tried again: {lost}");
+    // Paused after its tries: what tries again.
+    app.connection.health.as_mut().unwrap().state = crate::db::HealthState::Paused("no answer".into());
+    let paused = status_bar(&mut app);
+    assert!(paused.contains("paused after 5 tries"), "{paused}");
 }
 
 /// Each state of the connection is said in words where it isn't simply

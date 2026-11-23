@@ -616,9 +616,12 @@ impl Server {
             }
             let Some(dialect) = db.engine().dialect() else { return Err(no_sql(db.engine())) };
             if let Some((before, _)) = dialect.sandbox_session() {
-                db.run_once(before, 1).await.map_err(failed)?;
+                db.run(before, 1).await.map_err(failed)?;
             }
-            db.run_once(dialect.begin(false), 1).await.map_err(failed)?;
+            db.run(dialect.begin(false), 1).await.map_err(failed)?;
+            // Its supervisor too: a check then never reopens the session
+            // under it.
+            db.note_transaction(true);
             let number = self.sandbox_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
             let open =
                 AgentSandbox { number, db: db.clone(), session: db.session_id(), calls: 0, last: Instant::now() };
@@ -632,15 +635,15 @@ impl Server {
         // No savepoint: the transaction is gone.
         let savepoint = format!("podelis_{n}");
         let Some(dialect) = db.engine().dialect() else { return Err(no_sql(db.engine())) };
-        if let Err(e) = db.run_once(&dialect.savepoint(&savepoint), 1).await {
+        if let Err(e) = db.run(&dialect.savepoint(&savepoint), 1).await {
             self.forget_sandbox(db, &profile.name).await;
             return Err(format!("{} ({LOST})", failed(e)));
         }
-        let result = db.run_within(sql, limit, Some(call_timeout(profile)), false).await.map_err(|e| ran_error(&e));
+        let result = db.run_within(sql, limit, Some(call_timeout(profile))).await.map_err(|e| ran_error(&e));
         // A failed call goes back to before it; if even that fails, the
         // transaction is gone (a deadlock rolls all of it back on MySQL).
         if let Err(e) = &result
-            && db.run_once(&dialect.rollback_to_savepoint(&savepoint), 1).await.is_err()
+            && db.run(&dialect.rollback_to_savepoint(&savepoint), 1).await.is_err()
         {
             self.forget_sandbox(db, &profile.name).await;
             return Err(format!("{e} ({LOST})"));
@@ -704,7 +707,16 @@ impl Server {
         }
         #[expect(clippy::cast_precision_loss, reason = "a threshold")]
         let limit = self.guard_rows as f64;
-        let scans = db.full_scans(sql).await.ok()?;
+        let scans = match db.full_scans(sql).await {
+            Ok(scans) => scans,
+            Err(e) => {
+                return Some(format!(
+                    "how much this reads on a production database couldn't be checked ({}): narrow it, or ask \
+                     the user",
+                    crate::db::error_message(&e)
+                ));
+            }
+        };
         let (table, rows) = scans.into_iter().find(|(_, rows)| *rows >= limit)?;
         Some(format!(
             "this would read all of {table} (about {} rows) on a production database: narrow it with a WHERE \
@@ -801,7 +813,7 @@ async fn unrollable(db: &Database) -> Option<String> {
     let dialect = engine.dialect()?;
     let sql = dialect.tables_without_rollback()?;
     // (Not run again on a new session: inside a sandbox that would leave it.)
-    let outcome = match db.run_once(sql, 10_000).await {
+    let outcome = match db.run(sql, 10_000).await {
         Ok(outcome) => outcome,
         Err(e) => {
             return Some(format!("couldn't check that a dry run can be rolled back: {}", crate::db::error_message(&e)));
@@ -873,7 +885,7 @@ async fn run_wrapped(
 ) -> Result<QueryOutcome, String> {
     use crate::language::statements::TxnOp;
     let engine = db.engine();
-    let run = || db.run_within(sql, limit, Some(call_timeout(profile)), false);
+    let run = || db.run_within(sql, limit, Some(call_timeout(profile)));
     let one_write = engine.capabilities().transactions == crate::db::Transactions::OneWrite;
     if one_write {
         // Only a dry run is in a transaction (the language's own): a read
@@ -897,17 +909,22 @@ async fn run_wrapped(
     // Marked open from before its begin until it has ended: a call cut
     // short in between leaves the mark for the next one (`settle`).
     held.left_open = true;
-    db.run_once(&begin, 1).await.map_err(|e| {
+    // Its supervisor hears of it (put back after as it was: a sandbox's).
+    let was_open = db.in_transaction();
+    db.note_transaction(true);
+    db.run(&begin, 1).await.map_err(|e| {
         held.left_open = false;
+        db.note_transaction(was_open);
         let why = crate::db::error_message(&e);
         if one_write { format!("a dry run needs a transaction: {why}") } else { why }
     })?;
     let result = run().await.map_err(|e| ran_error(&e));
     let how = if wrap == Wrap::Commit && result.is_ok() { TxnOp::Commit } else { TxnOp::Rollback };
     let end = crate::language::transaction(engine, how, false).unwrap_or_default();
-    let ended = db.run_once(&end, 1).await;
+    let ended = db.run(&end, 1).await;
     // A failed end may have left it open: the next call rolls it back.
     held.left_open = ended.is_err();
+    db.note_transaction(was_open || held.left_open);
     let outcome = result?;
     ended.map_err(|e| format!("couldn't end the transaction ({end}): {}", crate::db::error_message(&e)))?;
     Ok(outcome)
@@ -925,8 +942,9 @@ async fn settle(db: &Database, held: &mut Turn) {
     }
     let rollback = crate::language::transaction(db.engine(), crate::language::statements::TxnOp::Rollback, false);
     if let Some(rollback) = rollback {
-        let _ = db.run_once(&rollback, 1).await;
+        let _ = db.run(&rollback, 1).await;
     }
+    db.note_transaction(false);
 }
 
 /// What an agent is told when its sandbox turned out to be gone.
@@ -937,9 +955,10 @@ const LOST: &str = "the sandbox was lost (the connection was opened again, or th
 /// (MySQL's autocommit on again).
 async fn end_sandbox(db: &Database) {
     let Some(dialect) = db.engine().dialect() else { return };
-    let _ = db.run_once(dialect.end(TxEnd::Rollback), 1).await;
+    let _ = db.run(dialect.end(TxEnd::Rollback), 1).await;
+    db.note_transaction(false);
     if let Some((_, after)) = dialect.sandbox_session() {
-        let _ = db.run_once(after, 1).await;
+        let _ = db.run(after, 1).await;
     }
 }
 

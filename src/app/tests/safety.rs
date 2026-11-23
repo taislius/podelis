@@ -173,17 +173,39 @@ async fn heavy_reads_on_production_ask_first() {
     let (mut app, _dir) = connected_app(ConnectionMode::Production).await;
     app.settings.guard_rows = 1000;
     let infos = statements::analyze(&parse("select 7", Engine::Sqlite));
-    app.guarded("select 7".into(), 0, infos.clone(), None, &[("orders".into(), 52_000_000.0)]);
+    app.guarded("select 7".into(), 0, infos.clone(), None, &Ok(vec![("orders".into(), 52_000_000.0)]));
     let confirm = app.popups.confirm.as_ref().unwrap();
     assert_eq!(confirm.details, ["orders: about 52.0M rows, read in full"]);
     app.handle_key(key(KeyCode::Char('y')));
     finish(&mut app).await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][0].as_deref(), Some("7"));
     // Small: no question.
-    app.guarded("select 8".into(), 0, infos, None, &[("tiny".into(), 10.0)]);
+    app.guarded("select 8".into(), 0, infos, None, &Ok(vec![("tiny".into(), 10.0)]));
     assert!(app.popups.confirm.is_none());
     finish(&mut app).await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][0].as_deref(), Some("8"));
+}
+
+/// On production, a read whose plan couldn't be had (refused, the link)
+/// isn't let through as if it read nothing: how much it reads isn't known,
+/// so it asks, saying why; no, and nothing runs. One that's wrong itself
+/// (a table not there) isn't asked about: its run says what's wrong.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_read_on_production_that_cant_be_planned_asks_first() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Production).await;
+    app.settings.guard_rows = 1000;
+    let infos = statements::analyze(&parse("select 7", Engine::Sqlite));
+    app.guarded("select 7".into(), 0, infos, None, &Err("permission denied for EXPLAIN".into()));
+    let confirm = app.popups.confirm.as_ref().expect("asked");
+    assert!(confirm.message.contains("couldn't be checked"), "{}", confirm.message);
+    assert_eq!(confirm.details, ["permission denied for EXPLAIN"]);
+    app.handle_key(key(KeyCode::Char('n')));
+    assert!(app.popups.confirm.is_none() && !app.tab.run.executing, "not run");
+    // Wrong itself: run, and its error said.
+    run_sql(&mut app, "select * from nowhere").await;
+    assert!(app.popups.confirm.is_none());
+    assert!(app.tab.run_error.as_ref().is_some_and(|e| e.contains("nowhere")), "{:?}", app.tab.run_error);
 }
 
 #[cfg(feature = "sqlite")]
@@ -467,6 +489,7 @@ async fn a_sqlite_files_sandbox_works_on_a_copy() {
     finish(&mut app).await;
     let copy = app.connection.sandbox.as_ref().unwrap().copy.as_ref().unwrap().path.clone();
     assert!(copy.exists() && copy.starts_with(dir.path().join("sandbox")));
+    assert_ne!(copy.parent().unwrap(), dir.path().join("sandbox"), "a folder of its own");
     run_sql(&mut app, "select count(*) from t").await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][0].as_deref(), Some("1"));
     // The original, from outside: untouched, and writable meanwhile.
@@ -492,6 +515,62 @@ async fn a_sqlite_files_sandbox_works_on_a_copy() {
     assert!(!copy.exists(), "the copy is deleted");
 }
 
+/// Starting a file's sandbox cleans up only the folders of sandboxes that
+/// ended without doing it (a crash): not one that's open, in another tab
+/// or another Podėlis (its lock held).
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_sandbox_doesnt_remove_another_open_one() {
+    let (mut app, dir) = test_app();
+    app.data_dir = Some(dir.path().to_path_buf());
+    let all = dir.path().join("sandbox");
+    let (open, ended) = (all.join("open"), all.join("ended"));
+    for folder in [&open, &ended] {
+        std::fs::create_dir_all(folder).unwrap();
+        std::fs::write(folder.join("copy.db"), "work").unwrap();
+    }
+    // An older Podėlis's copy, straight in the folder, with its WAL.
+    let old = all.join("0123abcd.db");
+    std::fs::write(&old, "old copy").unwrap();
+    std::fs::write(all.join("0123abcd.db-wal"), "wal").unwrap();
+    let days_ago = std::time::SystemTime::now() - Duration::from_hours(48);
+    for file in [&old, &all.join("0123abcd.db-wal")] {
+        std::fs::File::options().write(true).open(file).unwrap().set_modified(days_ago).unwrap();
+    }
+    // One an older Podėlis has open now: changed just now.
+    let in_use = all.join("4567cdef.db");
+    std::fs::write(&in_use, "in use").unwrap();
+    // One a crash left as it was made (no lock yet), long ago; one being
+    // made now.
+    let (crashed, making) = (all.join("crashed"), all.join("making"));
+    for folder in [&crashed, &making] {
+        std::fs::create_dir_all(folder).unwrap();
+        std::fs::write(folder.join("lock.new"), "").unwrap();
+    }
+    let long_ago = std::time::SystemTime::now() - Duration::from_hours(2);
+    std::fs::File::open(&crashed).unwrap().set_modified(long_ago).unwrap();
+    let held = std::fs::File::create(open.join("lock")).unwrap();
+    held.lock().unwrap();
+    std::fs::File::create(ended.join("lock")).unwrap();
+    let project = project_id(&app);
+    let profile = file_profile("shop", &dir.path().join("shop.db"));
+    app.store.upsert(&project, None, profile.clone()).unwrap();
+    connect_profile(&mut app, &profile).await;
+    run_sql(&mut app, "create table t (id integer)").await;
+    app.connection.tx_mode = TxMode::Sandbox;
+    app.tab.editor.set_text("insert into t values (1)");
+    app.handle_key(key(KeyCode::F(5)));
+    until_event(&mut app, |k| matches!(k, DbEventKind::SandboxCopied(_))).await;
+    finish(&mut app).await;
+    assert!(app.connection.sandbox.as_ref().unwrap().copy.is_some());
+    assert_eq!(std::fs::read_to_string(open.join("copy.db")).unwrap(), "work", "the open one's kept");
+    assert!(!ended.exists(), "the ended one's gone");
+    assert!(!crashed.exists() && making.exists(), "an hour old with no lock: gone; one being made: kept");
+    assert!(!old.exists() && !all.join("0123abcd.db-wal").exists(), "an older Podėlis's copy is gone");
+    assert!(in_use.exists(), "not one an older Podėlis has open");
+    drop(held);
+}
+
 #[test]
 fn the_sandbox_and_rollback_only_refuse_tables_a_rollback_cant_undo() {
     let (mut app, _dir) = test_app();
@@ -499,7 +578,17 @@ fn the_sandbox_and_rollback_only_refuse_tables_a_rollback_cant_undo() {
     // MySQL's MyISAM table `audit` (from the catalog), InnoDB `orders`.
     let table =
         |schema: &str, table: &str| crate::app::session::Unrollable { schema: schema.into(), table: table.into() };
-    app.connection.unrollable = vec![table("shop", "audit"), table("archive", "log")];
+    // Not known yet (the catalog still loading, or it couldn't be read):
+    // a write is refused, a read isn't.
+    app.connection.tx_mode = TxMode::RollbackOnly;
+    let unknown = app.unrollable_refusal("INSERT INTO orders VALUES (1)").unwrap();
+    assert!(unknown.contains("isn't known"), "{unknown}");
+    assert!(app.unrollable_refusal("SELECT * FROM audit").is_none());
+    // Couldn't be read: said why, and that a reload tries again.
+    app.connection.set_unrollable(Err("access denied".into()));
+    let unread = app.unrollable_refusal("INSERT INTO orders VALUES (1)").unwrap();
+    assert!(unread.contains("couldn't be read (access denied)") && unread.contains("Reload"), "{unread}");
+    app.connection.unrollable = Some(vec![table("shop", "audit"), table("archive", "log")]);
     for mode in [TxMode::Sandbox, TxMode::RollbackOnly] {
         app.connection.tx_mode = mode;
         let refused = app.unrollable_refusal("INSERT INTO shop.`Audit` VALUES (1)").unwrap();
@@ -513,4 +602,129 @@ fn the_sandbox_and_rollback_only_refuse_tables_a_rollback_cant_undo() {
     // Other modes say what they do: a write there is meant to stay.
     app.connection.tx_mode = TxMode::Manual;
     assert!(app.unrollable_refusal("INSERT INTO audit VALUES (1)").is_none());
+}
+
+/// A failed transaction isn't committed by the commit key (the server
+/// would roll it back): it says to roll back. A COMMIT typed in one that
+/// the server ends is said rolled back, not committed.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_failed_transaction_isnt_said_committed() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    app.connection.txn = TxnState::Aborted;
+    app.end_transaction(podelis_core::db::TxEnd::Commit);
+    assert!(!app.tab.run.executing, "COMMIT isn't sent");
+    assert!(app.notes.status.contains("can't be committed"), "{}", app.notes.status);
+    // As PostgreSQL does: the transaction ends, the server rolls it back.
+    app.connection.txn = TxnState::Aborted;
+    run_sql(&mut app, "BEGIN; COMMIT").await;
+    assert_eq!(app.connection.txn, TxnState::Idle);
+    assert!(app.notes.status.contains("rolled back, not committed"), "{}", app.notes.status);
+    assert!(app.notes.status_is_error);
+}
+
+/// A failed run whose `BEGIN` ran (where the server doesn't say, as on
+/// MySQL and SQLite) leaves the transaction open, and said open: its
+/// rollback is offered, and undoes what ran before the failure.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_failed_runs_begin_leaves_its_transaction_open() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    run_sql(&mut app, "create table t (x int)").await;
+    run_sql(&mut app, "begin; insert into t values (1); select * from missing").await;
+    assert!(app.tab.run_error.is_some());
+    assert_eq!(app.connection.txn, TxnState::Open, "the BEGIN ran");
+    app.end_transaction(podelis_core::db::TxEnd::Rollback);
+    finish(&mut app).await;
+    assert_eq!(app.connection.txn, TxnState::Idle);
+    run_sql(&mut app, "select count(*) from t").await;
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][0].as_deref(), Some("0"), "rolled back");
+}
+
+/// A file's sandbox works on a copy: the copy's health is the tab's then,
+/// and a late report of the original's isn't; once it ends, the other way
+/// round.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_sandboxs_copy_reports_its_own_health() {
+    use crate::db::{Health, HealthState};
+    let (mut app, dir) = test_app();
+    app.data_dir = Some(dir.path().to_path_buf());
+    let project = project_id(&app);
+    let profile = file_profile("shop", &dir.path().join("shop.db"));
+    app.store.upsert(&project, None, profile.clone()).unwrap();
+    connect_profile(&mut app, &profile).await;
+    run_sql(&mut app, "create table t (id integer)").await;
+    // The original reconnected once before (given up on, reopened).
+    let original_db = app.connection.database.clone().unwrap();
+    original_db.abandon_session();
+    let _ = original_db.run("select 1", 1).await;
+    assert_eq!(original_db.health().borrow().reconnects, 1);
+    let id = app.connection.slots.active.unwrap();
+    let follower = |app: &mut App| app.connection.slot_mut(id).unwrap().follower;
+    let original = follower(&mut app);
+    app.connection.tx_mode = TxMode::Sandbox;
+    app.tab.editor.set_text("insert into t values (1)");
+    app.handle_key(key(KeyCode::F(5)));
+    until_event(&mut app, |k| matches!(k, DbEventKind::SandboxCopied(_))).await;
+    finish(&mut app).await;
+    let copy = follower(&mut app);
+    assert_ne!(copy, original, "the copy's followed");
+    let lost = || Health { next_check: None, ..Health::of(HealthState::Lost("gone".into())) };
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Followed { follower: original, health: lost() }));
+    assert!(!app.connection.state.is_lost(), "the original's report isn't the tab's now");
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Followed { follower: copy, health: lost() }));
+    assert!(app.connection.state.is_lost(), "the copy's is");
+    let back = Health::of(HealthState::Live);
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Followed { follower: copy, health: back }));
+    // Ended: the original's followed again, anew.
+    app.end_transaction(podelis_core::db::TxEnd::Rollback);
+    finish(&mut app).await;
+    assert!(app.connection.sandbox.is_none());
+    let again = follower(&mut app);
+    assert!(again != copy && again != original);
+    // Followed again, its reconnect before isn't taken for a new one.
+    let slot = app.connection.slot_mut(id).unwrap();
+    assert_eq!((slot.reconnects_said, slot.reconnects_logged), (1, 1));
+    let live = Health { reconnects: 1, ..Health::of(HealthState::Live) };
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Followed { follower: again, health: live }));
+    assert!(!said(&app).contains("reconnected"), "{}", said(&app));
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Followed { follower: copy, health: lost() }));
+    assert!(!app.connection.state.is_lost(), "the copy's late report isn't");
+}
+
+/// A file's sandbox whose transaction a reconnect lost goes like one
+/// ended: the tab's back on the original (not left on the copy), and the
+/// copy's folder is deleted.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_reconnect_ends_a_files_sandbox_on_the_original() {
+    use crate::db::{Health, HealthState};
+    let (mut app, dir) = test_app();
+    app.data_dir = Some(dir.path().to_path_buf());
+    let project = project_id(&app);
+    let profile = file_profile("shop", &dir.path().join("shop.db"));
+    app.store.upsert(&project, None, profile.clone()).unwrap();
+    connect_profile(&mut app, &profile).await;
+    run_sql(&mut app, "create table t (id integer)").await;
+    let original = app.connection.database.clone().unwrap();
+    app.connection.tx_mode = TxMode::Sandbox;
+    app.tab.editor.set_text("insert into t values (1)");
+    app.handle_key(key(KeyCode::F(5)));
+    until_event(&mut app, |k| matches!(k, DbEventKind::SandboxCopied(_))).await;
+    finish(&mut app).await;
+    let copy = app.connection.sandbox.as_ref().unwrap().copy.as_ref().unwrap().path.clone();
+    let id = app.connection.slots.active.unwrap();
+    let follower = app.connection.slot_mut(id).unwrap().follower;
+    let reconnected = Health { reconnects: 1, ..Health::of(HealthState::Reconnected) };
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Followed { follower, health: reconnected }));
+    assert!(app.connection.sandbox.is_none());
+    assert!(app.connection.database.as_ref().unwrap().same(&original), "back on the original");
+    for _ in 0..50 {
+        if !copy.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!copy.parent().unwrap().exists(), "the copy's folder deleted");
 }

@@ -281,8 +281,9 @@ fn draw_no_result(f: &mut Frame, app: &App, area: Rect) {
             Paragraph::new(format!(" {running} · {}", t!("results.esc_cancels"))).style(fg(t.text))
         }
     } else if let Some(err) = &app.tab.run_error {
-        // The link, not the SQL: nothing to fix in the editor.
-        let link = err.contains("the server doesn't answer") || err.contains("couldn't reconnect");
+        // The link, not the SQL: nothing to fix in the editor (as the
+        // error said when it came).
+        let link = app.tab.run_error_link;
         let (said, then) = if link {
             (t!("results.no_answer"), t!("results.no_answer_then"))
         } else {

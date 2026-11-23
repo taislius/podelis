@@ -56,16 +56,26 @@ impl App {
                     }
                 }
                 ConnEvent::Unrollable { load, tables } if current_load(&self.connection.schema, load) => {
-                    self.connection.unrollable = tables;
+                    self.connection.set_unrollable(tables);
                 }
                 ConnEvent::Pinged(result) => self.pinged(result),
+                ConnEvent::Health(health) => self.apply_health(id, health),
+                ConnEvent::Followed { follower, health } => self.apply_followed(id, follower, health),
                 // An earlier load's.
                 ConnEvent::Catalog { .. } | ConnEvent::Routines { .. } | ConnEvent::Unrollable { .. } => {}
             }
             return;
         }
         match kind {
-            ConnEvent::Pinged(result) => self.parked_pinged(id, &result),
+            // A check asked for (`r`) is the shown connection's: one that
+            // came back after another was shown is said by its reports.
+            ConnEvent::Pinged(_) => {
+                if let Some(slot) = self.connection.slot_mut(id) {
+                    slot.checking = false;
+                }
+            }
+            ConnEvent::Health(health) => self.apply_health(id, health),
+            ConnEvent::Followed { follower, health } => self.apply_followed(id, follower, health),
             ConnEvent::Catalog { load, result } => {
                 if let Some(slot) = self.connection.slot_mut(id)
                     && current_load(&slot.schema, load)
@@ -73,70 +83,116 @@ impl App {
                     slot.state.tables_loaded(result.as_ref().map(|_| ()).map_err(String::as_str));
                 }
             }
-            ConnEvent::Routines { .. } | ConnEvent::Unrollable { .. } => {}
+            // Kept for when its tab's shown again (that doesn't load them
+            // again).
+            ConnEvent::Routines { load, routines } => {
+                if let Some(slot) = self.connection.slot_mut(id)
+                    && current_load(&slot.schema, load)
+                    && let Some(panel) = &mut slot.schema
+                {
+                    panel.routines = routines;
+                }
+            }
+            ConnEvent::Unrollable { load, tables } => {
+                if let Some(slot) = self.connection.slot_mut(id)
+                    && current_load(&slot.schema, load)
+                {
+                    slot.set_unrollable(tables);
+                }
+            }
         }
     }
 
-    /// A check of a hidden tab's connection came back: as for the shown
-    /// one (`pinged`), but what it says waits for its tab, except what
-    /// mustn't go unsaid: a reconnect that lost an open transaction.
-    fn parked_pinged(&mut self, id: ConnId, result: &Result<(Duration, bool), (String, Ping)>) {
-        let in_use = self.conn_in_use(id);
+    /// Connection `id`'s supervisor reported (shown or parked: it's that
+    /// connection's either way): the one place its being lost or back
+    /// comes from. Said: lost, back, paused, and a reconnect, which
+    /// loses an open transaction (said at once, a hidden tab's too).
+    /// A followed report: only the slot's connection now's.
+    fn apply_followed(&mut self, id: ConnId, follower: u64, health: crate::db::Health) {
+        if self.connection.slot_mut(id).is_some_and(|slot| slot.follower == follower) {
+            self.apply_health(id, health);
+        }
+    }
+
+    pub(super) fn apply_health(&mut self, id: ConnId, health: crate::db::Health) {
+        use crate::db::HealthState;
+        let shown = self.connection.slots.active == Some(id);
+        // A run on it now made the reconnect: the run says it, with its
+        // result (and the transaction it lost).
+        let running_here = shown && self.tab.run.executing;
+        let paused_said = self.paused_said();
         let Some(slot) = self.connection.slot_mut(id) else { return };
-        slot.keepalive.finish_check();
-        let was_lost = slot.state.is_lost();
-        if result.is_ok() {
-            slot.state.answered();
-        } else {
-            slot.state.lose();
-        }
-        let lost = slot.state.is_lost();
-        slot.keepalive.checked(lost);
         let name = slot.form.short_name();
-        let mut said = None;
-        match result {
-            Ok((latency, reconnected)) => {
-                slot.latency = Some(*latency);
-                if *reconnected {
-                    crate::system::connection_log::record(
-                        "reconnected",
-                        &name,
-                        "the session was reopened (a hidden tab's)",
-                    );
-                    let had_transaction = slot.txn != TxnState::Idle;
-                    slot.txn = TxnState::Idle;
-                    let mut message = format!("{name}: {}: {}", t!("info.reconnected"), t!("info.settings_reset"));
-                    if had_transaction {
-                        slot.sandbox = None;
-                        let _ = write!(message, " · {}", t!("info.transaction_lost"));
-                    }
-                    said = Some((message, had_transaction));
-                } else if was_lost {
-                    crate::system::connection_log::record("back", &name, "(a hidden tab's)");
-                }
+        let was_lost = slot.state.is_lost();
+        if let Some(latency) = health.latency {
+            slot.latency = Some(latency);
+        }
+        let mut said: Option<(String, bool)> = None;
+        let mut sandbox_lost = false;
+        // A reconnect not said yet, whatever the report's state now (one
+        // that answered since can come as one report with it). In the
+        // connection log once; on screen once, by the run if one's going.
+        if health.reconnects > slot.reconnects_said {
+            if health.reconnects > slot.reconnects_logged {
+                slot.reconnects_logged = health.reconnects;
+                crate::system::connection_log::record("reconnected", &name, "the session was reopened");
             }
-            Err((e, ping)) => {
-                if !was_lost && lost {
-                    crate::system::connection_log::record("check failed", &name, e);
+            if !running_here {
+                slot.reconnects_said = health.reconnects;
+                // Said: the runs after it go on.
+                if let Some(db) = &slot.database {
+                    db.reconnect_told(health.reconnects);
                 }
-                // No answer while lost: its session is given up, so the next
-                // check opens a new one rather than waiting on a dead link;
-                // not with a transaction open, or a query on it.
-                if matches!(ping, Ping::NoAnswer)
-                    && was_lost
-                    && !in_use
-                    && slot.txn == TxnState::Idle
-                    && let Some(db) = &slot.database
-                {
-                    db.abandon_session();
+                let had_transaction = slot.txn != TxnState::Idle;
+                slot.set_txn(TxnState::Idle);
+                sandbox_lost = had_transaction;
+                let mut message = reconnect_said(&health);
+                if had_transaction {
+                    let _ = write!(message, " · {}", t!("info.transaction_lost"));
                 }
+                let message = if shown { message } else { format!("{name}: {message}") };
+                said = Some((message, had_transaction || !health.lost.is_empty()));
             }
         }
-        if let Some((message, is_error)) = said {
-            self.log(message.clone(), is_error);
-            if is_error {
-                self.set_status(message, true);
+        match &health.state {
+            HealthState::Live | HealthState::Reconnected => {
+                slot.state.answered();
+                // (A reconnect the run's to say says it's back.)
+                let runs_to_say = running_here && health.reconnects > slot.reconnects_said;
+                if was_lost && said.is_none() && !runs_to_say {
+                    crate::system::connection_log::record("back", &name, "it answered");
+                    said = Some((t!("info.back").to_string(), false));
+                }
             }
+            HealthState::Lost(why) => {
+                if !was_lost {
+                    crate::system::connection_log::record("lost", &name, why);
+                }
+                slot.state.lose();
+            }
+            // Said once, as it pauses: not again with each later report.
+            HealthState::Paused(why) => {
+                let was_paused = matches!(slot.health.as_ref().map(|h| &h.state), Some(HealthState::Paused(_)));
+                if !was_paused {
+                    crate::system::connection_log::record("paused", &name, why);
+                    if shown {
+                        said = Some((paused_said, true));
+                    }
+                }
+                slot.state.lose();
+            }
+            HealthState::Closed => {}
+        }
+        slot.health = Some(health);
+        // Its transaction gone: a sandbox with it.
+        if sandbox_lost {
+            self.sandbox_gone(id);
+        }
+        if let Some((message, is_error)) = said
+            && (shown || is_error)
+        {
+            self.log(message.clone(), is_error);
+            self.set_status(message, is_error);
         }
     }
 
@@ -188,9 +244,10 @@ impl App {
                 self.on_query_done(outcome, txn, stream);
                 self.run_queued_plan();
             }
-            RunEvent::QueryFailed { message, position, txn, missing_feature } => {
+            RunEvent::QueryFailed { message, position, txn, missing_feature, link } => {
                 self.tab.run.missing_feature = missing_feature;
                 self.on_query_failed(&message, position, txn);
+                self.tab.run_error_link = link && self.tab.run_error.is_some();
                 self.drop_queued_plan();
             }
             RunEvent::MoreRows { page, shown } => self.append_rows(page, shown),
@@ -278,16 +335,28 @@ impl App {
             // For the tab it was asked in, if that's still the one shown and
             // free (a tab switched to since, or a query started there, keeps
             // its connection).
-            DbEventKind::DatabaseOpened(db, form, tab) => {
-                let busy = self.tab.run.executing || self.connection.txn == TxnState::Open;
-                if self.tabs[self.active_tab].id != tab || busy {
+            DbEventKind::DatabaseOpened(db, form, swap) => {
+                // One asked for before the latest: not this tab's now.
+                if self.latest_swap != Some(swap) {
+                    tokio::spawn(async move { db.close().await });
+                    return self.swap_dropped(swap);
+                }
+                self.latest_swap = None;
+                self.notes.editor_note = None;
+                // A failed transaction too: it's the tab's to roll back.
+                let busy = self.tab.run.executing || self.connection.txn != TxnState::Idle;
+                if self.tabs[self.active_tab].id != swap.tab || busy {
                     tokio::spawn(async move { db.close().await });
                     return self.set_status(t!("palette.database_busy").to_string(), true);
                 }
                 self.on_connected_with(db, *form);
             }
-            DbEventKind::DatabaseFailed { name, error } => {
+            DbEventKind::DatabaseFailed { swap, .. } if self.latest_swap != Some(swap) => self.swap_dropped(swap),
+            DbEventKind::DatabaseFailed { name, error, .. } => {
+                self.latest_swap = None;
                 self.connect_started = None;
+                // "Opening…" has had its answer.
+                self.notes.editor_note = None;
                 self.set_status(t!("palette.database_failed", name = name, e = crate::db::with_hint(&error)), true);
             }
             DbEventKind::ConnectFailed(err) => {
@@ -356,11 +425,9 @@ impl App {
         // The server couldn't be reached to be told (not one that refused:
         // a missing privilege): the connection looks down, and while the
         // query still runs, Esc again stops waiting for it.
+        // (That it's lost, the supervisor reports.)
         let stuck = self.tab.run.executing && unreachable;
         self.tab.run.cancel_failed = stuck;
-        if stuck {
-            self.connection.state.lose();
-        }
         let again = if stuck { format!("{} · ", t!("run.esc_again")) } else { String::new() };
         let status = t!("run.cancel_failed", again = again, err = one_line(err));
         self.log(status.clone(), true);
@@ -381,16 +448,15 @@ impl App {
     fn on_connected_with(&mut self, db: Database, form: ConnectForm) {
         tracing::info!(engine = ?db.engine(), version = db.version(), "connected");
         self.tab.run.task = None;
-        // The connection the tab let go of for this one goes (unless other
-        // tabs use it: `attach_connection` releases the unused).
-        self.manager.previous_conn = None;
+        // The connection the tab had goes (unless other tabs use it:
+        // `attach_connection` releases the unused).
         let project = self.project().map(|p| p.name.clone()).unwrap_or_default();
         self.attach_connection(db);
         self.connection.form = form;
         self.connection.summary = format!("[{project}] {}", self.connection.form.summary());
         self.connection.mode = self.connection.form.mode;
         self.connection.tx_mode = self.connection.form.tx_mode();
-        self.connection.txn = TxnState::Idle;
+        self.connection.set_txn(TxnState::Idle);
         self.connection.form.connecting = false;
         self.connection.form.error = None;
         self.tab.grid.results = None;
@@ -431,10 +497,21 @@ impl App {
     }
 
     pub(super) fn on_query_done(&mut self, outcome: QueryOutcome, txn: Option<TxnState>, stream: Option<RowStream>) {
-        // A reconnect loses an open transaction: said, never quietly.
-        let had_transaction = self.connection.txn != TxnState::Idle;
+        // A reconnect before this run (its report not here yet) lost the
+        // transaction the tab had: said now, before this result's own
+        // transaction state, which a late report then can't clear.
+        let ran_on = self.tab.run.db.take();
+        // The transaction it lost, said with the result, as an error: the
+        // result ran on a new session, outside it (a later ROLLBACK undoes
+        // nothing of it).
+        let mut lost_transaction = false;
+        if self.reconnected_before(ran_on.as_ref()) {
+            let had_transaction = self.connection.txn != TxnState::Idle;
+            let mut said = t!("info.reconnected").to_string();
+            lost_transaction = self.say_runs_reconnect(had_transaction, &mut said);
+            self.log(said, lost_transaction);
+        }
         self.tab.run.sql.clear();
-        self.tab.run.db = None;
         self.tab.run.task = None;
         self.tab.run.executing = false;
         self.note_session_changes();
@@ -442,26 +519,28 @@ impl App {
         if self.tab.run.infos.iter().any(|i| matches!(i.kind, Kind::Ddl | Kind::Session)) {
             self.load_catalog();
         }
-        self.connection.txn = txn.unwrap_or_else(|| self.tracked_txn_state());
+        // The server's word, else the session's (what ran on it).
+        let txn = txn.unwrap_or_else(|| ran_on.as_ref().map_or(self.connection.txn, Self::txn_of));
+        // A COMMIT of a failed transaction (PostgreSQL's) rolls it back.
+        let commit_rolled_back = self.connection.txn == TxnState::Aborted
+            && txn == TxnState::Idle
+            && self.tab.run.infos.iter().any(|i| i.kind == Kind::Transaction(TxnOp::Commit));
+        self.connection.set_txn(txn);
         let rows_affected = outcome.rows_affected.unwrap_or(0);
         self.connection.state.answered();
         self.tab.run.cancel_failed = false;
-        tracing::debug!(
-            rows = outcome.rows.len(),
-            elapsed_ms = outcome.elapsed.as_millis(),
-            reconnected = outcome.reconnected,
-            "query done"
-        );
-        let reconnected = outcome.reconnected;
-        if reconnected {
-            self.connection.txn = TxnState::Idle;
-        }
+        tracing::debug!(rows = outcome.rows.len(), elapsed_ms = outcome.elapsed.as_millis(), "query done");
         match std::mem::take(&mut self.tab.run.purpose) {
             RunPurpose::Query => {
                 self.tab.run_error = None;
                 let grid = &self.tab.grid;
                 let place = (grid.table_state.selected(), grid.selected_col, grid.row_offset);
                 self.show_results(outcome);
+                // The connection its rows were read on (not the tab's now:
+                // a reconnect put a sandbox's original back meanwhile).
+                if let Some(db) = &ran_on {
+                    self.tab.grid.from = Some(db.identity());
+                }
                 if self.watch.is_some() {
                     self.after_watched_run(place);
                 }
@@ -483,8 +562,12 @@ impl App {
                     let _ = write!(self.notes.status, " · {}", t!("run.more_as_you_scroll"));
                 }
                 self.tab.run.set_stream(stream);
+                if commit_rolled_back {
+                    let _ = write!(self.notes.status, " · {}", t!("review.commit_rolled_back"));
+                }
                 let status = self.notes.status.clone();
-                self.log(status, false);
+                self.log(status, commit_rolled_back);
+                self.notes.status_is_error |= commit_rolled_back;
             }
             RunPurpose::Explain => self.show_plan(outcome),
             RunPurpose::CellEdit { row, col, value } => self.apply_cell_edit(&outcome, row, col, value),
@@ -492,20 +575,19 @@ impl App {
             RunPurpose::RowChange(what) => self.rows_changed(what, &outcome),
             RunPurpose::SandboxBack { number, undo } => self.sandbox_went_back(number, undo),
         }
+        if lost_transaction {
+            self.notes.status = format!("{} · {}", t!("info.transaction_lost"), self.notes.status);
+            self.notes.status_is_error = true;
+        }
         if let Some(step) = self.tab.run.extra.sandbox_step.take() {
             self.sandbox_step_done(step, rows_affected);
         }
         // The transaction gone (a reconnect): a sandbox with it.
-        if self.connection.txn == TxnState::Idle && self.sandbox_flow.then.is_none() {
-            self.connection.sandbox = None;
-        }
-        if reconnected {
-            let _ = write!(self.notes.status, " · {}", t!("run.reconnected"));
-            if had_transaction {
-                let _ = write!(self.notes.status, " · {}", t!("info.transaction_lost"));
-                self.notes.status_is_error = true;
-                self.log(t!("info.transaction_lost").to_string(), true);
-            }
+        if self.connection.txn == TxnState::Idle
+            && self.sandbox_flow.then.is_none()
+            && let Some(id) = self.connection.slots.active
+        {
+            self.sandbox_gone(id);
         }
         if std::mem::take(&mut self.tab.run.extra.reviewing) {
             self.open_review(rows_affected);
@@ -528,14 +610,75 @@ impl App {
         self.run_sandbox_script();
     }
 
+    /// A reconnect a run made: its transaction (and sandbox) gone, what came
+    /// back on the new session added to `status` (its report, coming before
+    /// or after, doesn't say it again). Whether a transaction was lost.
+    fn say_runs_reconnect(&mut self, had_transaction: bool, status: &mut String) -> bool {
+        self.connection.set_txn(TxnState::Idle);
+        if self.sandbox_flow.then.is_none()
+            && let Some(id) = self.connection.slots.active
+        {
+            self.sandbox_gone(id);
+        }
+        let health = self.connection.database.as_ref().map(|db| db.health().borrow().clone());
+        if let Some(health) = health
+            && health.reconnects > self.connection.reconnects_said
+        {
+            self.connection.reconnects_said = health.reconnects;
+            if let Some(db) = &self.connection.database {
+                db.reconnect_told(health.reconnects);
+            }
+            if let Some(lost) = lost_with_session(&health) {
+                let _ = write!(status, " · {lost}");
+            }
+        }
+        if had_transaction {
+            let _ = write!(status, " · {}", t!("info.transaction_lost"));
+            self.log(t!("info.transaction_lost").to_string(), true);
+        }
+        had_transaction
+    }
+
+    /// What a paused connection's said: after how many tries, and what
+    /// tries again.
+    pub fn paused_said(&self) -> String {
+        let key = self.keymap.label(Action::CheckConnection);
+        t!("bar.paused", tries = crate::db::LOST_CHECKS, key = key)
+    }
+
+    /// A reconnect the shown tab's run was to say (its report came while it
+    /// ran), left unsaid: the run stopped without its answer (dropped, the
+    /// tab's connection changed).
+    pub(super) fn reconnect_unsaid(&self) -> bool {
+        !self.tab.run.executing
+            && self.connection.health.as_ref().is_some_and(|h| h.reconnects > self.connection.reconnects_said)
+    }
+
+    /// Says it, by its report, as if it came now.
+    pub(super) fn say_unsaid_reconnect(&mut self) {
+        if self.reconnect_unsaid()
+            && let (Some(id), Some(health)) = (self.connection.slots.active, self.connection.health.clone())
+        {
+            self.apply_health(id, health);
+        }
+    }
+
+    /// Whether the shown connection, the one `ran_on` (a run's), has a
+    /// reconnect not said yet.
+    fn reconnected_before(&self, ran_on: Option<&Database>) -> bool {
+        let shown = self.connection.database.as_ref();
+        ran_on.zip(shown).is_some_and(|(ran, shown)| {
+            ran.same(shown) && shown.health().borrow().reconnects > self.connection.reconnects_said
+        })
+    }
+
     pub(super) fn on_query_failed(&mut self, err: &str, position: Option<ErrorPos>, txn: Option<TxnState>) {
         // The run's own connection (another tab's may be shown now): no
         // other server's version says anything about it.
         let ran_on = self.tab.run.db.take();
         self.stop_watch(&format!(": {}", t!("run.query_failed")));
-        if err.contains("couldn't reconnect") || err.contains("the server doesn't answer") {
-            self.connection.state.lose();
-        }
+        // Whether the connection was lost is the supervisor's to say (its
+        // `Health` report), not this message's.
         self.tab.run.cancel_failed = false;
         tracing::debug!(error = err, "query failed");
         self.tab.run.task = None;
@@ -544,8 +687,11 @@ impl App {
         // Statements before the failing one ran.
         self.note_session_changes();
         let query = matches!(std::mem::take(&mut self.tab.run.purpose), RunPurpose::Query);
+        // As it was before this run (a reconnect's error says Idle: the
+        // transaction that was open is what it lost).
+        let had_transaction = self.connection.txn != TxnState::Idle;
         if let Some(txn) = txn {
-            self.connection.txn = txn;
+            self.connection.set_txn(txn);
         }
         let prefix = match self.tab.run.extra.timed_out.take() {
             Some(limit) => format!("{}: ", t!("run.timed_out", s = limit.as_secs())),
@@ -554,6 +700,21 @@ impl App {
         };
         self.tab.run.cancelling = false;
         let mut status = format!("{prefix}{}", one_line(err));
+        // The run reopened the session (and wasn't run again): its
+        // transaction's gone with the old one, said now, not on a later
+        // report.
+        if self.reconnected_before(ran_on.as_ref()) {
+            self.say_runs_reconnect(had_transaction, &mut status);
+        } else if txn.is_none()
+            && let Some(db) = ran_on.as_ref()
+        {
+            // No word from the server (MySQL, SQLite): what ran before the
+            // failing statement says it (a `BEGIN` that ran left one open).
+            let txn = Self::txn_of(db);
+            if (txn == TxnState::Idle) != (self.connection.txn == TxnState::Idle) {
+                self.connection.set_txn(txn);
+            }
+        }
         let mut failed_at = None;
         let mut place = None;
         if let Some(marker) = position.and_then(|p| self.locate_error(&p)) {
@@ -582,10 +743,6 @@ impl App {
         }
         let dry_run = self.tab.run.extra.dry_run.is_some();
         if reviewing || dry_run {
-            // BEGIN ran before the failing statement.
-            if txn.is_none() {
-                self.connection.txn = TxnState::Open;
-            }
             if dry_run {
                 let _ = write!(status, " · {}", t!("run.rolled_back"));
             } else {
@@ -673,20 +830,10 @@ impl App {
         Some((self.tab.editor.pos_of_offset(base + start), self.tab.editor.pos_of_offset(base + end)))
     }
 
-    /// Transaction state after the last successful run, for engines the
-    /// server can't be asked about: follows BEGIN/COMMIT/ROLLBACK (and
-    /// MySQL's implicit commit on DDL).
-    pub(super) fn tracked_txn_state(&self) -> TxnState {
-        let mut state = self.connection.txn;
-        for info in &self.tab.run.infos {
-            state = match info.kind {
-                Kind::Transaction(TxnOp::Begin) => TxnState::Open,
-                Kind::Transaction(TxnOp::Commit | TxnOp::Rollback) => TxnState::Idle,
-                Kind::Ddl if self.engine().capabilities().ddl_commits => TxnState::Idle,
-                _ => state,
-            };
-        }
-        state
+    /// A transaction's open on `db`'s session, as what ran on it says
+    /// (where its server doesn't: MySQL, SQLite, DuckDB).
+    fn txn_of(db: &Database) -> TxnState {
+        if db.in_transaction() { TxnState::Open } else { TxnState::Idle }
     }
 }
 
@@ -697,6 +844,18 @@ pub enum Ping {
     Failed,
     /// Nothing came back in time: the session may be stuck on a dead link.
     NoAnswer,
+    /// The check didn't get the session in time (a result's rows still
+    /// open on it): not a sign the connection's lost.
+    Busy,
+}
+
+/// A tab's connection being swapped for another opening in the
+/// background: only the latest one asked for lands (A then B: B, whichever
+/// opens first).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Swap {
+    pub tab: super::TabId,
+    pub attempt: u64,
 }
 
 pub struct DbEvent {
@@ -747,22 +906,47 @@ pub(super) enum ConnEvent {
         load: u64,
         routines: Vec<RoutineInfo>,
     },
-    /// The connection's tables a rollback doesn't undo.
+    /// The connection's tables a rollback doesn't undo, or why they
+    /// couldn't be read.
     Unrollable {
         load: u64,
-        tables: Vec<super::session::Unrollable>,
+        tables: Result<Vec<super::session::Unrollable>, String>,
     },
     /// A connection check: its latency and whether it reconnected, or why
     /// not and whether it got no answer at all (`Ping::NoAnswer`).
     Pinged(Result<(Duration, bool), (String, Ping)>),
+    /// What the connection's supervisor reports: it answers, it's lost,
+    /// its session was reopened, it's closed.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the tests send reports straight"))]
+    Health(crate::db::Health),
+    /// …as followed for the slot (`follower`: which connection it had then;
+    /// one reopened in place since has another, and the old one's late
+    /// reports are dropped).
+    Followed {
+        follower: u64,
+        health: crate::db::Health,
+    },
 }
 
 pub(super) enum RunEvent {
     QueryDone(QueryOutcome, Option<TxnState>, Option<RowStream>),
-    MoreRows { page: Page, shown: bool },
+    MoreRows {
+        page: Page,
+        shown: bool,
+    },
     MoreFailed(String),
-    QueryFailed { message: String, position: Option<ErrorPos>, txn: Option<TxnState>, missing_feature: bool },
-    CancelFailed { message: String, unreachable: bool },
+    QueryFailed {
+        message: String,
+        position: Option<ErrorPos>,
+        txn: Option<TxnState>,
+        missing_feature: bool,
+        /// The link's fault (no answer, couldn't reconnect), not the SQL's.
+        link: bool,
+    },
+    CancelFailed {
+        message: String,
+        unreachable: bool,
+    },
     SessionSeen(SessionSeen),
     SessionReplaced(String),
 }
@@ -779,11 +963,12 @@ pub(super) enum DbEventKind {
     ConnectFailed(String),
     /// The server's databases (`None`: a file, the one database).
     DatabasesListed(Result<Option<Vec<String>>, String>),
-    /// Another database opened for tab `TabId`, with its form.
-    DatabaseOpened(Database, Box<ConnectForm>, super::TabId),
+    /// Another database opened for a tab (`Swap`), with its form.
+    DatabaseOpened(Database, Box<ConnectForm>, Swap),
     DatabaseFailed {
         name: String,
         error: String,
+        swap: Swap,
     },
     TableDetails {
         schema: String,
@@ -802,7 +987,7 @@ pub(super) enum DbEventKind {
     /// The output of piping rows through a command.
     PipeDone(String, Result<String, String>),
     /// A SQLite file's copy for a sandbox, opened (or why not).
-    SandboxCopied(Result<(Database, PathBuf), String>),
+    SandboxCopied(Result<(Database, PathBuf, std::fs::File), String>),
     /// A definition to show, or why it can't be.
     Definition {
         title: String,
@@ -829,7 +1014,8 @@ pub(super) enum DbEventKind {
         offset: usize,
         infos: Vec<StatementInfo>,
         filled: Option<Filled>,
-        scans: Vec<(String, f64)>,
+        /// Or why it couldn't be planned.
+        scans: Result<Vec<(String, f64)>, String>,
     },
     /// A plan made on a connection of its own while a query ran: the
     /// statement, its line, and the plan (`None`: it couldn't be made there).
@@ -909,6 +1095,21 @@ impl From<Background> for DbEventKind {
     }
 }
 
+/// A reconnect, as said, with what the old session had that's gone
+/// (`Reconnected · gone with the old session: database shop, sql_mode`).
+pub(super) fn reconnect_said(health: &crate::db::Health) -> String {
+    let mut said = t!("info.reconnected").to_string();
+    if let Some(lost) = lost_with_session(health) {
+        let _ = write!(said, " · {lost}");
+    }
+    said
+}
+
+/// What the old session had that's gone with it, said (none: `None`).
+fn lost_with_session(health: &crate::db::Health) -> Option<String> {
+    (!health.lost.is_empty()).then(|| t!("info.lost_with_session", what = health.lost.join(", ")))
+}
+
 #[cfg(test)]
 mod event_identity_tests {
     use super::{DbEvent, DbEventKind, RunEvent};
@@ -919,7 +1120,13 @@ mod event_identity_tests {
         let connection = DbEvent::connection(ConnectionGeneration::default(), DbEventKind::ConnectFailed("no".into()));
         let run = DbEvent::run(
             RunId::default(),
-            RunEvent::QueryFailed { message: "failed".into(), position: None, txn: None, missing_feature: false },
+            RunEvent::QueryFailed {
+                message: "failed".into(),
+                position: None,
+                txn: None,
+                missing_feature: false,
+                link: false,
+            },
         );
 
         assert!(connection.as_connection_kind().is_some());

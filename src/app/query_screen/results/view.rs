@@ -174,6 +174,11 @@ pub struct CellEdit {
     /// The column's type, as the result names it.
     pub column_type: String,
     pub nullable: bool,
+    /// The value shown when the edit began: the UPDATE changes the row only
+    /// if it still has it (another client's newer value isn't overwritten),
+    /// where it can be compared (`guarded`).
+    pub shown: Option<String>,
+    pub guarded: bool,
     pub text: LineInput,
 }
 
@@ -205,6 +210,7 @@ impl App {
         self.close_cell_popups();
         let added = std::mem::take(&mut self.tab.run.extra.added_statements);
         let sets = self.tab.grid.show(outcome);
+        self.tab.grid.from = self.connection.database.as_ref().map(crate::db::Database::identity);
         let Some(outcome) = &self.tab.grid.results else { return };
 
         let elapsed = format_elapsed(outcome.elapsed);

@@ -105,8 +105,10 @@ pub(in crate::db) async fn close(pool: &DuckPool) {
     }
 }
 
-/// A file always answers.
-pub(in crate::db) async fn ping(_c: &mut DuckConnection) {}
+/// A file: it always answers.
+pub(in crate::db) async fn ping(_c: &mut DuckConnection) -> bool {
+    true
+}
 
 pub(in crate::db) fn detach(c: DuckConnection) {
     drop(c);
@@ -122,11 +124,21 @@ fn reads(statement: &str) -> bool {
 /// Runs `;`-separated statements, one by one: each one's result, with at
 /// most `limit` rows (and the count of all). A change's result is
 /// DuckDB's one `Count` row (its rows affected) or `Success`.
-pub(in crate::db) async fn run(c: &mut DuckConnection, sql: &str, limit: usize) -> Result<Vec<StatementResult>> {
+/// `ran`: how many statements ran, set as they do (a failed run's
+/// statements before the failing one ran: a `BEGIN` among them left its
+/// transaction open).
+pub(in crate::db) async fn run(
+    c: &mut DuckConnection,
+    sql: &str,
+    limit: usize,
+    ran: &mut usize,
+) -> Result<Vec<StatementResult>> {
     check_reads(c, sql)?;
     let statements: Vec<String> =
         crate::language::split_statements(sql, Engine::DuckDb).into_iter().map(str::to_string).collect();
-    blocking(c, move |conn| {
+    let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&done);
+    let results = blocking(c, move |conn| {
         let mut results = Vec::new();
         for statement in statements {
             let mut stmt = conn.prepare(&statement)?;
@@ -153,10 +165,13 @@ pub(in crate::db) async fn run(c: &mut DuckConnection, sql: &str, limit: usize) 
                 }
             }
             results.push(result);
+            counted.store(results.len(), std::sync::atomic::Ordering::SeqCst);
         }
         Ok(results)
     })
-    .await
+    .await;
+    *ran = done.load(std::sync::atomic::Ordering::SeqCst);
+    results
 }
 
 /// One statement's rows as they come (through a channel from the blocking

@@ -57,6 +57,7 @@ const ROWS_MENU: &[&[C]] = &[
     &[C::LoadMore, C::OtherResults],
     &[C::EditCell, C::AddRow, C::MarkRow],
     &[C::DeleteRows],
+    &[C::Reconnect],
 ];
 
 /// Over a plan's table: another menu, not the same one dimmed; it's only
@@ -74,6 +75,7 @@ const NO_ROWS_MENU: &[&[C]] = &[
     &[C::WholeMessage, C::CopyMessage, C::CopyMessages],
     &[C::CopyPlanLines, C::CopyWholePlan],
     &[C::OtherResults, C::Action(A::Zoom)],
+    &[C::Reconnect],
 ];
 
 const OTHER_RESULTS_MENU: &[&[C]] = &[&[C::NextSet, C::PrevSet], &[C::EarlierResult, C::LaterResult, C::Pin]];

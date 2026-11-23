@@ -17,6 +17,7 @@ impl App {
         if self.connection.mode == ConnectionMode::ReadOnly {
             return Err(t!("rows.read_only").into());
         }
+        self.result_is_here()?;
         let results = self.tab.grid.results.as_ref().ok_or(t!("rows.no_results"))?;
         let row = *self
             .tab
@@ -80,6 +81,11 @@ impl App {
             key,
             column_type: ty(col).to_string(),
             nullable: info.nullable,
+            shown: results.rows[row][col].clone(),
+            guarded: compares_as_shown(ty(col), &info.data_type)
+                && results.rows[row][col]
+                    .as_deref()
+                    .is_none_or(|shown| !shown_as_hex(shown, ty(col), engine) && !PLACEHOLDERS.contains(&shown)),
             text: LineInput::new(results.rows[row][col].clone().unwrap_or_default()),
         })
     }
@@ -111,11 +117,24 @@ impl App {
             return self.set_status(t!("edit.wait_for_query").to_string(), true);
         }
         let Some(edit) = self.cell_edit.take() else { return };
+        if let Err(why) = self.result_is_here() {
+            return self.set_status(t!("edit.cant", why = why), true);
+        }
         let engine = self.engine();
         let literal = |v: Option<&str>| {
             v.map_or_else(|| "NULL".to_string(), |v| crate::db::value_literal(v, &edit.column_type, engine))
         };
-        let condition: Vec<String> = edit.key.iter().map(|(k, v)| format!("{} = {v}", engine.quote_ident(k))).collect();
+        let mut condition: Vec<String> =
+            edit.key.iter().map(|(k, v)| format!("{} = {v}", engine.quote_ident(k))).collect();
+        // Only while it still has the value shown: changed since by someone
+        // else, nothing's updated, and that's said.
+        if edit.guarded {
+            let column = engine.quote_ident(&edit.column);
+            condition.push(match edit.shown.as_deref() {
+                Some(shown) => format!("{column} = {}", literal(Some(shown))),
+                None => format!("{column} IS NULL"),
+            });
+        }
         let set = [(engine.quote_ident(&edit.column), literal(value.as_deref()))];
         let Some(dialect) = self.sql_dialect() else { return };
         let sql = dialect.update(&edit.table, &set, &condition.join(" AND "));
@@ -142,7 +161,7 @@ impl App {
                 self.set_status(t!("edit.saved").to_string(), false);
             }
             Some(0) => {
-                let msg = t!("edit.not_updated").to_string();
+                let msg = t!("edit.not_updated", reload = self.keymap.label(crate::config::keys::Action::Run));
                 self.log(msg.clone(), true);
                 self.set_status(msg, true);
             }
@@ -152,5 +171,64 @@ impl App {
                 self.set_status(msg, true);
             }
         }
+    }
+}
+
+/// Whether a column compares equal to the text it was shown as, by the
+/// result's type `ty` and the one it's declared with: not JSON
+/// (PostgreSQL's `json` can't be compared at all), XML, a float (its text
+/// may round it), or geometry; nor a column declared with no type, `ANY`
+/// or `BLOB` (SQLite: its `5` never equals the text `'5'`).
+fn compares_as_shown(ty: &str, declared: &str) -> bool {
+    const UNLIKE: &[&str] = &[
+        "json",
+        "xml",
+        "float",
+        "double",
+        "real",
+        "geometry",
+        "geography",
+        "point",
+        "polygon",
+        "line",
+        "box",
+        "circle",
+        "path",
+        "bit",
+    ];
+    let declared = declared.trim().to_ascii_lowercase();
+    if declared.is_empty() || declared == "any" || declared.contains("blob") {
+        return false;
+    }
+    [ty.to_ascii_lowercase(), declared].iter().all(|t| !UNLIKE.iter().any(|u| t.contains(u)))
+}
+
+/// What a driver shows in place of a value it couldn't read as text: not
+/// the value, so it never equals it.
+const PLACEHOLDERS: &[&str] = &["<unsupported>", "<error>", "<invalid utf-8>"];
+
+/// Whether `shown` is a text value written as hex for showing (MySQL's
+/// with control characters or bytes that aren't UTF-8): it never equals
+/// what's stored. A binary column's hex is its literal, and compares.
+fn shown_as_hex(shown: &str, ty: &str, engine: Engine) -> bool {
+    let binary = engine.dialect().is_some_and(|d| d.is_binary_type(ty));
+    !binary && shown.len() > 2 && shown.starts_with("0x") && shown[2..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What's compared with the value shown, and what isn't.
+    #[test]
+    fn what_an_edit_compares() {
+        assert!(compares_as_shown("TEXT", "text"));
+        assert!(!compares_as_shown("INTEGER", ""), "SQLite, no declared type");
+        assert!(!compares_as_shown("jsonb", "jsonb"));
+        assert!(!compares_as_shown("BIT", "bit(8)"), "shown as a number");
+        assert!(shown_as_hex("0x1B41", "VARCHAR", Engine::MySql), "text shown as hex");
+        assert!(!shown_as_hex("0x1B41", "VARBINARY", Engine::MySql), "a binary's hex is its literal");
+        assert!(!shown_as_hex("0x", "VARCHAR", Engine::MySql));
+        assert!(!shown_as_hex("0xyz", "VARCHAR", Engine::MySql));
     }
 }

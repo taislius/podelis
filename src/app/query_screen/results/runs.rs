@@ -36,6 +36,7 @@ struct Parked {
     last_query_infos: Vec<StatementInfo>,
     filled: Option<Filled>,
     error: Option<String>,
+    error_link: bool,
 }
 
 impl KeptRun {
@@ -57,6 +58,7 @@ impl TabState {
         std::mem::swap(&mut self.last_query_infos, &mut p.last_query_infos);
         std::mem::swap(&mut self.last_filled, &mut p.filled);
         std::mem::swap(&mut self.run_error, &mut p.error);
+        std::mem::swap(&mut self.run_error_link, &mut p.error_link);
     }
 
     /// The oldest unpinned result, if one more would be past [`KEEP`]
@@ -88,6 +90,7 @@ impl TabState {
         self.last_query_infos.clear();
         self.last_filled = None;
         self.run_error = None;
+        self.run_error_link = false;
         if self.runs.last().is_some_and(|r| !r.pinned && r.parked.grid.results.is_none()) {
             self.runs.pop();
         }

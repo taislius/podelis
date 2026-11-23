@@ -6,31 +6,59 @@ use super::super::activity::Activity;
 use super::super::catalog::{ColumnRow, TableRow};
 use super::super::details::{ForeignKey, IndexInfo};
 use super::super::*;
-use sqlx::pool::PoolConnection;
 use sqlx::{AssertSqlSafe, Row};
-use sqlx::mysql::MySql;
 use super::DriverConnection;
 use super::super::dialect::Scan;
 
-impl Database {
-    /// The MySQL session connection if it's free right now; otherwise (or
-    /// after `close()`) a query takes one from the pool.
-    pub(in crate::db) fn mysql_session_now(&self) -> Option<MappedMutexGuard<'_, PoolConnection<MySql>>> {
-        let session = self.0.session.try_lock().ok()?;
-        MutexGuard::try_map(session, |s| if let Session::MySql(c) = s { Some(c) } else { None })
-        .ok()
-    }
-}
+/// How long a catalog query waits for a session whose settings changed.
+const CHANGED_SESSION_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Runs `query` on the session connection if it's free (so it sees the
-/// session's settings), else on one from the pool.
+/// session's settings: `DATABASE()` after a `USE`), taken at once so a run
+/// can't get in before it; else on one from the pool, while the session's
+/// settings are the connection's own. Once they've changed (`USE`, `SET`),
+/// a pool connection could be in another database: it waits for the
+/// session's turn instead, `CHANGED_SESSION_WAIT` at most (then it says
+/// the session's busy); not for a session given up on (the next one opens
+/// at the connection's own database, the pool's). `$query` builds the query
+/// (it's moved into the session's work, so another is built for each try).
 macro_rules! fetch_all_on_session {
-    ($db:expr, $pool:expr, $query:expr) => {
-        match $db.mysql_session_now() {
-            Some(mut c) => $query.fetch_all(&mut **c).await?,
-            None => $query.fetch_all($pool).await?,
+    ($db:expr, $pool:expr, $query:expr) => {{
+        macro_rules! on_session {
+            () => {{
+                let query = ($query)();
+                move |session: &mut Session| -> SessionFuture<'_, _> {
+                    Box::pin(async move {
+                        match session {
+                            Session::MySql(c) => Some(query.fetch_all(&mut **c).await),
+                            _ => None,
+                        }
+                    })
+                }
+            }};
         }
-    };
+        let rows = match $db.with_free_session(on_session!()).await {
+            Some(rows) => rows?,
+            // Not a session given up on (it'd wait on a dead link): the
+            // next one opens at the connection's own database, the pool's.
+            // Not for long: an open result's rows hold the session until
+            // they're read or closed.
+            None if $db.0.session_changed.load(Ordering::SeqCst) && !$db.0.stale.load(Ordering::SeqCst) => {
+                match $db.with_session_within(CHANGED_SESSION_WAIT, on_session!()).await? {
+                    Some(rows) => rows,
+                    None => anyhow::bail!(
+                        "the session is busy (an open result holds it), and after USE or SET only it shows the \
+                         right database: load again once it's free"
+                    ),
+                }
+            }
+            None => None,
+        };
+        match rows {
+            Some(rows) => rows?,
+            None => ($query)().fetch_all($pool).await?,
+        }
+    }};
 }
 
 type MySqlActivityRow = (String, String, String, String, String, Option<i64>, String, String);
@@ -38,7 +66,7 @@ type MySqlActivityRow = (String, String, String, String, String, Option<i64>, St
 pub(in crate::db) async fn column_rows(db: &Database, system: bool) -> Result<Vec<ColumnRow>> {
     let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
     Ok({
-        let query = sqlx::query_as(
+        let query = move || sqlx::query_as(
             "SELECT CAST(table_schema AS CHAR), CAST(table_name AS CHAR), CAST(column_name AS CHAR),
                             CAST(column_type AS CHAR), CAST(is_nullable AS CHAR), CAST(column_key AS CHAR)
                      FROM information_schema.columns
@@ -54,7 +82,7 @@ pub(in crate::db) async fn column_rows(db: &Database, system: bool) -> Result<Ve
 pub(in crate::db) async fn table_rows(db: &Database, system: bool) -> Result<Vec<TableRow>> {
     let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
     Ok({
-        let query = sqlx::query_as(
+        let query = move || sqlx::query_as(
             "SELECT CAST(table_schema AS CHAR), CAST(table_name AS CHAR),
                             CAST(table_type AS CHAR), CAST(table_rows AS SIGNED),
                             CAST(data_length + index_length AS SIGNED)
@@ -95,7 +123,7 @@ pub(in crate::db) async fn column_info_rows(
 pub(in crate::db) async fn routine_rows(db: &Database) -> Result<Vec<(String, String, String, String)>> {
     let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
     Ok({
-        let query = sqlx::query_as(
+        let query = move || sqlx::query_as(
             "SELECT CAST(routine_schema AS CHAR), CAST(routine_name AS CHAR),
                             CAST(LOWER(routine_type) AS CHAR), CAST(routine_name AS CHAR)
                      FROM information_schema.routines
@@ -130,7 +158,7 @@ pub(in crate::db) async fn link_rows(
     db: &Database,
 ) -> Result<Vec<(String, String, String, String, String, Option<String>)>> {
     let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
-    let query = sqlx::query_as(
+    let query = move || sqlx::query_as(
         "SELECT CAST(table_schema AS CHAR), CAST(table_name AS CHAR), CAST(column_name AS CHAR),
                     CAST(referenced_table_schema AS CHAR), CAST(referenced_table_name AS CHAR),
                     CAST(referenced_column_name AS CHAR)
@@ -145,7 +173,7 @@ pub(in crate::db) async fn link_rows(
 /// `TABLE_COMMENT` is just "VIEW", so views are left out).
 pub(in crate::db) async fn comment_rows(db: &Database) -> Result<Vec<(String, String, Option<String>, String)>> {
     let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
-    let query = sqlx::query_as(
+    let query = move || sqlx::query_as(
         "SELECT CAST(table_schema AS CHAR), CAST(table_name AS CHAR), CAST(NULL AS CHAR),
                     CAST(table_comment AS CHAR)
              FROM information_schema.tables
@@ -337,7 +365,7 @@ pub(in crate::db) async fn cancel(db: &Database, id: i64) -> Result<()> {
 }
 
 /// Its plans are made on the session (as the user's statements run).
-pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Option<Vec<Scan>> {
+pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Result<Vec<Scan>> {
     db.scans_by_explain(statement).await
 }
 

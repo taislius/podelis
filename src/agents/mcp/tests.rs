@@ -914,9 +914,9 @@ async fn live_dry_run_notes_and_sandbox_ends() {
         let changed = db.run("SELECT count(*) FROM dry_t WHERE x = 0", 1).await.unwrap();
         assert_eq!(changed.rows[0][0].as_deref(), Some("0"), "{engine:?}: dry runs change nothing");
         if engine == Engine::MySql {
-            db.run_once("SET autocommit = 0", 1).await.unwrap();
+            db.run("SET autocommit = 0", 1).await.unwrap();
             end_sandbox(&db).await;
-            let on = db.run_once("SELECT @@autocommit", 1).await.unwrap();
+            let on = db.run("SELECT @@autocommit", 1).await.unwrap();
             assert_eq!(on.rows[0][0].as_deref(), Some("1"), "autocommit back on");
         }
         db.run("DROP TABLE dry_t", 1).await.unwrap();
@@ -953,13 +953,13 @@ async fn a_transaction_a_cancelled_call_left_open_is_rolled_back_first() {
     let profile = file_connection("c", &path, AgentAccess::Write, ConnectionMode::Normal);
     // As a dry run cancelled after its write: begun, written, never ended.
     let mut held = Turn { left_open: true };
-    db.run_once("BEGIN", 1).await.unwrap();
-    db.run_once("INSERT INTO t VALUES (1)", 1).await.unwrap();
+    db.run("BEGIN", 1).await.unwrap();
+    db.run("INSERT INTO t VALUES (1)", 1).await.unwrap();
     settle(&db, &mut held).await;
     assert!(!held.left_open);
     run_wrapped(&db, &profile, Wrap::Commit, "INSERT INTO t VALUES (2)", 1, &mut held).await.unwrap();
     assert!(!held.left_open, "ended");
-    let rows = db.run_once("SELECT x FROM t", 10).await.unwrap().rows;
+    let rows = db.run("SELECT x FROM t", 10).await.unwrap().rows;
     assert_eq!(rows, vec![vec![Some("2".to_string())]], "the dry run's write wasn't committed with it");
     db.close().await;
 }

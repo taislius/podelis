@@ -7,7 +7,7 @@ use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
-use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 // The engines (`Engine`, `Engine::ALL`, `Pool`, `Session`, their modules
 // and `on_engine!` / `on_driver!` / `on_pool!` / `on_session!`), found by
@@ -28,6 +28,9 @@ mod options;
 pub mod password_command;
 pub mod passwords;
 mod run;
+mod session_memory;
+mod supervisor;
+use supervisor::SessionFuture;
 pub mod services;
 #[cfg(any(test, feature = "test-support"))]
 pub mod tests;
@@ -44,11 +47,12 @@ pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint
 pub use dialect::PlanNote;
 pub use dialect::{LexerRules, Plan, SqlDialect, TxEnd, human_bytes, human_rows};
 pub use errors::{
-    CheckOutcome, ErrorPos, error_details, error_message, error_position, is_broken, is_reconnected, is_unreachable,
-    missing_feature, sql_literal, value_literal,
+    CheckOutcome, ErrorPos, error_details, error_message, error_position, is_broken, is_link_failure, is_no_answer,
+    is_reconnected, is_unreachable, missing_feature, sql_literal, value_literal,
 };
 pub use options::{AgentAccess, ConnectParams, ConnectionMode, PasswordSource, SslMode, TxMode};
 pub use run::RunError;
+pub use supervisor::{CHECK_WITHIN, Health, HealthState, LOST_CHECKS, lost_wait};
 use tunnel::{Tunnel, open_tunnel};
 pub use types::kind as type_kind;
 pub use types::{TypeKind, same_type, translate_type};
@@ -66,12 +70,29 @@ const POOL_IDLE: Duration = Duration::from_secs(60);
 #[derive(Clone)]
 pub struct Database(Arc<Inner>);
 
+/// A connection's identity (`Database::identity`), not keeping it open.
+#[derive(Clone, Debug)]
+pub struct DatabaseId(std::sync::Weak<Inner>);
+
+impl DatabaseId {
+    /// Whether it's `db`'s.
+    pub fn is(&self, db: &Database) -> bool {
+        std::ptr::eq(self.0.as_ptr(), Arc::as_ptr(&db.0))
+    }
+
+    /// Whether its connection is still held by anything.
+    pub fn is_open(&self) -> bool {
+        self.0.strong_count() > 0
+    }
+}
+
 struct Inner {
     engine: Engine,
     pool: Pool,
-    /// The connection user queries run on. Holding one connection means
-    /// session state (`SET`, `BEGIN`, temp tables) survives between runs.
-    session: Arc<Mutex<Session>>,
+    /// The task that owns the connection user queries run on (one
+    /// connection: session state, `SET`, `BEGIN`, temp tables, survives
+    /// between runs), and runs what's asked of it in turn.
+    supervisor: supervisor::Handle,
     /// Server-side id of the session connection, used to cancel its query.
     backend_id: AtomicI64,
     /// SQLite has no server to ask: cancelling sets this, and the
@@ -92,9 +113,16 @@ struct Inner {
     /// dead link): its connection is in an unknown state, so the next run
     /// opens a new one first.
     stale: AtomicBool,
-    /// The task reading the last streamed result, which holds the session
-    /// while it runs: stopped when the session is given up on.
-    stream_task: std::sync::Mutex<Option<tokio::task::AbortHandle>>,
+    /// The database lives in the session itself (SQLite's `:memory:`): a
+    /// new session would be an empty database, so it's never replaced.
+    owns_data: bool,
+    /// The reconnects whoever runs (the app, a run's own error) was told of:
+    /// one beyond them (a check reopened the session while nothing ran) and
+    /// the next run isn't sent, so nothing lands on a new session unsaid.
+    told_reconnects: std::sync::atomic::AtomicU64,
+    /// What the user's statements changed on the session, said as gone
+    /// after a reconnect (each engine's `session.rs` says what).
+    memory: std::sync::Mutex<session_memory::SessionMemory>,
     /// The server's TCP address, for its engine to check it answers before
     /// a new connection is made for a session or a cancel
     /// (`connect::check_reach`). None for a file, a socket path, or an SSH
@@ -127,8 +155,6 @@ pub struct QueryOutcome {
     pub rows_affected: Option<u64>,
     pub statements: usize,
     pub elapsed: Duration,
-    /// The connection had dropped and was reopened before this result.
-    pub reconnected: bool,
     /// Earlier statements of the script that also returned rows, in order
     /// (this result is the last statement that did).
     pub earlier: Vec<QueryOutcome>,
@@ -315,6 +341,7 @@ impl Database {
             on_driver!(params.engine, engine::connect::check_before_connect(host, *port).await)?;
         }
         let host = host.as_str();
+        let owns_data = on_driver!(params.engine, engine::session::owns_data(host));
         let open = |params: ConnectParams| async move {
             on_driver!(params.engine, engine::connect::connect(&params, host, port).await)
         };
@@ -341,10 +368,10 @@ impl Database {
         let backend_id = session.backend_id().await?;
         let version = session.server_version().await;
         let sql_mode = session.sql_mode().await.unwrap_or_default();
-        Ok(Database(Arc::new(Inner {
+        Ok(Database(Arc::new_cyclic(|this| Inner {
             engine: params.engine,
             pool,
-            session: Arc::new(Mutex::new(session)),
+            supervisor: supervisor::Handle::spawn(session, std::sync::Weak::clone(this)),
             backend_id: AtomicI64::new(backend_id),
             interrupt,
             _tunnel: tunnel,
@@ -353,7 +380,9 @@ impl Database {
             tls_failed,
             session_changed: AtomicBool::new(false),
             stale: AtomicBool::new(false),
-            stream_task: std::sync::Mutex::new(None),
+            owns_data,
+            told_reconnects: std::sync::atomic::AtomicU64::new(0),
+            memory: std::sync::Mutex::new(session_memory::SessionMemory::default()),
             address,
             service,
         })))
@@ -385,6 +414,12 @@ impl Database {
         Arc::ptr_eq(&self.0, &other.0)
     }
 
+    /// Which connection this is, without keeping it open (its tunnel, its
+    /// supervisor): for what only has to know it later.
+    pub fn identity(&self) -> DatabaseId {
+        DatabaseId(Arc::downgrade(&self.0))
+    }
+
     /// The session's `sql_mode` when last read (empty for other engines).
     pub fn sql_mode(&self) -> String {
         self.0.sql_mode.lock().map(|m| m.clone()).unwrap_or_default()
@@ -398,8 +433,8 @@ impl Database {
 
     /// Re-reads the session's `sql_mode`, unless a query is running on it.
     pub async fn refresh_sql_mode(&self) {
-        let Ok(mut session) = self.0.session.try_lock() else { return };
-        if let Some(mode) = session.sql_mode().await
+        // Taken only if free right now, at once: never waited for.
+        if let Some(Ok(Some(mode))) = self.with_free_session(|session| Box::pin(session.sql_mode())).await
             && let Ok(mut current) = self.0.sql_mode.lock()
         {
             *current = mode;

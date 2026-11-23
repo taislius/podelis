@@ -42,6 +42,22 @@ impl Default for ConnectionDraft {
 }
 
 impl ConnectionDraft {
+    /// Whether it reaches what `other` does, the same way: the same server
+    /// (or file), user and database, through the same tunnel, with the same
+    /// TLS and mode. The password isn't compared (it may not be loaded).
+    pub fn same_target(&self, other: &ConnectionDraft) -> bool {
+        let same = |a: &str, b: &str| a.trim() == b.trim();
+        self.engine == other.engine
+            && same(&self.host, &other.host)
+            && same(&self.port, &other.port)
+            && same(&self.user, &other.user)
+            && same(&self.database, &other.database)
+            && same(&self.ssh, &other.ssh)
+            && same(&self.password_command, &other.password_command)
+            && self.ssl_mode == other.ssl_mode
+            && self.mode == other.mode
+    }
+
     pub fn new() -> Self {
         Self {
             name: String::new(),

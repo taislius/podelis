@@ -122,10 +122,21 @@ macro_rules! driver {
             pool.close().await;
         }
 
-        /// The protocol's ping: any answer counts.
-        pub(in crate::db) async fn ping(c: &mut DriverConnection) {
+        /// The protocol's ping: whether the server answered (an error it
+        /// sent is an answer; a link that broke isn't).
+        pub(in crate::db) async fn ping(c: &mut DriverConnection) -> bool {
             use sqlx::Connection as _;
-            let _ = c.ping().await;
+            match c.ping().await {
+                Ok(()) => true,
+                // The server's last word before it ended the session (a
+                // kill, a shutdown) isn't an answer either.
+                Err(e) => {
+                    !matches!(
+                        e,
+                        sqlx::Error::Io(_) | sqlx::Error::Tls(_) | sqlx::Error::PoolClosed | sqlx::Error::WorkerCrashed
+                    ) && !crate::db::errors::is_broken(&anyhow::Error::new(e))
+                }
+            }
         }
 
         /// The connection out of the pool, not back into it.
@@ -135,10 +146,13 @@ macro_rules! driver {
 
         /// Runs `;`-separated statements: each one's result, with at most
         /// `limit` rows (and the count of all).
+        /// `ran` counts the statements done, so a failure says how many ran
+        /// before it.
         pub(in crate::db) async fn run(
             c: &mut DriverConnection,
             sql: &str,
             limit: usize,
+            ran: &mut usize,
         ) -> anyhow::Result<Vec<StatementResult>> {
             let mut results: Vec<StatementResult> = Vec::new();
             let mut current = StatementResult::default();
@@ -157,6 +171,7 @@ macro_rules! driver {
                     Either::Left(done) => {
                         current.rows_affected = done.rows_affected();
                         results.push(std::mem::take(&mut current));
+                        *ran = results.len();
                     }
                 }
             }

@@ -461,7 +461,7 @@ async fn execute_inner(args: &Args, store: &ConnectionStore) -> Result<(), Failu
     let db = connect(&form, args).await?;
     let limit = args.limit.unwrap_or(usize::MAX);
     let timeout = form.query_timeout().map_err(Failure::usage)?;
-    let result = db.run_within(&sql, limit, timeout, true).await;
+    let result = db.run_within(&sql, limit, timeout).await;
     db.close().await;
     let outcome = result.map_err(|e| match e {
         crate::db::RunError::TimedOut(limit) => {

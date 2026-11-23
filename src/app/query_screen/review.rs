@@ -227,6 +227,12 @@ impl App {
         if self.connection.txn == TxnState::Idle {
             return self.set_status(t!("review.none_open").to_string(), true);
         }
+        // A failed transaction can't be committed: the server would roll it
+        // back, and saying "committed" would be wrong.
+        if how == TxEnd::Commit && self.connection.txn == TxnState::Aborted {
+            let rollback = self.keymap.label(Action::Rollback);
+            return self.set_status(t!("review.aborted_commit", rollback = rollback), true);
+        }
         let Some(dialect) = self.sql_dialect() else { return };
         let command = dialect.end(how);
         let infos = statements::analyze(&parse(command, self.engine()));

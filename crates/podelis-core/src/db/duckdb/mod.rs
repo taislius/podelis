@@ -15,6 +15,8 @@ pub(super) mod driver;
 pub(super) mod passwords;
 #[cfg(feature = "duckdb")]
 pub(super) mod queries;
+#[cfg(feature = "duckdb")]
+pub(super) mod session;
 
 use super::backend::{Backend, Capabilities};
 use super::dialect::{LexerRules, Placeholders, Plan, SqlDialect};

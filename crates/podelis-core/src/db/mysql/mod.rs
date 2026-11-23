@@ -14,6 +14,8 @@ pub(super) mod passwords;
 mod plan;
 #[cfg(feature = "mysql")]
 pub(super) mod queries;
+#[cfg(feature = "mysql")]
+pub(super) mod session;
 mod versions;
 
 use super::backend::{Backend, Capabilities};

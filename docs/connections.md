@@ -63,7 +63,7 @@ While editing or adding a connection:
 |---|---|
 | `↑`/`↓` | Move between fields (or click one) |
 | `←`/`→` | Change Engine, SSL mode, Mode or Transaction when that field is focused |
-| `Enter` | Connect this tab to it (its connection before stays for its other tabs; not while it has a transaction open) |
+| `Enter` | Connect this tab to it: the tab keeps its connection while the new one opens, then swaps (its connection before stays for its other tabs; not while it has a transaction open; one that doesn't open leaves the tab as it was) |
 | `t` | Connect in a new tab |
 | `Ctrl+S` | Save this connection (settings locally; password in the OS keychain, unless a password command supplies it). Changing the name and saving renames the profile. A new connection is also saved once it connects (unnamed: after its host/database or file) |
 | `Ctrl+T` | Test the connection step by step: SSH, DNS, TCP, login, TLS, session, latency — each with its timing, the failing step with a hint |

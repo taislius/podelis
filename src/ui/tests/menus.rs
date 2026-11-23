@@ -425,6 +425,9 @@ fn a_groups_menu_shows_after_the_pause_and_with_a_question_mark() {
     app.handle_key(key(KeyCode::Char('?')));
     let screen = render(&mut app, 90, 30);
     assert!(screen.contains("CTRL+K S") && screen.contains("s  sessions") && screen.contains("i  info"), "{screen}");
+    // Checking the connection has a letter of its own there (not Ctrl+K r,
+    // which rolls back; R is the results pane's).
+    assert!(screen.contains("c  check connection"), "{screen}");
     assert!(!screen.contains("TABS") && !screen.contains("x  mode"), "{screen}");
     assert_snapshot!(screen);
     // `?` again is every key, as everywhere.
@@ -440,8 +443,9 @@ fn a_stray_letter_in_a_group_runs_nothing() {
     let text = app.tab.editor.text();
     app.handle_key(ctrl_k());
     app.handle_key(key(KeyCode::Char('s')));
-    // `c` commits at the top: in this group it's nothing, and shows the group.
-    app.handle_key(key(KeyCode::Char('c')));
+    // `x` is the mode at the top: in this group it's nothing, and shows the
+    // group.
+    app.handle_key(key(KeyCode::Char('x')));
     let palette = app.popups.palette.as_ref().expect("still in the group");
     assert!(palette.group() == Some('s') && palette.menu_shown() && !palette.searching());
     assert!(app.connection.txn == TxnState::Open && app.tab.editor.text() == text);

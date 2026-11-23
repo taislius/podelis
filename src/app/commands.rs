@@ -353,6 +353,7 @@ pub const ACTION_GROUPS: &[(Group, &[Action])] = &[
             Action::ConnectionInfo,
             Action::Heartbeat,
             Action::ServerLoad,
+            Action::CheckConnection,
         ],
     ),
     (
@@ -715,7 +716,7 @@ impl App {
             }
             C::Reconnect if self.connection.database.is_none() => Can::not_now(t!("info.not_connected")),
             C::Reconnect if self.conn_busy() => Can::not_now(t!("info.stop_query_first")),
-            C::Reconnect if self.connection.keepalive.pinging() => Can::not_now(t!("info.reconnecting")),
+            C::Reconnect if self.connection.checking => Can::not_now(t!("info.reconnecting")),
             C::EditCell | C::AddRow | C::DeleteRows | C::Follow | C::LoadMore | C::NextSet | C::PrevSet if plan => {
                 not_for_plan()
             }

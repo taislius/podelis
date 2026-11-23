@@ -351,6 +351,47 @@ async fn until_removed(app: &mut App, dir: &std::path::Path) {
     .expect("the file removed");
 }
 
+/// An export never writes over a file that's there: two in the same
+/// second (the same default name) are two files, and one named after a
+/// file put there since gets a name of its own. Stopped, it removes only
+/// its own file, never the one that was there.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn an_export_never_writes_over_a_file_thats_there() {
+    let (mut app, dir) = big_export(0, 1, 0).await;
+    app.settings.row_limit = 10;
+    for _ in 0..2 {
+        app.run_command(crate::app::commands::Command::Rows { to: Dest::ExportShown, format: Format::Csv });
+    }
+    let shown = export_files(dir.path());
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    let there = dir.path().join("kept.csv");
+    std::fs::write(&there, "someone's work").unwrap();
+    app.exports.name = Some(there.clone());
+    app.run_command(crate::app::commands::Command::Rows { to: Dest::ExportShown, format: Format::Csv });
+    app.exports.name = None;
+    assert!(dir.path().join("kept-2.csv").exists(), "{}", said(&app));
+    assert_eq!(std::fs::read_to_string(&there).unwrap(), "someone's work");
+    // Every row, stopped at its question: its own file goes, not the one
+    // that was there.
+    app.start_export_all(Format::Csv, 0, Some(there.clone()));
+    while app.popups.confirm.is_none() {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    assert!(dir.path().join("kept-3.csv").exists());
+    answer(&mut app, 'n');
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while dir.path().join("kept-3.csv").exists() {
+            let event = app.poll_db_event().await.unwrap();
+            app.handle_db_event(event);
+        }
+    })
+    .await
+    .expect("its own file removed");
+    assert_eq!(std::fs::read_to_string(&there).unwrap(), "someone's work");
+}
+
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn an_export_asks_at_its_size_and_no_stops_it_and_removes_its_file() {
@@ -1292,6 +1333,76 @@ async fn edit_a_cell_by_primary_key() {
     app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
     finish(&mut app).await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[0][1], None);
+}
+
+/// A cell another client changed after it was shown isn't overwritten:
+/// nothing's saved, and that's said.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_cell_changed_since_it_was_shown_isnt_overwritten() {
+    let (mut app, _dir) = Box::pin(edit_cell(ConnectionMode::Normal, "select * from people order by id", 2)).await;
+    assert!(app.cell_edit.as_ref().is_some_and(|e| e.shown.is_none()), "Ben's note, shown NULL");
+    let other = app.connection.database.clone().unwrap();
+    other.run("update people set note = 'newer' where id = 2", 1).await.unwrap();
+    type_text(&mut app, "mine");
+    app.handle_key(key(KeyCode::Enter));
+    finish(&mut app).await;
+    assert!(app.notes.status.contains("changed or deleted since it was read"), "{}", app.notes.status);
+    assert!(app.notes.status_is_error);
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows[1][2], None, "the grid isn't changed either");
+    let o = other.run("select note from people where id = 2", 1).await.unwrap();
+    assert_eq!(o.rows[0][0].as_deref(), Some("newer"), "the newer value kept");
+}
+
+/// A SQLite column declared with no type keeps its value's own type (an
+/// integer never equals the text it's shown as): its edit isn't guarded,
+/// and saves.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn an_untyped_sqlite_column_is_edited() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    run_sql(&mut app, "create table loose (id integer primary key, n)").await;
+    run_sql(&mut app, "insert into loose values (1, 5)").await;
+    finish_catalog(&mut app).await;
+    run_sql(&mut app, "select * from loose").await;
+    app.focus = Focus::Results;
+    app.tab.grid.selected_col = 1;
+    app.handle_key(key(KeyCode::Char('c')));
+    assert!(app.cell_edit.as_ref().is_some_and(|e| !e.guarded), "not compared: {}", said(&app));
+    app.cell_edit.as_mut().unwrap().text = LineInput::new("6".to_string());
+    app.handle_key(key(KeyCode::Enter));
+    finish(&mut app).await;
+    assert!(app.notes.status.contains("updated 1 row"), "{}", app.notes.status);
+}
+
+/// A result read on another connection than the tab's now (switched to
+/// another database since) isn't edited, nor its rows deleted: its keys
+/// would find rows of a table of the same name there. Not when the prompt
+/// was opened before the switch either.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_result_from_another_connection_isnt_edited() {
+    let (mut app, _dir) = Box::pin(edit_cell(ConnectionMode::Normal, "select * from people order by id", 2)).await;
+    assert!(app.cell_edit.is_some(), "its own: editable");
+    let elsewhere = Database::connect(app.connection.form.params().unwrap()).await.unwrap();
+    let own = app.connection.database.replace(elsewhere.clone()).unwrap();
+    type_text(&mut app, "mine");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(!app.tab.run.executing, "no UPDATE sent");
+    assert!(said(&app).contains("another connection"), "{}", said(&app));
+    app.handle_key(key(KeyCode::Char('c')));
+    assert!(app.cell_edit.is_none() && said(&app).contains("another connection"), "{}", said(&app));
+    assert!(app.edit_table().is_err_and(|e| e.contains("another connection")));
+    // Back on its own: editable again.
+    app.connection.database = Some(own);
+    assert!(app.edit_table().is_ok());
+    // The result only knows which connection it came from: it doesn't keep
+    // one open (an SSH tunnel's would stay).
+    let other_id = elsewhere.identity();
+    drop(elsewhere);
+    app.connection.database = None;
+    assert!(!other_id.is_open());
+    assert!(!app.tab.grid.from.as_ref().unwrap().is_open(), "not kept open by the grid");
 }
 
 #[cfg(feature = "sqlite")]

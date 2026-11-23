@@ -107,8 +107,21 @@ pub(in crate::db) async fn close(pool: &MongoPool) {
     pool.client.clone().shutdown().await;
 }
 
-pub(in crate::db) async fn ping(c: &mut MongoConnection) {
-    let _ = c.db().run_command(doc! {"ping": 1}).await;
+/// Whether the server answered (an error it sent is an answer; a link
+/// that broke, or no server to send to, isn't).
+pub(in crate::db) async fn ping(c: &mut MongoConnection) -> bool {
+    match c.db().run_command(doc! {"ping": 1}).await {
+        Ok(_) => true,
+        Err(e) => answered(&e.kind),
+    }
+}
+
+/// Whether an error is the server's own reply (a command it refused),
+/// not the driver's (a broken link, a cleared pool, no server selected
+/// in time).
+fn answered(kind: &::mongodb::error::ErrorKind) -> bool {
+    use ::mongodb::error::ErrorKind;
+    matches!(kind, ErrorKind::Command(_) | ErrorKind::Write(_) | ErrorKind::Authentication { .. })
 }
 
 pub(in crate::db) fn detach(c: MongoConnection) {
@@ -515,7 +528,14 @@ pub(super) fn table(docs: &[Document]) -> Table {
 
 /// Runs each statement in `sql`: documents as rows (at most `limit` kept,
 /// all counted), a change as its count.
-pub(in crate::db) async fn run(c: &mut MongoConnection, sql: &str, limit: usize) -> Result<Vec<StatementResult>> {
+/// `ran`: how many ran (a failed run's `startTransaction` before the
+/// failing one left its transaction open).
+pub(in crate::db) async fn run(
+    c: &mut MongoConnection,
+    sql: &str,
+    limit: usize,
+    ran: &mut usize,
+) -> Result<Vec<StatementResult>> {
     c.interrupt.clear();
     let mut results = Vec::new();
     for statement in crate::language::split_statements(sql, Engine::MongoDb) {
@@ -531,6 +551,7 @@ pub(in crate::db) async fn run(c: &mut MongoConnection, sql: &str, limit: usize)
             Outcome::Changed(n) => {
                 result.rows_affected = n;
                 results.push(result);
+                *ran = results.len();
                 continue;
             }
         };
@@ -539,6 +560,7 @@ pub(in crate::db) async fn run(c: &mut MongoConnection, sql: &str, limit: usize)
         result.columns = Some(columns);
         result.rows = rows;
         results.push(result);
+        *ran = results.len();
     }
     Ok(results)
 }
@@ -635,6 +657,16 @@ pub(in crate::db) fn error_facts(cause: &(dyn std::error::Error + 'static)) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only the server's own reply is an answer to a ping: a broken link
+    /// isn't (nor is no server selected in time, which can't be built
+    /// here: the live tests stop the server).
+    #[test]
+    fn a_ping_answer_is_the_servers_reply() {
+        use ::mongodb::error::ErrorKind;
+        let io = ErrorKind::Io(std::sync::Arc::new(std::io::Error::other("reset")));
+        assert!(!answered(&io));
+    }
 
     #[test]
     fn documents_as_rows() {

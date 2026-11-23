@@ -1,9 +1,8 @@
 //! Where a connection stands ([`ConnState`], a state machine only its own
-//! steps change) and keeping an idle one alive ([`KeepAlive`]: a check's
-//! timing). Each connection slot (`session::Connection`) has both; the
-//! status bar, the navigator, the tabs and the reopening card read them.
-
-use std::time::{Duration, Instant};
+//! steps change). Each connection slot (`session::Connection`) has one;
+//! the status bar, the navigator, the tabs and the reopening card read it.
+//! Keeping an idle connection alive is its supervisor's (podelis-core's
+//! `db::supervisor`), whose reports move it.
 
 /// Where a connection stands: the one thing the status bar, the
 /// navigator, the tabs and the reopening card read, and only
@@ -100,68 +99,6 @@ impl ConnState {
     }
 }
 
-/// Keeping an idle connection alive: when it was last used, and the check
-/// running on it. Whether it's lost is its [`ConnState`]'s.
-pub struct KeepAlive {
-    /// When the connection was last used.
-    pub(super) last_activity: Instant,
-    /// A check is running.
-    pinging: bool,
-    /// The user explicitly asked to check a lost connection.
-    reconnect_requested: bool,
-    /// Checks that found it lost in a row: each waits longer for the next.
-    lost_checks: u32,
-}
-
-impl KeepAlive {
-    pub(super) fn pinging(&self) -> bool {
-        self.pinging
-    }
-
-    pub(super) fn begin_check(&mut self) {
-        self.pinging = true;
-    }
-
-    pub(super) fn begin_reconnect(&mut self) {
-        self.reconnect_requested = true;
-    }
-
-    /// Completes a check: whether the user asked for it.
-    pub(super) fn finish_check(&mut self) -> bool {
-        self.pinging = false;
-        std::mem::take(&mut self.reconnect_requested)
-    }
-
-    /// A check found it lost (`true`) or answering: the next of a lost
-    /// one's checks waits longer each time.
-    pub(super) fn checked(&mut self, lost: bool) {
-        self.lost_checks = if lost { self.lost_checks.saturating_add(1) } else { 0 };
-    }
-
-    /// How long a lost connection waits for its next check: 5 s, then
-    /// twice as long each time it's still lost, up to a minute (a network
-    /// that's down isn't asked every few seconds for an hour).
-    pub fn next_lost_check(&self) -> Duration {
-        let first = Duration::from_secs(5);
-        let factor = 1u32 << self.lost_checks.saturating_sub(1).min(4);
-        (first * factor).min(Duration::from_secs(60))
-    }
-
-    /// Seconds until a lost connection's next check (0: due, or running).
-    pub fn lost_check_in(&self) -> u64 {
-        if self.pinging {
-            return 0;
-        }
-        self.next_lost_check().saturating_sub(self.last_activity.elapsed()).as_secs()
-    }
-}
-
-impl Default for KeepAlive {
-    fn default() -> Self {
-        Self { last_activity: Instant::now(), pinging: false, reconnect_requested: false, lost_checks: 0 }
-    }
-}
-
 #[cfg(test)]
 mod state_tests {
     use super::*;
@@ -201,33 +138,5 @@ mod state_tests {
         let failed = ConnState::Failed { why: "refused".into() };
         assert_eq!(failed.failure(), Some("refused"));
         assert!(!failed.is_open());
-    }
-
-    #[test]
-    fn a_check_keeps_only_its_own_timing_and_intent() {
-        let mut keepalive = KeepAlive::default();
-        keepalive.begin_check();
-        keepalive.begin_reconnect();
-        assert!(keepalive.pinging());
-        assert!(keepalive.finish_check(), "asked for");
-        assert!(!keepalive.pinging());
-        keepalive.begin_check();
-        assert_eq!(keepalive.lost_check_in(), 0, "a check running: not a countdown");
-        assert!(!keepalive.finish_check(), "the intent went with the check that had it");
-    }
-
-    #[test]
-    fn a_lost_connection_is_checked_less_often_the_longer_it_stays_lost() {
-        let mut keepalive = KeepAlive::default();
-        let waits: Vec<u64> = (0..8)
-            .map(|_| {
-                keepalive.checked(true);
-                keepalive.next_lost_check().as_secs()
-            })
-            .collect();
-        assert_eq!(waits, [5, 10, 20, 40, 60, 60, 60, 60]);
-        keepalive.checked(false);
-        keepalive.checked(true);
-        assert_eq!(keepalive.next_lost_check().as_secs(), 5, "back, then lost again: from the start");
     }
 }

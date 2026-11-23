@@ -482,6 +482,7 @@ impl App {
             }
             Action::Heartbeat => self.toggle_heartbeat(),
             Action::ServerLoad => self.show_server_load(),
+            Action::CheckConnection => self.reconnect_now(),
             Action::TxMode => self.open_tx_picker(),
             Action::Messages => self.open_messages(),
             Action::Projects => self.open_manager(Screen::Projects),

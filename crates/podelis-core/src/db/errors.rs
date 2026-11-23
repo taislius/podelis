@@ -57,7 +57,7 @@ pub struct Reconnected;
 
 impl std::fmt::Display for Reconnected {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("connection lost; reconnected (session settings and any open transaction were reset)")
+        f.write_str("connection lost; reconnected (any open transaction was lost)")
     }
 }
 
@@ -70,6 +70,18 @@ impl std::fmt::Display for NoAnswer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("the server doesn't answer: the connection looks down (a VPN or network that dropped?)")
     }
+}
+
+/// Whether the server didn't answer in time (a dead link).
+pub fn is_no_answer(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<NoAnswer>().is_some()
+}
+
+/// Whether the error is the link's (no answer, unreachable, broken), not
+/// the statement's: a reconnect that worked isn't (the statement's to run
+/// again).
+pub fn is_link_failure(err: &anyhow::Error) -> bool {
+    (is_unreachable(err) || is_no_answer(err)) && !is_reconnected(err)
 }
 
 /// Whether the session was reopened after this error.

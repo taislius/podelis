@@ -80,7 +80,8 @@ impl Database {
     /// The tables `sql`'s reads would read in full, with about how many
     /// rows each (the plan's estimate, else the catalog's): what a guard
     /// against heavy queries asks about. Only reads are planned, at most
-    /// 20 statements; one that can't be planned is left out.
+    /// 20 statements. A read whose plan fails is an error: how much it
+    /// reads isn't known (a guard asks, rather than let it through).
     ///
     /// Each engine plans them its own way (`full_scans_of`: PostgreSQL on
     /// a connection of its own, so one that fails can't abort the
@@ -97,8 +98,19 @@ impl Database {
             {
                 continue;
             }
+            // A plan that couldn't be had: how much it reads isn't known.
             let found = on_driver!(engine, engine::queries::full_scans_of(self, statement).await);
-            scans.extend(found.unwrap_or_default());
+            let found = match found {
+                Ok(found) => found,
+                // The statement itself is wrong (a syntax error, a table not
+                // there): its run says so, reading nothing.
+                Err(e) if errors::server_error(&e).is_some_and(|s| s.check.is_some()) => continue,
+                Err(e) => {
+                    let what = infos.first().map_or_else(|| statement.to_string(), |i| i.summary.clone());
+                    return Err(e.context(format!("couldn't plan {what}")));
+                }
+            };
+            scans.extend(found);
         }
         if scans.iter().all(|s| s.rows.is_some()) {
             return Ok(scans.into_iter().filter_map(|s| Some((s.name(), s.rows?))).collect());
@@ -108,10 +120,19 @@ impl Database {
 
     /// A statement's full scans from its EXPLAIN on the session (for
     /// engines whose plans don't need a connection of their own).
-    pub(super) async fn scans_by_explain(&self, statement: &str) -> Option<Vec<Scan>> {
-        let dialect = self.engine().dialect()?;
-        let plan = self.run(&dialect.explain(statement, self.version()), 10_000).await.ok()?;
-        Some(dialect.full_scans(&plan.columns, &plan.rows))
+    pub(super) async fn scans_by_explain(&self, statement: &str) -> Result<Vec<Scan>> {
+        let Some(dialect) = self.engine().dialect() else { return Ok(Vec::new()) };
+        let plan = self.run_own(&dialect.explain(statement, self.version()), 10_000).await?;
+        Ok(dialect.full_scans(&plan.columns, &plan.rows))
+    }
+
+    /// Runs Podėlis's own `sql` (a plan: it changes nothing), on a new
+    /// session again if the old one had been given up on.
+    pub(super) async fn run_own(&self, sql: &str, limit: usize) -> Result<QueryOutcome> {
+        match self.run(sql, limit).await {
+            Err(e) if errors::is_reconnected(&e) => self.run(sql, limit).await,
+            result => result,
+        }
     }
 
     /// Scans' rows: the plan's, else the catalog's estimate (all tables

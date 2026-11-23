@@ -84,7 +84,6 @@ pub(super) fn query_app() -> (App, tempfile::TempDir) {
         rows_affected: None,
         statements: 1,
         elapsed: Duration::from_millis(4),
-        reconnected: false,
         ..QueryOutcome::default()
     };
     app.show_results_for_tests(outcome);

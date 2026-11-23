@@ -30,7 +30,8 @@ impl App {
     pub fn tick_running(&mut self) {
         self.offer_export_question();
         self.watch_tick();
-        self.keepalive_tick();
+        self.apply_heartbeat();
+        self.say_unsaid_reconnect();
         self.activity_tick();
         if self.watching_agents() {
             self.approvals_tick();

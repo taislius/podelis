@@ -44,11 +44,23 @@ pub(in crate::app) fn to_markdown(outcome: &QueryOutcome, rows: &[usize]) -> Str
 }
 
 impl App {
+    /// The result was read on the tab's connection as it is now (or the
+    /// sandbox's copy of it): else its rows' keys would find rows of
+    /// another database's table of the same name.
+    pub(in crate::app) fn result_is_here(&self) -> Result<(), String> {
+        let here = self.connection.database.as_ref();
+        let original = self.connection.sandbox.as_ref().and_then(|s| s.copy.as_ref()).map(|c| &c.original);
+        let from = self.tab.grid.from.as_ref();
+        let same = |db: Option<&crate::db::Database>| from.zip(db).is_some_and(|(id, db)| id.is(db));
+        if same(here) || same(original) { Ok(()) } else { Err(t!("rows.other_connection").into()) }
+    }
+
     /// The editable table behind the current result, or why there isn't one.
     pub(in crate::app) fn edit_table(&self) -> Result<EditTable, String> {
         if self.connection.mode == ConnectionMode::ReadOnly {
             return Err(t!("rows.read_only").into());
         }
+        self.result_is_here()?;
         let results = self.tab.grid.results.as_ref().ok_or(t!("rows.no_results"))?;
         let (sql, _) = self.tab.last_sql.as_ref().ok_or(t!("rows.no_query"))?;
         let source = analyze::edit_source(&parse(sql, self.engine())).ok_or(t!("rows.not_editable"))?;

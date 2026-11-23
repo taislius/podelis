@@ -29,6 +29,9 @@ pub struct Sandbox {
 pub struct FileCopy {
     pub original: Database,
     pub path: std::path::PathBuf,
+    /// Held while the sandbox lives: its folder (the copy's) isn't another
+    /// sandbox's to clean up.
+    pub lock: std::fs::File,
 }
 
 /// A sandbox open this long is said to be holding its locks too long.
@@ -151,14 +154,21 @@ impl App {
             TxMode::RollbackOnly => t!("review.rollback_only"),
             _ => return None,
         };
-        if self.connection.unrollable.is_empty() {
+        // None on an engine whose every table a rollback undoes.
+        self.engine().dialect().and_then(crate::db::SqlDialect::tables_without_rollback)?;
+        let written = written_tables(sql, self.engine());
+        if written.is_empty() {
             return None;
         }
-        let hit: Vec<String> = written_tables(sql, self.engine())
-            .into_iter()
-            .filter(|t| self.connection.unrollable.iter().any(|u| u.is(t)))
-            .collect();
         let switch = self.keymap.label(crate::config::keys::Action::TxMode);
+        // Which tables those are isn't known yet: a write might stay.
+        let Some(unrollable) = &self.connection.unrollable else {
+            return Some(match &self.connection.unrollable_failed {
+                Some(why) => t!("sandbox.unrollable_unread", why = why, label = label, switch = switch),
+                None => t!("sandbox.unrollable_unknown", label = label, switch = switch),
+            });
+        };
+        let hit: Vec<String> = written.into_iter().filter(|t| unrollable.iter().any(|u| u.is(t))).collect();
         (!hit.is_empty()).then(|| t!("sandbox.unrollable", tables = hit.join(", "), label = label, switch = switch))
     }
 
@@ -203,22 +213,31 @@ impl App {
         let (Some(db), Ok(mut params)) = (self.connection.database.clone(), self.connection.form.params()) else {
             return;
         };
-        let dir = self.data_dir.clone().unwrap_or_else(crate::config::store::config_dir).join("sandbox");
-        let path = dir.join(format!("{}.db", uuid::Uuid::new_v4().simple()));
+        let all = self.data_dir.clone().unwrap_or_else(crate::config::store::config_dir).join("sandbox");
+        // A folder of its own, locked while it lives.
+        let dir = all.join(uuid::Uuid::new_v4().simple().to_string());
+        let path = dir.join("copy.db");
         params.host = path.to_string_lossy().into_owned();
         self.sandbox_flow.waiting = Some((sql, offset, filled, purpose));
         self.set_result_status(t!("sandbox.copying").to_string(), false);
         let send = self.sender();
         tokio::spawn(async move {
             let copied = async {
-                // Copies left by a sandbox that never ended (a crash) go first.
-                let _ = std::fs::remove_dir_all(&dir);
+                // Copies left by a sandbox that never ended (a crash) go first;
+                // not one that's open (another tab's, another Podėlis's).
+                remove_ended_sandboxes(&all);
                 std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                // Locked before it's found by its name: another start's
+                // clean-up can't take it in between.
+                let made = dir.join(format!("{LOCK}.new"));
+                let lock = std::fs::File::create(&made).map_err(|e| e.to_string())?;
+                lock.lock().map_err(|e| e.to_string())?;
+                std::fs::rename(&made, dir.join(LOCK)).map_err(|e| e.to_string())?;
                 let copy = db.engine().dialect().and_then(|d| d.copy_into(&path.to_string_lossy()));
                 let copy = copy.ok_or_else(|| format!("{} can't copy its database", db.engine().label()))?;
-                db.run_once(&copy, 1).await.map_err(|e| crate::db::error_message(&e))?;
+                db.run(&copy, 1).await.map_err(|e| crate::db::error_message(&e))?;
                 let copy = Database::connect(params).await.map_err(|e| crate::db::error_message(&e))?;
-                Ok::<_, String>((copy, path))
+                Ok::<_, String>((copy, path, lock))
             };
             send(DbEventKind::SandboxCopied(copied.await));
         });
@@ -226,15 +245,22 @@ impl App {
 
     /// The copy is ready: the connection works on it now, and the step that
     /// waited runs.
-    pub(in crate::app) fn sandbox_copied(&mut self, copied: Result<(Database, std::path::PathBuf), String>) {
+    pub(in crate::app) fn sandbox_copied(
+        &mut self,
+        copied: Result<(Database, std::path::PathBuf, std::fs::File), String>,
+    ) {
         let Some((sql, offset, filled, purpose)) = self.sandbox_flow.waiting.take() else { return };
-        let (copy, path) = match copied {
+        let (copy, path, lock) = match copied {
             Ok(copied) => copied,
             Err(e) => return self.set_status(t!("sandbox.copy_failed", e = e), true),
         };
-        let Some(original) = self.connection.database.replace(copy) else { return };
+        let Some(original) = self.connection.database.replace(copy.clone()) else { return };
+        // The copy's reports are the slot's now, not the original's.
+        if let Some(id) = self.connection.slots.active {
+            self.follow_health(id, &copy);
+        }
         self.connection.sandbox = Some(Sandbox {
-            copy: Some(FileCopy { original, path }),
+            copy: Some(FileCopy { original, path, lock }),
             started: Some(Instant::now()),
             ..Sandbox::default()
         });
@@ -337,21 +363,37 @@ impl App {
         self.end_transaction(TxEnd::Rollback);
     }
 
+    /// Connection `id`'s sandbox is gone (ended, or its transaction lost
+    /// with a reconnect): on a file's copy, the original's put back (its
+    /// health followed again) and the copy deleted, with its folder.
+    pub(in crate::app) fn sandbox_gone(&mut self, id: ConnId) {
+        let Some(slot) = self.connection.slot_mut(id) else { return };
+        let Some(FileCopy { original, path, lock }) = slot.sandbox.take().and_then(|s| s.copy) else { return };
+        let copy = slot.database.replace(original.clone());
+        self.follow_health(id, &original);
+        if let Some(copy) = copy {
+            tokio::spawn(async move {
+                copy.close().await;
+                // Its own folder, the lock let go of first (Windows removes
+                // no file that's open).
+                drop(lock);
+                if let Some(dir) = path.parent() {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
+            });
+        }
+        // Its schema changes were the copy's.
+        if self.connection.slots.active == Some(id) {
+            self.load_catalog();
+        }
+    }
+
     /// The sandbox's transaction ended: the sandbox with it; its script
     /// goes where it was asked to now.
     pub(super) fn sandbox_ended(&mut self) {
-        // Working on a file's copy: the original back, the copy deleted.
-        if let Some(FileCopy { original, path }) = self.connection.sandbox.take().and_then(|s| s.copy) {
-            if let Some(copy) = self.connection.database.replace(original) {
-                tokio::spawn(async move {
-                    copy.close().await;
-                    for end in ["", "-wal", "-shm", "-journal"] {
-                        let _ = std::fs::remove_file(format!("{}{end}", path.display()));
-                    }
-                });
-            }
-            // Its schema changes were the copy's.
-            self.load_catalog();
+        match self.connection.slots.active {
+            Some(id) => self.sandbox_gone(id),
+            None => self.connection.sandbox = None,
         }
         match self.sandbox_flow.then.take() {
             Some(Then::Tab(script)) => {
@@ -377,6 +419,56 @@ impl App {
         self.connection.tx_mode = TxMode::Manual;
         self.set_status(t!("sandbox.running_for_real").to_string(), false);
         self.execute(script, 0);
+    }
+}
+
+/// The lock file in a sandbox's folder.
+const LOCK: &str = "lock";
+
+/// How old a sandbox folder with no lock can be and still be one being
+/// made.
+const UNMADE: Duration = Duration::from_hours(1);
+
+/// How long an older Podėlis's copy (a file straight in the folder) is
+/// left unchanged before it's taken for one whose sandbox ended.
+const OLD_LAYOUT_UNUSED: Duration = Duration::from_hours(24);
+
+/// Whether `path` was last changed more than `age` ago.
+fn older_than(path: &std::path::Path, age: Duration) -> bool {
+    path.metadata().and_then(|m| m.modified()).is_ok_and(|at| at.elapsed().is_ok_and(|e| e > age))
+}
+
+/// Removes the sandbox folders in `all` whose sandbox has ended without
+/// removing its own (a crash): those whose lock can be taken. One without
+/// a lock file yet is being made; one locked is open. Files lying in `all`
+/// itself are copies an older Podėlis left (a copy and its `-wal`, each
+/// straight in the folder): every sandbox has a folder now, so they go once
+/// unchanged for a day.
+fn remove_ended_sandboxes(all: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(all) else { return };
+    for entry in entries.filter_map(|e| e.ok().map(|e| e.path())) {
+        if !entry.is_dir() {
+            // Not one an older Podėlis has open now (its copy or WAL changes
+            // as it's used).
+            if older_than(&entry, OLD_LAYOUT_UNUSED) {
+                let _ = std::fs::remove_file(&entry);
+            }
+            continue;
+        }
+        let dir = entry;
+        let Ok(lock) = std::fs::File::open(dir.join(LOCK)) else {
+            // No lock yet: being made, unless it's been an hour (a crash
+            // while it was).
+            if older_than(&dir, UNMADE) {
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+            continue;
+        };
+        if lock.try_lock().is_ok() {
+            // Let go of first: Windows removes no file that's open.
+            drop(lock);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }
 

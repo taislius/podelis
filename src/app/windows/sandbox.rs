@@ -35,7 +35,7 @@ impl App {
         }
         let send = self.sender();
         tokio::spawn(async move {
-            let said = match db.run_once(query, 1).await {
+            let said = match db.run(query, 1).await {
                 Ok(o) => {
                     let n = o.rows.first().and_then(|r| r.first().cloned().flatten()).unwrap_or_default();
                     tn!("sandbox.locks", n.parse::<u64>().unwrap_or(0))

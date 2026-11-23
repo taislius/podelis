@@ -361,27 +361,97 @@ pub(in crate::db) async fn live_reconnect(db: &Database, other: &Database, pid_s
     let before = pid(&db.run(pid_sql, 10).await.unwrap());
     other.run(&kill.replace("{pid}", &before), 10).await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let o = db.run(pid_sql, 10).await.expect("a read is retried after reconnecting");
-    assert!(o.reconnected);
+    // Not even a read is run again: said, and run by hand.
+    let o = rerun(db, pid_sql, 10).await;
     assert_ne!(pid(&o), before);
+    // Its supervisor said so itself.
+    let health = db.health().borrow().clone();
+    // (Reconnected, then live again: the run by hand answered.)
+    assert_eq!((health.state, health.reconnects), (HealthState::Live, 1));
 
     let now = pid(&o);
     other.run(&kill.replace("{pid}", &now), 10).await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
     let e = db.run("CREATE TEMPORARY TABLE podelis_rc (x INT)", 10).await.unwrap_err();
     assert!(crate::db::is_reconnected(&e), "{e:#}");
+    // Not the link's: it's fine now, and the statement's to run again.
+    assert!(!crate::db::is_link_failure(&e), "{e:#}");
     assert!(db.run(pid_sql, 10).await.is_ok());
+    assert_eq!(db.health().borrow().state, HealthState::Live, "it answered since");
+    db.close().await;
+    assert_eq!(db.health().borrow().state, HealthState::Closed);
 }
 
-/// A TCP proxy to `target` on a port of its own: once `freeze` is set,
-/// the connections it already has stop forwarding (what's sent is
-/// dropped, nothing closes), as a link that died without a word does
-/// (a VPN, a laptop's sleep, a NAT's timeout); new ones work.
-async fn freezing_proxy(target: (String, u16), freeze: Arc<AtomicBool>) -> u16 {
+/// `sql` after a reconnect: not run again on the new session (said so),
+/// then run by hand on it.
+pub(in crate::db) async fn rerun(db: &Database, sql: &str, limit: usize) -> QueryOutcome {
+    let err = db.run(sql, limit).await.expect_err("not run again on a new session");
+    assert!(crate::db::is_reconnected(&err), "{err:#}");
+    db.run(sql, limit).await.expect("run again by hand, on the new session")
+}
+
+/// A stream queued behind other work whose caller is gone before its turn
+/// sends nothing: the next run, once that work is done, is answered at
+/// once, not after `slow` (a query whose first row takes seconds).
+pub(in crate::db) async fn a_queued_stream_whose_caller_is_gone_sends_nothing(db: &Database, slow: &str) {
+    let held = db.clone();
+    let holding = tokio::spawn(async move {
+        held.with_session(|_| Box::pin(async { tokio::time::sleep(Duration::from_millis(300)).await })).await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let streaming = db.clone();
+    let slow = slow.to_string();
+    // Its job queued (not `run_streaming`'s check first, which waits too).
+    let queued = tokio::spawn(async move { streaming.run_streaming_once(&slow, 10).await.map(drop) });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    queued.abort();
+    holding.await.unwrap().unwrap();
+    let o = tokio::time::timeout(Duration::from_secs(1), db.run("SELECT 7", 1))
+        .await
+        .expect("not behind the stream: it wasn't sent")
+        .unwrap();
+    assert_eq!(cells(&o), vec![vec![Some("7")]]);
+}
+
+/// What `freezing_proxy`'s link does, switched by the test.
+#[derive(Clone, Default)]
+struct Link {
+    /// The connections it has stop forwarding (what's sent is dropped,
+    /// nothing closes): a link that died without a word (a VPN, a laptop's
+    /// sleep, a NAT's timeout).
+    freeze: Arc<AtomicBool>,
+    /// New connections are closed at once: the server's gone too.
+    down: Arc<AtomicBool>,
+    /// New connections are taken, and never answered: a server that
+    /// hangs.
+    hang: Arc<AtomicBool>,
+}
+
+impl Link {
+    fn set(flag: &AtomicBool, on: bool) {
+        flag.store(on, Ordering::SeqCst);
+    }
+}
+
+/// A TCP proxy to `target` on a port of its own, doing what `link` says
+/// (new connections work unless it's down or hanging).
+async fn freezing_proxy(target: (String, u16), link: Link) -> u16 {
+    let Link { freeze, down, hang } = link;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
         while let Ok((client, _)) = listener.accept().await {
+            if down.load(Ordering::SeqCst) {
+                drop(client);
+                continue;
+            }
+            if hang.load(Ordering::SeqCst) {
+                tokio::spawn(async move {
+                    let _held = client;
+                    std::future::pending::<()>().await;
+                });
+                continue;
+            }
             let Ok(server) = tokio::net::TcpStream::connect((target.0.as_str(), target.1)).await else { continue };
             // Born frozen-free: frozen only by a freeze after it opened.
             let born_frozen = freeze.load(Ordering::SeqCst);
@@ -426,7 +496,8 @@ async fn forward(
 pub(in crate::db) async fn live_dead_link(engine: Engine, big: &str) {
     let Some(mut params) = live_params(engine) else { return };
     let freeze = Arc::new(AtomicBool::new(false));
-    params.port = freezing_proxy((params.host.clone(), params.port), Arc::clone(&freeze)).await;
+    let link = Link { freeze: Arc::clone(&freeze), ..Link::default() };
+    params.port = freezing_proxy((params.host.clone(), params.port), link).await;
     params.host = "127.0.0.1".into();
     let db = Database::connect(params).await.expect("connect");
     db.run("SELECT 1", 10).await.unwrap();
@@ -440,16 +511,224 @@ pub(in crate::db) async fn live_dead_link(engine: Engine, big: &str) {
     let check = tokio::time::timeout(Duration::from_secs(60), db.answers_within(Duration::from_secs(5))).await;
     let err = check.expect("the check ends").expect_err("a dead session doesn't answer");
     assert!(crate::db::is_unreachable(&err) || format!("{err:#}").contains("doesn't answer"), "{err:#}");
+    // Its supervisor reported it lost, without anyone reading that message.
+    assert!(matches!(db.health().borrow().state, HealthState::Lost(_)), "{:?}", db.health().borrow());
     // The server answers about it on a new connection: waiting for a
-    // statement (PostgreSQL, whose cancel got through), or still sending
-    // the rows nobody reads (MySQL, whose cancel went through the frozen
-    // one).
+    // statement (PostgreSQL, whose cancel got through), still sending the
+    // rows nobody reads (MySQL, whose cancel went through the frozen one),
+    // or, under load, already ended by the server.
     let seen = tokio::time::timeout(Duration::from_secs(15), db.own_session()).await.expect("an answer");
-    assert!(matches!(seen.unwrap(), Some(OwnSession::Idle(_) | OwnSession::Busy)));
-    let run = tokio::time::timeout(Duration::from_secs(60), db.run("SELECT 42", 10)).await.expect("not for good");
-    let outcome = run.expect("a read runs on a new session");
-    assert!(outcome.reconnected);
+    let seen = seen.unwrap();
+    assert!(matches!(seen, Some(OwnSession::Idle(_) | OwnSession::Busy | OwnSession::Gone)), "{seen:?}");
+    let outcome =
+        tokio::time::timeout(Duration::from_secs(60), rerun(&db, "SELECT 42", 10)).await.expect("not for good");
     assert_eq!(outcome.rows[0][0].as_deref(), Some("42"));
+    let health = db.health().borrow().clone();
+    assert_eq!((health.state, health.reconnects), (HealthState::Live, 1), "back, on a new session");
+}
+
+/// Waits for the connection's supervisor to report what `want` says.
+async fn reported(health: &mut watch::Receiver<Health>, within: Duration, want: fn(&HealthState) -> bool) {
+    let until = async {
+        loop {
+            if want(&health.borrow_and_update().state) {
+                return;
+            }
+            health.changed().await.expect("reports go on while the connection is open");
+        }
+    };
+    let in_time = tokio::time::timeout(within, until).await.is_ok();
+    assert!(in_time, "not reported in {within:?}: {:?}", health.borrow());
+}
+
+/// A connection's supervisor keeps it on its own: with the heartbeat on,
+/// a link that died is found lost and the session reopened, without a run
+/// or the app asking; a server that's gone too is checked at growing
+/// waits, then paused (not tried for hours), until a check asked for finds
+/// it back and the checks go on.
+pub(in crate::db) async fn live_supervisor_keeps_the_connection(engine: Engine) {
+    let Some(params) = live_params(engine) else { return };
+    // A link that dies, the server still there: back by itself.
+    let link = Link::default();
+    let db = through_proxy(&params, &link).await;
+    let mut health = db.health();
+    db.run("SELECT 1", 10).await.unwrap();
+    db.set_heartbeat(Some(Duration::from_millis(200)));
+    Link::set(&link.freeze, true);
+    reported(&mut health, Duration::from_secs(10), |s| matches!(s, HealthState::Lost(_))).await;
+    assert!(health.borrow().next_check.is_some(), "when it's checked next, for the countdown");
+    reported(&mut health, Duration::from_secs(15), |s| *s == HealthState::Reconnected).await;
+    // Reopened by a check, told to nobody yet: the next run isn't sent
+    // (it says so), then runs.
+    assert_eq!(rerun(&db, "SELECT 7", 10).await.rows[0][0].as_deref(), Some("7"));
+
+    // The server gone too: checked, then paused.
+    let link = Link::default();
+    let db = through_proxy(&params, &link).await;
+    let mut health = db.health();
+    db.run("SELECT 1", 10).await.unwrap();
+    db.set_heartbeat(Some(Duration::from_millis(200)));
+    Link::set(&link.freeze, true);
+    Link::set(&link.down, true);
+    reported(&mut health, Duration::from_secs(10), |s| matches!(s, HealthState::Lost(_))).await;
+    reported(&mut health, Duration::from_secs(20), |s| matches!(s, HealthState::Paused(_))).await;
+    assert_eq!(health.borrow().next_check, None, "no more checks until asked");
+    // A check asked for, the server still gone: the pause ends, and the
+    // checks go on by themselves.
+    assert!(db.check_now().await.is_err(), "still gone");
+    let resumed = health.borrow_and_update().clone();
+    assert!(matches!(resumed.state, HealthState::Lost(_)) && resumed.next_check.is_some(), "{resumed:?}");
+    // Back: found by those checks, and reconnected.
+    Link::set(&link.down, false);
+    reported(&mut health, Duration::from_secs(20), |s| *s == HealthState::Reconnected).await;
+    assert_eq!(rerun(&db, "SELECT 8", 10).await.rows[0][0].as_deref(), Some("8"));
+}
+
+/// A connection to `params`' server through a `freezing_proxy` on `link`.
+async fn through_proxy(params: &ConnectParams, link: &Link) -> Database {
+    let mut params = params.clone();
+    params.port = freezing_proxy((params.host.clone(), params.port), link.clone()).await;
+    params.host = "127.0.0.1".into();
+    Database::connect(params).await.expect("connect")
+}
+
+/// A `COPY` stopped while its link hangs: its abort isn't answered, so
+/// the session's given up on (said lost), and the next run opens a new
+/// one rather than sending SQL on the old.
+#[cfg(feature = "postgres")]
+pub(in crate::db) async fn live_an_unanswered_copy_abort_gives_the_session_up() {
+    let Some(params) = live_params(Engine::Postgres) else { return };
+    let link = Link::default();
+    let db = through_proxy(&params, &link).await;
+    db.run("CREATE TEMP TABLE podelis_copied (x int)", 1).await.unwrap();
+    let copying = db.clone();
+    let import = tokio::spawn(async move {
+        let rows = std::iter::repeat_with(|| Ok(b"1\n".to_vec()));
+        copying.copy_in("COPY podelis_copied FROM STDIN", 1, rows).await
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    Link::set(&link.freeze, true);
+    import.abort();
+    let _ = import.await;
+    let mut health = db.health();
+    reported(&mut health, Duration::from_secs(10), |s| matches!(s, HealthState::Lost(_))).await;
+    // The temporary table went with the old session: a new one has none.
+    let rerun = tokio::time::timeout(Duration::from_secs(20), rerun(&db, "SELECT 7", 1)).await.expect("a new session");
+    assert_eq!(cells(&rerun), vec![vec![Some("7")]]);
+}
+
+/// With a transaction open, a check only asks whether the session answers;
+/// a session the server ended (killed by `kill`, `{pid}` its id from
+/// `pid_sql`) has lost the transaction already, so it's reopened (`R` gets
+/// it back, the reconnect says so), not taken for an answer.
+pub(in crate::db) async fn live_a_check_reopens_a_killed_session_in_a_transaction(
+    engine: Engine,
+    pid_sql: &str,
+    kill: &str,
+) {
+    let Some(db) = live_db(engine).await else { return };
+    let Some(other) = live_db(engine).await else { return };
+    let pid = db.run(pid_sql, 1).await.unwrap().rows[0][0].clone().unwrap();
+    db.note_transaction(true);
+    other.run(&kill.replace("{pid}", &pid), 1).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (_, reconnected) = db.check_now().await.expect("reopened: the transaction was gone already");
+    assert!(reconnected);
+    assert_eq!(db.health().borrow().reconnects, 1, "{:?}", db.health().borrow());
+}
+
+/// The check before a run, on a session the server ended (a restart, a
+/// kill): broken at once, not "no answer in 5 s"; the run goes on, opens a
+/// new session, and says it reconnected.
+pub(in crate::db) async fn live_a_run_after_a_killed_session_reconnects(engine: Engine, pid_sql: &str, kill: &str) {
+    let Some(db) = live_db(engine).await else { return };
+    let Some(other) = live_db(engine).await else { return };
+    let pid = db.run(pid_sql, 1).await.unwrap().rows[0][0].clone().unwrap();
+    other.run(&kill.replace("{pid}", &pid), 1).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let started = std::time::Instant::now();
+    db.answers_within(Duration::from_secs(5)).await.expect("broken is no reason to stop the run");
+    assert!(started.elapsed() < Duration::from_secs(3), "at once: {:?}", started.elapsed());
+    let outcome = rerun(&db, "SELECT 5", 10).await;
+    assert_eq!(outcome.rows[0][0].as_deref(), Some("5"));
+}
+
+/// A stream whose link breaks while its rows are read reopens the session
+/// itself, in its own turn: said (a reconnect), and the next run runs as it
+/// is, on the new session (nothing in between got the broken one).
+pub(in crate::db) async fn live_a_broken_stream_reopens_its_session(
+    engine: Engine,
+    big: &str,
+    pid_sql: &str,
+    kill: &str,
+) {
+    let Some(db) = live_db(engine).await else { return };
+    let Some(other) = live_db(engine).await else { return };
+    let pid = db.run(pid_sql, 1).await.unwrap().rows[0][0].clone().unwrap();
+    let (_, rows) = db.run_streaming(big, 10).await.unwrap();
+    let rows = rows.expect("more to read");
+    other.run(&kill.replace("{pid}", &pid), 1).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // The rows already buffered may come; read until it breaks.
+    let mut broke = false;
+    for _ in 0..1000 {
+        match rows.next_page(1000).await {
+            Ok(page) if page.done => break,
+            Ok(_) => {}
+            Err(_) => {
+                broke = true;
+                break;
+            }
+        }
+    }
+    if !broke {
+        return; // all of it was on its way already
+    }
+    let mut health = db.health();
+    reported(&mut health, Duration::from_secs(10), |s| *s == HealthState::Reconnected).await;
+    assert_eq!(db.run("SELECT 3", 1).await.expect("on the new session, as it is").rows[0][0].as_deref(), Some("3"));
+}
+
+/// A lost connection with a transaction open is never reopened by the
+/// checks (that would lose the transaction without a word): they only ask
+/// whether it answers. Once the transaction's done with, it's reopened.
+pub(in crate::db) async fn live_a_lost_transaction_isnt_reopened_behind_its_back(engine: Engine) {
+    let Some(params) = live_params(engine) else { return };
+    let link = Link::default();
+    let db = through_proxy(&params, &link).await;
+    let mut health = db.health();
+    db.run("SELECT 1", 10).await.unwrap();
+    db.note_transaction(true);
+    db.set_heartbeat(Some(Duration::from_millis(200)));
+    Link::set(&link.freeze, true);
+    reported(&mut health, Duration::from_secs(10), HealthState::is_lost).await;
+    // Checked again and again (paused, even): never reopened.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let seen = health.borrow().clone();
+    assert!(seen.state.is_lost() && seen.reconnects == 0, "{seen:?}");
+    // The transaction's done with (rolled back by the user, say): the
+    // next check reopens it.
+    db.note_transaction(false);
+    let (_, reconnected) = db.check_now().await.expect("a new session");
+    assert!(reconnected);
+    assert_eq!(db.health().borrow().reconnects, 1);
+}
+
+/// A check whose time runs out while it reopens a session given up on
+/// (the server hangs) leaves it to be reopened by the next run, not closed
+/// for good.
+pub(in crate::db) async fn live_a_check_cut_short_while_reopening(engine: Engine) {
+    let Some(params) = live_params(engine) else { return };
+    let link = Link::default();
+    let db = through_proxy(&params, &link).await;
+    db.run("SELECT 1", 10).await.unwrap();
+    db.abandon_session();
+    Link::set(&link.hang, true);
+    assert!(db.check_now().await.is_err(), "the reopen hangs past the check's time");
+    Link::set(&link.hang, false);
+    // Reopened by the next run, not "disconnected" (which isn't sent).
+    let o = rerun(&db, "SELECT 9", 10).await;
+    assert_eq!(o.rows[0][0].as_deref(), Some("9"));
 }
 
 /// What the server says of the session's own state, which a run that
@@ -659,22 +938,20 @@ async fn a_session_given_up_on_is_opened_again() {
     let db = Database::connect(file_params(&path, false)).await.unwrap();
     db.run("create temp table only_here (x int)", 10).await.unwrap();
     db.answers_within(std::time::Duration::from_secs(1)).await.unwrap();
-    // Given up on mid-call: the next run has a session of its own (the
-    // temporary table, the old session's, is gone with it).
-    db.abandon_session();
-    let err = db.run("select * from only_here", 10).await.unwrap_err();
-    assert!(crate::db::error_message(&err).contains("no such table"), "{err:#}");
-    db.run("select 1", 10).await.unwrap();
-    // A write isn't run on the new session: the old one's transaction may
-    // have been open, so it's the user's to run again, told why.
+    // Given up on mid-call: the next run isn't sent, and says why; then
+    // it has a session of its own (the temporary table, the old session's,
+    // is gone with it).
     db.abandon_session();
     let err = db.run("create table w (x int)", 10).await.unwrap_err();
     assert!(crate::db::is_reconnected(&err), "{err:#}");
-    assert!(crate::db::error_message(&err).contains("wasn't run"), "{err:#}");
+    assert!(crate::db::error_message(&err).contains("wasn't sent"), "{err:#}");
     assert!(db.run("select * from w", 10).await.is_err(), "not created");
-    // A read is run again, and says it reconnected.
+    let err = db.run("select * from only_here", 10).await.unwrap_err();
+    assert!(crate::db::error_message(&err).contains("no such table"), "{err:#}");
+    // A read the same: not sent either.
     db.abandon_session();
-    assert!(db.run("select 1", 10).await.unwrap().reconnected);
+    assert!(crate::db::is_reconnected(&db.run("select 1", 10).await.unwrap_err()));
+    db.run("select 1", 10).await.unwrap();
 }
 
 /// The statements Podėlis writes itself, in each engine's dialect: ending a

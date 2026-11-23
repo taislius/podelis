@@ -15,6 +15,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Ctrl+K s c` checks the connection now and reconnects a lost one, as `R` does in the results (whose menu lists it too).
 - Another database on the same server for a tab: `D` in the navigator, a click on its database line, or `Ctrl+K` "Databases…" lists the server's databases to search; the one picked opens as the tab's connection with that database (a reconnect keeps it; other tabs stay on theirs). A connection with no database set is no longer stuck with the server's default.
 - `R` in the results checks the connection at once and reconnects a lost one; a lost connection shows `×` in the status bar.
 - Each database's ontology: its tables, views, columns and keys, with what the project's memory says of them, as one graph. `Ctrl+K y k` on a saved connection shows it by table, column and term, with a model's suggestions and stale facts apart; `a` on a line adds a fact about it.
@@ -29,6 +30,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Each connection's session is owned by a task of its own (an actor), which runs what's asked of the session in turn. Nothing on screen changes.
+- A connection's supervisor reports what happened to it (it answers, it's lost and why, its session was reopened, it's closed), and that's what the status bar and the tabs show: the app no longer decides a connection is lost from the words of an error message.
+- A connection is kept by its supervisor: with the heartbeat on it checks an idle connection (a hidden tab's too); a lost one it checks again by itself at growing waits (5 s, doubling to a minute, a little jittered), reconnecting unless a transaction is open, and after five failed checks it pauses ("paused after 5 tries · R in the results (Ctrl+K s c elsewhere) tries again") rather than trying for hours. R checks at once and ends a pause.
+- After a reconnect, the message says by name what the old session had that the new one hasn't: its database (`USE`), `SET` settings and `@variables`, `SET ROLE`, `LISTEN`, temporary tables, prepared statements; instead of "session settings were reset". None of it is run again on the new session (set it again if you need it): replaying it could change server-wide settings, bring back what a rollback undid, or set what never ran. A lost connection with a transaction open is never reopened by the checks.
+- Nothing you run is run again by itself after a reconnect, a read neither (one can write, `nextval()`, and the new session may have another database or search path): one sent on a session given up on says it wasn't sent; one whose connection dropped while it ran says whether it ran isn't known, to check before running it again. Before, a read was run again on the new session.
+- With a transaction open, a check that finds the session ended (a restart, a kill) reopens it, and says the transaction was lost: it was gone on the server already, and `R` couldn't bring the connection back before. A connection that doesn't answer at all is still left be while its transaction is open.
+- A result whose connection breaks while its rows are read opens a new session at once, and says so; the next query runs as it is.
+- A query's time limit counts from when it has the session, not while it waits for its turn: its cancel can no longer stop the query before it, nor can it run after saying it timed out.
+- A session the connection's checks reopened (nothing running) isn't one a run lands on unsaid: the first run after it says it wasn't sent, unless the reconnect was said already. A run that succeeds on a new session says the transaction it lost with its result, as an error.
+- The connection check asks the server with the protocol's ping, not a `SELECT 1`, so it leaves MySQL's `SHOW WARNINGS`, `ROW_COUNT()` and `FOUND_ROWS()` as the last run left them.
+- A lost connection is tried again at 5, 10, 20, 40 and 60 s, then paused (the first two waits were both 5 s). MySQL's `SET autocommit = 0` and SQLite's `SAVEPOINT` count as opening a transaction, so a check doesn't reopen a session under one.
+- Closing a connection (a project switch, the last tab on it gone) no longer waits behind what runs on it: the server is asked to stop the query, and nothing queued is run.
+- A grid edit saves only if the cell still has the value shown: changed by someone else since, nothing is overwritten, and it says so (rerun to see it as it is now). JSON, XML, float and geometry columns are compared by their key alone, as before.
+- Each export claims its own file: a name already taken (another export in the same second, a file put there since) gets `-2`, `-3`…; a failed or stopped export removes only its own file, and a kept `.partial` one never replaces another.
+- Switching a connected tab to another saved connection (Enter in the connections) opens the new one first, in the background, and swaps the tab only once it's open; one that doesn't open leaves the tab on its connection and says why (it used to let go of the old one first).
 - Picking a connection (Ctrl+O, the connections pane): `Enter` makes it this tab's (one already open in another tab is joined; not while this tab has a transaction open), `t` opens it in a new tab. It used to open in a new tab whenever this one was connected, so switching from stage to prod left the tabs behind.
 - The top bar names the project and the tab's connection, each a drop-down: the projects to switch to (then the projects window), or the project's connections for this tab (then its databases and the connections window). With tabs on more than one connection, each tab says its.
 - The query over a result fades out over a dozen characters, gently at first, and is as quiet as the tabs' names (it competed with the rows).
@@ -54,6 +70,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A COMMIT in a PostgreSQL transaction that had failed was reported as committed, though the server rolled it back: the commit key now says to roll back, and a typed `COMMIT` says it was rolled back.
+- A grid's rows read on one connection could be edited or deleted after the tab moved to another database with a table of the same name, writing there: they're refused now (run the query again on the tab's connection).
+- Starting a SQLite file's sandbox deleted every sandbox's copy, another tab's or another Podėlis's open one too: each has a locked folder of its own now, and only those whose sandbox has ended are cleaned up.
+- An in-memory SQLite database lost all its data if work on it failed badly (a driver panic) or was stopped with Esc twice: a new, empty session replaced it. Its one session is kept now.
+- A COPY stopped while the server didn't answer could leave its session in use in an unknown state: the session is given up on after 10 s, and the next run opens a new one.
+- A result given up on while it waited for its turn (DuckDB) still ran to its end, holding the database meanwhile.
+- MySQL, SQLite, DuckDB: a run whose `BEGIN` and first statements ran before one failed left its transaction open while the tab said none was (and refused the rollback): it's said open now, and the rollback undoes what ran.
+- On production, a read whose plan couldn't be had (`EXPLAIN` refused or failing) ran without asking, as if it read nothing: it asks now, saying how much it reads couldn't be checked. The MCP server refuses it for an agent, the same way.
+- MySQL's sandbox and rollback-only let a write to a MyISAM or MEMORY table through while the catalog was still finding which tables those are (or couldn't): writes wait for that now, said so.
+- A failed MySQL import into a new table kept the rows of its earlier batches (its `CREATE TABLE` committed the transaction): the table's made first now, and dropped if the load fails.
+- Enter on a saved connection open in another tab joined it even when that tab had a transaction open (this tab's SQL ran in it), or when the saved one had since been edited to another host or database: neither is joined now.
+- Picking two connections for a tab in turn could leave it on the first, if that one opened first: the latest picked lands.
+- MySQL's navigator could list the connection's own database's tables after `USE` another, while the session was busy: it waits for the session then.
+- A SQLite file's sandbox showed the original's connection state, not its copy's.
 - The connection form's fields had no cursor and were edited only at their end (Delete and the arrows did nothing): a field now has a cursor, drawn, that ←/→, Home and End move, and typing, Delete, Backspace and a paste work there. The form always says its keys (Ctrl+S save · Ctrl+T test · ↵ connect · Esc drop the changes) and marks unsaved changes; Ctrl+←/→ move its border as on the connections.
 - A tab with no connection open (one that didn't reopen, say) checked its SQL as PostgreSQL: MySQL's `SET @id = 1` was flagged ("Expected: identifier, found: @"). It's read as its connection's engine (the one it had, or the project's).
 - The editor's footer said a problem only while the cursor is in its statement: after running the next one, an error about the one before looked like it was about what just ran (its mark stays in the text; `Ctrl+K w` goes to it).

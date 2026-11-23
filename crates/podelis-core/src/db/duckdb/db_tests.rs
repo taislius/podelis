@@ -162,3 +162,21 @@ async fn its_load_reads() {
         assert!(!value.starts_with("not readable") && !value.is_empty(), "{what}: {value}");
     }
 }
+
+#[tokio::test]
+async fn a_queued_stream_whose_caller_is_gone_sends_nothing_duckdb() {
+    let (db, _) = own_live_db("queued-stream").await.unwrap();
+    a_queued_stream_whose_caller_is_gone_sends_nothing(&db, "SELECT count(*) FROM range(3000000000) t(i) WHERE i % 7 = 3").await;
+}
+
+/// A failed script whose `BEGIN` ran leaves its transaction open: DuckDB
+/// counts what ran, so the session says so.
+#[tokio::test]
+async fn a_failed_scripts_begin_leaves_its_transaction_open_duckdb() {
+    let (db, _) = own_live_db("failed-begin").await.unwrap();
+    db.run("CREATE TABLE t (x int)", 1).await.unwrap();
+    db.run("BEGIN; INSERT INTO t VALUES (1); SELECT * FROM nowhere", 1).await.unwrap_err();
+    assert!(db.in_transaction(), "the BEGIN ran");
+    db.run("ROLLBACK", 1).await.unwrap();
+    assert!(!db.in_transaction());
+}

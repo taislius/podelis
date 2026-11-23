@@ -14,7 +14,8 @@ pub(in crate::db) fn live_params() -> Option<ConnectParams> {
 pub(in crate::db) async fn own_live_db(name: &str) -> Option<(Database, ConnectParams)> {
     let mut params = live_params()?;
     let server = Database::connect(params.clone()).await.expect("connect");
-    server.run(&format!("CREATE DATABASE IF NOT EXISTS {name}"), 1).await.expect("create the test's database");
+    // Fresh each time: a run before (one that failed) may have left it.
+    server.run(&format!("DROP DATABASE IF EXISTS {name}; CREATE DATABASE {name}"), 1).await.expect("create the test's database");
     server.close().await;
     params.database = name.to_string();
     Some((Database::connect(params.clone()).await.expect("connect"), params))
@@ -248,4 +249,188 @@ async fn live_own_session_mysql() {
 async fn live_dead_link_mysql() {
     let big = "SELECT a.column_name FROM information_schema.columns a, information_schema.columns b";
     crate::db::tests::live_dead_link(Engine::MySql, big).await;
+}
+
+#[tokio::test]
+async fn live_supervisor_keeps_the_connection_mysql() {
+    crate::db::tests::live_supervisor_keeps_the_connection(Engine::MySql).await;
+}
+
+/// What the session had (its database, a setting, a user variable, a
+/// temporary table) is said gone after a reconnect, and not run again: the
+/// new session has the connection's own.
+#[tokio::test]
+async fn live_session_memory_mysql() {
+    let Some((db, _)) = own_live_db("podelis_memory").await else { return };
+    let Some(other) = live_db(Engine::MySql).await else { return };
+    let own = db.run("SELECT DATABASE()", 1).await.unwrap().rows[0][0].clone();
+    db.run("CREATE DATABASE IF NOT EXISTS podelis_memory_b", 1).await.unwrap();
+    db.run("USE podelis_memory_b", 1).await.unwrap();
+    db.run("SET SESSION sql_mode = 'ANSI_QUOTES'; SET @id = 42", 1).await.unwrap();
+    db.run("CREATE TEMPORARY TABLE podelis_tmp (x int)", 1).await.unwrap();
+    let pid = db.run("SELECT CAST(CONNECTION_ID() AS CHAR)", 1).await.unwrap().rows[0][0].clone().unwrap();
+    other.run(&format!("KILL {pid}"), 1).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let o = crate::db::tests::rerun(&db, "SELECT DATABASE(), @@session.sql_mode, CAST(@id AS CHAR)", 1).await;
+    assert_eq!(o.rows[0][0], own, "the connection's own database");
+    assert_ne!(o.rows[0][1].as_deref(), Some("ANSI_QUOTES"));
+    assert_eq!(o.rows[0][2], None, "no @id");
+    let health = db.health().borrow().clone();
+    assert_eq!(health.lost, ["database podelis_memory_b", "sql_mode", "@id", "temporary tables"]);
+    // The lint reads the new session's sql_mode, not the old one's.
+    assert!(!db.sql_mode().contains("ANSI_QUOTES"), "{}", db.sql_mode());
+    other.run("DROP DATABASE podelis_memory_b", 1).await.unwrap();
+}
+
+/// Behind ProxySQL, a SELECT after `SET @id` fails (the session's tied to
+/// one group of servers) and a new session opens: said as a reconnect, the
+/// variable gone with the old one.
+#[tokio::test]
+async fn live_session_memory_behind_proxysql() {
+    let Some(params) = server_params(Engine::MySql, "PODELIS_TEST_PROXYSQL", "app") else { return };
+    let db = Database::connect(params).await.expect("connect through ProxySQL");
+    db.run("SET @id = 1", 1).await.unwrap();
+    let err = db.run("SELECT @id", 1).await.unwrap_err();
+    assert!(crate::db::is_reconnected(&err), "{err:#}");
+    let health = db.health().borrow().clone();
+    assert!(health.lost.contains(&"@id".to_string()), "{health:?}");
+}
+
+#[tokio::test]
+async fn live_a_run_after_a_killed_session_reconnects_mysql() {
+    crate::db::tests::live_a_run_after_a_killed_session_reconnects(Engine::MySql, "SELECT CAST(CONNECTION_ID() AS CHAR)", "KILL {pid}").await;
+}
+
+#[tokio::test]
+async fn live_a_check_reopens_a_killed_session_in_a_transaction_mysql() {
+    crate::db::tests::live_a_check_reopens_a_killed_session_in_a_transaction(Engine::MySql, "SELECT CAST(CONNECTION_ID() AS CHAR)", "KILL {pid}").await;
+}
+
+#[tokio::test]
+async fn live_a_check_cut_short_while_reopening_mysql() {
+    crate::db::tests::live_a_check_cut_short_while_reopening(Engine::MySql).await;
+}
+
+#[tokio::test]
+async fn live_a_lost_transaction_isnt_reopened_behind_its_back_mysql() {
+    crate::db::tests::live_a_lost_transaction_isnt_reopened_behind_its_back(Engine::MySql).await;
+}
+
+/// What ran before a failing statement in the same run stands, and is
+/// said gone after a reconnect: `USE shop; SELECT … missing` left the
+/// session in shop.
+#[tokio::test]
+async fn live_a_failed_runs_earlier_statements_are_remembered_mysql() {
+    let Some((db, _)) = own_live_db("podelis_memory_part").await else { return };
+    let Some(other) = live_db(Engine::MySql).await else { return };
+    db.run("CREATE DATABASE IF NOT EXISTS podelis_memory_part_b", 1).await.unwrap();
+    db.run("USE podelis_memory_part_b; SELECT * FROM no_such_table", 1).await.expect_err("the second fails");
+    let pid = db.run("SELECT CAST(CONNECTION_ID() AS CHAR)", 1).await.unwrap().rows[0][0].clone().unwrap();
+    other.run(&format!("KILL {pid}"), 1).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let o = crate::db::tests::rerun(&db, "SELECT DATABASE()", 1).await;
+    assert_ne!(cells(&o), vec![vec![Some("podelis_memory_part_b")]], "not put back");
+    assert_eq!(db.health().borrow().lost, ["database podelis_memory_part_b"]);
+    other.run("DROP DATABASE podelis_memory_part_b", 1).await.unwrap();
+}
+
+#[tokio::test]
+async fn live_a_broken_stream_reopens_its_session_mysql() {
+    // More than the link holds on its way: the kill is met mid-read.
+    let big = "SELECT a.ORDINAL_POSITION FROM information_schema.COLUMNS a, information_schema.COLUMNS b";
+    crate::db::tests::live_a_broken_stream_reopens_its_session(Engine::MySql, big, "SELECT CAST(CONNECTION_ID() AS CHAR)", "KILL {pid}").await;
+}
+
+/// A `CALL` gives several results, each counted as a statement: from the
+/// first, which statements of a failed run ran isn't known, and none after
+/// it is said lost (`USE other` after a failure never ran).
+#[tokio::test]
+async fn live_a_call_doesnt_make_a_failed_runs_count_wrong_mysql() {
+    let Some((db, _)) = own_live_db("podelis_memory_call").await else { return };
+    let Some(other) = live_db(Engine::MySql).await else { return };
+    db.run("DROP PROCEDURE IF EXISTS podelis_two", 1).await.unwrap();
+    db.run("CREATE PROCEDURE podelis_two() BEGIN SELECT 1; SELECT 2; END", 1).await.unwrap();
+    db.run("CALL podelis_two(); SELECT * FROM no_such_table; USE mysql", 1).await.expect_err("the second fails");
+    let pid = db.run("SELECT CAST(CONNECTION_ID() AS CHAR)", 1).await.unwrap().rows[0][0].clone().unwrap();
+    other.run(&format!("KILL {pid}"), 1).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    crate::db::tests::rerun(&db, "SELECT 1", 1).await;
+    assert!(db.health().borrow().lost.is_empty(), "{:?}", db.health().borrow().lost);
+}
+
+
+/// After `USE`, the catalog is the session's database's even while the
+/// session is busy: it waits for its turn rather than read a pool
+/// connection, which is still in the connection's own.
+#[tokio::test]
+async fn live_the_catalog_follows_use_while_the_session_is_busy() {
+    let Some((db, _)) = own_live_db("podelis_catalog_use").await else { return };
+    db.run("CREATE DATABASE IF NOT EXISTS podelis_catalog_b", 1).await.unwrap();
+    db.run("CREATE TABLE IF NOT EXISTS podelis_catalog_b.only_in_b (x int)", 1).await.unwrap();
+    db.run("USE podelis_catalog_b", 1).await.unwrap();
+    db.mark_session_changed();
+    let busy = db.clone();
+    let sleeping = tokio::spawn(async move { busy.run("SELECT SLEEP(1)", 1).await });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let tables = db.tables(false).await.unwrap();
+    assert!(tables.iter().any(|t| t.name == "only_in_b"), "{:?}", tables.iter().map(|t| &t.name).collect::<Vec<_>>());
+    sleeping.await.unwrap().unwrap();
+    db.run("DROP DATABASE podelis_catalog_b", 1).await.unwrap();
+}
+
+/// A batch whose `BEGIN` and insert ran before a statement failed leaves
+/// its transaction open (MySQL doesn't say; what ran does), and a rollback
+/// undoes the insert.
+#[tokio::test]
+async fn live_a_failed_batch_leaves_its_transaction_open_mysql() {
+    let Some((db, _)) = own_live_db("podelis_failed_batch").await else { return };
+    db.run("CREATE TABLE IF NOT EXISTS podelis_batch (x int) ENGINE = InnoDB", 1).await.unwrap();
+    db.run("BEGIN; INSERT INTO podelis_batch VALUES (1); SELECT * FROM podelis_nowhere", 1).await.unwrap_err();
+    assert!(db.in_transaction(), "the BEGIN ran");
+    db.run("ROLLBACK", 1).await.unwrap();
+    assert!(!db.in_transaction());
+    let counted = db.run("SELECT CAST(count(*) AS CHAR) FROM podelis_batch", 1).await.unwrap();
+    assert_eq!(cells(&counted), vec![vec![Some("0")]]);
+    db.run("DROP TABLE podelis_batch", 1).await.unwrap();
+}
+
+/// A `CALL` that gives several results, then a failing statement, then a
+/// `COMMIT` that never ran: the transaction is still open (the results
+/// counted aren't statements).
+#[tokio::test]
+async fn live_a_call_doesnt_end_a_transaction_that_stays_open_mysql() {
+    let Some((db, _)) = own_live_db("podelis_call_txn").await else { return };
+    db.run("DROP PROCEDURE IF EXISTS podelis_two", 1).await.unwrap();
+    db.run("CREATE PROCEDURE podelis_two() BEGIN SELECT 1; SELECT 2; END", 1).await.unwrap();
+    db.run("BEGIN", 1).await.unwrap();
+    db.run("CALL podelis_two(); SELECT * FROM podelis_nowhere; COMMIT", 1).await.unwrap_err();
+    assert!(db.in_transaction(), "the COMMIT after the failure never ran");
+    db.run("ROLLBACK; DROP PROCEDURE podelis_two", 1).await.unwrap();
+}
+
+/// After `USE`, a catalog load behind an open result (its rows hold the
+/// session) doesn't wait for good: it says the session's busy, in seconds.
+#[tokio::test]
+async fn live_the_catalog_after_use_doesnt_wait_behind_an_open_result() {
+    let Some((db, _)) = own_live_db("podelis_catalog_open").await else { return };
+    db.run("USE podelis_catalog_open", 1).await.unwrap();
+    db.mark_session_changed();
+    let big = "SELECT a.COLUMN_NAME FROM information_schema.COLUMNS a CROSS JOIN information_schema.COLUMNS b";
+    let (_, stream) = db.run_streaming(big, 10).await.unwrap();
+    assert!(stream.is_some(), "more rows to come: the session's held");
+    let tables = tokio::time::timeout(Duration::from_secs(15), db.tables(false)).await.expect("not for good");
+    let err = tables.expect_err("busy");
+    assert!(format!("{err:#}").contains("busy"), "{err:#}");
+    drop(stream);
+}
+
+/// A connection check doesn't run a statement on the session: a run's
+/// warnings (and `ROW_COUNT()`) are still there after it.
+#[tokio::test]
+async fn live_a_check_keeps_the_last_runs_warnings_mysql() {
+    let Some(db) = live_db(Engine::MySql).await else { return };
+    db.run("SELECT CAST('7x' AS UNSIGNED)", 1).await.unwrap();
+    db.check_now().await.unwrap();
+    let warnings = db.run("SHOW WARNINGS", 10).await.unwrap();
+    assert!(!warnings.rows.is_empty(), "the warning kept");
 }

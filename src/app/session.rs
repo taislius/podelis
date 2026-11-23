@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::*;
 
-pub use super::conn_state::{ConnState, KeepAlive};
+pub use super::conn_state::ConnState;
 
 /// A connection and what goes with it: its form, modes, transaction,
 /// navigator, health, summary and connect time. The active value is
@@ -26,8 +26,23 @@ pub struct Connection {
     pub txn: TxnState,
     /// Where it stands: opening, open, lost, failed.
     pub state: ConnState,
-    /// The heartbeat's timing and check for this connection's session.
-    pub keepalive: KeepAlive,
+    /// Its supervisor's last report (when it's checked next, its latency).
+    pub health: Option<crate::db::Health>,
+    /// Its reconnects said so far (a report's count above it is a new one,
+    /// whatever its state: reports can merge).
+    pub reconnects_said: u64,
+    /// …and written to the connection log (once each, said or not yet).
+    pub reconnects_logged: u64,
+    /// Which follower of its supervisor's reports is its connection's now
+    /// (`follow_health`).
+    pub follower: u64,
+    /// The task forwarding its reports: stopped when another follows them.
+    pub following: Option<tokio::task::AbortHandle>,
+    /// A check asked for (`r`) is on its way…
+    pub checking: bool,
+    /// …asked while it was lost (its answer says "back", whatever the
+    /// reports said meanwhile).
+    pub checked_lost: bool,
     /// The schema navigator's catalog and state.
     pub schema: Option<SchemaPanel>,
     /// Where it goes, for the status bar.
@@ -38,8 +53,37 @@ pub struct Connection {
     pub sandbox: Option<super::Sandbox>,
     /// Its tables a rollback doesn't undo (MySQL's `MyISAM`, `MEMORY`…),
     /// read with the catalog: the sandbox and rollback-only refuse to
-    /// write them, since the write would stay.
-    pub unrollable: Vec<Unrollable>,
+    /// write them, since the write would stay. `None`: not known (still
+    /// being read, or it couldn't be), so they refuse writes on an engine
+    /// that has such tables.
+    pub unrollable: Option<Vec<Unrollable>>,
+    /// Why they couldn't be read, the last time they were asked for (they
+    /// are again with the catalog).
+    pub unrollable_failed: Option<String>,
+}
+
+impl Connection {
+    /// The tables a rollback doesn't undo, as read, or why they couldn't
+    /// be (those known before, if any, kept).
+    pub fn set_unrollable(&mut self, tables: Result<Vec<Unrollable>, String>) {
+        match tables {
+            Ok(tables) => {
+                self.unrollable = Some(tables);
+                self.unrollable_failed = None;
+            }
+            Err(why) => self.unrollable_failed = Some(why),
+        }
+    }
+
+    /// Its transaction state, as the app tracks it: its supervisor hears of
+    /// it at once (a check then never reopens a session with a transaction
+    /// open, which would lose it without a word).
+    pub fn set_txn(&mut self, txn: TxnState) {
+        self.txn = txn;
+        if let Some(db) = &self.database {
+            db.note_transaction(txn != TxnState::Idle);
+        }
+    }
 }
 
 /// A table a rollback doesn't undo: its schema (database) and name,
@@ -546,7 +590,9 @@ impl App {
         self.tabs[self.active_tab].conn = None;
         self.switch_conn(None);
         self.release_unused_conns();
+        let follow = db.clone();
         let id = self.connection.attach_active(Connection { database: Some(db), ..Connection::default() });
+        self.follow_health(id, &follow);
         self.tabs[self.active_tab].conn = Some(id);
     }
 
@@ -582,6 +628,47 @@ impl App {
         if moved {
             self.release_unused_conns();
         }
+    }
+
+    /// Passes connection `id`'s supervisor reports on to the app, as
+    /// `ConnEvent::Health`, until the connection is gone (its last handle
+    /// dropped ends the reports, and this with them); and gives it the
+    /// heartbeat as set.
+    pub(in crate::app) fn follow_health(&mut self, id: ConnId, db: &crate::db::Database) {
+        // No runtime in the unit tests that make a slot by hand.
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
+        self.heartbeat_for(db);
+        static FOLLOWERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let follower = FOLLOWERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut health = db.health();
+        // Its reports from now on, counted from the reconnects it's had (a
+        // connection followed again, the sandbox's original: none of those
+        // is new).
+        let reconnects = health.borrow().reconnects;
+        let send = self.conn_sender(id);
+        health.mark_unchanged();
+        let following = runtime.spawn(async move {
+            while health.changed().await.is_ok() {
+                let report = health.borrow_and_update().clone();
+                send(ConnEvent::Followed { follower, health: report });
+            }
+        });
+        if let Some(slot) = self.connection.slot_mut(id) {
+            slot.follower = follower;
+            slot.reconnects_said = reconnects;
+            slot.reconnects_logged = reconnects;
+            slot.health = None;
+            if let Some(before) = slot.following.replace(following.abort_handle()) {
+                before.abort();
+            }
+        } else {
+            following.abort();
+            return;
+        }
+        // How it is now, not only how it changes from now (followed again,
+        // it may be lost already).
+        let now = db.health().borrow().clone();
+        self.apply_health(id, now);
     }
 
     /// Ctrl+D: disconnects this tab. The connection stays open while other
@@ -625,16 +712,7 @@ impl App {
         self.manager.connection_message = None;
         self.restore_active_form();
         self.screen = Screen::Query;
-        // The tab let go of its connection for one that didn't open: it's
-        // the tab's again.
-        if let Some(previous) = self.manager.previous_conn.take()
-            && self.tabs[self.active_tab].conn.is_none()
-            && self.connection.state_of(previous).is_some()
-        {
-            self.tabs[self.active_tab].conn = Some(previous);
-            self.switch_conn(Some(previous));
-            return;
-        }
+
         let blank = self.tab.editor.is_empty() && self.tabs[self.active_tab].saved_id.is_none();
         if std::mem::take(&mut self.manager.drop_blank_tab)
             && self.connection.slots.active.is_none()
@@ -698,6 +776,10 @@ impl App {
     /// On startup: opens what the command line asked for (a project, a
     /// connection), or else restores the last session.
     pub fn start(&mut self, project: Option<&str>, connection: Option<&str>) {
+        // The heartbeat as loaded: each connection opened gets it as it
+        // opens (`follow_health`), so it isn't taken for one switched on
+        // (a check of every connection at once).
+        self.applied_heartbeat = self.settings.keepalive;
         if let Some(name) = project
             && let Err(e) = self.open_project_by_name(name)
         {
@@ -940,6 +1022,7 @@ impl App {
         crate::system::connection_log::record("reopened", &name, db.version());
         let summary = form.summary();
         let project = self.project().map(|p| p.name.clone()).unwrap_or_default();
+        self.follow_health(id, &db);
         let Some(slot) = self.connection.slot_mut(id) else { return };
         slot.database = Some(db);
         slot.state = ConnState::default();

@@ -342,19 +342,38 @@ impl App {
     /// has a transaction open or a query running: `t` opens it in a new tab.
     pub(in crate::app) fn open_saved_here(&mut self, profile: ConnectionProfile) {
         let connected = self.connection.slots.active.is_some();
-        if connected && (self.tab.run.executing || self.connection.txn == TxnState::Open) {
+        if connected && (self.tab.run.executing || self.connection.txn != TxnState::Idle) {
             if self.screen == Screen::Query {
                 return self.set_status(t!("session.busy_here").to_string(), true);
             }
             self.manager.connection_message = Some((t!("session.busy_here").to_string(), true));
             return;
         }
+        // Joined only if it's open to what the saved one reaches now (not to
+        // a host or database it named before an edit).
+        let wanted = ConnectForm::from_profile(&profile, String::new());
         let open = self
             .connection
             .all()
-            .find(|(_, slot)| slot.form.is_saved(&profile.name) && slot.database.is_some())
-            .map(|(id, _)| id);
-        if let Some(id) = open {
+            .find(|(_, slot)| {
+                slot.form.is_saved(&profile.name) && slot.database.is_some() && slot.form.same_target(&wanted)
+            })
+            .map(|(id, slot)| (id, slot.txn));
+        // Another tab's transaction is open on it: joining would run this
+        // tab's SQL in it.
+        if let Some((_, txn)) = open
+            && txn != TxnState::Idle
+        {
+            let said = t!("session.join_in_transaction", name = profile.name);
+            if self.screen == Screen::Query {
+                return self.set_status(said, true);
+            }
+            self.manager.connection_message = Some((said, true));
+            return;
+        }
+        if let Some((id, _)) = open {
+            // Picked over one still on its way: that one doesn't land.
+            self.latest_swap = None;
             self.tabs[self.active_tab].conn = Some(id);
             self.switch_conn(Some(id));
             self.release_unused_conns();
@@ -364,14 +383,72 @@ impl App {
             self.save_draft();
             return;
         }
-        // The tab lets go of its connection, which stays open (not released)
-        // until the new one is: leaving without it, the tab has it back.
+        // A connected tab keeps its connection while the new one opens, in
+        // the background: once it's open the tab swaps to it (the old one
+        // released, unless other tabs use it); if it doesn't open, the tab
+        // is as it was, and says why.
         if connected {
-            self.manager.previous_conn = self.tabs[self.active_tab].conn.take();
-            self.switch_conn(None);
+            return self.swap_to(profile);
         }
         self.connection.slots.auto_connect = true;
         self.load_profile(profile);
+    }
+
+    /// Opens `profile` for the shown tab, which keeps its connection until
+    /// the new one is open (`DbEventKind::DatabaseOpened` for this tab).
+    fn swap_to(&mut self, profile: ConnectionProfile) {
+        let Some(project_id) = self.current_project.clone() else { return };
+        if !self.may_reach_outside() {
+            return;
+        }
+        let name = profile.name.clone();
+        // A file that isn't there is made only when asked (the form asks):
+        // not here, behind the tab's back.
+        let missing = ConnectForm::from_profile(&profile, String::new())
+            .params()
+            .ok()
+            .and_then(|p| p.file_to_create().map(str::to_string));
+        if let Some(path) = missing {
+            let said = t!("session.swap_no_file", name = name, path = path);
+            self.manager.connection_message = Some((said, true));
+            return;
+        }
+        self.manager.connection_message = None;
+        self.screen = Screen::Query;
+        self.focus = Focus::Editor;
+        self.set_status(t!("palette.opening_database", name = name), false);
+        crate::system::connection_log::record("connecting", &name, profile.engine.label());
+        let send = self.sender();
+        let swap = self.new_swap();
+        tokio::spawn(async move {
+            let failed = |error: String| DbEventKind::DatabaseFailed { name: name.clone(), error, swap };
+            let keychain = {
+                let profile = profile.clone();
+                tokio::task::spawn_blocking(move || store::saved_password(&project_id, &profile)).await
+            };
+            let Ok((password, note)) = keychain else { return send(failed("the keychain didn't answer".into())) };
+            let mut form = ConnectForm::from_profile(&profile, password);
+            // Why the password is missing, said with a failure it explains.
+            form.keychain_note = note;
+            let params = match form.params() {
+                Ok(params) => params,
+                Err(e) => return send(failed(e)),
+            };
+            match Database::connect(params).await {
+                Ok(db) => send(DbEventKind::DatabaseOpened(db, Box::new(form), swap)),
+                Err(e) => {
+                    crate::system::connection_log::record("connect failed", &name, &crate::db::error_details(&e));
+                    let message = crate::db::error_message(&e);
+                    let mut said = form.connect_failure(&message);
+                    // A password to type: the form, in a new tab (this one
+                    // keeps its connection).
+                    if crate::db::is_auth_failure(&message) && form.password_command.trim().is_empty() {
+                        said = format!("{said} · {}", t!("session.swap_password"));
+                    }
+                    send(failed(said));
+                }
+            }
+        });
     }
 
     /// Lists the running database containers, off the UI thread (it runs
@@ -499,6 +576,8 @@ impl App {
     /// block on an unlock prompt.
     pub(in crate::app) fn load_profile(&mut self, profile: ConnectionProfile) {
         let Some(project_id) = self.current_project.clone() else { return };
+        // Opened another way: one still on its way for the tab doesn't land.
+        self.latest_swap = None;
         self.manager.loading_profile = true;
         self.manager.connection_message = None;
         let send = self.sender();

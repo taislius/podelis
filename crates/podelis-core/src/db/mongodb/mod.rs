@@ -31,6 +31,8 @@ pub(super) mod driver;
 pub(super) mod passwords;
 #[cfg(feature = "mongodb")]
 pub(super) mod queries;
+#[cfg(feature = "mongodb")]
+pub(super) mod session;
 
 use super::backend::{Backend, Capabilities};
 

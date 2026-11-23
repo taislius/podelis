@@ -204,16 +204,19 @@ everywhere:
   (`Background::Restored { id, attempt }`), never matched by name. The
   owner allocates IDs, switches and drains slots as one transition;
   `App::switch_conn` coordinates generation invalidation and catalog effects
-  around it. `ConnState` and `KeepAlive` (only a check's timing, whether one
-  runs, and how long a lost one waits for the next: 5 s doubling to a
-  minute) are in `conn_state.rs`. The other tabs' connections are checked as
-  the shown one is. A reconnect that lost an open transaction says so.
-  The optional heartbeat (`settings.keepalive`, off by default) checks idle
-  connections and updates the status bar; `Reconnect` runs that check on
-  demand. Query failures also mark an unreachable connection, and a later
-  successful check or query clears the lost state. With the heartbeat off,
-  the status bar can only learn about a loss when an operation checks the
-  server. A check's answer, and a catalog load's, are `ConnEvent`s for
+  around it. `ConnState` is in `conn_state.rs`; what moves it is the
+  connection's supervisor's reports (`ConnEvent::Health`), shown or hidden.
+  Keeping a connection is the supervisor's (`db/supervisor.rs`), each its
+  own, a hidden tab's too: with the heartbeat (`settings.keepalive`, off by
+  default, passed on to every open connection, `apply_heartbeat`) it checks
+  an idle one; a lost one it checks again at growing waits (5 s doubling
+  to a minute, jittered), reopening its session unless a transaction is
+  open (the app says which are, `note_transactions`), and pauses after five
+  failed checks; its reports carry when it checks next (the status bar's
+  countdown) and its latency. `Reconnect` (R in the results) asks it to
+  check now (`Database::check_now`), which ends a pause; something done
+  while lost nudges it. A reconnect that lost an open transaction says so.
+  A check's answer, and a catalog load's, are `ConnEvent`s for
   their connection by id (`DbEvent::conn`), wherever it is then: a hidden
   tab's connection keeps where it stands; a load's results carry which load
   they're of (`SchemaPanel::load`), so a late one is dropped. The catalog
@@ -313,6 +316,22 @@ db/
   run.rs          running, streaming, cancelling, checking statements; the
                   answer check before a run after a quiet while, and a
                   session given up on (stale) replaced before the next
+  session_memory.rs  what the user's statements changed on the session
+                  (each engine's `session.rs`: `remember`), said gone after
+                  a reconnect: nothing is run again on a new session, and
+                  neither is the user's SQL (a run after one fails, "not
+                  sent" or "whether it ran isn't known"); only Podėlis's
+                  own ping is
+  supervisor.rs   the task that owns a connection's session (an actor:
+                  `Database` is its handle): what's asked of the session
+                  (`with_session`) runs there one piece at a time; a
+                  streamed result is one long piece, stopped when the
+                  session is given up on; a cancel doesn't queue; it ends
+                  with the last handle. Its reports (`Database::health`, a
+                  watch: live, lost and why, reconnected, closed) are the
+                  one source of whether a connection is lost: the app
+                  follows each slot's (`ConnEvent::Health`) and doesn't
+                  read error text for it
   catalog.rs  details.rs  info.rs  activity.rs
                   Database methods: each calls its engine's same-named
                   function through the dispatch macros

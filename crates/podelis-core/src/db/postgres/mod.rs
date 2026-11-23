@@ -19,6 +19,8 @@ pub(super) mod passwords;
 pub(super) mod pgpass;
 #[cfg(feature = "postgres")]
 pub(super) mod queries;
+#[cfg(feature = "postgres")]
+pub(super) mod session;
 mod versions;
 
 use super::backend::{Backend, Capabilities};

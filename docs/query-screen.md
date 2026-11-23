@@ -403,7 +403,7 @@ bar to open it. The activity monitor lists the server's sessions (Postgres
 `pg_stat_activity`, MySQL's process list) with their state, time, what
 they wait on and who blocks them, refreshing every 2 s: `Enter` shows a
 session's full query, `c` cancels its query, `x` ends the session (both ask
-first; read-only connections refuse). **Server load** (`Ctrl+K s l`)
+first; read-only connections refuse). **Check the connection** (`Ctrl+K s c`, or `R` in the results) checks it now and reconnects a lost one. **Server load** (`Ctrl+K s l`)
 reads the server's own statistics: on PostgreSQL connections in use of the
 most, running queries, sessions waiting on locks or idle in a transaction,
 the longest running query, the cache hit ratio, commits and rollbacks,

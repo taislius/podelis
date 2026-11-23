@@ -51,8 +51,11 @@ pub struct TabState {
     pub runs: Vec<super::results::runs::KeptRun>,
     pub run_at: usize,
     pub(in crate::app) runs_made: usize,
-    /// Why the run shown has no result: its error.
+    /// Why the run shown has no result: its error…
     pub run_error: Option<String>,
+    /// …a link's (no answer, couldn't reconnect), not its SQL's: as the
+    /// error said when it came.
+    pub run_error_link: bool,
     /// The parameters the shown result's query ran with, to run it again.
     pub(in crate::app) last_filled: Option<Filled>,
     /// Its query: running, or the last one's state. Each tab has its own,

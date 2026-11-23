@@ -267,6 +267,8 @@ pub struct App {
     /// Handling a key, click or paste (see `on_input`).
     handling_input: bool,
     pub settings: Settings,
+    /// The heartbeat last passed to the open connections (`keepalive`).
+    applied_heartbeat: u64,
     /// The heartbeat interval to restore when heartbeat is toggled back on.
     heartbeat_secs: u64,
     pub keymap: crate::config::keys::KeyMap,
@@ -277,6 +279,13 @@ pub struct App {
     /// Reopening the session's connections (Esc or any key hides it).
     pub splash: Option<session::Splash>,
     connect_started: Option<Instant>,
+    /// The latest background swap of a tab's connection (`Swap`), and how
+    /// many were asked for.
+    latest_swap: Option<events::Swap>,
+    swaps: u64,
+    /// What the status bar said as a swap began ("Opening …"), to take
+    /// back if its answer's dropped.
+    swap_said: Option<(events::Swap, String, Instant)>,
     /// The open cell-edit prompt.
     pub cell_edit: Option<CellEdit>,
     /// Open tabs and their project connection slot references.
@@ -373,11 +382,15 @@ impl App {
             handling_input: false,
             settings: Settings::default(),
             heartbeat_secs: 30,
+            applied_heartbeat: 0,
             keymap: crate::config::keys::KeyMap::default(),
             focus: Focus::Editor,
             help: Help::default(),
             splash: None,
             connect_started: None,
+            latest_swap: None,
+            swaps: 0,
+            swap_said: None,
             cell_edit: None,
             tabs: vec![TabMeta {
                 id: TabId(1),
@@ -618,7 +631,35 @@ impl App {
         }
     }
 
+    /// A new background swap for the shown tab: the latest, so an earlier
+    /// one's answer is dropped.
+    fn new_swap(&mut self) -> events::Swap {
+        self.swaps += 1;
+        let swap = events::Swap { tab: self.tabs[self.active_tab].id, attempt: self.swaps };
+        self.latest_swap = Some(swap);
+        // Its latency counts from now (not from one asked for before).
+        let now = Instant::now();
+        self.connect_started = Some(now);
+        self.swap_said = Some((swap, self.notes.status.clone(), now));
+        swap
+    }
+
+    /// A swap's answer dropped (another asked for since, or none wanted):
+    /// its "Opening …" goes, unless something else is said by now.
+    fn swap_dropped(&mut self, swap: events::Swap) {
+        let Some((_, text, started)) = self.swap_said.take_if(|(said, ..)| *said == swap) else { return };
+        if text == self.notes.status {
+            self.set_status(String::new(), false);
+        }
+        // Its time, not another connect's begun since.
+        if self.connect_started == Some(started) {
+            self.connect_started = None;
+        }
+    }
+
     fn invalidate_tasks(&mut self) {
+        // A connection on its way for the tab isn't wanted now either.
+        self.latest_swap = None;
         self.tab.run.db = None;
         // (A check on its way is its connection's: its answer still finds
         // it, by id, so it's still awaited.)

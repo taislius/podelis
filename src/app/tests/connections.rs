@@ -409,7 +409,7 @@ async fn an_address_on_the_first_run_opens_a_default_project_that_keeps_the_tabs
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_cancel_the_server_cant_be_told_lets_esc_stop_waiting() {
-    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    let (mut app, _dir) = connected_file_app(ConnectionMode::Normal).await;
     // A run that never ends (as on a link that died), and Esc.
     app.tab.run.executing = true;
     app.tab.run.task = Some(tokio::spawn(std::future::pending()));
@@ -426,13 +426,26 @@ async fn a_cancel_the_server_cant_be_told_lets_esc_stop_waiting() {
         unreachable: true,
     };
     app.handle_db_event(DbEvent::run(app.tab.run.id, failed));
-    assert!(app.tab.run.cancel_failed && app.connection.state.is_lost() && app.tab.run.executing);
+    // The server can't be reached: its supervisor reports it lost (the
+    // failed cancel's message isn't read for that).
+    assert!(app.tab.run.cancel_failed && !app.connection.state.is_lost() && app.tab.run.executing);
+    let lost = crate::db::Health {
+        next_check: None,
+        ..crate::db::Health::of(crate::db::HealthState::Lost("unreachable".into()))
+    };
+    let id = app.connection.slots.active.unwrap();
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(lost)));
+    assert!(app.connection.state.is_lost());
     assert!(said(&app).starts_with("Couldn't cancel: Esc again stops waiting"), "{}", said(&app));
     // Esc again: no longer waiting; the next run checks the server first.
     app.handle_key(key(KeyCode::Esc));
     assert!(!app.tab.run.executing && app.tab.run.task.is_none() && !app.tab.run.cancel_failed);
     assert!(app.tab.run_error.as_ref().is_some_and(|e| e.contains("stopped waiting")));
     assert!(app.connection.state.is_lost());
+    // The next run opens a new session and isn't sent on it (said so);
+    // run again, it is.
+    run_sql(&mut app, "select 7").await;
+    assert!(app.tab.run_error.as_ref().is_some_and(|e| e.contains("wasn't sent")), "{:?}", app.tab.run_error);
     run_sql(&mut app, "select 7").await;
     assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("7".to_string())]]);
     assert!(!app.connection.state.is_lost());
@@ -448,20 +461,20 @@ async fn a_cancel_the_server_cant_be_told_lets_esc_stop_waiting() {
     assert!(!app.tab.run.cancel_failed, "the next Esc asks the server again");
 }
 
+/// A lost connection is its supervisor's to check again (`db::supervisor`);
+/// the app shows the countdown meanwhile, and says it's back when it
+/// reports so.
 #[cfg(feature = "sqlite")]
 #[tokio::test]
-async fn a_lost_connection_is_checked_again_and_said_when_back() {
+async fn a_lost_connection_is_said_back_when_its_supervisor_reports_it() {
+    use crate::db::{Health, HealthState};
     let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
-    app.connection.state.lose();
-    // Ticks go on for it, heartbeat or not; something done checks it now.
-    assert!(app.settings.keepalive == 0 && app.wants_ticks());
-    app.connection.keepalive.last_activity = Instant::now().checked_sub(Duration::from_secs(3)).unwrap();
-    app.handle_key(key(KeyCode::Down));
-    assert!(app.connection.keepalive.pinging());
-    while app.connection.keepalive.pinging() {
-        let event = app.poll_db_event().await.unwrap();
-        app.handle_db_event(event);
-    }
+    let id = app.connection.slots.active.unwrap();
+    let report = Health::of;
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(report(HealthState::Lost("no answer in 5 s".into())))));
+    assert!(app.connection.state.is_lost());
+    assert!(app.settings.keepalive == 0 && app.wants_ticks(), "ticks for the countdown");
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(report(HealthState::Live))));
     assert!(!app.connection.state.is_lost() && !app.wants_ticks());
     assert_eq!(said(&app), "The connection is back");
 }
@@ -475,12 +488,11 @@ async fn a_connection_can_be_checked_and_reconnected_from_the_results_pane() {
     // (Its tables loading answers too: a lost one would be back by them.)
     finish_catalog(&mut app).await;
     app.focus = Focus::Results;
-    app.connection.keepalive.last_activity = Instant::now();
     assert!(matches!(app.can(Command::Reconnect), Can::Yes));
 
     app.handle_key(key(KeyCode::Char('R')));
-    assert!(app.connection.keepalive.pinging());
-    while app.connection.keepalive.pinging() {
+    assert!(app.connection.checking);
+    while app.connection.checking {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
@@ -489,11 +501,10 @@ async fn a_connection_can_be_checked_and_reconnected_from_the_results_pane() {
     assert_eq!(said(&app), "The server is responding");
 
     app.connection.state.lose();
-    app.connection.keepalive.last_activity = Instant::now();
     assert!(matches!(app.can(Command::Reconnect), Can::Yes));
     app.handle_key(key(KeyCode::Char('R')));
-    assert!(app.connection.keepalive.pinging());
-    while app.connection.keepalive.pinging() {
+    assert!(app.connection.checking);
+    while app.connection.checking {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
@@ -505,8 +516,8 @@ async fn a_connection_can_be_checked_and_reconnected_from_the_results_pane() {
     app.focus = Focus::Editor;
     app.run_command_for_tests(Command::Reconnect);
     assert_eq!(app.focus, Focus::Results);
-    assert!(app.connection.keepalive.pinging());
-    while app.connection.keepalive.pinging() {
+    assert!(app.connection.checking);
+    while app.connection.checking {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
@@ -925,18 +936,16 @@ async fn connection_info_keepalive_and_diagnostics() {
     assert!(info.contains("Journal mode") && info.contains("Latency"), "{info}");
     app.popups.cell_view = None;
 
-    // Keep-alive: an idle connection gets checked, and the latency updated.
+    // Keep-alive: switched on, the connection's supervisor checks it (at
+    // once, then each heartbeat), and its latency comes with the report.
     app.settings.keepalive = 1;
-    app.connection.keepalive.last_activity = Instant::now().checked_sub(std::time::Duration::from_secs(5)).unwrap();
     app.connection.latency = None;
-    assert!(app.wants_ticks());
+    assert!(app.wants_ticks(), "the heartbeat to pass on");
     app.tick_running();
-    assert!(app.connection.keepalive.pinging());
-    while app.connection.keepalive.pinging() {
+    while app.connection.latency.is_none() {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
-    assert!(app.connection.latency.is_some());
 
     let report = app.diagnostics();
     assert!(report.contains(env!("CARGO_PKG_VERSION")) && report.contains(file_engine().label()), "{report}");
@@ -950,41 +959,30 @@ async fn heartbeat_can_be_switched_on_and_reports_a_lost_connection() {
     assert_eq!(app.settings.keepalive, 0, "off by default");
     app.run_action(crate::config::keys::Action::Heartbeat);
     assert_eq!(app.settings.keepalive, 30);
-    assert!(app.connection.keepalive.pinging(), "checks right away");
-    while app.connection.keepalive.pinging() {
+    // Passed on with the next tick: checked right away.
+    app.tick_running();
+    while app.connection.latency.is_none() {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
-    assert!(app.connection.latency.is_some() && !app.connection.state.is_lost());
-    // A failed check marks the connection lost until something succeeds.
+    assert!(!app.connection.state.is_lost());
+    // A check asked for that fails: lost, and said with a hint.
     app.pinged(Err(("connection refused".into(), crate::app::Ping::Failed)));
     assert!(app.connection.state.is_lost() && app.notes.status.contains("hint:"), "{}", app.notes.status);
     run_sql(&mut app, "select 1").await;
     assert!(!app.connection.state.is_lost());
-    // A heartbeat with no answer once: said, the session kept (an open
-    // transaction would go with it).
-    run_sql(&mut app, "create table hb (x int); begin; insert into hb values (1)").await;
-    assert_eq!(app.connection.txn, TxnState::Open);
-    app.pinged(Err(("no answer in 5 s".into(), crate::app::Ping::NoAnswer)));
-    app.pinged(Err(("no answer in 5 s".into(), crate::app::Ping::NoAnswer)));
-    assert!(app.connection.state.is_lost());
-    run_sql(&mut app, "select count(*) from hb").await;
-    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("1".to_string())]], "still its transaction");
-    // A check on its way when the connection shown changes is that
-    // connection's: its answer goes to it, not to the one shown now.
+    // A check that comes back after another connection is shown is said
+    // by its reports, not taken for the one shown now.
     let checked = app.connection.slots.active.unwrap();
-    app.connection.state.answered();
-    app.connection.keepalive.begin_check();
+    app.connection.checking = true;
     app.switch_conn(None);
-    assert!(!app.connection.keepalive.pinging(), "none on the one shown now");
-    assert!(app.connection.slot_mut(checked).unwrap().keepalive.pinging(), "still awaited: none starts beside it");
+    assert!(!app.connection.checking, "none on the one shown now");
     app.handle_db_event(DbEvent::conn(
         checked,
         ConnEvent::Pinged(Err(("old connection failed".into(), crate::app::Ping::Failed))),
     ));
     assert!(!app.connection.state.is_lost(), "a late check cannot poison the new connection state");
-    assert!(app.connection.slot_mut(checked).unwrap().state.is_lost(), "it's its own connection's");
-    assert!(!app.connection.slot_mut(checked).unwrap().keepalive.pinging());
+    assert!(!app.connection.slot_mut(checked).unwrap().checking);
     app.run_action(crate::config::keys::Action::Heartbeat);
     assert_eq!(app.settings.keepalive, 0);
 }
@@ -1488,12 +1486,13 @@ async fn a_connection_opened_by_hand_is_its_failed_tabs_too() {
     assert!(app.tab_connection_failure().is_none() && app.connected(), "{:?}", app.connection.state);
 }
 
-/// With the heartbeat on, the other tabs' connections are checked too,
-/// and what's found is theirs: shown in the tab list, and in the status
-/// bar once the tab is shown.
+/// With the heartbeat on, the other tabs' connections are checked too (each
+/// by its supervisor), and what's found is theirs: shown in the tab list,
+/// and in the status bar once the tab is shown.
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_hidden_tabs_connection_is_checked_too() {
+    use crate::db::{Health, HealthState};
     let (mut app, dir) = test_app();
     let project = project_id(&app);
     let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
@@ -1507,13 +1506,9 @@ async fn a_hidden_tabs_connection_is_checked_too() {
     let hidden = app.tabs[1].conn.unwrap();
     app.settings.keepalive = 30;
     assert!(app.wants_ticks());
-    let long_ago = Instant::now().checked_sub(Duration::from_secs(60)).unwrap();
-    app.connection.slot_mut(hidden).unwrap().keepalive.last_activity = long_ago;
-    app.connection.keepalive.last_activity = Instant::now();
-    app.keepalive_tick();
-    assert!(app.connection.slot_mut(hidden).unwrap().keepalive.pinging(), "checked, though hidden");
-    assert!(!app.connection.keepalive.pinging(), "the shown one isn't due");
-    while app.connection.slot_mut(hidden).unwrap().keepalive.pinging() {
+    app.tick_running();
+    // Its supervisor checked it, though hidden: its report is its own.
+    while app.connection.slot_mut(hidden).unwrap().latency.is_none() {
         let event = app.poll_db_event().await.unwrap();
         app.handle_db_event(event);
     }
@@ -1521,11 +1516,11 @@ async fn a_hidden_tabs_connection_is_checked_too() {
     // Lost while hidden: its tab says so in the list, and the bar once shown.
     app.connection.slot_mut(hidden).unwrap().state.lose_for_tests();
     assert!(app.connection_entry(hidden).contains("connection lost"), "{}", app.connection_entry(hidden));
-    // A hidden tab's check that had to reconnect: its open transaction is
-    // gone, and that's said at once, not when its tab is shown.
+    // A hidden tab's session reopened: its open transaction is gone, and
+    // that's said at once, not when its tab is shown.
     app.connection.slot_mut(hidden).unwrap().txn = TxnState::Open;
-    app.connection.slot_mut(hidden).unwrap().keepalive.begin_check();
-    app.handle_db_event(DbEvent::conn(hidden, ConnEvent::Pinged(Ok((Duration::from_millis(3), true)))));
+    let reconnected = Health { reconnects: 1, ..Health::of(HealthState::Reconnected) };
+    app.handle_db_event(DbEvent::conn(hidden, ConnEvent::Health(reconnected)));
     let slot = app.connection.slot_mut(hidden).unwrap();
     assert_eq!(slot.txn, TxnState::Idle);
     assert_eq!(slot.state, crate::app::ConnState::Ready { verified: true }, "back");
@@ -1616,14 +1611,11 @@ async fn enter_on_a_connection_makes_it_this_tabs() {
     connect_profile(&mut app, &a).await;
     app.handle_key(ctrl('t'));
     let alpha = app.tabs[0].conn;
-    // The second tab moves to beta; the first keeps alpha.
+    // The second tab moves to beta (once it's open); the first keeps alpha.
     app.handle_key(ctrl('o'));
     app.manager.connection_selected = 1;
     app.handle_key(key(KeyCode::Enter));
-    while app.connection.database.is_none() || app.connection.form.connecting || app.manager.loading_profile {
-        let event = app.poll_db_event().await.unwrap();
-        app.handle_db_event(event);
-    }
+    until_event(&mut app, |k| matches!(k, DbEventKind::DatabaseOpened(..))).await;
     assert_eq!(app.tabs.len(), 2, "no new tab");
     assert_eq!(app.connection.form.name, "beta");
     assert_eq!(app.tabs[0].conn, alpha);
@@ -1645,28 +1637,95 @@ async fn enter_on_a_connection_makes_it_this_tabs() {
     assert!(said.contains("t opens"), "{said}");
 }
 
-/// Enter on another connection lets go of this tab's only once the new one
-/// is open: leaving without it (Esc), the tab has its own back, still open.
+/// Enter on a connection open in another tab joins it only while it's open
+/// to what the saved one reaches now (edited since to another file: a new
+/// one is opened), and not while that tab has a transaction open on it
+/// (this tab's SQL would run in it).
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn enter_doesnt_join_an_open_transaction_or_an_old_target() {
+    let (mut app, dir) = test_app();
+    let project = project_id(&app);
+    std::fs::write(dir.path().join("b.db"), "").unwrap();
+    let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
+    app.store.upsert(&project, None, a.clone()).unwrap();
+    app.store.upsert(&project, None, b.clone()).unwrap();
+    connect_profile(&mut app, &a).await;
+    let alpha = app.tabs[0].conn;
+    app.handle_key(ctrl('t'));
+    app.handle_key(ctrl('o'));
+    app.manager.connection_selected = 1;
+    app.handle_key(key(KeyCode::Enter));
+    until_event(&mut app, |k| matches!(k, DbEventKind::DatabaseOpened(..))).await;
+    let beta = app.tabs[1].conn;
+    assert_ne!(beta, alpha);
+    // The first tab's transaction is open on alpha: not joined.
+    app.connection.slot_mut(alpha.unwrap()).unwrap().txn = TxnState::Open;
+    app.handle_key(ctrl('o'));
+    app.manager.connection_selected = 0;
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.tabs[1].conn, beta, "still beta");
+    let said = format!("{} {}", said(&app), app.manager.connection_message.as_ref().map_or("", |(m, _)| m));
+    assert!(said.contains("transaction open in another tab"), "{said}");
+    app.connection.slot_mut(alpha.unwrap()).unwrap().txn = TxnState::Idle;
+    // Alpha edited to another file since it was opened: a new connection,
+    // not the old one's.
+    let moved = file_profile("alpha", &dir.path().join("a2.db"));
+    std::fs::write(dir.path().join("a2.db"), "").unwrap();
+    app.store.upsert(&project, Some("alpha"), moved).unwrap();
+    app.handle_key(ctrl('o'));
+    app.manager.connection_selected = 0;
+    app.handle_key(key(KeyCode::Enter));
+    until_event(&mut app, |k| matches!(k, DbEventKind::DatabaseOpened(..))).await;
+    assert_ne!(app.tabs[1].conn, alpha, "not the old target's");
+    assert!(app.connection.form.host.ends_with("a2.db"), "{}", app.connection.form.host);
+}
+
+/// Enter on another connection, from a connected tab: the tab keeps its
+/// connection while the new one opens, and swaps once it's open (the old
+/// one closed, no other tab using it); one that doesn't open leaves the tab
+/// as it was, and says why.
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn a_tab_keeps_its_connection_until_the_one_picked_opens() {
     let (mut app, dir) = test_app();
     let project = project_id(&app);
     let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
-    app.store.upsert(&project, None, a.clone()).unwrap();
-    app.store.upsert(&project, None, b.clone()).unwrap();
+    // A file that won't open (a folder), and one that isn't there.
+    let gone = file_profile("gone", dir.path());
+    let missing = file_profile("missing", &dir.path().join("c.db"));
+    std::fs::write(dir.path().join("b.db"), "").unwrap();
+    for profile in [&a, &b, &gone, &missing] {
+        app.store.upsert(&project, None, profile.clone()).unwrap();
+    }
     connect_profile(&mut app, &a).await;
     let alpha = app.tabs[0].conn;
-    app.handle_key(ctrl('o'));
-    app.manager.connection_selected = 1;
-    app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.tabs[0].conn, None, "let go of while beta opens");
-    // Esc stops opening it, Esc again leaves.
+    let pick = |app: &mut App, name: &str| {
+        app.handle_key(ctrl('o'));
+        app.manager.connection_selected = app.profiles().iter().position(|p| p.name == name).unwrap();
+        app.handle_key(key(KeyCode::Enter));
+    };
+    // One that doesn't open: the tab is as it was, and says why.
+    pick(&mut app, "gone");
+    assert!(matches!(app.screen, Screen::Query) && app.tabs[0].conn == alpha, "kept while it opens");
+    until_event(&mut app, |k| matches!(k, DbEventKind::DatabaseFailed { .. })).await;
+    assert_eq!(app.tabs[0].conn, alpha, "still its own");
+    assert!(app.connected() && said_error(&app) && said(&app).starts_with("Couldn't open gone"), "{}", said(&app));
+    // A file that isn't there isn't made behind the tab's back: said, with
+    // what makes it.
+    pick(&mut app, "missing");
+    assert_eq!(app.tabs[0].conn, alpha);
+    let said = app.manager.connection_message.clone().unwrap_or_default().0;
+    assert!(said.contains("file isn't there") && said.contains("t opens it in a new tab"), "{said}");
+    assert!(!dir.path().join("c.db").exists());
     app.handle_key(key(KeyCode::Esc));
-    app.handle_key(key(KeyCode::Esc));
-    assert!(matches!(app.screen, Screen::Query));
-    assert_eq!(app.tabs[0].conn, alpha, "its own back");
-    assert!(app.connected());
+    // One that opens: swapped to, the old one closed.
+    pick(&mut app, "beta");
+    assert_eq!(app.tabs[0].conn, alpha, "kept while it opens");
+    until_event(&mut app, |k| matches!(k, DbEventKind::DatabaseOpened(..))).await;
+    assert_ne!(app.tabs[0].conn, alpha);
+    assert_eq!(app.connection.form.name, "beta");
+    assert!(app.connection.state_of(alpha.unwrap()).is_none(), "the old one closed: no tab uses it");
 }
 
 /// Another database can't take a tab's connection under a query or an open
@@ -1686,6 +1745,16 @@ async fn another_database_waits_for_the_tab_to_be_free() {
     app.run_command_for_tests(crate::app::commands::Command::OpenDatabase(1));
     assert!(said(&app).contains("Not while"), "{}", said(&app));
     assert_eq!(app.tabs[0].conn, before);
+    // A failed transaction (PostgreSQL's) too: it's the tab's to roll back.
+    app.connection.txn = TxnState::Aborted;
+    app.set_status(String::new(), false);
+    app.popups.palette = Some(crate::app::query_screen::palette::Palette::listing(
+        PaletteMode::Databases(vec!["one".into(), "two".into()]),
+        0,
+    ));
+    app.run_command_for_tests(crate::app::commands::Command::OpenDatabase(1));
+    assert!(said(&app).contains("Not while"), "{}", said(&app));
+    assert!(app.latest_swap.is_none(), "nothing opened");
     // One arriving for another tab is closed, not put here.
     app.connection.txn = TxnState::Idle;
     let other = app.connection.database.clone().unwrap();
@@ -1693,9 +1762,103 @@ async fn another_database_waits_for_the_tab_to_be_free() {
     form.database = "two".into();
     let generation = app.generation;
     let mut elsewhere = app.tabs[0].id;
-    let elsewhere = elsewhere.next();
-    app.handle_db_event(DbEvent::connection(generation, DbEventKind::DatabaseOpened(other, Box::new(form), elsewhere)));
+    let mut swap = app.new_swap();
+    swap.tab = elsewhere.next();
+    app.latest_swap = Some(swap);
+    app.handle_db_event(DbEvent::connection(generation, DbEventKind::DatabaseOpened(other, Box::new(form), swap)));
     assert_eq!(app.tabs[0].conn, before);
+}
+
+/// What a hidden tab's catalog load finds after its tables (its
+/// routines, the tables a rollback can't undo) is kept for it: shown
+/// again, it isn't loaded again, and its writes in the sandbox aren't
+/// refused for good as "not known yet".
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_hidden_tabs_late_catalog_answers_are_kept() {
+    let (mut app, dir) = test_app();
+    let project = project_id(&app);
+    std::fs::write(dir.path().join("b.db"), "").unwrap();
+    let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
+    app.store.upsert(&project, None, a.clone()).unwrap();
+    app.store.upsert(&project, None, b.clone()).unwrap();
+    connect_profile(&mut app, &a).await;
+    let alpha = app.tabs[0].conn.unwrap();
+    app.handle_key(ctrl('t'));
+    app.handle_key(ctrl('o'));
+    app.manager.connection_selected = 1;
+    app.handle_key(key(KeyCode::Enter));
+    until_event(&mut app, |k| matches!(k, DbEventKind::DatabaseOpened(..))).await;
+    let slot = app.connection.slot_mut(alpha).unwrap();
+    slot.unrollable = None;
+    let load = slot.schema.as_ref().unwrap().load;
+    let table = crate::app::session::Unrollable { schema: "main".into(), table: "audit".into() };
+    app.handle_db_event(DbEvent::conn(alpha, ConnEvent::Unrollable { load, tables: Ok(vec![table]) }));
+    app.handle_key(alt('1'));
+    assert_eq!(app.tabs[app.active_tab].conn, Some(alpha));
+    assert!(app.connection.unrollable.as_ref().is_some_and(|t| t.len() == 1), "kept while hidden");
+}
+
+/// Two connections asked for in turn for one tab (A, then B): B lands,
+/// even if A opens first; A's answer, or its failure, is dropped.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn the_latest_connection_asked_for_lands() {
+    let (mut app, dir) = test_app();
+    let project = project_id(&app);
+    let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
+    for name in ["a.db", "b.db"] {
+        std::fs::write(dir.path().join(name), "").unwrap();
+    }
+    app.store.upsert(&project, None, a.clone()).unwrap();
+    app.store.upsert(&project, None, b.clone()).unwrap();
+    let start = file_profile("start", &dir.path().join("s.db"));
+    connect_profile(&mut app, &start).await;
+    async fn opened(profile: &ConnectionProfile) -> (Database, ConnectForm) {
+        let form = ConnectForm::from_profile(profile, String::new());
+        (Database::connect(form.params().unwrap()).await.unwrap(), form)
+    }
+    let (first, second) = (app.new_swap(), app.new_swap());
+    let generation = app.generation;
+    let (db_a, form_a) = opened(&a).await;
+    app.handle_db_event(DbEvent::connection(generation, DbEventKind::DatabaseOpened(db_a, Box::new(form_a), first)));
+    assert_eq!(app.connection.form.name, "start", "A, asked for first, doesn't land");
+    let failed = DbEventKind::DatabaseFailed { name: "alpha".into(), error: "late".into(), swap: first };
+    app.handle_db_event(DbEvent::connection(generation, failed));
+    assert!(!said(&app).contains("late"), "{}", said(&app));
+    let (db_b, form_b) = opened(&b).await;
+    app.handle_db_event(DbEvent::connection(generation, DbEventKind::DatabaseOpened(db_b, Box::new(form_b), second)));
+    assert_eq!(app.connection.form.name, "beta");
+    // One on its way, then the tab given another way (joined, opened, its
+    // tasks dropped): the one on its way doesn't land.
+    app.set_status("Opening alpha…".into(), false);
+    let late = app.new_swap();
+    app.invalidate_tasks();
+    let (db_a, form_a) = opened(&a).await;
+    let generation = app.generation;
+    app.handle_db_event(DbEvent::connection(generation, DbEventKind::DatabaseOpened(db_a, Box::new(form_a), late)));
+    assert_eq!(app.connection.form.name, "beta", "not overridden by the one still on its way");
+    assert!(!app.notes.status.contains("Opening alpha"), "its 'Opening' taken back: {}", app.notes.status);
+    assert!(app.connect_started.is_none(), "its time isn't left for the next to count");
+}
+
+/// A paused connection is said paused once, as it pauses: later reports
+/// while it stays paused add nothing to the log.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_pause_is_said_once() {
+    use crate::db::{Health, HealthState};
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    let id = app.connection.slots.active.unwrap();
+    let paused = |latency| Health {
+        latency: Some(std::time::Duration::from_millis(latency)),
+        ..Health::of(HealthState::Paused("after 5 tries".into()))
+    };
+    for latency in [1, 2, 3] {
+        app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(paused(latency))));
+    }
+    let said = app.notes.log.iter().filter(|m| m.text.contains("paused")).count();
+    assert_eq!(said, 1, "{:?}", app.notes.log.iter().map(|m| &m.text).collect::<Vec<_>>());
 }
 
 /// A connection opened on another database of a saved one keeps its name
@@ -1709,4 +1872,296 @@ fn another_database_is_not_its_saved_connection() {
     form.other_database = true;
     assert!(!form.is_saved("prod"));
     assert_eq!(form.label(), "prod/archive");
+}
+
+/// What a connection's supervisor reports is that connection's, shown or
+/// in a hidden tab: lost, then back when it answers; and a failed query's
+/// message isn't read for it.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_connections_reports_are_its_own() {
+    use crate::db::{Health, HealthState};
+    let report = |state| ConnEvent::Health(Health::of(state));
+    let (mut app, dir) = test_app();
+    let project = project_id(&app);
+    let (a, b) = (file_profile("alpha", &dir.path().join("a.db")), file_profile("beta", &dir.path().join("b.db")));
+    app.store.upsert(&project, None, a.clone()).unwrap();
+    app.store.upsert(&project, None, b.clone()).unwrap();
+    connect_profile(&mut app, &a).await;
+    let alpha = app.connection.slots.active.unwrap();
+    open_in_new_tab(&mut app);
+    connect_profile(&mut app, &b).await;
+    // A failed query that says "doesn't answer": not taken for a loss.
+    app.on_query_failed("the server doesn't answer: no answer in 5 s", None, None);
+    assert!(!app.connection.state.is_lost());
+    // Alpha, in the hidden tab, is reported lost: its slot, not beta's.
+    app.handle_db_event(DbEvent::conn(alpha, report(HealthState::Lost("no answer in 5 s".into()))));
+    assert!(!app.connection.state.is_lost(), "beta, shown, is fine");
+    assert!(app.connection.state_of(alpha).is_some_and(crate::app::ConnState::is_lost));
+    app.handle_db_event(DbEvent::conn(alpha, report(HealthState::Live)));
+    assert!(app.connection.state_of(alpha).is_some_and(|s| !s.is_lost()), "back");
+}
+
+/// A reconnect says what the old session had that the new one hasn't
+/// (nothing's run again): by name, not "session settings were reset".
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_reconnect_says_what_was_lost_with_the_session() {
+    use crate::db::{Health, HealthState};
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    let id = app.connection.slots.active.unwrap();
+    let health = Health {
+        lost: vec!["database shop".into(), "@id".into(), "temporary tables".into()],
+        reconnects: 1,
+        ..Health::of(HealthState::Reconnected)
+    };
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(health)));
+    assert_eq!(
+        said(&app),
+        "The connection had dropped: reconnected · gone with the old session (set again if you need it): database \
+         shop, @id, temporary tables"
+    );
+    // The same reconnect again (a report with other news): not said twice.
+    app.notes.status.clear();
+    let again = Health {
+        reconnects: 1,
+        latency: Some(std::time::Duration::from_millis(3)),
+        ..Health::of(HealthState::Reconnected)
+    };
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(again)));
+    assert_eq!(said(&app), "");
+}
+
+/// The app tells a connection's supervisor whether a transaction is open
+/// on it (so its checks never reopen one with a transaction), as the
+/// transaction opens and ends.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_connections_supervisor_knows_when_a_transaction_is_open() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    let db = app.connection.database.clone().unwrap();
+    assert!(!db.in_transaction());
+    run_sql(&mut app, "create table t (x int); begin; insert into t values (1)").await;
+    assert_eq!(app.connection.txn, TxnState::Open);
+    assert!(db.in_transaction(), "told as it opened");
+    run_sql(&mut app, "rollback").await;
+    assert!(!db.in_transaction(), "and as it ended");
+}
+
+/// Paused after its tries: said, the status bar saying what tries again;
+/// then back once it answers.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_paused_connection_is_said_then_back() {
+    use crate::db::{Health, HealthState};
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    let id = app.connection.slots.active.unwrap();
+    let report = |state| DbEvent::conn(id, ConnEvent::Health(Health::of(state)));
+    app.handle_db_event(report(HealthState::Lost("no answer in 5 s".into())));
+    app.handle_db_event(report(HealthState::Paused("no answer in 5 s".into())));
+    assert!(app.connection.state.is_lost());
+    assert!(said(&app).starts_with("paused after 5 tries"), "{}", said(&app));
+    assert!(said_error(&app));
+    app.handle_db_event(report(HealthState::Live));
+    assert!(!app.connection.state.is_lost());
+    assert_eq!(said(&app), "The connection is back");
+}
+
+/// Whether a failed run's error is the link's is what the error said when
+/// it came: an SQL error stays one when the connection's found lost later.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn an_sql_error_stays_one_when_the_connection_is_lost_later() {
+    use crate::db::{Health, HealthState};
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    run_sql(&mut app, "select * from no_such_table").await;
+    assert!(app.tab.run_error.is_some() && !app.tab.run_error_link);
+    let id = app.connection.slots.active.unwrap();
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(Health::of(HealthState::Lost("no answer".into())))));
+    assert!(app.connection.state.is_lost());
+    assert!(!app.tab.run_error_link, "still the SQL's");
+}
+
+/// `R` that brings a lost connection back says so once, whichever comes
+/// first: its report, or its answer.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn back_is_said_once_after_r() {
+    use crate::db::{Health, HealthState};
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    let id = app.connection.slots.active.unwrap();
+    let backs = |app: &App| app.notes.log.iter().filter(|m| m.text == "The connection is back").count();
+    // The report first, then the answer.
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(Health::of(HealthState::Lost("no answer".into())))));
+    app.connection.checking = true;
+    app.connection.checked_lost = true;
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(Health::of(HealthState::Live))));
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Pinged(Ok((Duration::from_millis(2), false)))));
+    assert_eq!(backs(&app), 1);
+    // The answer first, then the report.
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(Health::of(HealthState::Lost("no answer".into())))));
+    app.connection.checking = true;
+    app.connection.checked_lost = true;
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Pinged(Ok((Duration::from_millis(2), false)))));
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(Health::of(HealthState::Live))));
+    assert_eq!(backs(&app), 2, "once more, for the second time it came back");
+}
+
+/// A reconnect is a reconnect whatever the report it comes with: one that
+/// answered since can come as a single report (live, the count up), and
+/// the transaction it lost is said all the same.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_reconnect_merged_into_a_later_report_is_said() {
+    use crate::db::{Health, HealthState};
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    let id = app.connection.slots.active.unwrap();
+    app.connection.txn = TxnState::Open;
+    let merged = Health { reconnects: 1, ..Health::of(HealthState::Live) };
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(merged)));
+    assert_eq!(app.connection.txn, TxnState::Idle);
+    assert!(said(&app).contains("the open transaction was lost"), "{}", said(&app));
+    // The same count again: not said twice.
+    app.notes.status.clear();
+    let again = Health { reconnects: 1, ..Health::of(HealthState::Live) };
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(again)));
+    assert_eq!(said(&app), "");
+}
+
+/// A reconnect made by a run is said by the run, with its result: the
+/// reports coming meanwhile say nothing (however many come), and leave the
+/// transaction for the run to say; the run then says it once.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_runs_own_reconnect_is_said_with_its_result() {
+    use crate::db::{Health, HealthState};
+    let (mut app, _dir) = connected_file_app(ConnectionMode::Normal).await;
+    let id = app.connection.slots.active.unwrap();
+    app.connection.txn = TxnState::Open;
+    app.tab.run.executing = true;
+    app.notes.status = "running".into();
+    let health = Health { reconnects: 1, lost: vec!["sql_mode".into()], ..Health::of(HealthState::Reconnected) };
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(health)));
+    assert_eq!(app.notes.status, "running", "the run's line kept");
+    assert_eq!(app.connection.txn, TxnState::Open, "the run says the transaction");
+    let live =
+        Health { reconnects: 1, latency: Some(std::time::Duration::from_millis(2)), ..Health::of(HealthState::Live) };
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(live)));
+    let reconnects = |app: &App| app.notes.log.iter().filter(|m| m.text.contains("reconnected")).count();
+    assert_eq!(reconnects(&app), 0, "not said meanwhile");
+    assert_eq!(app.connection.reconnects_said, 0, "the run says it");
+    assert_eq!(app.connection.reconnects_logged, 1, "in the connection log once");
+    // The run fails (not sent on the new session, which the connection
+    // really opened): it says it, once.
+    let db = app.connection.database.clone().unwrap();
+    db.abandon_session();
+    assert!(crate::db::is_reconnected(&db.run("select 1", 1).await.unwrap_err()));
+    app.tab.run.db = Some(db);
+    // As the real path sends it: a reconnect's error says no transaction.
+    app.on_query_failed("the connection had dropped, so this wasn't sent", None, Some(TxnState::Idle));
+    assert_eq!(app.connection.txn, TxnState::Idle);
+    assert!(said(&app).contains("the open transaction was lost"), "{}", said(&app));
+    let later = Health { reconnects: 1, ..Health::of(HealthState::Live) };
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(later)));
+    assert_eq!(app.connection.reconnects_said, 1);
+}
+
+/// `R` while a result's rows hold the session: said busy after a while,
+/// not taken for a lost connection, and it can be asked again.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn r_while_the_session_is_held_says_busy() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    run_sql(
+        &mut app,
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200000) SELECT i FROM n",
+    )
+    .await;
+    assert!(app.tab.run.stream.is_some(), "rows left to read: the session's held");
+    app.focus = Focus::Results;
+    app.handle_key(key(KeyCode::Char('R')));
+    assert!(app.connection.checking);
+    while app.connection.checking {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    assert!(said(&app).contains("busy"), "{}", said(&app));
+    assert!(!app.connection.state.is_lost());
+}
+
+/// Ctrl+K s c checks the connection, as R does in the results.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn ctrl_k_s_c_checks_the_connection() {
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    app.handle_key(ctrl('k'));
+    app.handle_key(key(KeyCode::Char('s')));
+    app.handle_key(key(KeyCode::Char('c')));
+    assert!(app.connection.checking, "asked");
+    while app.connection.checking {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    assert_eq!(said(&app), "The server is responding");
+}
+
+/// A report from a connection the slot no longer has (reopened in place
+/// since) is dropped: it can't mark the new one lost, or count its
+/// reconnects against the new one's.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn an_old_connections_late_report_is_dropped() {
+    use crate::db::{Health, HealthState};
+    let (mut app, _dir) = connected_app(ConnectionMode::Normal).await;
+    let id = app.connection.slots.active.unwrap();
+    let now = app.connection.follower;
+    assert_ne!(now, 0, "followed");
+    let lost = Health::of(HealthState::Lost("no answer in 5 s".into()));
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Followed { follower: now - 1, health: lost.clone() }));
+    assert!(!app.connection.state.is_lost(), "the old one's");
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Followed { follower: now, health: lost }));
+    assert!(app.connection.state.is_lost(), "its own");
+}
+
+/// A reconnect reported while a run went on is the run's to say; if the
+/// run stops without its answer (its task dropped), it's said all the
+/// same, with the transaction it lost.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_reconnect_a_dropped_run_didnt_say_is_said() {
+    use crate::db::{Health, HealthState};
+    let (mut app, _dir) = connected_file_app(ConnectionMode::Normal).await;
+    let id = app.connection.slots.active.unwrap();
+    app.connection.txn = TxnState::Open;
+    app.tab.run.executing = true;
+    let reconnected = Health { reconnects: 1, ..Health::of(HealthState::Reconnected) };
+    app.handle_db_event(DbEvent::conn(id, ConnEvent::Health(reconnected)));
+    assert_eq!(app.connection.reconnects_said, 0, "the run's to say");
+    // Dropped without its answer.
+    app.tab.run.executing = false;
+    assert!(app.wants_ticks());
+    app.tick_running();
+    assert_eq!(app.connection.reconnects_said, 1);
+    assert_eq!(app.connection.txn, TxnState::Idle);
+    assert!(said(&app).contains("the open transaction was lost"), "{}", said(&app));
+    assert!(!app.reconnect_unsaid(), "said once");
+}
+
+/// A run that succeeds on a new session (its reconnect not said before)
+/// says the transaction it lost with its result, as an error: what it did
+/// ran outside it, and a ROLLBACK undoes nothing of it.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn a_result_after_a_lost_transaction_says_so() {
+    let (mut app, _dir) = connected_file_app(ConnectionMode::Normal).await;
+    let db = app.connection.database.clone().unwrap();
+    app.connection.txn = TxnState::Open;
+    db.abandon_session();
+    db.check_now().await.unwrap();
+    db.reconnect_told(1);
+    app.tab.run.db = Some(db.clone());
+    let outcome = db.run("SELECT 1", 1).await.unwrap();
+    app.on_query_done(outcome, None, None);
+    assert!(app.notes.status.starts_with("the open transaction was lost"), "{}", app.notes.status);
+    assert!(app.notes.status_is_error);
 }

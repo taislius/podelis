@@ -28,7 +28,6 @@ pub(super) fn outcome(columns: &[&str], rows: &[&[Option<&str>]]) -> QueryOutcom
         rows_affected: None,
         statements: 1,
         elapsed: Duration::from_millis(5),
-        reconnected: false,
         ..QueryOutcome::default()
     }
 }
@@ -66,6 +65,21 @@ pub(super) async fn connected_app(mode: ConnectionMode) -> (App, tempfile::TempD
     let (mut app, dir) = test_app();
     app.connection.form.engine = file_engine();
     app.connection.form.host = ":memory:".into();
+    app.connection.form.mode = mode;
+    let db = Database::connect(app.connection.form.params().unwrap()).await.unwrap();
+    let generation = app.generation;
+    app.handle_db_event(DbEvent::connection(generation, DbEventKind::Connected(db)));
+    assert!(matches!(app.screen, Screen::Query));
+    (app, dir)
+}
+
+/// An app connected to a SQLite file (a new session after giving one up
+/// is the same database, unlike `:memory:`'s), on the query screen.
+#[cfg(feature = "sqlite")]
+pub(super) async fn connected_file_app(mode: ConnectionMode) -> (App, tempfile::TempDir) {
+    let (mut app, dir) = test_app();
+    app.connection.form.engine = file_engine();
+    app.connection.form.host = dir.path().join("app.db").to_string_lossy().into_owned();
     app.connection.form.mode = mode;
     let db = Database::connect(app.connection.form.params().unwrap()).await.unwrap();
     let generation = app.generation;
@@ -209,6 +223,18 @@ pub(super) async fn live_app(engine: Engine, name: &str) -> Option<(App, tempfil
     form.database = params.database;
     let generation = app.generation;
     app.handle_db_event(DbEvent::connection(generation, DbEventKind::Connected(db)));
+    // Where some tables can't be rolled back (MySQL), which ones they are
+    // is read after the catalog: until then the sandbox refuses writes.
+    if engine.dialect().and_then(crate::db::SqlDialect::tables_without_rollback).is_some() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while app.connection.unrollable.is_none() {
+                let event = app.poll_db_event().await.unwrap();
+                app.handle_db_event(event);
+            }
+        })
+        .await
+        .expect("the tables a rollback can't undo, read");
+    }
     Some((app, dir))
 }
 

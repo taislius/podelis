@@ -15,6 +15,8 @@ pub(in crate::db) mod db_tests;
 pub(super) mod passwords;
 #[cfg(feature = "sqlite")]
 pub(super) mod queries;
+#[cfg(feature = "sqlite")]
+pub(super) mod session;
 
 use super::backend::{Backend, Capabilities};
 use super::dialect::{SqlDialect, LexerRules, Placeholders, Plan, PlanNote, hex_digits};
