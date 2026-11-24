@@ -247,6 +247,8 @@ fn a_definition_lists_the_foreign_keys() {
             target_schema: "public".into(),
             target_table: "users".into(),
             target_column: Some("id".into()),
+            on_delete: Some("CASCADE".into()),
+            on_update: None,
         }],
         checks: vec![crate::db::CheckInfo { name: "positive".into(), definition: "CHECK ((total > 0))".into() }],
         ..crate::db::TableDetails::default()
@@ -277,7 +279,7 @@ fn a_definition_lists_the_foreign_keys() {
     app.focus = Focus::Schema;
     app.handle_schema_key(key(KeyCode::Char('d')));
     let text = &app.popups.cell_view.as_ref().expect("definition").text;
-    assert!(text.contains("-- foreign keys") && text.contains("user_id  → users.id"), "{text}");
+    assert!(text.contains("-- foreign keys") && text.contains("user_id  → users.id ON DELETE CASCADE"), "{text}");
     assert!(text.contains("-- check constraints\nCONSTRAINT positive CHECK ((total > 0))"), "{text}");
 }
 
@@ -394,4 +396,55 @@ async fn a_in_the_navigator_analyzes_the_table() {
     assert!(app.tab.editor.text().ends_with("ANALYZE main.people;"), "{}", app.tab.editor.text());
     assert!(app.tab.run_error.is_none(), "{:?}", app.tab.run_error);
     assert_eq!(app.focus, Focus::Schema);
+}
+
+/// A table's DDL lands in the popup that asked, still open on that table
+/// (its schema too: two named `orders` aren't the same), keeping its
+/// browsing and scroll; not in one closed or on another table.
+#[test]
+fn a_tables_ddl_comes_into_its_own_popup_only() {
+    let (mut app, _dir) = test_app();
+    let info = |schema: &str| crate::db::TableInfo {
+        schema: schema.into(),
+        name: "orders".into(),
+        is_view: false,
+        rows: None,
+        bytes: None,
+        system: false,
+        partition_of: None,
+        materialized: false,
+    };
+    let tables = vec![SchemaTable::new(info("audit"), Vec::new()), SchemaTable::new(info("public"), Vec::new())];
+    app.connection.schema = Some(SchemaPanel { tables, ..SchemaPanel::default() });
+    let select = |app: &mut App, schema: &str| {
+        let panel = app.connection.schema.as_mut().unwrap();
+        let t = panel.tables.iter().position(|t| t.info.schema == schema).unwrap();
+        panel.selected = panel.nodes().iter().position(|n| *n == SchemaNode::Table(t)).unwrap();
+    };
+    let ddl = |app: &mut App, schema: &str| {
+        let generation = app.generation;
+        app.handle_db_event(DbEvent::connection(
+            generation,
+            DbEventKind::TableDdl {
+                schema: schema.into(),
+                table: "orders".into(),
+                result: Ok(format!("CREATE TABLE {schema}.orders ();")),
+            },
+        ));
+    };
+    select(&mut app, "public");
+    app.popups.cell_view = Some(CellView::definition("TABLE orders".into(), "-- summary".into()));
+    app.popups.cell_view.as_mut().unwrap().scroll = 3;
+    ddl(&mut app, "public");
+    let view = app.popups.cell_view.as_ref().unwrap();
+    assert_eq!((view.text.as_str(), view.browse, view.scroll), ("CREATE TABLE public.orders ();", true, 3));
+    // Stepped on to audit.orders (the same title): not public's.
+    select(&mut app, "audit");
+    app.popups.cell_view = Some(CellView::definition("TABLE orders".into(), "-- summary".into()));
+    ddl(&mut app, "public");
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().text, "-- summary");
+    // Closed: it stays closed.
+    app.popups.cell_view = None;
+    ddl(&mut app, "audit");
+    assert!(app.popups.cell_view.is_none());
 }

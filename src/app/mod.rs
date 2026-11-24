@@ -318,6 +318,9 @@ pub struct App {
     pub hits: Hits,
     /// `f` is waiting for the result table's foreign keys to load.
     pending_follow: bool,
+    /// The last table definition `d` asked the server's DDL of: an older
+    /// request, waiting its moment, sees it isn't wanted and asks nothing.
+    ddl_wanted: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub should_quit: bool,
     /// What the main loop does for the app, outside the screen.
     for_terminal: ForTerminal,
@@ -411,6 +414,7 @@ impl App {
             hidden_tab: None,
             hits: Hits::default(),
             pending_follow: false,
+            ddl_wanted: std::sync::Arc::default(),
             routine_definition_pending: false,
             should_quit: false,
             for_terminal: ForTerminal::default(),

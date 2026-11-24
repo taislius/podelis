@@ -248,12 +248,18 @@ pub(in crate::db) async fn table_details(db: &Database, schema: &str, table: &st
     .bind(table)
     .fetch_all(p)
     .await?;
-    let fks: Vec<(String, String, String, String)> = sqlx::query_as(
-        "SELECT CAST(column_name AS CHAR), CAST(referenced_table_schema AS CHAR),
-                    CAST(referenced_table_name AS CHAR), CAST(referenced_column_name AS CHAR)
-             FROM information_schema.key_column_usage
-             WHERE table_schema = ? AND table_name = ? AND referenced_table_name IS NOT NULL
-             ORDER BY constraint_name, ordinal_position",
+    // Column, its target's schema, table and column, ON DELETE, ON UPDATE.
+    type FkRow = (String, String, String, String, Option<String>, Option<String>);
+    let fks: Vec<FkRow> = sqlx::query_as(
+        "SELECT CAST(k.column_name AS CHAR), CAST(k.referenced_table_schema AS CHAR),
+                    CAST(k.referenced_table_name AS CHAR), CAST(k.referenced_column_name AS CHAR),
+                    CAST(r.delete_rule AS CHAR), CAST(r.update_rule AS CHAR)
+             FROM information_schema.key_column_usage k
+             LEFT JOIN information_schema.referential_constraints r
+               ON r.constraint_schema = k.constraint_schema AND r.constraint_name = k.constraint_name
+              AND r.table_name = k.table_name
+             WHERE k.table_schema = ? AND k.table_name = ? AND k.referenced_table_name IS NOT NULL
+             ORDER BY k.constraint_name, k.ordinal_position",
     )
     .bind(schema)
     .bind(table)
@@ -292,12 +298,14 @@ pub(in crate::db) async fn table_details(db: &Database, schema: &str, table: &st
             .collect(),
         foreign_keys: fks
             .into_iter()
-            .map(|(column, s, t, c)| ForeignKey {
+            .map(|(column, s, t, c, on_delete, on_update)| ForeignKey {
                 column,
                 target: super::super::details::fk_target(schema, &s, &t, &c),
                 target_schema: s,
                 target_table: t,
                 target_column: Some(c),
+                on_delete: super::super::details::fk_rule(on_delete.as_deref()),
+                on_update: super::super::details::fk_rule(on_update.as_deref()),
             })
             .collect(),
         definition: definition.and_then(|(d,)| d),
@@ -478,6 +486,30 @@ pub(in crate::db) async fn copy_in(
     _chunks: impl Iterator<Item = Result<Vec<u8>>>,
 ) -> Result<u64> {
     anyhow::bail!("{} has no COPY", db.engine().label())
+}
+
+pub(in crate::db) async fn table_ddl(db: &Database, schema: &str, table: &str) -> Result<Option<String>> {
+    let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
+    show_create_table(p, schema, table).await
+}
+
+/// The table as MySQL writes it (`SHOW CREATE TABLE`): every column with
+/// its default, every key with its ON DELETE, CHECKs, the engine, the
+/// character set, comments. `None` for a view (its query is `definition`);
+/// an error the server gives (a privilege it lacks) is said, not taken for
+/// "none".
+async fn show_create_table(p: &sqlx::MySqlPool, schema: &str, table: &str) -> Result<Option<String>> {
+    use sqlx::{Column as _, Row as _};
+    let sql = format!("SHOW CREATE TABLE {}.{}", Engine::MySql.quote_ident(schema), Engine::MySql.quote_ident(table));
+    let row = sqlx::query(AssertSqlSafe(sql)).fetch_one(p).await?;
+    // A view's says `Create View`: not a table's.
+    if row.columns().get(1).is_none_or(|c| !c.name().eq_ignore_ascii_case("Create Table")) {
+        return Ok(None);
+    }
+    let ddl: String = row
+        .try_get::<String, _>(1)
+        .or_else(|_| row.try_get::<Vec<u8>, _>(1).map(|b| String::from_utf8_lossy(&b).into_owned()))?;
+    Ok(Some(format!("{};", ddl.trim_end_matches(';'))))
 }
 
 /// `CHECK (…)` for a CHECK constraint's clause: MySQL's comes in brackets

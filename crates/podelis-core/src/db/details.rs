@@ -42,6 +42,39 @@ pub struct ForeignKey {
     pub target_table: String,
     /// `None` when it's the target's primary key, unnamed (SQLite).
     pub target_column: Option<String>,
+    /// What deleting the row it points at does (`CASCADE`, `SET NULL`,
+    /// `RESTRICT`…); `None` for NO ACTION, the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_delete: Option<String>,
+    /// And updating its key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_update: Option<String>,
+}
+
+impl ForeignKey {
+    /// Its rules as SQL writes them, after the target: ` ON DELETE CASCADE`.
+    pub fn actions(&self) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        if let Some(rule) = &self.on_delete {
+            let _ = write!(out, " ON DELETE {rule}");
+        }
+        if let Some(rule) = &self.on_update {
+            let _ = write!(out, " ON UPDATE {rule}");
+        }
+        out
+    }
+}
+
+/// A foreign key's rule as the catalog says it: `None` for NO ACTION
+/// (what an unsaid rule is), else upper case.
+/// Its words upper case, a column list (`SET NULL (a, b)`) as it is.
+pub fn fk_rule(rule: Option<&str>) -> Option<String> {
+    let rule = rule?.trim();
+    let (words, columns) = rule.split_at(rule.find('(').unwrap_or(rule.len()));
+    let rule = format!("{} {columns}", words.trim().to_ascii_uppercase());
+    let rule = rule.trim().to_string();
+    (!rule.is_empty() && rule != "NO ACTION").then_some(rule)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -228,6 +261,16 @@ impl Database {
         let rows: Vec<(String, String, String, String)> =
             on_driver!(self.0.engine, engine::queries::routine_rows(self).await?);
         Ok(rows.into_iter().map(|(schema, name, kind, id)| RoutineInfo { schema, name, kind, id }).collect())
+    }
+
+    /// The table as the server writes it, every detail (defaults, keys
+    /// with their ON DELETE, triggers…): MySQL's `SHOW CREATE TABLE`,
+    /// PostgreSQL's from its own functions. `None` for a view, or where the
+    /// engine has none (SQLite's CREATE is its details' `definition`).
+    /// Asked for by itself (`d`), not with the details: it's several
+    /// queries, which schema compare and agents don't need.
+    pub async fn table_ddl(&self, schema: &str, table: &str) -> Result<Option<String>> {
+        on_driver!(self.0.engine, engine::queries::table_ddl(self, schema, table).await)
     }
 
     /// The CREATE statement of a function, procedure or other object.

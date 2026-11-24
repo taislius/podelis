@@ -345,6 +345,21 @@ pub trait SqlDialect: Backend {
     fn modify_column(&self, _table: &str, _column: &str, _data_type: &str, _nullable: bool) -> Option<String> {
         None
     }
+    /// Whether a foreign key's rule (`CASCADE`, `SET DEFAULT`, PostgreSQL
+    /// 15's `SET NULL (a)`) is one it takes: SQL's own words, not a column
+    /// list, unless it says.
+    fn takes_fk_rule(&self, rule: &str) -> bool {
+        !rule.contains('(')
+    }
+    /// Whether its foreign keys keep rules at all (DuckDB's have none).
+    fn keeps_fk_rules(&self) -> bool {
+        true
+    }
+    /// Whether RESTRICT is how it says a rule left unsaid (MySQL, on some
+    /// versions): then RESTRICT and NO ACTION are the same key.
+    fn restrict_is_no_action(&self) -> bool {
+        false
+    }
     /// A statement adding a foreign key, if the engine can add one to an
     /// existing table (SQLite can't). Names are quoted.
     fn add_foreign_key(&self, table: &str, column: &str, target_table: &str, target_column: &str) -> Option<String> {

@@ -1324,6 +1324,7 @@ indexes = "indeksai"
 checks = "CHECK apribojimai"
 links_failed = "Nepavyko perskaityti išorinių raktų: {e}"
 related = "SUSIJUSIOS"
+ddl_failed = "Rodoma {name} santrauka: serveris nepateikė jos CREATE TABLE ({e})"
 
 [session]
 again = "paleidus bandoma vėl, Ctrl+O – kitas"

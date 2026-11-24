@@ -464,6 +464,10 @@ async fn live_a_script_with_delimiter_lines_makes_its_routine() {
 #[tokio::test]
 async fn live_mysql_details_have_check_constraints() {
     let Some((db, _)) = own_live_db("podelis_checks").await else { return };
+    // MySQL before 8.0.16 keeps no CHECK (it parses and drops them).
+    if !super::server::Server::of(db.version()).has(super::server::Feature::CheckConstraints) {
+        return;
+    }
     db.run("CREATE TABLE orders (total INT, CONSTRAINT positive CHECK (total > 0))", DEFAULT_ROW_LIMIT).await.unwrap();
     // Another table's CHECK on a column of the same name (MariaDB names
     // both after it) isn't this one's.
@@ -565,4 +569,32 @@ async fn live_start_transaction_lets_go_of_table_locks() {
     db.run("START TRANSACTION", DEFAULT_ROW_LIMIT).await.unwrap();
     assert!(!db.remembered().iter().any(|s| s == "LOCK TABLES"), "{:?}", db.remembered());
     db.run("ROLLBACK; DROP DATABASE podelis_tlocks", DEFAULT_ROW_LIMIT).await.unwrap();
+}
+
+/// `d` on a table: MySQL's own SHOW CREATE TABLE, and each key's rules.
+#[tokio::test]
+async fn live_mysql_table_ddl_and_key_rules() {
+    let Some((db, _)) = own_live_db("podelis_ddl").await else { return };
+    db.run(
+        "CREATE TABLE users (id INT PRIMARY KEY); \
+         CREATE TABLE orders (id INT PRIMARY KEY, user_id INT, total DECIMAL(10,2) NOT NULL DEFAULT 0 COMMENT 'VAT in', \
+           CONSTRAINT orders_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE ON UPDATE SET NULL) \
+           COMMENT 'One row per order'; \
+         CREATE TABLE plain (id INT, user_id INT, FOREIGN KEY (user_id) REFERENCES users (id))",
+        DEFAULT_ROW_LIMIT,
+    )
+    .await
+    .unwrap();
+    let details = db.table_details("podelis_ddl", "orders").await.unwrap();
+    let fk = details.foreign_keys.first().expect("the foreign key");
+    assert_eq!((fk.on_delete.as_deref(), fk.on_update.as_deref()), (Some("CASCADE"), Some("SET NULL")));
+    let ddl = db.table_ddl("podelis_ddl", "orders").await.unwrap().expect("SHOW CREATE TABLE");
+    for part in ["CREATE TABLE `orders`", "ON DELETE CASCADE ON UPDATE SET NULL", "COMMENT 'VAT in'", "ENGINE="] {
+        assert!(ddl.contains(part), "{part}\n\nin\n\n{ddl}");
+    }
+    // No rule said: none shown (NO ACTION, or RESTRICT as the server says it).
+    let plain = db.table_details("podelis_ddl", "plain").await.unwrap();
+    let fk = plain.foreign_keys.first().expect("its foreign key");
+    assert!(fk.on_delete.as_deref().is_none_or(|r| r == "RESTRICT"), "{:?}", fk.on_delete);
+    db.run("DROP DATABASE podelis_ddl", DEFAULT_ROW_LIMIT).await.unwrap();
 }

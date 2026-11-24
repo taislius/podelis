@@ -83,6 +83,11 @@ pub(in crate::db) async fn table_rows(db: &Database, system: bool) -> Result<Vec
         .collect())
 }
 
+/// The table as the server writes it: none here.
+pub(in crate::db) async fn table_ddl(_db: &Database, _schema: &str, _table: &str) -> Result<Option<String>> {
+    Ok(None)
+}
+
 #[cfg(test)]
 pub(in crate::db) async fn column_info_rows(
     db: &Database,
@@ -173,6 +178,9 @@ pub(in crate::db) async fn table_details(db: &Database, schema: &str, table: &st
                     target_schema: schema.to_string(),
                     target_table,
                     target_column,
+                    // DuckDB has no actions on its keys.
+                    on_delete: None,
+                    on_update: None,
                 }
             })
             .collect(),

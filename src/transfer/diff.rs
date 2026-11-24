@@ -88,8 +88,17 @@ fn untranslatable(column: &ColumnInfo, engine: Engine) -> String {
     format!("-- column {} {}: {} has no such type; add it by hand", column.name, column.data_type, engine.label())
 }
 
+/// A foreign key as keys are matched: its column and target.
 fn fk_key(fk: &ForeignKey) -> String {
     format!("{}→{}", fk.column.to_lowercase(), fk.target.to_lowercase())
+}
+
+/// Its rules as they're compared. With `loose` (a side whose RESTRICT is
+/// how it says a rule left unsaid: MySQL), RESTRICT as NO ACTION; elsewhere
+/// they differ (PostgreSQL checks RESTRICT at once, never deferred).
+fn fk_rules(fk: &ForeignKey, loose: bool) -> String {
+    let rule = |r: &Option<String>| r.as_deref().filter(|r| !loose || *r != "RESTRICT").map(str::to_string);
+    ForeignKey { on_delete: rule(&fk.on_delete), on_update: rule(&fk.on_update), ..fk.clone() }.actions()
 }
 
 /// The differences inside one table that exists on both sides.
@@ -187,21 +196,69 @@ fn table_changes(here: &TableShape, there: &TableShape, this: Side, other: Side)
             lines.push(format!("{}: only there", index_label(index)));
             sql.push(format!("-- DROP INDEX {};", engine.quote_ident(&index.name)));
         }
-        let b_fks: HashSet<String> = b.foreign_keys.iter().map(fk_key).collect();
-        let a_fks: HashSet<String> = a.foreign_keys.iter().map(fk_key).collect();
-        for fk in a.foreign_keys.iter().filter(|f| !b_fks.contains(&fk_key(f))) {
-            lines.push(format!("foreign key {} → {}: only here", fk.column, fk.target));
-            let target = qualified(engine, &there.info.schema, &fk.target_table);
-            let added = fk.target_column.as_ref().and_then(|tc| {
-                dialect?.add_foreign_key(&table, &engine.quote_ident(&fk.column), &target, &engine.quote_ident(tc))
-            });
-            sql.push(match added {
-                Some(stmt) => format!("{stmt};"),
-                None => format!("-- foreign key {} → {}: add it by hand", fk.column, fk.target),
-            });
+        // Keys by column and target; one on both sides whose rules differ is
+        // one change, not one only here and one only there.
+        let same_key = |x: &ForeignKey, y: &ForeignKey| fk_key(x) == fk_key(y);
+        // RESTRICT is NO ACTION where either side says an unsaid rule so;
+        // a rule's difference counts only where the other side could keep
+        // the rule (DuckDB keeps none, MySQL refuses SET DEFAULT).
+        let loose = [this.engine, engine]
+            .iter()
+            .any(|e| e.dialect().is_some_and(podelis_core::db::SqlDialect::restrict_is_no_action));
+        let keeps = |r: &Option<String>| {
+            dialect.is_some_and(podelis_core::db::SqlDialect::keeps_fk_rules)
+                && r.as_deref().is_none_or(|r| dialect.is_some_and(|d| d.takes_fk_rule(r)))
+        };
+        for fk in &a.foreign_keys {
+            let rules = fk_rules(fk, loose);
+            match b.foreign_keys.iter().find(|other| same_key(fk, other)) {
+                Some(other) if fk_rules(other, loose) == rules => {}
+                Some(_) if !(keeps(&fk.on_delete) && keeps(&fk.on_update)) => {}
+                Some(other) => {
+                    let said = |r: &str| if r.is_empty() { "none".to_string() } else { r.trim().to_string() };
+                    lines.push(format!(
+                        "foreign key {} → {}: {} here, {} there",
+                        fk.column,
+                        fk.target,
+                        said(&rules),
+                        said(&fk_rules(other, loose))
+                    ));
+                    // Its name isn't known here: dropped by hand, added again.
+                    sql.push(format!(
+                        "-- foreign key {} → {}: drop it on {table} and add it again{}",
+                        fk.column,
+                        fk.target,
+                        fk.actions()
+                    ));
+                }
+                None => {
+                    lines.push(format!("foreign key {} → {}{}: only here", fk.column, fk.target, fk.actions()));
+                    let target = qualified(engine, &there.info.schema, &fk.target_table);
+                    // With its rules (without, a delete would stop cascading),
+                    // where the other engine takes them.
+                    let takes = |rule: &Option<String>| {
+                        rule.as_deref().is_none_or(|r| dialect.is_some_and(|d| d.takes_fk_rule(r)))
+                    };
+                    let added =
+                        fk.target_column.as_ref().filter(|_| takes(&fk.on_delete) && takes(&fk.on_update)).and_then(
+                            |tc| {
+                                dialect?.add_foreign_key(
+                                    &table,
+                                    &engine.quote_ident(&fk.column),
+                                    &target,
+                                    &engine.quote_ident(tc),
+                                )
+                            },
+                        );
+                    sql.push(match added {
+                        Some(stmt) => format!("{stmt}{};", fk.actions()),
+                        None => format!("-- foreign key {} → {}{}: add it by hand", fk.column, fk.target, fk.actions()),
+                    });
+                }
+            }
         }
-        for fk in b.foreign_keys.iter().filter(|f| !a_fks.contains(&fk_key(f))) {
-            lines.push(format!("foreign key {} → {}: only there", fk.column, fk.target));
+        for fk in b.foreign_keys.iter().filter(|f| !a.foreign_keys.iter().any(|other| same_key(f, other))) {
+            lines.push(format!("foreign key {} → {}{}: only there", fk.column, fk.target, fk.actions()));
             sql.push(format!("-- drop the foreign key on {table} ({}) by hand", fk.column));
         }
     }
@@ -515,6 +572,52 @@ mod tests {
         ] {
             assert!(diff.sql.contains(expected), "missing {expected:?} in\n{}", diff.sql);
         }
+    }
+
+    #[test]
+    fn a_foreign_keys_rules_are_compared_and_written() {
+        let fk = |on_delete: Option<&str>| ForeignKey {
+            column: "user_id".into(),
+            target: "users.id".into(),
+            target_schema: "public".into(),
+            target_table: "users".into(),
+            target_column: Some("id".into()),
+            on_delete: on_delete.map(str::to_string),
+            on_update: None,
+        };
+        let orders = |rule| {
+            let mut t = table("public", "orders", vec![col("user_id", "integer", true, false)], vec![]);
+            t.details.as_mut().unwrap().foreign_keys = vec![fk(rule)];
+            t
+        };
+        // The same key, its rule changed: one change, not a key added beside it.
+        let diff = schema_diff(&[orders(Some("CASCADE"))], &[orders(None)], PG, PG_PROD);
+        assert!(
+            diff.report.contains("foreign key user_id → users.id: ON DELETE CASCADE here, none there"),
+            "{}",
+            diff.report
+        );
+        assert!(!diff.sql.contains("ADD FOREIGN KEY"), "{}", diff.sql);
+        assert!(diff.sql.contains("drop it on public.orders and add it again ON DELETE CASCADE"), "{}", diff.sql);
+        assert_eq!(diff.differences, 1);
+        assert_eq!(schema_diff(&[orders(Some("CASCADE"))], &[orders(Some("CASCADE"))], PG, PG_PROD).differences, 0);
+        // RESTRICT isn't NO ACTION on PostgreSQL (checked at once)…
+        assert_eq!(schema_diff(&[orders(Some("RESTRICT"))], &[orders(None)], PG, PG_PROD).differences, 1);
+        // …but is what MySQL says for a rule left unsaid.
+        let my_side = Side { name: "prod", engine: Engine::MySql };
+        assert_eq!(schema_diff(&[orders(Some("RESTRICT"))], &[orders(None)], PG, my_side).differences, 0);
+        // DuckDB keeps no rules: not a difference there, every time.
+        let duck = Side { name: "copy", engine: Engine::DuckDb };
+        assert_eq!(schema_diff(&[orders(Some("CASCADE"))], &[orders(None)], PG, duck).differences, 0);
+        // Only here: added with its rules.
+        let mut bare = orders(None);
+        bare.details.as_mut().unwrap().foreign_keys.clear();
+        let added = schema_diff(&[orders(Some("CASCADE"))], &[bare.clone()], PG, PG_PROD).sql;
+        assert!(added.contains("REFERENCES public.users (id) ON DELETE CASCADE;"), "{added}");
+        // A rule the other engine doesn't take: by hand.
+        let my = Side { name: "prod", engine: Engine::MySql };
+        let by_hand = schema_diff(&[orders(Some("SET DEFAULT"))], &[bare], PG, my).sql;
+        assert!(by_hand.contains("ON DELETE SET DEFAULT: add it by hand"), "{by_hand}");
     }
 
     #[test]

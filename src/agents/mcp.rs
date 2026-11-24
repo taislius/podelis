@@ -334,7 +334,7 @@ impl Server {
                 let _ = writeln!(out, "  {unique}index {} ({})", i.name, i.columns);
             }
             for fk in &details.foreign_keys {
-                let _ = writeln!(out, "  foreign key {} → {}", fk.column, fk.target);
+                let _ = writeln!(out, "  foreign key {} → {}{}", fk.column, fk.target, fk.actions());
             }
             if let Some(def) = details.definition.filter(|_| table.is_view) {
                 let _ = writeln!(out, "  definition: {}", def.trim());

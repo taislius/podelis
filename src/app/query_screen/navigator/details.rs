@@ -3,6 +3,9 @@
 
 use crate::app::*;
 
+/// How long `d`'s popup stays on a table before its DDL is asked for.
+const DDL_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
+
 impl App {
     /// Loads table `t`'s details unless they're loaded or on their way.
     pub(in crate::app) fn request_details(&mut self, t: usize) {
@@ -47,6 +50,9 @@ impl App {
     /// Opens table `t`'s definition, loading its details first if needed.
     pub(in crate::app) fn show_table_definition(&mut self, t: usize) {
         let engine = self.engine();
+        let database = self.connection.database.clone();
+        let send = self.sender();
+        let wanted = std::sync::Arc::clone(&self.ddl_wanted);
         let Some(panel) = &mut self.connection.schema else { return };
         let Some(table) = panel.tables.get(t) else { return };
         let kind = if table.info.is_view { t!("navigator.view_title") } else { t!("navigator.table_title") };
@@ -59,7 +65,45 @@ impl App {
             }
             return self.request_details(t);
         }
-        self.popups.cell_view = Some(CellView::definition(title, table_definition(engine, table)));
+        let summary = table_definition(engine, table);
+        // A table as the server writes it (MySQL's SHOW CREATE TABLE,
+        // PostgreSQL's from its functions), every detail, ON DELETE
+        // included: asked for now, by itself; the summary till it comes,
+        // and where the engine has none.
+        //
+        // Asked once the popup stays on it a moment (stepping through with
+        // ←/→ doesn't ask for each), and only if still wanted then.
+        if !table.info.is_view
+            && let Some(db) = database
+        {
+            use std::sync::atomic::Ordering;
+            let (schema, name) = (table.info.schema.clone(), table.info.name.clone());
+            let this = wanted.fetch_add(1, Ordering::SeqCst) + 1;
+            tokio::spawn(async move {
+                tokio::time::sleep(DDL_SETTLE).await;
+                if wanted.load(Ordering::SeqCst) != this {
+                    return;
+                }
+                let result = match db.table_ddl(&schema, &name).await {
+                    Ok(Some(ddl)) => Ok(ddl),
+                    Ok(None) => return,
+                    Err(e) => Err(crate::db::error_message(&e)),
+                };
+                send(DbEventKind::TableDdl { schema, table: name, result });
+            });
+        }
+        self.popups.cell_view = Some(CellView::definition(title, summary));
+    }
+
+    /// The table definition popup open on `schema.table`, if it still is:
+    /// the navigator's selection on it (stepping moves it), the popup
+    /// browsing.
+    pub(in crate::app) fn definition_open_on(&mut self, schema: &str, table: &str) -> Option<&mut CellView> {
+        let on_it = self.connection.schema.as_ref().is_some_and(|panel| {
+            matches!(panel.nodes().get(panel.selected), Some(SchemaNode::Table(t))
+                if panel.tables.get(*t).is_some_and(|x| x.info.schema == schema && x.info.name == table))
+        });
+        self.popups.cell_view.as_mut().filter(|v| on_it && v.browse)
     }
 
     /// `f` in the navigator: the table's neighbours through foreign keys,
@@ -139,7 +183,7 @@ fn table_definition(engine: Engine, table: &SchemaTable) -> String {
             if !details.foreign_keys.is_empty() {
                 let _ = write!(out, "\n\n-- {}\n", t!("schema.foreign_keys"));
                 for fk in &details.foreign_keys {
-                    let _ = writeln!(out, "-- {} → {}", fk.column, fk.target);
+                    let _ = writeln!(out, "-- {} → {}{}", fk.column, fk.target, fk.actions());
                 }
             }
             return out;
@@ -166,7 +210,7 @@ fn table_definition(engine: Engine, table: &SchemaTable) -> String {
         let _ = write!(out, "\n-- {}\n", t!("schema.foreign_keys"));
         let w = details.foreign_keys.iter().map(|f| f.column.chars().count()).max().unwrap_or(0);
         for fk in &details.foreign_keys {
-            let _ = writeln!(out, "{:<w$}  → {}", fk.column, fk.target);
+            let _ = writeln!(out, "{:<w$}  → {}{}", fk.column, fk.target, fk.actions());
         }
     }
     if !details.checks.is_empty() {

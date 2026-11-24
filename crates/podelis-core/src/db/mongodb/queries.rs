@@ -87,6 +87,11 @@ pub(in crate::db) async fn table_rows(db: &Database, system: bool) -> Result<Vec
     Ok(rows)
 }
 
+/// The table as the server writes it: none here.
+pub(in crate::db) async fn table_ddl(_db: &Database, _schema: &str, _table: &str) -> Result<Option<String>> {
+    Ok(None)
+}
+
 #[cfg(test)]
 pub(in crate::db) async fn column_info_rows(
     db: &Database,

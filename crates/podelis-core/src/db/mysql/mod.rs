@@ -177,6 +177,16 @@ impl Backend for MySql {
 }
 
 impl SqlDialect for MySql {
+    /// `InnoDB` refuses SET DEFAULT (the parser takes it), and has no column
+    /// lists.
+    fn takes_fk_rule(&self, rule: &str) -> bool {
+        !rule.contains('(') && !rule.starts_with("SET DEFAULT")
+    }
+    /// `InnoDB`'s RESTRICT and NO ACTION are one, and a rule left unsaid
+    /// reads as either.
+    fn restrict_is_no_action(&self) -> bool {
+        true
+    }
     fn has_delimiter_command(&self) -> bool {
         true
     }

@@ -139,7 +139,13 @@ impl App {
                 let tables = shapes(&db).await?;
                 let now = chrono::Local::now();
                 let taken = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
-                let snapshot = crate::transfer::snapshots::Snapshot { connection, engine: db.engine(), taken, tables };
+                let snapshot = crate::transfer::snapshots::Snapshot {
+                    connection,
+                    engine: db.engine(),
+                    taken,
+                    tables,
+                    fk_rules: true,
+                };
                 let path = crate::transfer::snapshots::save(&dir, &snapshot, now).map_err(|e| format!("{e:#}"))?;
                 Ok((path, snapshot.tables.len()))
             }
@@ -172,7 +178,10 @@ impl App {
         tokio::spawn(async move {
             let result = async {
                 let snapshot = crate::transfer::snapshots::load(&saved.path).map_err(|e| format!("{e:#}"))?;
-                Ok((shapes(&db).await?, snapshot))
+                let now = shapes(&db).await?;
+                // One taken before keys kept their rules: not a change.
+                let snapshot = snapshot.without_unknown_rules(&now);
+                Ok((now, snapshot))
             }
             .await;
             send(DbEventKind::SnapshotCompared(result));

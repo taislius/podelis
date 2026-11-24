@@ -418,6 +418,17 @@ impl App {
                 let (found, result) = *followed;
                 self.followed(found, result);
             }
+            // In the popup that asked, still open on that table: its text
+            // only, as it browses and where it's scrolled to. Not one
+            // that's been closed, or has stepped on to another.
+            DbEventKind::TableDdl { schema, table, result } => {
+                let Some(view) = self.definition_open_on(&schema, &table) else { return };
+                match result {
+                    Ok(ddl) => view.text = ddl,
+                    // The summary stays; why the server's didn't come is said.
+                    Err(e) => self.set_status(t!("schema.ddl_failed", name = table, e = e), true),
+                }
+            }
             DbEventKind::Definition { title, text: result } => {
                 let browse = std::mem::take(&mut self.routine_definition_pending);
                 match result {
@@ -1037,6 +1048,13 @@ pub(super) enum DbEventKind {
     Definition {
         title: String,
         text: Result<String, String>,
+    },
+    /// A table's CREATE TABLE as the server writes it (or why not), for
+    /// the definition popup open on it (`d`), if it still is.
+    TableDdl {
+        schema: String,
+        table: String,
+        result: Result<String, String>,
     },
     /// Rows opened in an app (`what` they were, by `command`), or why they
     /// couldn't be.

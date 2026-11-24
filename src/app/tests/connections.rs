@@ -587,6 +587,8 @@ fn connection_urls_fill_the_form() {
     assert!(f.apply_url("redis://x").unwrap_err().contains("Unsupported"));
 }
 
+// Its URLs are PostgreSQL's and MySQL's.
+#[cfg(all(feature = "postgres", feature = "mysql"))]
 #[test]
 fn tls_files_come_from_a_url_and_go_to_the_connection_and_the_saved_profile() {
     let mut f = ConnectForm::new();

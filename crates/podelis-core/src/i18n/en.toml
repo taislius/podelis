@@ -1293,6 +1293,7 @@ indexes = "indexes"
 checks = "check constraints"
 links_failed = "Couldn't read the foreign keys: {e}"
 related = "RELATED"
+ddl_failed = "Showing a summary of {name}: the server didn't give its CREATE TABLE ({e})"
 
 [session]
 again = "a run tries again, Ctrl+O picks another"

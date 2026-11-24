@@ -42,7 +42,7 @@ mod via_sqlx;
 
 pub use activity::{Activity, OwnSession, SessionId};
 pub use backend::{Backend, Capabilities, ContainerLogin, ContainerSecret, Transactions};
-pub use details::{CheckInfo, Comment, ForeignKey, IndexInfo, Link, RoutineInfo, TableDetails};
+pub use details::{CheckInfo, Comment, ForeignKey, IndexInfo, Link, RoutineInfo, TableDetails, fk_rule};
 pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint};
 #[cfg(any(test, feature = "test-support"))]
 pub use dialect::PlanNote;

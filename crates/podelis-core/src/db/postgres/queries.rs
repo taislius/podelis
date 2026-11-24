@@ -366,8 +366,19 @@ pub(in crate::db) async fn table_details(db: &Database, schema: &str, table: &st
     .bind(table)
     .fetch_all(p)
     .await?;
-    let fks: Vec<(String, String, String, String)> = sqlx::query_as(
-        "SELECT a.attname::text, fn.nspname::text, ft.relname::text, fa.attname::text
+    // Column, its target's schema, table and column, its ON DELETE and ON
+    // UPDATE (`confdeltype`, `confupdtype`) and, for SET NULL or SET
+    // DEFAULT, the columns it sets (15's `confdelsetcols`: read by key, so
+    // a server without it has none).
+    type FkRow = (String, String, String, String, String, String, Option<String>);
+    let fks: Vec<FkRow> = sqlx::query_as(
+        "SELECT a.attname::text, fn.nspname::text, ft.relname::text, fa.attname::text,
+                    c.confdeltype::text, c.confupdtype::text,
+                    (SELECT string_agg(quote_ident(sa.attname), ', ' ORDER BY s.ord)
+                       FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(to_jsonb(c) -> 'confdelsetcols') = 'array'
+                                                           THEN to_jsonb(c) -> 'confdelsetcols' ELSE '[]' END)
+                            WITH ORDINALITY AS s(num, ord)
+                       JOIN pg_attribute sa ON sa.attrelid = c.conrelid AND sa.attnum = s.num::int)
              FROM pg_constraint c
              JOIN pg_class t ON t.oid = c.conrelid
              JOIN pg_namespace n ON n.oid = t.relnamespace
@@ -417,16 +428,40 @@ pub(in crate::db) async fn table_details(db: &Database, schema: &str, table: &st
             .collect(),
         foreign_keys: fks
             .into_iter()
-            .map(|(column, s, t, c)| ForeignKey {
+            .map(|(column, s, t, c, on_delete, on_update, sets)| ForeignKey {
                 column,
                 target: super::super::details::fk_target(schema, &s, &t, &c),
                 target_schema: s,
                 target_table: t,
                 target_column: Some(c),
+                on_delete: fk_action(&on_delete, sets.as_deref()),
+                on_update: fk_action(&on_update, None),
             })
             .collect(),
         definition: definition.and_then(|(d,)| d).map(|d| d.trim().to_string()),
         checks: checks.into_iter().map(|(name, definition)| CheckInfo { name, definition }).collect(),
+    })
+}
+
+pub(in crate::db) async fn table_ddl(db: &Database, schema: &str, table: &str) -> Result<Option<String>> {
+    let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
+    super::ddl::table_ddl(p, schema, table).await
+}
+
+/// A foreign key's rule from `pg_constraint` (`confdeltype`), with the
+/// columns a SET NULL or SET DEFAULT sets where it names them (`sets`):
+/// `None` for NO ACTION, the default.
+fn fk_action(code: &str, sets: Option<&str>) -> Option<String> {
+    let rule = match code {
+        "c" => "CASCADE",
+        "n" => "SET NULL",
+        "d" => "SET DEFAULT",
+        "r" => "RESTRICT",
+        _ => return None,
+    };
+    Some(match sets.filter(|s| !s.is_empty() && matches!(code, "n" | "d")) {
+        Some(columns) => format!("{rule} ({columns})"),
+        None => rule.to_string(),
     })
 }
 
@@ -656,4 +691,15 @@ pub(in crate::db) async fn copy_in(
     chunks: impl Iterator<Item = Result<Vec<u8>>>,
 ) -> Result<u64> {
     super::copy::copy_in(db, statement, first_line, chunks).await
+}
+
+#[cfg(test)]
+mod fk_rule_tests {
+    #[test]
+    fn a_keys_rules_are_read_from_the_catalog() {
+        assert_eq!(super::fk_action("c", None).as_deref(), Some("CASCADE"));
+        assert_eq!(super::fk_action("n", Some("a, \"B\"")).as_deref(), Some("SET NULL (a, \"B\")"));
+        assert_eq!(super::fk_action("c", Some("a")).as_deref(), Some("CASCADE"), "only SET NULL/DEFAULT name columns");
+        assert_eq!(super::fk_action("a", None), None);
+    }
 }

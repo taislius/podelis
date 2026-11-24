@@ -8,6 +8,8 @@ pub(super) mod cells;
 #[cfg(feature = "postgres")]
 pub(super) mod connect;
 #[cfg(feature = "postgres")]
+mod ddl;
+#[cfg(feature = "postgres")]
 pub(super) mod driver;
 #[cfg(all(any(test, feature = "test-support"), feature = "postgres"))]
 pub(in crate::db) mod db_tests;
@@ -199,6 +201,10 @@ impl Backend for Postgres {
 }
 
 impl SqlDialect for Postgres {
+    /// Its own rules, `SET NULL (a)` (15 on) too.
+    fn takes_fk_rule(&self, _rule: &str) -> bool {
+        true
+    }
     fn load_queries(&self) -> &'static [(&'static str, &'static str)] {
         &[
             (

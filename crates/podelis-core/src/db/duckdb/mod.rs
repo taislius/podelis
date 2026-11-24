@@ -128,6 +128,10 @@ impl Backend for DuckDb {
 }
 
 impl SqlDialect for DuckDb {
+    /// Its foreign keys have no ON DELETE or ON UPDATE.
+    fn keeps_fk_rules(&self) -> bool {
+        false
+    }
     fn load_queries(&self) -> &'static [(&'static str, &'static str)] {
         &[
             ("Database size", "SELECT database_size FROM pragma_database_size()"),

@@ -20,6 +20,11 @@ impl Database {
         self.with_session(move |session| {
             Box::pin(async move {
                 db.clear_interrupt();
+                // (With SQLite alone built, `_` is only Closed.)
+                #[cfg_attr(
+                    not(any(feature = "postgres", feature = "mysql", feature = "duckdb", feature = "mongodb")),
+                    expect(clippy::match_wildcard_for_single_variants, reason = "other engines' sessions, where they're built")
+                )]
                 match session {
                     Session::Sqlite(c) => work(c).await,
                     _ => Err(anyhow::anyhow!("the connection is closed")),
@@ -98,6 +103,11 @@ pub(in crate::db) async fn table_rows(db: &Database, system: bool) -> Result<Vec
     .await
 }
 
+/// The table as the server writes it: its CREATE TABLE is its details' `definition`.
+pub(in crate::db) async fn table_ddl(_db: &Database, _schema: &str, _table: &str) -> Result<Option<String>> {
+    Ok(None)
+}
+
 #[cfg(test)]
 pub(in crate::db) async fn column_info_rows(
     db: &Database,
@@ -156,8 +166,11 @@ pub(in crate::db) async fn table_details(db: &Database, _schema: &str, table: &s
         .bind(table)
         .fetch_all(&mut *c)
         .await?;
-        let fks: Vec<(String, String, Option<String>)> =
-            sqlx::query_as(r#"SELECT "from", "table", "to" FROM pragma_foreign_key_list(?1) ORDER BY id, seq"#)
+        // From, to table, to column, ON DELETE, ON UPDATE.
+        type FkRow = (String, String, Option<String>, Option<String>, Option<String>);
+        let fks: Vec<FkRow> = sqlx::query_as(
+            r#"SELECT "from", "table", "to", on_delete, on_update FROM pragma_foreign_key_list(?1) ORDER BY id, seq"#,
+        )
                 .bind(table)
                 .fetch_all(&mut *c)
                 .await?;
@@ -179,13 +192,15 @@ pub(in crate::db) async fn table_details(db: &Database, _schema: &str, table: &s
                 .collect(),
             foreign_keys: fks
                 .into_iter()
-                .map(|(column, t, to)| ForeignKey {
+                .map(|(column, t, to, on_delete, on_update)| ForeignKey {
                     column,
                     // No target column means the target's primary key.
                     target: format!("{t}.{}", to.as_deref().unwrap_or("(primary key)")),
                     target_schema: "main".into(),
                     target_table: t,
                     target_column: to,
+                    on_delete: super::super::details::fk_rule(on_delete.as_deref()),
+                    on_update: super::super::details::fk_rule(on_update.as_deref()),
                 })
                 .collect(),
             definition: definition.and_then(|(d,)| d),

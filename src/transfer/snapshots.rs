@@ -19,6 +19,40 @@ pub struct Snapshot {
     /// When it was taken, RFC 3339.
     pub taken: String,
     pub tables: Vec<TableShape>,
+    /// Its foreign keys have their ON DELETE and ON UPDATE (taken since
+    /// they're kept): one taken before has none, which isn't "NO ACTION".
+    #[serde(default)]
+    pub fk_rules: bool,
+}
+
+impl Snapshot {
+    /// Compared with `now`, a snapshot that kept no rules (`fk_rules`):
+    /// each of its keys takes the rules of the same key (column → target)
+    /// in `now`, so a rule isn't taken for a change. Its keys, else as kept.
+    pub fn without_unknown_rules(mut self, now: &[TableShape]) -> Self {
+        if self.fk_rules {
+            return self;
+        }
+        for table in &mut self.tables {
+            let Some(live) = now.iter().find(|t| t.info.schema == table.info.schema && t.info.name == table.info.name)
+            else {
+                continue;
+            };
+            let (Some(kept), Some(live)) = (table.details.as_mut(), live.details.as_ref()) else { continue };
+            for fk in &mut kept.foreign_keys {
+                // Matched as the compare matches keys: case aside.
+                let same_key = |l: &&crate::db::ForeignKey| {
+                    l.column.eq_ignore_ascii_case(&fk.column) && l.target.eq_ignore_ascii_case(&fk.target)
+                };
+                if let Some(same) = live.foreign_keys.iter().find(same_key) {
+                    fk.on_delete.clone_from(&same.on_delete);
+                    fk.on_update.clone_from(&same.on_update);
+                }
+            }
+        }
+        self.fk_rules = true;
+        self
+    }
 }
 
 /// A saved snapshot, as listed: from its file name.
@@ -101,6 +135,7 @@ mod tests {
             engine: Engine::Postgres,
             taken: String::new(),
             tables: vec![table.clone()],
+            fk_rules: true,
         };
         let at = |h: u32| {
             chrono::Local::now().date_naive().and_hms_opt(h, 0, 0).unwrap().and_local_timezone(chrono::Local).unwrap()
@@ -111,5 +146,47 @@ mod tests {
         assert_eq!(listed.iter().map(|s| s.connection.as_str()).collect::<Vec<_>>(), ["odd_name_x", "prod"]);
         assert!(listed[0].taken.ends_with("10:00:00"), "{}", listed[0].taken);
         assert_eq!(load(&newer).unwrap().tables[0].columns[0].name, "id");
+    }
+
+    /// A snapshot taken before keys kept their rules isn't said to have
+    /// changed them: its keys take the live ones' rules.
+    #[test]
+    fn an_old_snapshots_keys_take_the_live_rules() {
+        use crate::db::{ForeignKey, TableDetails, TableInfo};
+        let shape = |on_delete: Option<&str>| TableShape {
+            info: TableInfo {
+                schema: "public".into(),
+                name: "orders".into(),
+                is_view: false,
+                rows: None,
+                bytes: None,
+                system: false,
+                partition_of: None,
+                materialized: false,
+            },
+            columns: Vec::new(),
+            details: Some(TableDetails {
+                foreign_keys: vec![ForeignKey {
+                    column: "user_id".into(),
+                    target: "users.id".into(),
+                    target_schema: "public".into(),
+                    target_table: "users".into(),
+                    target_column: Some("id".into()),
+                    on_delete: on_delete.map(str::to_string),
+                    on_update: None,
+                }],
+                ..TableDetails::default()
+            }),
+        };
+        // As an old file reads: no `fk_rules`.
+        let old: Snapshot = serde_json::from_value(serde_json::json!({
+            "connection": "prod", "engine": "Postgres", "taken": "", "tables": [shape(None)]
+        }))
+        .unwrap();
+        assert!(!old.fk_rules);
+        let now = [shape(Some("CASCADE"))];
+        let filled = old.without_unknown_rules(&now);
+        let fk = &filled.tables[0].details.as_ref().unwrap().foreign_keys[0];
+        assert_eq!(fk.on_delete.as_deref(), Some("CASCADE"));
     }
 }
