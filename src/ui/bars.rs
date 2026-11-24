@@ -4,6 +4,7 @@
 use super::splash::brand;
 use super::*;
 use crate::app::ConnState;
+use crate::app::commands::{Command, Here, pane_key};
 use crate::config::keys::Action;
 use crate::config::settings::Hints;
 
@@ -293,6 +294,40 @@ fn menu_chip(app: &App) -> Option<Vec<Span<'static>>> {
     Some(chip(&key, t!("hint.menu_click"), false))
 }
 
+/// The projects and connections screens' hints, their keys from the
+/// screens' tables.
+fn manager_hints(screen: Screen) -> Vec<(String, &'static str)> {
+    match screen {
+        Screen::Projects => {
+            use crate::app::manager_keys::{PROJECTS_KEYS as K, ProjectsKey as P, first_key};
+            vec![
+                (first_key(K, P::Open), t!("hint.open")),
+                (first_key(K, P::New), t!("hint.new")),
+                (first_key(K, P::Rename), t!("hint.rename")),
+                (first_key(K, P::Delete), t!("hint.delete")),
+                (first_key(K, P::Connections), t!("hint.connections")),
+                (first_key(K, P::Back), t!("hint.back")),
+                ("?".to_string(), t!("hint.keys")),
+            ]
+        }
+        Screen::Connections => {
+            use crate::app::manager_keys::{CONNECTIONS_KEYS as K, ConnectionsKey as C, first_key};
+            vec![
+                (first_key(K, C::Connect), t!("hint.connect")),
+                (first_key(K, C::NewTab), t!("hint.new_tab")),
+                (first_key(K, C::Edit), t!("hint.edit")),
+                (first_key(K, C::New), t!("hint.new")),
+                (first_key(K, C::Move), t!("hint.move")),
+                (first_key(K, C::Delete), t!("hint.delete")),
+                (first_key(K, C::Containers), t!("hint.containers")),
+                (first_key(K, C::Projects), t!("hint.projects")),
+                (first_key(K, C::Back), t!("hint.back")),
+            ]
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// As many key hints as fit in `width` cells, most important first.
 fn key_hints(app: &App, width: u16) -> Vec<Span<'static>> {
     let keys = &app.keymap;
@@ -308,55 +343,42 @@ fn key_hints(app: &App, width: u16) -> Vec<Span<'static>> {
         (keys.short_label(Action::Palette), t!("hint.keys")),
     ];
     let hints: Vec<(String, &str)> = match app.screen {
-        Screen::Projects => owned(&[
-            ("↵", t!("hint.open")),
-            ("n", t!("hint.new")),
-            ("r", t!("hint.rename")),
-            ("d", t!("hint.delete")),
-            ("→", t!("hint.connections")),
-            ("Esc", t!("hint.back")),
-            ("?", t!("hint.keys")),
-        ]),
-        Screen::Connections => owned(&[
-            ("↵", t!("hint.connect")),
-            ("t", t!("hint.new_tab")),
-            ("e", t!("hint.edit")),
-            ("n", t!("hint.new")),
-            ("m", t!("hint.move")),
-            ("d", t!("hint.delete")),
-            ("c", t!("hint.containers")),
-            ("←", t!("hint.projects")),
-            ("Esc", t!("hint.back")),
-        ]),
+        Screen::Projects | Screen::Connections => manager_hints(app.screen),
         Screen::Connect => owned(&[
             ("↵", t!("hint.connect")),
-            ("^S", t!("hint.save")),
-            ("^T", t!("hint.test")),
+            (&crate::app::key_table::ctrl_label(crate::app::SAVE_KEY), t!("hint.save")),
+            (&crate::app::key_table::ctrl_label(crate::app::TEST_KEY), t!("hint.test")),
             ("↑↓", t!("hint.field")),
             ("←→", t!("hint.option")),
             ("Tab", t!("hint.next_pane")),
         ]),
         Screen::Query => match app.focus {
-            Focus::Results => owned(&[
-                ("↵", t!("hint.view")),
-                ("s", t!("hint.sort")),
-                ("/", t!("hint.filter")),
-                ("c", t!("hint.edit")),
-                ("E", t!("hint.export")),
-                ("m", t!("hint.menu")),
-                ("[ ]", t!("hint.tabs")),
-                ("?", t!("hint.keys")),
-            ]),
-            Focus::Schema => owned(&[
-                ("↵", t!("hint.expand")),
-                ("s", t!("hint.select")),
-                ("d", t!("hint.definition")),
-                ("/", t!("hint.filter")),
-                ("o", t!("hint.order")),
-                ("r", t!("hint.refresh")),
-                ("m", t!("hint.menu")),
-                ("?", t!("hint.keys")),
-            ]),
+            Focus::Results => {
+                let key = |c| pane_key(Here::Rows, c);
+                vec![
+                    (key(Command::FullValue), t!("hint.view")),
+                    (key(Command::Sort), t!("hint.sort")),
+                    (key(Command::FilterRows), t!("hint.filter")),
+                    (key(Command::EditCell), t!("hint.edit")),
+                    (key(Command::ExportMenu), t!("hint.export")),
+                    (key(Command::Action(Action::Menu)), t!("hint.menu")),
+                    ("[ ]".to_string(), t!("hint.tabs")),
+                    ("?".to_string(), t!("hint.keys")),
+                ]
+            }
+            Focus::Schema => {
+                let key = |c| pane_key(Here::Navigator, c);
+                vec![
+                    (key(Command::Expand), t!("hint.expand")),
+                    (key(Command::SelectFrom), t!("hint.select")),
+                    (key(Command::Definition), t!("hint.definition")),
+                    (key(Command::FilterNames), t!("hint.filter")),
+                    (key(Command::OrderNames), t!("hint.order")),
+                    (key(Command::RefreshSchema), t!("hint.refresh")),
+                    (key(Command::Action(Action::Menu)), t!("hint.menu")),
+                    ("?".to_string(), t!("hint.keys")),
+                ]
+            }
             Focus::Editor => editor_hints.to_vec(),
         },
     };

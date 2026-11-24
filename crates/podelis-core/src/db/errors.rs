@@ -9,6 +9,9 @@ pub fn sql_literal(value: &str, engine: Engine) -> String {
 /// A literal for `value` from a result column of type `ty`: a binary
 /// value in the engine's hex notation, anything else as a string.
 pub fn value_literal(value: &str, ty: &str, engine: Engine) -> String {
+    if let Some(literal) = engine.dialect().and_then(|d| d.typed_literal(value, ty)) {
+        return literal;
+    }
     if let Some(dialect) = engine.dialect()
         && dialect.is_binary_type(ty)
         && let Some(literal) = dialect.binary_literal(value)

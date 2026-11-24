@@ -23,8 +23,18 @@ pub(in crate::db) async fn own_live_db(name: &str) -> Option<(Database, ConnectP
 
 pub static TEST_SQL: TestSql = TestSql {
     sleep: Some("SELECT SLEEP({s})"),
-    count_to_2500: "SET SESSION cte_max_recursion_depth = 5000; \
-        WITH RECURSIVE s(g) AS (SELECT 1 UNION ALL SELECT g + 1 FROM s WHERE g < 2500) SELECT g FROM s",
+    // Cross joins, not a recursive CTE: MariaDB has no
+    // cte_max_recursion_depth, MySQL 5.7 no CTEs.
+    count_to_2500: "SELECT a.d * 1000 + b.d * 100 + c.d * 10 + e.d + 1 AS g \
+        FROM (SELECT 0 d UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 \
+              UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) a, \
+             (SELECT 0 d UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 \
+              UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) b, \
+             (SELECT 0 d UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 \
+              UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) c, \
+             (SELECT 0 d UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 \
+              UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) e \
+        WHERE a.d * 1000 + b.d * 100 + c.d * 10 + e.d < 2500 ORDER BY g",
     // The classic table before 8.0.16 and on MariaDB; the tree after.
     plan_shows: &["select_type", "-> "],
     analyzed_shows: "actual time",
@@ -433,4 +443,126 @@ async fn live_a_check_keeps_the_last_runs_warnings_mysql() {
     db.check_now().await.unwrap();
     let warnings = db.run("SHOW WARNINGS", 10).await.unwrap();
     assert!(!warnings.rows.is_empty(), "the warning kept");
+}
+
+#[tokio::test]
+async fn live_a_script_with_delimiter_lines_makes_its_routine() {
+    let Some((db, _)) = own_live_db("podelis_delimiter").await else { return };
+    let script = "DELIMITER $$\nCREATE PROCEDURE two() BEGIN SELECT 1; SELECT 2; END$$\nDELIMITER ;\nCALL two();";
+    let o = db.run(script, DEFAULT_ROW_LIMIT).await.unwrap();
+    assert_eq!(cells(&o), vec![vec![Some("2")]], "the procedure was made whole and ran");
+    // Its body's SET isn't the session's.
+    let script = "DELIMITER $$\nCREATE PROCEDURE three() BEGIN DECLARE v INT; SET v = 3; SELECT v; END$$";
+    db.run(script, DEFAULT_ROW_LIMIT).await.unwrap();
+    assert!(!db.remembered().iter().any(|s| s == "v"), "{:?}", db.remembered());
+    // A single read under a DELIMITER line, streamed as the app does.
+    let (o, _) = db.run_streaming("DELIMITER $$\nSELECT 7$$", 10).await.unwrap();
+    assert_eq!(cells(&o), vec![vec![Some("7")]]);
+    db.run("DROP DATABASE podelis_delimiter", DEFAULT_ROW_LIMIT).await.unwrap();
+}
+
+#[tokio::test]
+async fn live_mysql_details_have_check_constraints() {
+    let Some((db, _)) = own_live_db("podelis_checks").await else { return };
+    db.run("CREATE TABLE orders (total INT, CONSTRAINT positive CHECK (total > 0))", DEFAULT_ROW_LIMIT).await.unwrap();
+    // Another table's CHECK on a column of the same name (MariaDB names
+    // both after it) isn't this one's.
+    db.run("CREATE TABLE others (total INT CHECK (total < 100))", DEFAULT_ROW_LIMIT).await.unwrap();
+    db.run("CREATE TABLE more_others (total INT CHECK (total < 50))", DEFAULT_ROW_LIMIT).await.unwrap();
+    let others = db.table_details("podelis_checks", "others").await.unwrap();
+    assert_eq!(others.checks.len(), 1, "{:?}", others.checks);
+    assert!(others.checks[0].definition.contains("100"), "{:?}", others.checks);
+    let details = db.table_details("podelis_checks", "orders").await.unwrap();
+    assert_eq!(details.checks.len(), 1, "{:?}", details.checks);
+    assert_eq!(details.checks[0].name, "positive");
+    assert!(details.checks[0].definition.starts_with("CHECK (") && details.checks[0].definition.contains("total"));
+    db.run("DROP DATABASE podelis_checks", DEFAULT_ROW_LIMIT).await.unwrap();
+}
+
+/// One value of each kind of type there is, as the mysql client shows it.
+#[tokio::test]
+async fn live_mysql_shows_every_kind_of_type_as_text() {
+    let Some((db, _)) = own_live_db("podelis_types").await else { return };
+    db.run(
+        "SET SESSION sql_mode = ''; \
+         CREATE TABLE t (zero_date DATE, zero_dt DATETIME, y YEAR, e ENUM('a','b'), s SET('x','y'), \
+           u BIGINT UNSIGNED, f FLOAT, g GEOMETRY, tm TIME(3), tx TINYTEXT, vb VARBINARY(4)); \
+         INSERT INTO t VALUES ('0000-00-00', '0000-00-00 00:00:00', 2024, 'b', 'x,y', \
+           18446744073709551615, 1.5, ST_GeomFromText('POINT(1 2)'), '-838:59:59.000', 'ž', X'00FF'); \
+         SET SESSION sql_mode = DEFAULT",
+        DEFAULT_ROW_LIMIT,
+    )
+    .await
+    .unwrap();
+    let o = db.run("SELECT * FROM t", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert_eq!(
+        cells(&o),
+        vec![vec![
+            Some("0000-00-00"),
+            Some("0000-00-00 00:00:00"),
+            Some("2024"),
+            Some("b"),
+            Some("x,y"),
+            Some("18446744073709551615"),
+            Some("1.5"),
+            Some("POINT(1 2)"),
+            Some("-838:59:59.000"),
+            Some("ž"),
+            Some("0x00FF"),
+        ]]
+    );
+    db.run("DROP DATABASE podelis_types", DEFAULT_ROW_LIMIT).await.unwrap();
+}
+
+#[tokio::test]
+async fn live_mysql_lists_triggers_and_events_with_their_definitions() {
+    let Some((db, _)) = own_live_db("podelis_obj").await else { return };
+    db.run(
+        "CREATE TABLE logged (id INT); \
+         CREATE TRIGGER logged_touch BEFORE INSERT ON logged FOR EACH ROW SET NEW.id = NEW.id + 1; \
+         CREATE EVENT nightly ON SCHEDULE EVERY 1 DAY DISABLE DO DELETE FROM logged",
+        DEFAULT_ROW_LIMIT,
+    )
+    .await
+    .unwrap();
+    let objects = db.routines().await.unwrap();
+    let trigger = objects.iter().find(|r| r.kind == "trigger").expect("the trigger listed");
+    assert_eq!(trigger.name, "logged_touch (logged)");
+    assert!(db.routine_definition(trigger).await.unwrap().contains("BEFORE INSERT"));
+    let event = objects.iter().find(|r| r.kind == "event").expect("the event listed");
+    assert!(db.routine_definition(event).await.unwrap().contains("EVERY 1 DAY"));
+    db.run("DROP DATABASE podelis_obj", DEFAULT_ROW_LIMIT).await.unwrap();
+}
+
+/// A `GET_LOCK` that times out (another session holds it) isn't remembered.
+#[tokio::test]
+async fn live_a_named_lock_not_taken_isnt_remembered() {
+    let Some(db) = live_db(Engine::MySql).await else { return };
+    let Some(other) = live_db(Engine::MySql).await else { return };
+    other.run("SELECT GET_LOCK('podelis_held', 0)", DEFAULT_ROW_LIMIT).await.unwrap();
+    let o = db.run("SELECT GET_LOCK('podelis_held', 0)", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert_eq!(cells(&o), vec![vec![Some("0")]]);
+    assert!(!db.remembered().iter().any(|s| s.starts_with("named locks")), "{:?}", db.remembered());
+    let o = db.run("SELECT GET_LOCK('podelis_free', 0)", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert_eq!(cells(&o), vec![vec![Some("1")]]);
+    assert!(db.remembered().iter().any(|s| s.starts_with("named locks")), "{:?}", db.remembered());
+    db.run("DO RELEASE_ALL_LOCKS()", DEFAULT_ROW_LIMIT).await.unwrap();
+    // No rows to read the answer from: taken, maybe, and noted.
+    db.run("DO GET_LOCK('podelis_do', 0)", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert!(db.remembered().iter().any(|s| s.starts_with("named locks")), "{:?}", db.remembered());
+    db.run("DO RELEASE_ALL_LOCKS()", DEFAULT_ROW_LIMIT).await.unwrap();
+    other.run("DO RELEASE_ALL_LOCKS()", DEFAULT_ROW_LIMIT).await.unwrap();
+}
+
+/// A transaction begun lets go of LOCK TABLES: no longer said held, a run
+/// of nothing else too.
+#[tokio::test]
+async fn live_start_transaction_lets_go_of_table_locks() {
+    let Some((db, _)) = own_live_db("podelis_tlocks").await else { return };
+    db.run("CREATE TABLE t (x int)", DEFAULT_ROW_LIMIT).await.unwrap();
+    db.run("LOCK TABLES t WRITE", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert!(db.remembered().iter().any(|s| s == "LOCK TABLES"), "{:?}", db.remembered());
+    db.run("START TRANSACTION", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert!(!db.remembered().iter().any(|s| s == "LOCK TABLES"), "{:?}", db.remembered());
+    db.run("ROLLBACK; DROP DATABASE podelis_tlocks", DEFAULT_ROW_LIMIT).await.unwrap();
 }

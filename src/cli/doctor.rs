@@ -255,6 +255,7 @@ mod tests {
             user: String::new(),
             database: String::new(),
             ssl_mode: crate::db::SslMode::Disable,
+            tls: crate::db::TlsFiles::default(),
             mode: crate::db::ConnectionMode::Normal,
             transaction: None,
             ssh: String::new(),

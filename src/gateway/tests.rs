@@ -352,6 +352,7 @@ pub(crate) async fn saved_shop(dir: &Path) {
         user: String::new(),
         database: String::new(),
         ssl_mode: crate::db::SslMode::default(),
+        tls: crate::db::TlsFiles::default(),
         mode: ConnectionMode::Normal,
         transaction: None,
         ssh: String::new(),

@@ -14,9 +14,27 @@ pub(super) fn draw_agents(f: &mut Frame, app: &App, area: Rect) {
         Some(s) => format!("{} · {}", t!("agents.title"), s.label()),
         None => t!("agents.title").to_string(),
     };
-    let keys = match session {
-        Some(_) => format!(" {} ", t!("agents.call_keys")),
-        None => format!(" {} ", t!("agents.session_keys")),
+    let keys = {
+        use crate::app::key_table::hint_line;
+        use crate::app::windows::agents::{AGENTS_KEYS, AgentsKey as A};
+        let hints: &[(A, &str)] = match session {
+            Some(_) => &[
+                (A::Open, t!("agents.key_details")),
+                (A::OpenInTab, t!("agents.key_open_tab")),
+                (A::Copy, t!("agents.key_copy")),
+                (A::Sandbox, t!("agents.key_sandbox")),
+                (A::Search, t!("agents.key_search")),
+                (A::Flagged, t!("agents.key_flagged")),
+                (A::Back, t!("agents.key_back")),
+            ],
+            None => &[
+                (A::Open, t!("agents.key_open")),
+                (A::Search, t!("agents.key_search")),
+                (A::Flagged, t!("agents.key_flagged")),
+                (A::Back, t!("agents.key_close")),
+            ],
+        };
+        format!(" {} ", hint_line(AGENTS_KEYS, hints))
     };
     let block = popup(&title, t.accent).title_bottom(Line::from(Span::styled(keys, dim())).right_aligned());
     let inner = block.inner(rect);

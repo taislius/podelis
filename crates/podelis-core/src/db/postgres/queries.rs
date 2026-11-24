@@ -17,11 +17,29 @@ use super::super::dialect::Scan;
 
 type PgActivityRow = (String, String, String, String, String, Option<i64>, String, String, String);
 
+/// Which materialized views (`pg_class` as `$c`, `c` if not said) the
+/// user may see: as `information_schema.tables` decides for tables and
+/// views, which leaves them out (owned, or some privilege on it or a
+/// column of it).
+macro_rules! matview_visible {
+    () => {
+        matview_visible!("c")
+    };
+    ($c:literal) => {
+        concat!(
+            "(pg_has_role(", $c, ".relowner, 'USAGE') \
+              OR has_table_privilege(", $c, ".oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') \
+              OR has_any_column_privilege(", $c, ".oid, 'SELECT, INSERT, UPDATE, REFERENCES'))"
+        )
+    };
+}
+
 pub(in crate::db) async fn column_rows(db: &Database, system: bool) -> Result<Vec<ColumnRow>> {
     let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
     let rows: Vec<ColumnRow> = {
-        sqlx::query_as(
-            "SELECT c.table_schema::text, c.table_name::text, c.column_name::text,
+        sqlx::query_as(concat!(
+            "SELECT s, t, col, ty, nul, k FROM (
+                     SELECT c.table_schema::text, c.table_name::text, c.column_name::text,
                             c.udt_name::text || CASE
                                 WHEN c.character_maximum_length IS NOT NULL
                                     THEN '(' || c.character_maximum_length || ')'
@@ -29,7 +47,8 @@ pub(in crate::db) async fn column_rows(db: &Database, system: bool) -> Result<Ve
                                     THEN '(' || c.numeric_precision || ',' || c.numeric_scale || ')'
                                 ELSE '' END,
                             c.is_nullable::text,
-                            CASE WHEN pk.column_name IS NULL THEN '' ELSE 'PRI' END
+                            CASE WHEN pk.column_name IS NULL THEN '' ELSE 'PRI' END,
+                            c.ordinal_position::int
                      FROM information_schema.columns c
                      LEFT JOIN (
                          SELECT k.table_schema, k.table_name, k.column_name
@@ -43,8 +62,29 @@ pub(in crate::db) async fn column_rows(db: &Database, system: bool) -> Result<Ve
                          AND pk.column_name = c.column_name
                      WHERE ($1 OR c.table_schema NOT IN ('pg_catalog', 'information_schema'))
                        AND c.table_schema NOT LIKE 'pg_toast%'
-                     ORDER BY c.table_schema, c.table_name, c.ordinal_position",
-        )
+                     UNION ALL
+                     SELECT n.nspname::text, m.relname::text, a.attname::text,
+                            ty.typname::text || CASE
+                                WHEN ty.typname IN ('varchar', 'bpchar') AND a.atttypmod > 4
+                                    THEN '(' || (a.atttypmod - 4) || ')'
+                                WHEN ty.typname IN ('bit', 'varbit') AND a.atttypmod > 0
+                                    THEN '(' || a.atttypmod || ')'
+                                WHEN ty.typname = 'numeric' AND a.atttypmod > 4
+                                    THEN '(' || ((a.atttypmod - 4) >> 16) || ',' || ((a.atttypmod - 4) & 65535) || ')'
+                                ELSE '' END,
+                            CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END,
+                            '',
+                            a.attnum::int
+                     FROM pg_attribute a
+                     JOIN pg_class m ON m.oid = a.attrelid AND m.relkind = 'm'
+                     JOIN pg_namespace n ON n.oid = m.relnamespace
+                     JOIN pg_type ty ON ty.oid = a.atttypid
+                     WHERE a.attnum > 0 AND NOT a.attisdropped
+                       AND ($1 OR n.nspname NOT IN ('pg_catalog', 'information_schema'))
+                       AND ", matview_visible!("m"), "
+                     ) AS x (s, t, col, ty, nul, k, ord)
+                     ORDER BY s, t, ord"
+        ))
         .bind(system)
         .fetch_all(p)
         .await?
@@ -62,7 +102,8 @@ pub(in crate::db) async fn column_rows(db: &Database, system: bool) -> Result<Ve
         .collect())
 }
 
-/// Every table with `$kind` as its type, then its row estimate and size.
+/// Every table with `$kind` as its type, then its row estimate and size;
+/// materialized views too, which `information_schema` leaves out.
 macro_rules! tables {
     ($kind:literal) => {
         concat!(
@@ -81,7 +122,20 @@ macro_rules! tables {
              LEFT JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = t.table_name
              WHERE ($1 OR t.table_schema NOT IN ('pg_catalog', 'information_schema'))
                AND t.table_schema NOT LIKE 'pg_toast%'
-             ORDER BY t.table_schema, t.table_name"
+             UNION ALL
+             SELECT n.nspname::text, c.relname::text, 'MATERIALIZED VIEW', c.reltuples::bigint,
+                    ((c.relpages::bigint
+                      + COALESCE((SELECT tc.relpages FROM pg_class tc WHERE tc.oid = c.reltoastrelid), 0)
+                      + COALESCE((SELECT sum(i.relpages) FROM pg_index x
+                                  JOIN pg_class i ON i.oid = x.indexrelid
+                                  WHERE x.indrelid = c.oid), 0))
+                     * current_setting('block_size')::bigint)::bigint
+             FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE c.relkind = 'm'
+               AND ($1 OR n.nspname NOT IN ('pg_catalog', 'information_schema'))
+               AND n.nspname NOT LIKE 'pg_toast%'
+               AND ", matview_visible!(), "
+             ORDER BY 1, 2"
         )
     };
 }
@@ -135,11 +189,8 @@ pub(in crate::db) async fn column_info_rows(
     })
 }
 
-pub(in crate::db) async fn routine_rows(db: &Database) -> Result<Vec<(String, String, String, String)>> {
-    let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
-    Ok({
-        sqlx::query_as(
-            "SELECT n.nspname::text,
+/// Functions and procedures, not those of extensions.
+const ROUTINE_FUNCTIONS: &str = "SELECT n.nspname::text,
                             p.proname::text || '(' || pg_get_function_identity_arguments(p.oid) || ')',
                             CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END,
                             p.oid::text
@@ -147,20 +198,111 @@ pub(in crate::db) async fn routine_rows(db: &Database) -> Result<Vec<(String, St
                      WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
                        AND n.nspname NOT LIKE 'pg_toast%'
                        AND p.prokind IN ('f', 'p')
-                       AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
-                     ORDER BY 1, 2",
-        )
-        .fetch_all(p)
-        .await?
-    })
+                       AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')";
+
+/// Triggers, not internal ones nor a partition's copy of its parent's.
+const ROUTINE_TRIGGERS: &str = "SELECT n.nspname::text, tg.tgname::text || ' (' || c.relname::text || ')', 'trigger', tg.oid::text
+                     FROM pg_trigger tg
+                     JOIN pg_class c ON c.oid = tg.tgrelid
+                     JOIN pg_namespace n ON n.oid = c.relnamespace
+                     WHERE NOT tg.tgisinternal
+                       AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                       -- A partition's copy of its parent's trigger: the
+                       -- parent's is listed (by name: tgparentid is 13's).
+                       AND NOT (c.relispartition AND EXISTS (
+                           SELECT 1 FROM pg_inherits i
+                           JOIN pg_trigger pt ON pt.tgrelid = i.inhparent AND pt.tgname = tg.tgname
+                           WHERE i.inhrelid = c.oid))";
+
+/// Sequences, not a serial or identity column's own.
+const ROUTINE_SEQUENCES: &str = "SELECT n.nspname::text, c.relname::text, 'sequence', c.oid::text
+                     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                     WHERE c.relkind = 'S'
+                       AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                       -- Not a serial or identity column's own.
+                       AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                                       WHERE d.objid = c.oid AND d.deptype IN ('a', 'i', 'e'))";
+
+/// Enums, domains and composite types, not those of extensions.
+const ROUTINE_TYPES: &str = "SELECT n.nspname::text, t.typname::text,
+                            CASE t.typtype WHEN 'e' THEN 'enum' WHEN 'd' THEN 'domain' ELSE 'type' END,
+                            t.oid::text
+                     FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+                     WHERE (t.typtype IN ('e', 'd')
+                            OR (t.typtype = 'c'
+                                AND (SELECT relkind FROM pg_class WHERE oid = t.typrelid) = 'c'))
+                       AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                       AND n.nspname NOT LIKE 'pg_toast%'
+                       AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = t.oid AND d.deptype = 'e')";
+
+pub(in crate::db) async fn routine_rows(db: &Database) -> Result<Vec<(String, String, String, String)>> {
+    let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
+    // Each kind by itself: one a server or a user can't read (a catalog
+    // column it hasn't, a privilege) leaves only that kind out.
+    let mut rows: Vec<(String, String, String, String)> = sqlx::query_as(ROUTINE_FUNCTIONS).fetch_all(p).await?;
+    for (kind, sql) in [("triggers", ROUTINE_TRIGGERS), ("sequences", ROUTINE_SEQUENCES), ("types", ROUTINE_TYPES)] {
+        match sqlx::query_as(sql).fetch_all(p).await {
+            Ok(more) => rows.extend(more),
+            Err(e) => tracing::debug!(error = %e, kind, "postgres: not listed"),
+        }
+    }
+    rows.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+    Ok(rows)
 }
+
+/// A sequence as a CREATE SEQUENCE, its last value after it.
+const SEQUENCE_DEFINITION: &str = "SELECT format(
+        E'CREATE SEQUENCE %I.%I AS %s INCREMENT BY %s MINVALUE %s MAXVALUE %s START WITH %s CACHE %s%s;%s',
+        s.schemaname, s.sequencename, s.data_type, s.increment_by, s.min_value, s.max_value,
+        s.start_value, s.cache_size, CASE WHEN s.cycle THEN ' CYCLE' ELSE '' END,
+        coalesce(E'\\n-- last value: ' || s.last_value, ''))
+     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     JOIN pg_sequences s ON s.schemaname = n.nspname AND s.sequencename = c.relname
+     WHERE c.oid = $1::text::oid";
+
+/// An enum as a CREATE TYPE, its labels in their order.
+const ENUM_DEFINITION: &str = "SELECT format('CREATE TYPE %I.%I AS ENUM (%s);', n.nspname, t.typname,
+        string_agg(quote_literal(e.enumlabel), ', ' ORDER BY e.enumsortorder))
+     FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+     LEFT JOIN pg_enum e ON e.enumtypid = t.oid
+     WHERE t.oid = $1::text::oid
+     GROUP BY n.nspname, t.typname";
+
+/// A domain as a CREATE DOMAIN: its type, NOT NULL, default and checks
+/// (only CHECKs from `pg_constraint`: PostgreSQL 17 keeps a domain's NOT
+/// NULL there too, written already from `typnotnull`).
+const DOMAIN_DEFINITION: &str = "SELECT format('CREATE DOMAIN %I.%I AS %s%s%s%s;', n.nspname, t.typname,
+        format_type(t.typbasetype, t.typtypmod),
+        CASE WHEN t.typnotnull THEN ' NOT NULL' ELSE '' END,
+        coalesce(' DEFAULT ' || t.typdefault, ''),
+        coalesce((SELECT string_agg(' CONSTRAINT ' || quote_ident(c.conname) || ' '
+                                    || pg_get_constraintdef(c.oid, true), '' ORDER BY c.conname)
+                  FROM pg_constraint c WHERE c.contypid = t.oid AND c.contype = 'c'), ''))
+     FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+     WHERE t.oid = $1::text::oid";
+
+/// A composite type as a CREATE TYPE, a field a line.
+const COMPOSITE_DEFINITION: &str = "SELECT format(E'CREATE TYPE %I.%I AS (\\n%s\\n);', n.nspname, t.typname,
+        string_agg('  ' || quote_ident(a.attname) || ' ' || format_type(a.atttypid, a.atttypmod),
+                   E',\\n' ORDER BY a.attnum))
+     FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+     JOIN pg_attribute a ON a.attrelid = t.typrelid AND a.attnum > 0 AND NOT a.attisdropped
+     WHERE t.oid = $1::text::oid
+     GROUP BY n.nspname, t.typname";
 
 pub(in crate::db) async fn routine_definition(db: &Database, routine: &RoutineInfo) -> Result<String> {
     let Pool::Postgres(p) = &db.0.pool else { unreachable!("engine matches pool") };
     {
-        let (def,): (String,) =
-            sqlx::query_as("SELECT pg_get_functiondef($1::text::oid)").bind(&routine.id).fetch_one(p).await?;
-        Ok(def)
+        let sql = match routine.kind.as_str() {
+            "trigger" => "SELECT pg_get_triggerdef($1::text::oid, true) || ';'",
+            "sequence" => SEQUENCE_DEFINITION,
+            "enum" => ENUM_DEFINITION,
+            "domain" => DOMAIN_DEFINITION,
+            "type" => COMPOSITE_DEFINITION,
+            _ => "SELECT pg_get_functiondef($1::text::oid)",
+        };
+        let (def,): (Option<String>,) = sqlx::query_as(sql).bind(&routine.id).fetch_one(p).await?;
+        def.context("The server didn't show the definition (missing privilege?)")
     }
 }
 
@@ -241,6 +383,18 @@ pub(in crate::db) async fn table_details(db: &Database, schema: &str, table: &st
     .bind(table)
     .fetch_all(p)
     .await?;
+    let checks: Vec<(String, String)> = sqlx::query_as(
+        "SELECT c.conname::text, pg_get_constraintdef(c.oid, true)
+             FROM pg_constraint c
+             JOIN pg_class t ON t.oid = c.conrelid
+             JOIN pg_namespace n ON n.oid = t.relnamespace
+             WHERE c.contype = 'c' AND n.nspname = $1 AND t.relname = $2
+             ORDER BY c.conname",
+    )
+    .bind(schema)
+    .bind(table)
+    .fetch_all(p)
+    .await?;
     let definition: Option<(Option<String>,)> = sqlx::query_as(
         "SELECT pg_get_viewdef(c.oid, true)
              FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -272,6 +426,7 @@ pub(in crate::db) async fn table_details(db: &Database, schema: &str, table: &st
             })
             .collect(),
         definition: definition.and_then(|(d,)| d).map(|d| d.trim().to_string()),
+        checks: checks.into_iter().map(|(name, definition)| CheckInfo { name, definition }).collect(),
     })
 }
 

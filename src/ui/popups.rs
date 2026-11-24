@@ -4,30 +4,61 @@
 use super::*;
 
 /// The text view's keys (a cell, a row with `x`, a definition…), most
-/// important first; closing it last.
-fn text_view_keys(view: &crate::app::CellView) -> Vec<&'static str> {
+/// important first; closing it last. The keys are the window's table's.
+fn text_view_keys(view: &crate::app::CellView) -> Vec<String> {
+    use crate::app::key_table::{LEFT_RIGHT, UP_DOWN, hint};
+    use crate::app::windows::cell::{CELL_KEYS, CellKey};
+    let key = |command, what| hint(CELL_KEYS, command, what);
+    let moving = |keys: &str, what: &str| format!("{keys} {what}");
+    let close = key(CellKey::Close, t!("cell_view.close"));
     if view.record {
-        vec![t!("cell_view.scroll_next_row"), t!("cell_view.row"), t!("cell_view.copy_row"), t!("cell_view.close")]
+        vec![
+            moving(UP_DOWN, t!("cell_view.scroll_next_row")),
+            moving(LEFT_RIGHT, t!("cell_view.row")),
+            key(CellKey::Copy, t!("cell_view.copy_row")),
+            close,
+        ]
     } else if view.browse {
-        vec![t!("cell_view.prev_next_table"), t!("cell_view.scroll"), t!("cell_view.copy"), t!("cell_view.close")]
+        vec![
+            moving(LEFT_RIGHT, t!("cell_view.prev_next_table")),
+            moving(UP_DOWN, t!("cell_view.scroll")),
+            key(CellKey::Copy, t!("cell_view.copy")),
+            close,
+        ]
     } else if view.follow.is_some() {
-        vec![t!("cell_view.open_tab"), t!("cell_view.copy"), t!("cell_view.scroll"), t!("cell_view.close")]
+        vec![
+            key(CellKey::Open, t!("cell_view.open_tab")),
+            key(CellKey::Copy, t!("cell_view.copy")),
+            moving(UP_DOWN, t!("cell_view.scroll")),
+            close,
+        ]
     } else if view.sql.is_some() {
-        vec![t!("cell_view.scroll"), t!("cell_view.copy_sql"), t!("cell_view.open_tab_there"), t!("cell_view.close")]
+        vec![
+            moving(UP_DOWN, t!("cell_view.scroll")),
+            key(CellKey::Copy, t!("cell_view.copy_sql")),
+            key(CellKey::Open, t!("cell_view.open_tab_there")),
+            close,
+        ]
     } else {
         // A message: copied whole with `y`, or a part of it with the
         // terminal's own selection (the app has the mouse otherwise).
-        vec![t!("cell_view.scroll"), t!("cell_view.copy"), t!("cell_view.select"), t!("cell_view.close")]
+        vec![
+            moving(UP_DOWN, t!("cell_view.scroll")),
+            key(CellKey::Copy, t!("cell_view.copy")),
+            t!("cell_view.select").to_string(),
+            close,
+        ]
     }
 }
 
 /// As many of `keys` as fit in `width`, joined by ` · `: the first ones,
 /// and always the last (how to close).
-fn fitting_hints(keys: &[&str], width: usize) -> String {
+fn fitting_hints<S: AsRef<str>>(keys: &[S], width: usize) -> String {
     let Some((last, rest)) = keys.split_last() else { return String::new() };
     let mut shown: Vec<&str> = Vec::new();
-    let mut used = 1 + last.chars().count();
+    let mut used = 1 + last.as_ref().chars().count();
     for key in rest {
+        let key = key.as_ref();
         let w = key.chars().count() + 3;
         if used + w > width {
             break;
@@ -35,7 +66,7 @@ fn fitting_hints(keys: &[&str], width: usize) -> String {
         used += w;
         shown.push(key);
     }
-    shown.push(last);
+    shown.push(last.as_ref());
     format!(" {}", shown.join(" · "))
 }
 

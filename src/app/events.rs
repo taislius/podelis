@@ -154,6 +154,13 @@ impl App {
                 said = Some((message, had_transaction || !health.lost.is_empty()));
             }
         }
+        // A pooler moved the session (once): what's set on it, and its
+        // transactions across runs, can't be relied on.
+        if health.pooled && !slot.health.as_ref().is_some_and(|h| h.pooled) {
+            crate::system::connection_log::record("pooled", &name, "the server session changed by itself");
+            let message = t!("info.pooled");
+            said = Some((if shown { message.to_string() } else { format!("{name}: {message}") }, true));
+        }
         match &health.state {
             HealthState::Live | HealthState::Reconnected => {
                 slot.state.answered();
@@ -369,7 +376,11 @@ impl App {
                 if crate::db::is_auth_failure(&err) && form.password_command.trim().is_empty() {
                     // Said before clearing: the keychain is only to blame if
                     // there was no password.
-                    let said = t!("run.type_password", err = err);
+                    let said = t!(
+                        "run.type_password",
+                        err = err,
+                        save = crate::app::manager::connections::ctrl_words(crate::app::manager::connections::SAVE_KEY)
+                    );
                     form.error = Some(form.connect_failure(&said));
                     form.password.clear();
                     form.focus = ConnectField::Password;
@@ -482,6 +493,16 @@ impl App {
             self.set_status(said, is_error);
         }
         self.take_over_failed_slots();
+        // A server older than supported, or one only compatible: said once,
+        // quietly (it may well work).
+        // (In the status line only if nothing else was said there: a save
+        // that failed stays in sight.)
+        if let Some(note) = self.connection.database.as_ref().and_then(|db| db.support().note()) {
+            self.log(note.clone(), false);
+            if self.notes.status.is_empty() {
+                self.set_status(note, false);
+            }
+        }
         // SSL mode `prefer` gave up on TLS: say so, it's not what was asked.
         let tls_failed = self.connection.database.as_ref().and_then(|db| db.tls_failed().map(str::to_string));
         if let Some(why) = tls_failed {
@@ -496,11 +517,19 @@ impl App {
         }
     }
 
-    pub(super) fn on_query_done(&mut self, outcome: QueryOutcome, txn: Option<TxnState>, stream: Option<RowStream>) {
+    pub(super) fn on_query_done(
+        &mut self,
+        mut outcome: QueryOutcome,
+        txn: Option<TxnState>,
+        stream: Option<RowStream>,
+    ) {
         // A reconnect before this run (its report not here yet) lost the
         // transaction the tab had: said now, before this result's own
         // transaction state, which a late report then can't clear.
         let ran_on = self.tab.run.db.take();
+        // A longer stream's before (they wait for the next run), then this
+        // run's own.
+        self.log_notices(ran_on.as_ref(), std::mem::take(&mut outcome.notices));
         // The transaction it lost, said with the result, as an error: the
         // result ran on a new session, outside it (a later ROLLBACK undoes
         // nothing of it).
@@ -672,10 +701,26 @@ impl App {
         })
     }
 
+    /// What the server said beside the run's results (PostgreSQL's
+    /// notices), in the messages: a warning as one, the rest as notes.
+    /// Those still waiting on the run's connection (a failed run's, a
+    /// longer stream's) first, then `own`, the run's outcome's.
+    fn log_notices(&mut self, ran_on: Option<&Database>, own: Vec<String>) {
+        // Only the run's own connection's: the one shown may be another
+        // tab's, its notices another run's.
+        let waiting = ran_on.map(Database::take_notices).unwrap_or_default();
+        for notice in waiting.into_iter().chain(own) {
+            let warning = notice.starts_with("WARNING");
+            self.log(notice, warning);
+        }
+    }
+
     pub(super) fn on_query_failed(&mut self, err: &str, position: Option<ErrorPos>, txn: Option<TxnState>) {
         // The run's own connection (another tab's may be shown now): no
         // other server's version says anything about it.
         let ran_on = self.tab.run.db.take();
+        // A function's RAISE NOTICE before it failed says why, often.
+        self.log_notices(ran_on.as_ref(), Vec::new());
         self.stop_watch(&format!(": {}", t!("run.query_failed")));
         // Whether the connection was lost is the supervisor's to say (its
         // `Health` report), not this message's.

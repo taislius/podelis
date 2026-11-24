@@ -12,10 +12,19 @@ pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, port: u16
     // looked up for this connection's (`db::passwords`, before connecting).
     let mut opts = PgConnectOptions::new_without_pgpass()
         .port(port)
-        .ssl_mode(ssl_mode(params.ssl_mode))
+        .ssl_mode(ssl_mode(params.tls_mode()))
         .application_name("podelis");
     if params.read_only {
         opts = opts.options([("default_transaction_read_only", "on")]);
+    }
+    if let Some(ca) = &params.tls.ca {
+        opts = opts.ssl_root_cert(TlsFiles::expanded(ca));
+    }
+    if let Some(cert) = &params.tls.cert {
+        opts = opts.ssl_client_cert(TlsFiles::expanded(cert));
+    }
+    if let Some(key) = &params.tls.key {
+        opts = opts.ssl_client_key(TlsFiles::expanded(key));
     }
     // Leave unset fields to libpq-style defaults (OS user, PGPASSWORD...).
     if !params.user.is_empty() {
@@ -38,8 +47,42 @@ pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, port: u16
         .connect_with(opts)
         .await
         .context("couldn't connect")?;
-    let conn = pool.acquire().await.context("failed to open session")?;
+    let mut conn = pool.acquire().await.context("failed to open session")?;
+    if let Some(why) = transaction_pooled(&mut conn, host, port).await {
+        // Back to the pool first: closing it waits for every connection
+        // out of it.
+        drop(conn);
+        pool.close().await;
+        anyhow::bail!(why);
+    }
     Ok((Pool::Postgres(pool), Session::Postgres(conn)))
+}
+
+/// Why Podėlis won't use the session, if a pooler in transaction mode
+/// (`PgBouncer`, Supavisor, RDS Proxy…) answers at `host:port`: it hands
+/// each transaction another server session, so the backend's process id
+/// changes from one statement to the next. A SQL client needs one session
+/// (`SET`, transactions across runs, temporary tables), and cancelling by
+/// that id could stop another client's query. (Simple protocol: such a
+/// pooler may refuse the driver's named statements.) Best-effort: a quiet
+/// pool often hands back the server connection it gave last (`PgBouncer`'s
+/// LIFO), and then both ids agree; the supervisor's checks compare the id
+/// again later (`check_server_session`), and say so then.
+async fn transaction_pooled(conn: &mut PoolConnection<Postgres>, host: &str, port: u16) -> Option<String> {
+    use sqlx::Row as _;
+    let mut pid = async || -> Option<String> {
+        let row = sqlx::raw_sql("SELECT pg_backend_pid()::text").fetch_optional(&mut **conn).await.ok()??;
+        row.try_get::<String, _>(0).ok()
+    };
+    let (first, second) = (pid().await?, pid().await?);
+    (first != second).then(|| {
+        format!(
+            "{} hands each transaction another server session (a pooler in transaction mode: PgBouncer, \
+             Supavisor, RDS Proxy…), and a SQL client needs one session (SET, transactions across runs, \
+             cancelling a query)\nhint: connect to the pooler's session mode, or to the server itself",
+            crate::db::address_text(host, port)
+        )
+    })
 }
 
 /// Podėlis's SSL mode as PostgreSQL's (libpq's names, one for one).

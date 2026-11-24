@@ -503,7 +503,7 @@ impl App {
         if self.tab_dirty(self.active_tab) {
             self.popups.confirm = Some(Confirm {
                 message: t!("tabs.close_unsaved", name = self.tabs[self.active_tab].name),
-                details: vec![t!("tabs.save_first").into()],
+                details: vec![t!("tabs.save_first", key = self.keymap.label(crate::config::keys::Action::SaveTab))],
                 danger: false,
                 action: ConfirmAction::CloseTab,
                 offer_transaction: false,

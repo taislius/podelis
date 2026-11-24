@@ -24,3 +24,8 @@ pub(in crate::db) fn error_facts(cause: &(dyn std::error::Error + 'static)) -> O
         Some(ServerError { message, position: None, missing_feature: false, closes_connection: false, check })
     })
 }
+
+/// The notices the server sent since they were last taken: none here.
+pub(in crate::db) fn take_notices(_c: &mut super::DriverConnection) -> Vec<String> {
+    Vec::new()
+}

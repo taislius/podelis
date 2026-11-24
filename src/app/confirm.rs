@@ -3,6 +3,21 @@
 use super::*;
 use crate::config::store::ProjectId;
 
+/// What a key answers to a y/n question: `y` yes, `n` or Esc no (either
+/// case); anything else isn't an answer.
+pub(in crate::app) fn answer(key: KeyEvent) -> Option<bool> {
+    match key.code {
+        KeyCode::Char('y' | 'Y') => Some(true),
+        KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether a key answers yes: where anything else means no.
+pub(in crate::app) fn is_yes(key: KeyEvent) -> bool {
+    answer(key) == Some(true)
+}
+
 /// Something to do once the user answers "y".
 pub enum ConfirmAction {
     /// A read on production that would read a whole big table: run it as
@@ -74,8 +89,7 @@ impl App {
         {
             return self.run_in_transaction(&sql, offset, filled, RunPurpose::Query);
         }
-        let yes =
-            matches!(key.code, KeyCode::Char('y' | 'Y')) || (quit_key && matches!(confirm.action, ConfirmAction::Quit));
+        let yes = is_yes(key) || (quit_key && matches!(confirm.action, ConfirmAction::Quit));
         // An export's size is asked about by itself, maybe while typing, and
         // no would throw its file away: only y, or n / Esc, and not at once.
         if matches!(confirm.action, ConfirmAction::KeepExporting | ConfirmAction::ExportAll { .. }) {
@@ -86,7 +100,7 @@ impl App {
                 return self.request_quit();
             }
             let settled = self.exports.asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
-            let answers = yes || matches!(key.code, KeyCode::Char('n' | 'N') | KeyCode::Esc);
+            let answers = yes || answer(key).is_some();
             if !(settled && answers) {
                 self.popups.confirm = Some(confirm);
                 return;
@@ -96,12 +110,7 @@ impl App {
             // Only y, or n / Esc, answer; and not in the first moment
             // (a key being typed as it appeared).
             let settled = self.agents.asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
-            let answer = match key.code {
-                KeyCode::Char('y' | 'Y') => Some(true),
-                KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(false),
-                _ => None,
-            };
-            match answer {
+            match answer(key) {
                 Some(approve) if settled => {
                     let request = request.clone();
                     return self.answer_agent(&request, approve);
@@ -116,13 +125,12 @@ impl App {
             // It came by itself, maybe while typing: only y, a, or n / Esc
             // answer it, and not in its first moment (as an agent's write).
             let settled = self.agents.asked.is_none_or(|at| at.elapsed() >= AGENT_SETTLE);
-            let answer = match key.code {
-                KeyCode::Char('y' | 'Y') => Some(Some(false)),
+            // `a`: yes, and always.
+            let share = match key.code {
                 KeyCode::Char('a' | 'A') => Some(Some(true)),
-                KeyCode::Char('n' | 'N') | KeyCode::Esc => Some(None),
-                _ => None,
+                _ => answer(key).map(|yes| yes.then_some(false)),
             };
-            match answer {
+            match share {
                 Some(Some(always)) if settled => {
                     return self.answer_share(question.clone(), project_id.as_ref(), always);
                 }

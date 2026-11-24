@@ -86,6 +86,7 @@ mod tests {
                 bytes: None,
                 system: false,
                 partition_of: None,
+                materialized: false,
             },
             columns: vec![ColumnInfo {
                 name: "id".into(),

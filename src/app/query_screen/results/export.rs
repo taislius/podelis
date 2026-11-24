@@ -746,7 +746,7 @@ fn open_sink(
 ) -> anyhow::Result<Sink<std::io::BufWriter<std::fs::File>>> {
     let file = std::io::BufWriter::new(std::fs::File::create(target)?);
     Ok(match paged {
-        Some(paged) => Sink::Text(crate::transfer::export::PagedWriter::new(file, paged, columns, types)),
+        Some(paged) => Sink::Text(Box::new(crate::transfer::export::PagedWriter::new(file, paged, columns, types))),
         None => Sink::Parquet(Box::new(crate::transfer::parquet::Pages::new(
             file,
             columns,
@@ -939,7 +939,7 @@ impl Format {
 
 /// Where every row of a result goes, a page at a time: text, or Parquet.
 enum Sink<W: std::io::Write + Send> {
-    Text(crate::transfer::export::PagedWriter<W>),
+    Text(Box<crate::transfer::export::PagedWriter<W>>),
     Parquet(Box<crate::transfer::parquet::Pages<W>>),
 }
 
@@ -961,7 +961,7 @@ impl<W: std::io::Write + Send> Sink<W> {
     /// Ends the file; `stop` ends Parquet's writing between row groups.
     fn finish(self, stop: &std::sync::atomic::AtomicBool) -> std::io::Result<()> {
         match self {
-            Sink::Text(out) => out.finish().map(drop),
+            Sink::Text(out) => (*out).finish().map(drop),
             Sink::Parquet(out) => out.finish(stop).map(drop),
         }
     }

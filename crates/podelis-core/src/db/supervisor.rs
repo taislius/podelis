@@ -66,6 +66,10 @@ pub struct Health {
     /// (`database shop`, `sql_mode`, temporary tables): nothing's run again,
     /// it's the user's to set again.
     pub lost: Vec<String>,
+    /// The session moved to another server session by itself, with no
+    /// reconnect (PostgreSQL's backend pid changed between checks): a
+    /// pooler in transaction mode hands each transaction another one.
+    pub pooled: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,7 +91,7 @@ pub enum HealthState {
 impl Health {
     /// A report of `state`, with nothing else said.
     pub fn of(state: HealthState) -> Self {
-        Health { state, reconnects: 0, next_check: None, latency: None, lost: Vec::new() }
+        Health { state, reconnects: 0, next_check: None, latency: None, lost: Vec::new(), pooled: false }
     }
 }
 
@@ -615,7 +619,14 @@ impl Database {
             tokio::time::timeout(CHECK_WITHIN, self.ping_on(session)).await.ok()
         } else {
             match session.answer_within(CHECK_WITHIN).await {
-                crate::db::run::Answer::Yes => Some(Ok(false)),
+                crate::db::run::Answer::Yes => {
+                    // A pooler that moved the session shows as another
+                    // server session (the engine's id, where it has one).
+                    if !in_transaction {
+                        self.check_server_session(session, asked).await;
+                    }
+                    Some(Ok(false))
+                }
                 crate::db::run::Answer::Broke => {
                     self.0.stale.store(true, Ordering::SeqCst);
                     tokio::time::timeout(CHECK_WITHIN, self.ping_on(session)).await.ok()
@@ -650,6 +661,11 @@ impl Database {
                 Err(anyhow::anyhow!(why).context(errors::NoAnswer))
             }
         }
+    }
+
+    /// Its session was moved to another server session by a pooler (once).
+    pub(super) fn report_pooled(&self) {
+        self.0.supervisor.health.send_if_modified(|h| !std::mem::replace(&mut h.pooled, true));
     }
 
     /// It answered: live again if it wasn't.

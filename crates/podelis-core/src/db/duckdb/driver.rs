@@ -260,6 +260,11 @@ pub(in crate::db) fn error_facts(cause: &(dyn std::error::Error + 'static)) -> O
     })
 }
 
+/// The notices the server sent since they were last taken: none here.
+pub(in crate::db) fn take_notices(_c: &mut super::DriverConnection) -> Vec<String> {
+    Vec::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

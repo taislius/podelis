@@ -51,6 +51,7 @@ impl Database {
                     schema,
                     name,
                     is_view: partition_of.is_none() && kind.to_ascii_uppercase().contains("VIEW"),
+                    materialized: kind.eq_ignore_ascii_case("MATERIALIZED VIEW"),
                     partition_of,
                     // Postgres reports -1 for tables never analyzed.
                     rows: rows.filter(|n| *n >= 0),

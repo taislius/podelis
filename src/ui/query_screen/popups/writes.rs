@@ -168,23 +168,37 @@ pub(super) fn draw_sandbox(f: &mut Frame, app: &App, area: Rect) {
     if let Some(locks) = &view.locks {
         lines.push(Line::from(Span::styled(format!(" {locks}"), dim())));
     }
-    let key = |k: &str, what: &str, bg| {
+    let key = |command, what: &str, bg| {
+        use crate::app::windows::sandbox::SANDBOX_KEYS;
+        let k = crate::app::key_table::first_key(SANDBOX_KEYS, command);
         [Span::styled(format!(" {k} "), bold(t.on_accent).bg(bg)), Span::styled(format!(" {what}  "), fg(t.text))]
     };
+    use crate::app::windows::sandbox::SandboxKey as S;
     lines.push(Line::from(
         [
-            key("u", t!("sandbox.undo"), t.accent),
-            key("d", t!("sandbox.discard"), t.error),
-            key("s", t!("sandbox.keep_script"), t.accent),
-            key("r", t!("sandbox.run_for_real"), t.ok),
+            key(S::Undo, t!("sandbox.undo"), t.accent),
+            key(S::Discard, t!("sandbox.discard"), t.error),
+            key(S::KeepScript, t!("sandbox.keep_script"), t.accent),
+            key(S::RunForReal, t!("sandbox.run_for_real"), t.ok),
         ]
         .concat(),
     ));
     let height = (lines.len() as u16 + 2).min(area.height);
     let rect = centered_box(area, width, height);
     f.render_widget(Clear, rect);
-    let block = popup(t!("sandbox.title"), t.warn)
-        .title_bottom(Line::from(Span::styled(format!(" {} ", t!("sandbox.esc")), dim())).right_aligned());
+    let block = popup(t!("sandbox.title"), t.warn).title_bottom(
+        Line::from(Span::styled(
+            format!(
+                " {} ",
+                t!(
+                    "sandbox.esc",
+                    key = crate::app::key_table::first_key(crate::app::windows::sandbox::SANDBOX_KEYS, S::Close)
+                )
+            ),
+            dim(),
+        ))
+        .right_aligned(),
+    );
     f.render_widget(Paragraph::new(lines).scroll((view.scroll, 0)).block(block), rect);
 }
 

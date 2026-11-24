@@ -84,6 +84,16 @@ pub trait Backend: Sync {
     }
     /// A query returning the server's version string.
     fn version_query(&self) -> &'static str;
+    /// One tried before it, for a server that says what it is only so
+    /// (Aurora: `@@aurora_version`); where it fails, `version_query`.
+    fn version_query_first(&self) -> Option<&'static str> {
+        None
+    }
+    /// How a server of `version` (as `version_query` gave it) stands
+    /// against the versions Podėlis supports: supported unless it says.
+    fn support(&self, _version: &str) -> super::server::Support {
+        super::server::Support::Supported
+    }
     /// Reads session settings that change what SQL text means.
     fn sql_mode_query(&self) -> Option<&'static str> {
         None
@@ -95,6 +105,13 @@ pub trait Backend: Sync {
     /// language (SQL's, unless the engine says).
     fn ping(&self) -> &'static str {
         "SELECT 1"
+    }
+    /// A ping that also says which server session answers (as text), where
+    /// the engine's session id is the server's own: a pooler that moves the
+    /// session shows as another id (PostgreSQL's `pg_backend_pid()`; not
+    /// MySQL's, which behind ProxySQL is ProxySQL's).
+    fn session_ping(&self) -> Option<&'static str> {
+        None
     }
     /// What AI agents may send (`db::agent_constraints`).
     fn agent_constraints(&self) -> &'static super::agent_constraints::AgentConstraints;

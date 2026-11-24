@@ -2,7 +2,7 @@
 //! temporary tables, prepared statements), so a reconnect can say what's
 //! gone with the old one.
 
-use super::super::session_memory::{DATABASE, SessionMemory, leading_words, top_level_parts};
+use super::super::session_memory::{DATABASE, SessionMemory, calls, leading_words, top_level_parts};
 use super::super::*;
 
 /// Whether it keeps anything of a session (else what runs isn't read for
@@ -11,7 +11,13 @@ pub(in crate::db) const KEEPS: bool = true;
 
 /// Words a statement that changes a session has (lowercase): a run with
 /// none of them isn't read for it.
-pub(in crate::db) const CHANGED_BY: &[&str] = &["use", "set", "create", "prepare"];
+/// (`begin` and `start`: a transaction begun lets go of LOCK TABLES.)
+pub(in crate::db) const CHANGED_BY: &[&str] = &["use", "set", "create", "prepare", "lock", "unlock", "begin", "start"];
+
+/// Functions whose call anywhere in a statement changes the session
+/// (lowercase, as they start): named locks, held until let go of or the
+/// session ends.
+pub(in crate::db) const CALLS: &[&str] = &["get_lock", "release_all_locks"];
 
 /// A run that fails keeps what ran before the failing statement: each
 /// stands by itself.
@@ -52,6 +58,7 @@ pub(in crate::db) fn owns_data(_target: &str) -> bool {
 
 /// Notes what `statement` (one, run without error) changed on the session.
 pub(in crate::db) fn remember(statement: &str, memory: &mut SessionMemory) {
+    remember_locks(statement, memory);
     let words = leading_words(statement, Engine::MySql, 2);
     let word = |i: usize| words.get(i).map_or("", String::as_str);
     match word(0) {
@@ -71,8 +78,40 @@ pub(in crate::db) fn remember(statement: &str, memory: &mut SessionMemory) {
             }
         }
         "create" if word(1) == "temporary" => memory.temporary_tables = true,
+        "lock" if matches!(word(1), "table" | "tables") => memory.set("table locks", "LOCK TABLES"),
+        "unlock" if matches!(word(1), "table" | "tables") => memory.reset("table locks"),
+        // A transaction begun lets go of the tables locked.
+        "begin" => memory.reset("table locks"),
+        "start" if word(1) == "transaction" => memory.reset("table locks"),
         "prepare" => memory.prepared = true,
         _ => {}
+    }
+}
+
+/// The memory's keys for locks: forgotten again after a run whose lock
+/// calls all came back not taken (`lock_taken`).
+pub(in crate::db) const LOCK_KEYS: &[&str] = &["named locks"];
+
+/// Whether `statement` took a lock, by what it returned (`single`: its one
+/// cell, when its result is one row of one column): a `GET_LOCK` that timed
+/// out says 0 (an error, NULL). Without a single cell (`DO GET_LOCK(…)`,
+/// `SET @got = GET_LOCK(…)`), it may have. `None` when it calls none.
+pub(in crate::db) fn lock_taken(statement: &str, single: Option<&str>) -> Option<bool> {
+    let got = |cell: Option<&str>| cell.is_none_or(|c| c == "1");
+    calls(statement, Engine::MySql, CALLS).iter().any(|c| c == "get_lock").then(|| got(single))
+}
+
+/// Named locks taken (`GET_LOCK`) or all let go of (`RELEASE_ALL_LOCKS`)
+/// by a call in `statement` (its code, not its strings). One let go of
+/// (`RELEASE_LOCK`) may leave others: they're still said to be held.
+fn remember_locks(statement: &str, memory: &mut SessionMemory) {
+    let calls = calls(statement, Engine::MySql, CALLS);
+    let called = |name: &str| calls.iter().any(|c| c == name);
+    if called("release_all_locks") {
+        memory.reset("named locks");
+    }
+    if called("get_lock") {
+        memory.set("named locks", "named locks (GET_LOCK)");
     }
 }
 
@@ -100,6 +139,10 @@ fn remember_set(words: &[String], memory: &mut SessionMemory) {
         memory.set(key, label);
     }
 }
+
+/// Notes what `statement` changed on the session that no ROLLBACK undoes,
+/// beside `remember`'s: nothing here.
+pub(in crate::db) fn remember_kept(_statement: &str, _memory: &mut SessionMemory) {}
 
 #[cfg(test)]
 mod tests {
@@ -159,6 +202,22 @@ mod tests {
             "each assignment by itself; the server's own (in a list too) and an account's left out"
         );
         assert!(memory.prepared);
+    }
+
+    #[test]
+    fn table_and_named_locks_are_remembered_until_let_go_of() {
+        assert_eq!(remembered(&["LOCK TABLES t READ"]).lost(), ["LOCK TABLES"]);
+        assert!(remembered(&["LOCK TABLES t WRITE", "UNLOCK TABLES"]).is_empty());
+        assert_eq!(remembered(&["SELECT GET_LOCK('job', 10)"]).lost(), ["named locks (GET_LOCK)"]);
+        assert!(remembered(&["SELECT GET_LOCK('a', 1)", "DO RELEASE_ALL_LOCKS()"]).is_empty());
+        assert!(remembered(&["SELECT 'get_lock(1)'"]).is_empty(), "a string, not a call");
+        assert!(remembered(&["LOCK TABLES t WRITE", "START TRANSACTION"]).is_empty(), "a transaction lets them go");
+        assert_eq!(lock_taken("SELECT GET_LOCK('a', 1)", Some("0")), Some(false));
+        assert_eq!(lock_taken("SELECT GET_LOCK('a', 1)", Some("1")), Some(true));
+        assert_eq!(lock_taken("SELECT 1", Some("1")), None);
+        assert_eq!(lock_taken("DO GET_LOCK('a', 1)", None), Some(true), "no answer to read: kept");
+        assert!(remembered(&["EXPLAIN SELECT GET_LOCK('a', 1)"]).is_empty(), "a plan doesn't run it");
+        assert!(remembered(&["CREATE PROCEDURE p() BEGIN DO GET_LOCK('a', 1); END"]).is_empty());
     }
 
     #[test]

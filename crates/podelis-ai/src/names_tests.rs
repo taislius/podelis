@@ -11,6 +11,7 @@ fn schema() -> Schema {
             bytes: None,
             system: false,
             partition_of: None,
+            materialized: false,
         };
         let cols = cols
             .iter()

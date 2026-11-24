@@ -16,8 +16,53 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
+use crate::app::key_table::{Table, lookup};
 use crate::app::query_screen::ask::AskFailure;
 use crate::app::*;
+
+/// What a key does in the memory window's list (moving is `list::step`'s).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemoryKey {
+    Add,
+    Change,
+    Confirm,
+    Forget,
+    /// Between this database and every database in the project.
+    Scope,
+    /// All of it in the user's editor, as YAML.
+    Editor,
+    Close,
+}
+
+pub const MEMORY_KEYS: Table<MemoryKey> = &[
+    (KeyCode::Char('a'), MemoryKey::Add),
+    (KeyCode::Char('e'), MemoryKey::Change),
+    (KeyCode::Enter, MemoryKey::Change),
+    (KeyCode::Char('c'), MemoryKey::Confirm),
+    (KeyCode::Char('d'), MemoryKey::Forget),
+    (KeyCode::Char('p'), MemoryKey::Scope),
+    (KeyCode::Char('E'), MemoryKey::Editor),
+    (KeyCode::Esc, MemoryKey::Close),
+    (KeyCode::Char('q'), MemoryKey::Close),
+];
+
+/// What a key does while edits made in the editor are shown: those that
+/// didn't load, or the plan of loading them (scrolled with `MOVE_KEYS`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditsKey {
+    /// Load them (the plan only).
+    Apply,
+    EditAgain,
+    Discard,
+}
+
+pub const EDITS_KEYS: Table<EditsKey> = &[
+    (KeyCode::Char('y'), EditsKey::Apply),
+    (KeyCode::Char('E'), EditsKey::EditAgain),
+    (KeyCode::Char('e'), EditsKey::EditAgain),
+    (KeyCode::Esc, EditsKey::Discard),
+    (KeyCode::Char('n'), EditsKey::Discard),
+];
 use crate::gateway::client::{CallError, connect_or_start, spawn_gateway};
 use crate::gateway::methods::{self as m, Method, Scoped};
 use podelis_ai::memory::Fact;
@@ -366,35 +411,36 @@ impl App {
         let id = fact.as_ref().map(|f| f.id);
         let shown = fact.as_ref().map(|f| shortened(f.line()));
         let project = view.project_id.clone();
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.popups.memory_view = None,
+        let Some(command) = lookup(MEMORY_KEYS, key) else { return };
+        match command {
+            MemoryKey::Close => self.popups.memory_view = None,
             // About the selected table, column or term, typed for you.
-            KeyCode::Char('a') => {
+            MemoryKey::Add => {
                 let start =
                     view.subject().filter(|_| view.database.is_some()).map(|s| format!("{s} ")).unwrap_or_default();
                 view.adding = Some(LineInput::new(start));
                 view.editing = None;
             }
             // The whole fact to change, as typed when adding it.
-            KeyCode::Char('e') | KeyCode::Enter if id.is_some() => {
+            MemoryKey::Change if id.is_some() => {
                 let text = fact.as_ref().map(Fact::line).unwrap_or_default();
                 view.adding = Some(LineInput::new(text));
                 view.editing = id;
             }
-            KeyCode::Char('c') if id.is_some() => {
+            MemoryKey::Confirm if id.is_some() => {
                 self.gateway_call::<m::MemoryConfirm>(
                     m::FactParams { id, ..Default::default() },
                     GatewayPurpose::MemoryChanged(Change::Confirmed, project, shown),
                 );
             }
-            KeyCode::Char('d') if id.is_some() => {
+            MemoryKey::Forget if id.is_some() => {
                 self.gateway_call::<m::MemoryForget>(
                     m::FactParams { id, ..Default::default() },
                     GatewayPurpose::MemoryChanged(Change::Forgot, project, shown),
                 );
             }
             // Between this database and every database in the project.
-            KeyCode::Char('p') if id.is_some() && view.database.is_some() => {
+            MemoryKey::Scope if id.is_some() && view.database.is_some() => {
                 let every = fact.as_ref().is_some_and(|f| !f.database.is_empty());
                 self.gateway_call::<m::MemoryMove>(
                     m::MemoryMoveParams { id, every, ..Default::default() },
@@ -402,12 +448,12 @@ impl App {
                 );
             }
             // All of it in the editor, as YAML.
-            KeyCode::Char('E') if view.database.is_some() => {
+            MemoryKey::Editor if view.database.is_some() => {
                 let params =
                     m::OntologyParams { format: Some("yaml".into()), refresh: Some(false), ..Default::default() };
                 self.gateway_call::<m::Ontology>(params, GatewayPurpose::OntologyEdit(project));
             }
-            _ => {}
+            MemoryKey::Change | MemoryKey::Confirm | MemoryKey::Forget | MemoryKey::Scope | MemoryKey::Editor => {}
         }
     }
 

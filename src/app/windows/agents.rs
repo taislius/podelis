@@ -7,7 +7,35 @@ use crate::language::statements;
 use std::time::{Duration, Instant};
 
 use crate::agents::Alerts;
+use crate::app::key_table::{Table, lookup};
 use crate::app::*;
+
+/// What a key does in the agent activity window (moving is `list::step`'s).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentsKey {
+    /// A session's calls; a call's whole query.
+    Open,
+    OpenInTab,
+    Copy,
+    /// The session's sandbox writes as a script in a tab.
+    Sandbox,
+    Search,
+    /// Only what's worth a look.
+    Flagged,
+    /// Back to the sessions, or closed.
+    Back,
+}
+
+pub const AGENTS_KEYS: Table<AgentsKey> = &[
+    (KeyCode::Enter, AgentsKey::Open),
+    (KeyCode::Char('o'), AgentsKey::OpenInTab),
+    (KeyCode::Char('y'), AgentsKey::Copy),
+    (KeyCode::Char('s'), AgentsKey::Sandbox),
+    (KeyCode::Char('/'), AgentsKey::Search),
+    (KeyCode::Char('!'), AgentsKey::Flagged),
+    (KeyCode::Esc, AgentsKey::Back),
+    (KeyCode::Char('q'), AgentsKey::Back),
+];
 
 /// A query an AI agent ran through `podelis mcp`, and what's worth a look
 /// about it (refused, failed, a dry run, rows changed, a lint warning).
@@ -343,8 +371,9 @@ impl App {
             return;
         }
         let row = rows.get(view.selected).copied();
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
+        let Some(command) = lookup(AGENTS_KEYS, key) else { return };
+        match command {
+            AgentsKey::Back => {
                 // Back to the sessions as they were searched, on the one that
                 // was open.
                 if let Some(open) = view.session.take() {
@@ -356,25 +385,25 @@ impl App {
                     self.agents.view = None;
                 }
             }
-            KeyCode::Char('/') => view.filtering = true,
-            KeyCode::Char('!') => {
+            AgentsKey::Search => view.filtering = true,
+            AgentsKey::Flagged => {
                 view.flagged_only = !view.flagged_only;
                 view.selected = 0;
             }
-            KeyCode::Enter if view.session.is_none() => {
+            AgentsKey::Open if view.session.is_none() => {
                 if let Some(i) = row {
                     view.sessions_filter = std::mem::take(&mut view.filter);
                     view.session = Some(i);
                     view.selected = 0;
                 }
             }
-            KeyCode::Enter => {
+            AgentsKey::Open => {
                 if let Some(i) = row {
                     let text = self.agent_query_text(i);
                     self.popups.cell_view = Some(CellView::new(t!("agent_log.query_title").to_string(), text));
                 }
             }
-            KeyCode::Char('o') if view.session.is_some() => {
+            AgentsKey::OpenInTab if view.session.is_some() => {
                 let Some(q) = row.and_then(|i| self.agents.log.get(i)) else { return };
                 let (sql, ran_on) = (q.entry.sql.clone(), q.entry.connection.clone());
                 let name = q.entry.name.clone().unwrap_or_else(|| q.entry.agent.clone());
@@ -384,7 +413,7 @@ impl App {
             }
             // The session's sandbox writes as a script in a tab: what it did,
             // never committed, to read and run if it's wanted.
-            KeyCode::Char('s') if view.session.is_some() => {
+            AgentsKey::Sandbox if view.session.is_some() => {
                 let Some(i) = row else { return };
                 let Some(script) = self.sandbox_script(i) else {
                     return self.set_status(t!("agent_log.no_sandbox").to_string(), true);
@@ -393,13 +422,13 @@ impl App {
                 self.open_sql_in_tab(Some(t!("agent_log.sandbox_tab").to_string()), &script, None);
                 self.set_status(t!("agent_log.sandbox_kept").to_string(), false);
             }
-            KeyCode::Char('y') if view.session.is_some() => {
+            AgentsKey::Copy if view.session.is_some() => {
                 if let Some(q) = row.and_then(|i| self.agents.log.get(i)) {
                     let sql = q.entry.sql.clone();
                     self.copy_text(sql, t!("agent_log.copied_sql"));
                 }
             }
-            _ => {}
+            AgentsKey::OpenInTab | AgentsKey::Sandbox | AgentsKey::Copy => {}
         }
     }
 

@@ -669,6 +669,7 @@ mod tests {
             password: String::new(),
             database: "podelis_parquet".into(),
             ssl_mode: crate::db::SslMode::Prefer,
+            tls: crate::db::TlsFiles::default(),
             read_only: false,
             ssh: None,
             password_command: Vec::new(),

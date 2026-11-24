@@ -125,3 +125,50 @@ jobs:
           key: ${{ matrix.key }}
       - run: cargo clippy --all-targets --locked --no-default-features --features ${{ matrix.features }} -- -D warnings
       - run: cargo test --locked --no-default-features --features ${{ matrix.features }}
+
+  # The live database tests against older and newer servers than the jobs
+  # above (PostgreSQL 17, MySQL 8.4): what people still run. MySQL 5.7
+  # (out of support, still common) is experimental until its tests pass: a
+  # failure there is shown, not a failed run.
+  versions:
+    name: Servers (PostgreSQL ${{ matrix.pg }}, ${{ matrix.mysql }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { pg: "13", mysql: "mysql:8.0", mysql_ping: "mysqladmin ping -proot", experimental: false }
+          - { pg: "16", mysql: "mysql:5.7", mysql_ping: "mysqladmin ping -proot", experimental: true }
+          - { pg: "18", mysql: "mariadb:11.4", mysql_ping: "mariadb-admin ping -proot", experimental: false }
+    services:
+      postgres:
+        image: postgres:${{ matrix.pg }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+      mysql:
+        image: ${{ matrix.mysql }}
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MARIADB_ROOT_PASSWORD: root
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "${{ matrix.mysql_ping }}" --health-interval 2s --health-timeout 5s --health-retries 60
+    env:
+      PODELIS_TEST_PG_PORT: 5432
+      PODELIS_TEST_PG_PASSWORD: postgres
+      PODELIS_TEST_MYSQL_PORT: 3306
+      PODELIS_TEST_MYSQL_PASSWORD: root
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: versions
+      # The engines' own live tests (and the shared ones), no more: the
+      # rest doesn't depend on the server's version.
+      - run: cargo test --locked -p podelis-core live

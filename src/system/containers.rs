@@ -152,6 +152,7 @@ impl Ps {
                 user,
                 database,
                 ssl_mode: SslMode::default(),
+                tls: crate::db::TlsFiles::default(),
                 mode: ConnectionMode::Normal,
                 transaction: None,
                 ssh: String::new(),

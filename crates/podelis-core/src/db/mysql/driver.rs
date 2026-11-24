@@ -49,3 +49,8 @@ fn position(msg: &str) -> Option<ErrorPos> {
         _ => Some(ErrorPos::Line(line)),
     }
 }
+
+/// The notices the server sent since they were last taken: none here.
+pub(in crate::db) fn take_notices(_c: &mut super::DriverConnection) -> Vec<String> {
+    Vec::new()
+}

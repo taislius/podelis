@@ -2,7 +2,29 @@
 //! report; scrolled, copied, and (a row as `column  value` lines) moved
 //! to the previous or next row.
 
+use crate::app::key_table::{Move, Table, lookup, movement};
 use crate::app::*;
+
+/// What a key does in a text window (moving is `MOVE_KEYS`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CellKey {
+    Close,
+    /// A row's window (`x`) closes with `x` too.
+    CloseRow,
+    Copy,
+    /// The text's SQL, or the rows it follows to, in a tab.
+    Open,
+}
+
+pub const CELL_KEYS: Table<CellKey> = &[
+    (KeyCode::Esc, CellKey::Close),
+    (KeyCode::Enter, CellKey::Close),
+    (KeyCode::Char('q'), CellKey::Close),
+    (KeyCode::Char('v'), CellKey::Close),
+    (KeyCode::Char('x'), CellKey::CloseRow),
+    (KeyCode::Char('y'), CellKey::Copy),
+    (KeyCode::Char('e'), CellKey::Open),
+];
 
 pub struct CellView {
     pub title: String,
@@ -51,58 +73,60 @@ impl App {
     pub(in crate::app) fn handle_cell_view_key(&mut self, key: KeyEvent) {
         let Some(view) = &mut self.popups.cell_view else { return };
         let page = self.panes.editor_height.max(5) as u16;
-        // A row (`x`): past its end ↓ goes on to the next row, and ↑ above
-        // its start to the previous one.
-        let down = matches!(key.code, KeyCode::Down | KeyCode::Char('j'));
-        let up = matches!(key.code, KeyCode::Up | KeyCode::Char('k'));
-        if view.record && ((down && view.scroll >= view.max_scroll) || (up && view.scroll == 0)) {
-            return self.step_record(up);
+        if let Some(step) = movement(key) {
+            // A row (`x`): past its end ↓ goes on to the next row, and ↑
+            // above its start to the previous one.
+            let (down, up) = (step == Move::Down, step == Move::Up);
+            if view.record && ((down && view.scroll >= view.max_scroll) || (up && view.scroll == 0)) {
+                return self.step_record(up);
+            }
+            match step {
+                Move::Down => view.scroll = view.scroll.saturating_add(1),
+                Move::Up => view.scroll = view.scroll.saturating_sub(1),
+                Move::PageDown => view.scroll = view.scroll.saturating_add(page),
+                Move::PageUp => view.scroll = view.scroll.saturating_sub(page),
+                Move::Home => view.scroll = 0,
+                Move::Left | Move::Right if view.browse => self.step_definition(step == Move::Left),
+                Move::Left | Move::Right if view.record => self.step_record(step == Move::Left),
+                Move::Left | Move::Right | Move::End => {}
+            }
+            return;
         }
-        match key.code {
-            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q' | 'v') => self.popups.cell_view = None,
-            KeyCode::Down | KeyCode::Char('j') => view.scroll = view.scroll.saturating_add(1),
-            KeyCode::Up | KeyCode::Char('k') => view.scroll = view.scroll.saturating_sub(1),
-            KeyCode::PageDown => view.scroll = view.scroll.saturating_add(page),
-            KeyCode::PageUp => view.scroll = view.scroll.saturating_sub(page),
-            KeyCode::Home => view.scroll = 0,
-            KeyCode::Char('y') if view.sql.is_some() => {
+        let Some(command) = lookup(CELL_KEYS, key) else { return };
+        match command {
+            CellKey::Close => self.popups.cell_view = None,
+            CellKey::CloseRow if view.record => self.popups.cell_view = None,
+            CellKey::Copy if view.sql.is_some() => {
                 let text = view.sql.as_ref().map(|(sql, _)| sql.clone()).unwrap_or_default();
                 self.copy_text(text, t!("copy.sql"));
             }
-            KeyCode::Char('e') if view.follow.is_some() => {
+            CellKey::Open if view.follow.is_some() => {
                 let Some((tab, sql)) = view.follow.take() else { return };
                 self.open_followed(tab, &sql);
             }
-            KeyCode::Char('y') if view.follow.is_some() => {
+            CellKey::Copy if view.follow.is_some() => {
                 let text = view.text.clone();
                 self.copy_text(text, t!("copy.row"));
             }
-            KeyCode::Char('e') if view.sql.is_some() => {
+            CellKey::Open if view.sql.is_some() => {
                 let Some((sql, conn)) = view.sql.take() else { return };
                 self.popups.cell_view = None;
                 self.open_tab_on(conn, &sql);
             }
-            KeyCode::Char('y') if view.browse => {
+            CellKey::Open | CellKey::CloseRow => {}
+            CellKey::Copy if view.browse => {
                 let text = view.text.clone();
                 self.copy_text(text, t!("copy.definition"));
             }
-            KeyCode::Char('y') if view.record => {
+            CellKey::Copy if view.record => {
                 let text = view.text.clone();
                 self.copy_text(text, t!("copy.row"));
             }
-            KeyCode::Char('y') if view.copies_text.is_some() => {
+            CellKey::Copy if view.copies_text.is_some() => {
                 let (text, said) = (view.text.clone(), view.copies_text.unwrap_or_default());
                 self.copy_text(text, said);
             }
-            KeyCode::Char('y') => self.copy_cell(),
-            KeyCode::Left | KeyCode::Right | KeyCode::Char('h' | 'l') if view.browse => {
-                self.step_definition(matches!(key.code, KeyCode::Left | KeyCode::Char('h')));
-            }
-            KeyCode::Left | KeyCode::Right | KeyCode::Char('h' | 'l') if view.record => {
-                self.step_record(matches!(key.code, KeyCode::Left | KeyCode::Char('h')));
-            }
-            KeyCode::Char('x') if view.record => self.popups.cell_view = None,
-            _ => {}
+            CellKey::Copy => self.copy_cell(),
         }
     }
 }

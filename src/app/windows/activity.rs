@@ -1,7 +1,28 @@
 //! The activity monitor: sessions on the server and what they run, with
 //! cancel and kill. Refreshes every couple of seconds while open.
 
+use crate::app::key_table::{Table, lookup};
 use crate::app::*;
+
+/// What a key does in the activity window (moving is `list::step`'s).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActivityKey {
+    /// The selected session's whole query.
+    Details,
+    CancelQuery,
+    EndSession,
+    Refresh,
+    Close,
+}
+
+pub const ACTIVITY_KEYS: Table<ActivityKey> = &[
+    (KeyCode::Enter, ActivityKey::Details),
+    (KeyCode::Char('c'), ActivityKey::CancelQuery),
+    (KeyCode::Char('x'), ActivityKey::EndSession),
+    (KeyCode::Char('r'), ActivityKey::Refresh),
+    (KeyCode::Esc, ActivityKey::Close),
+    (KeyCode::Char('q'), ActivityKey::Close),
+];
 use crate::db::Activity;
 use crate::language::statements;
 
@@ -79,7 +100,7 @@ impl App {
     pub(in crate::app) fn handle_activity_key(&mut self, key: KeyEvent) {
         let Some(view) = &mut self.popups.activity else { return };
         if let Some((id, kill)) = view.confirm.take() {
-            if matches!(key.code, KeyCode::Char('y' | 'Y')) {
+            if crate::app::confirm::is_yes(key) {
                 self.stop_session(id, kill);
             }
             return;
@@ -88,29 +109,29 @@ impl App {
             view.selected = i;
             return;
         }
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.popups.activity = None,
-            KeyCode::Char('r') => {
+        let Some(command) = lookup(ACTIVITY_KEYS, key) else { return };
+        match command {
+            ActivityKey::Close => self.popups.activity = None,
+            ActivityKey::Refresh => {
                 view.refreshed = None;
                 self.refresh_activity();
             }
-            KeyCode::Enter => {
+            ActivityKey::Details => {
                 if let Some(a) = view.rows.get(view.selected) {
                     let title = format!("{} {} · {}@{}", t!("activity.session"), a.id, a.user, a.client);
                     let text = if a.query.is_empty() { t!("activity.no_query").to_string() } else { a.query.clone() };
                     self.popups.cell_view = Some(CellView::new(title, text));
                 }
             }
-            KeyCode::Char(c @ ('c' | 'x')) => {
+            ActivityKey::CancelQuery | ActivityKey::EndSession => {
                 if self.connection.mode == ConnectionMode::ReadOnly {
                     return self.set_status(t!("activity.read_only").to_string(), true);
                 }
                 let Some(view) = &mut self.popups.activity else { return };
                 if let Some(a) = view.rows.get(view.selected) {
-                    view.confirm = Some((a.id, c == 'x'));
+                    view.confirm = Some((a.id, command == ActivityKey::EndSession));
                 }
             }
-            _ => {}
         }
     }
 

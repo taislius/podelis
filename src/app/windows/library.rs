@@ -26,6 +26,11 @@ pub struct LibraryView {
     pub offset: usize,
 }
 
+/// With Ctrl: deletes the selected saved query.
+pub const DELETE_KEY: char = 'd';
+/// Renames or moves it (to another group).
+pub const RENAME_KEY: KeyCode = KeyCode::F(4);
+
 impl App {
     pub(in crate::app) fn open_library(&mut self) {
         // What another Podėlis on the project saved meanwhile, shown too.
@@ -69,13 +74,15 @@ impl App {
         }
     }
 
+    /// Its letters go to the search: Ctrl+`DELETE_KEY` deletes the selected
+    /// query, `RENAME_KEY` renames or moves it.
     pub(in crate::app) fn handle_library_key(&mut self, key: KeyEvent) {
         let items = self.library_items();
         let Some(view) = &mut self.popups.library_view else { return };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if view.confirm_delete {
             view.confirm_delete = false;
-            if matches!(key.code, KeyCode::Char('y' | 'Y'))
+            if crate::app::confirm::is_yes(key)
                 && let Some(LibraryItem::Saved(id)) = items.get(view.selected)
             {
                 let id = id.clone();
@@ -91,12 +98,12 @@ impl App {
         }
         match key.code {
             KeyCode::Esc => self.popups.library_view = None,
-            KeyCode::Char('d') if ctrl => {
+            KeyCode::Char(c) if ctrl && c == DELETE_KEY => {
                 if matches!(items.get(view.selected), Some(LibraryItem::Saved(_))) {
                     view.confirm_delete = true;
                 }
             }
-            KeyCode::F(4) => {
+            code if code == RENAME_KEY => {
                 if let Some(LibraryItem::Saved(id)) = items.get(view.selected) {
                     let text = self.library.get(id).map(library::SavedQuery::path).unwrap_or_default();
                     self.popups.tab_prompt =

@@ -154,6 +154,11 @@ fn allowed(sql: &str, engine: Engine) -> Result<Vec<crate::language::statements:
              write a quote inside a string doubled ('') instead"
             .to_string());
     }
+    // The mysql client's command, not the server's: an agent's SQL has no
+    // need of it, and nothing should ride along under its terminator.
+    if crate::sql::uses_delimiter(sql, engine) {
+        return Err("DELIMITER is the mysql client's command, not SQL: agents can't send it".to_string());
+    }
     let statements = crate::language::split_statements(sql, engine);
     if statements.is_empty() {
         return Err(if engine.dialect().is_some() { "there's no SQL to run" } else { "there's nothing to run" }.into());
@@ -265,6 +270,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Under a DELIMITER's terminator, a write after a read isn't hidden:
+    /// the statements are split as the server runs them, and an agent can't
+    /// send the client's command at all.
+    #[cfg(feature = "mysql")]
+    #[test]
+    fn a_write_behind_a_delimiter_is_caught() {
+        use AgentAccess::Read;
+        use ConnectionMode::Normal;
+        let sql = "DELIMITER $$\nSELECT 1; DROP TABLE users$$";
+        assert!(matches!(verdict(Read, Normal, sql, Engine::MySql), Verdict::Refuse(_)));
+        let parts = crate::language::split_statements(sql, Engine::MySql);
+        assert_eq!(parts, ["SELECT 1", "DROP TABLE users"]);
+        let kinds: Vec<_> = parts
+            .iter()
+            .flat_map(|p| crate::language::statements::analyze(&crate::sql::parse::parse(p, Engine::MySql)))
+            .map(|i| i.kind)
+            .collect();
+        assert!(kinds.iter().any(|k| *k != crate::language::statements::Kind::Read), "{kinds:?}");
     }
 
     /// Each engine's constraints, as it gives them: what reaches past the

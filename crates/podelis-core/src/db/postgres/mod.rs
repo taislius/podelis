@@ -77,6 +77,42 @@ impl Backend for Postgres {
     fn version_query(&self) -> &'static str {
         "SHOW server_version"
     }
+    fn session_ping(&self) -> Option<&'static str> {
+        Some("SELECT pg_backend_pid()::text")
+    }
+    /// The server's version, and what it is when it isn't PostgreSQL itself
+    /// but speaks its protocol (`8.0.2-redshift`), from `version()`. Where
+    /// it fails, `SHOW server_version`.
+    fn version_query_first(&self) -> Option<&'static str> {
+        Some(
+            "SELECT split_part(current_setting('server_version'), ' ', 1) || CASE
+                 WHEN version() ILIKE '%redshift%' THEN '-redshift'
+                 WHEN version() ILIKE '%greenplum%' THEN '-greenplum'
+                 WHEN version() ILIKE '%cockroach%' THEN '-cockroachdb'
+                 WHEN version() ILIKE '%yugabyte%' THEN '-yugabytedb'
+                 ELSE '' END",
+        )
+    }
+    /// 14 on: the oldest PostgreSQL itself still supports (13's ended
+    /// 2025-11); 13, which CI still tests, is tried. A server that only
+    /// speaks its protocol is said to be one, whatever version it gives.
+    fn support(&self, version: &str) -> crate::db::server::Support {
+        use crate::db::server::{Range, Support};
+        const RANGE: Range = Range { server: "PostgreSQL", from: "14", oldest: (14, 0, 0), best_effort: Some((13, 0, 0)) };
+        let compatible = [
+            ("-redshift", "Amazon Redshift"),
+            ("-greenplum", "Greenplum"),
+            ("-cockroachdb", "CockroachDB"),
+            ("-yugabytedb", "YugabyteDB"),
+        ];
+        match compatible.iter().find(|(mark, _)| version.ends_with(mark)) {
+            Some((mark, name)) => Support::Compatible {
+                name: (*name).to_string(),
+                version: version.trim_end_matches(mark).to_string(),
+            },
+            None => RANGE.check(version),
+        }
+    }
     fn is_system_table(&self, schema: &str, _table: &str) -> bool {
         matches!(schema, "pg_catalog" | "information_schema")
     }
@@ -299,6 +335,19 @@ impl SqlDialect for Postgres {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn supported_versions_and_servers_that_only_speak_the_protocol() {
+        use crate::db::server::Support;
+        use crate::db::Backend as _;
+        let pg = super::Postgres;
+        assert_eq!(pg.support("17.2"), Support::Supported);
+        assert!(matches!(pg.support("13.18"), Support::BestEffort { .. }));
+        assert!(matches!(pg.support("12.22"), Support::TooOld { .. }));
+        let redshift = pg.support("8.0.2-redshift");
+        assert_eq!(redshift, Support::Compatible { name: "Amazon Redshift".into(), version: "8.0.2".into() });
+        assert!(redshift.note().is_some_and(|n| n.contains("Amazon Redshift") && !n.contains("older")));
+    }
+
     use crate::db::Engine;
     use crate::db::dialect::Scan;
 

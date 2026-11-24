@@ -131,6 +131,18 @@ fn draw_database_line(f: &mut Frame, app: &mut App, database: Rect, focused: boo
     app.hits.schema_database = database;
 }
 
+/// A function's or other object's mark before its name, and its kind
+/// after it, short.
+fn routine_marks(routine: &crate::db::RoutineInfo) -> (&'static str, String) {
+    let kind = match routine.kind.as_str() {
+        "procedure" => "proc",
+        "function" => "fn",
+        "sequence" => "seq",
+        other => other,
+    };
+    (if routine.is_function() { "  ƒ " } else { "  ◦ " }, kind.to_string())
+}
+
 /// One row of the tree: a name on the left, details right-aligned.
 fn schema_item(panel: &SchemaPanel, node: SchemaNode, width: usize, show_schema: bool) -> ListItem<'static> {
     let t = theme();
@@ -150,10 +162,12 @@ fn schema_item(panel: &SchemaPanel, node: SchemaNode, width: usize, show_schema:
                     SchemaSection::Views => t!("navigator.views"),
                     SchemaSection::System => t!("navigator.system"),
                     SchemaSection::Routines => t!("navigator.functions"),
+                    SchemaSection::Objects => t!("navigator.other_objects"),
                 }
             );
             let n = match section {
-                SchemaSection::Routines => panel.routines.len(),
+                SchemaSection::Routines => panel.routines.iter().filter(|r| r.is_function()).count(),
+                SchemaSection::Objects => panel.routines.iter().filter(|r| !r.is_function()).count(),
                 _ => panel.tables.iter().filter(|t| section.holds(&t.info)).count(),
             };
             ListItem::new(row(vec![Span::styled(title, bold(t.muted))], n.to_string(), dim()))
@@ -223,14 +237,14 @@ fn schema_item(panel: &SchemaPanel, node: SchemaNode, width: usize, show_schema:
         }
         SchemaNode::Routine(r) => {
             let routine = &panel.routines[r];
-            let right = if routine.kind == "procedure" { "proc" } else { "fn" }.to_string();
+            let (icon, right) = routine_marks(routine);
             let name = if show_schema && routine.schema != "public" {
                 format!("{}.{}", routine.schema, routine.name)
             } else {
                 routine.name.clone()
             };
             let name = truncate(&name, width.saturating_sub(right.chars().count() + 6));
-            ListItem::new(row(vec![Span::styled("  ƒ ", dim()), Span::styled(name, fg(t.ident))], right, dim()))
+            ListItem::new(row(vec![Span::styled(icon, dim()), Span::styled(name, fg(t.ident))], right, dim()))
         }
     }
 }

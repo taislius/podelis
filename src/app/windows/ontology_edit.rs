@@ -8,6 +8,8 @@ use crate::config::store::ProjectId;
 use std::path::PathBuf;
 
 use super::memory::GatewayPurpose;
+use super::memory::{EDITS_KEYS, EditsKey};
+use crate::app::key_table::{Move, lookup, movement};
 use crate::app::query_screen::pipes::{AfterExternal, External, shell_quote};
 use crate::app::*;
 
@@ -17,16 +19,16 @@ impl App {
         let Some(view) = &mut self.popups.memory_view else { return };
         let Some((_, file)) = &view.failed_edit else { return };
         let (project, file) = (view.project_id.clone(), file.clone());
-        match key.code {
-            KeyCode::Char('E' | 'e') => {
+        match lookup(EDITS_KEYS, key) {
+            Some(EditsKey::EditAgain) => {
                 view.failed_edit = None;
                 self.open_editor(project, file);
             }
-            KeyCode::Esc | KeyCode::Char('n') => {
+            Some(EditsKey::Discard) => {
                 view.failed_edit = None;
                 let _ = std::fs::remove_file(&file);
             }
-            _ => {}
+            Some(EditsKey::Apply) | None => {}
         }
     }
 
@@ -36,11 +38,13 @@ impl App {
         let Some(view) = &mut self.popups.memory_view else { return };
         let Some((_, file)) = &view.plan else { return };
         let (project, file) = (view.project_id.clone(), file.clone());
-        let step = match key.code {
-            KeyCode::Down | KeyCode::Char('j') => Some(1_isize),
-            KeyCode::Up | KeyCode::Char('k') => Some(-1),
-            KeyCode::PageDown | KeyCode::Char(' ') => Some(10),
-            KeyCode::PageUp => Some(-10),
+        let step = match movement(key) {
+            Some(Move::Down) => Some(1_isize),
+            Some(Move::Up) => Some(-1),
+            Some(Move::PageDown) => Some(10),
+            Some(Move::PageUp) => Some(-10),
+            // Space pages on, as in a pager.
+            _ if key.code == KeyCode::Char(' ') => Some(10),
             _ => None,
         };
         if let Some(step) = step {
@@ -49,27 +53,27 @@ impl App {
             view.plan_scroll = view.plan_scroll.saturating_add_signed(step).min(last);
             return;
         }
-        match key.code {
+        match lookup(EDITS_KEYS, key) {
             // Not before every change has been in sight.
-            KeyCode::Char('y')
+            Some(EditsKey::Apply)
                 if view.plan_scroll + view.plan_shown.get() < view.plan.as_ref().map_or(0, |(p, _)| p.len()) =>
             {
                 self.set_status(t!("memory.plan_scroll").into(), true);
             }
-            KeyCode::Char('y') => {
+            Some(EditsKey::Apply) => {
                 view.plan = None;
                 self.load_edits(project, file, true);
             }
             // Back to the editor, the file as it was left.
-            KeyCode::Char('E') => {
+            Some(EditsKey::EditAgain) => {
                 view.plan = None;
                 self.open_editor(project, file);
             }
-            KeyCode::Esc | KeyCode::Char('n') => {
+            Some(EditsKey::Discard) => {
                 view.plan = None;
                 let _ = std::fs::remove_file(&file);
             }
-            _ => {}
+            None => {}
         }
     }
 

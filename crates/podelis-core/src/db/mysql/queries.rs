@@ -120,35 +120,65 @@ pub(in crate::db) async fn column_info_rows(
     })
 }
 
+/// Routines of the session's database (`DATABASE()` follows a `USE`).
+const ROUTINES: &str = "SELECT CAST(routine_schema AS CHAR), CAST(routine_name AS CHAR),
+            CAST(LOWER(routine_type) AS CHAR), CAST(routine_name AS CHAR)
+     FROM information_schema.routines
+     WHERE routine_schema = DATABASE()";
+
+/// Its triggers, listed with their tables.
+const TRIGGERS: &str = "SELECT CAST(trigger_schema AS CHAR),
+            CAST(CONCAT(trigger_name, ' (', event_object_table, ')') AS CHAR),
+            'trigger', CAST(trigger_name AS CHAR)
+     FROM information_schema.triggers
+     WHERE trigger_schema = DATABASE()";
+
+/// Its events.
+const EVENTS: &str = "SELECT CAST(event_schema AS CHAR), CAST(event_name AS CHAR), 'event', CAST(event_name AS CHAR)
+     FROM information_schema.events
+     WHERE event_schema = DATABASE()";
+
 pub(in crate::db) async fn routine_rows(db: &Database) -> Result<Vec<(String, String, String, String)>> {
     let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
-    Ok({
-        let query = move || sqlx::query_as(
-            "SELECT CAST(routine_schema AS CHAR), CAST(routine_name AS CHAR),
-                            CAST(LOWER(routine_type) AS CHAR), CAST(routine_name AS CHAR)
-                     FROM information_schema.routines
-                     WHERE routine_schema = DATABASE()
-                     ORDER BY routine_name",
-        );
-        // DATABASE() must reflect a `USE`, as in `tables`.
+    // Each kind by itself: one a server or a user can't read (events
+    // without the EVENT privilege, a server without them) leaves only that
+    // kind out. DATABASE() must reflect a `USE`, as in `tables`.
+    let mut rows: Vec<(String, String, String, String)> = {
+        let query = move || sqlx::query_as(ROUTINES);
         fetch_all_on_session!(db, p, query)
-    })
+    };
+    for (kind, sql) in [("triggers", TRIGGERS), ("events", EVENTS)] {
+        let query = move || sqlx::query_as(sql);
+        let more: Result<Vec<(String, String, String, String)>> = async { Ok(fetch_all_on_session!(db, p, query)) }.await;
+        match more {
+            Ok(more) => rows.extend(more),
+            Err(e) => tracing::debug!(error = %e, kind, "mysql: not listed"),
+        }
+    }
+    rows.sort_by(|a, b| a.1.cmp(&b.1));
+    Ok(rows)
 }
 
 pub(in crate::db) async fn routine_definition(db: &Database, routine: &RoutineInfo) -> Result<String> {
     let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
     {
-        let kind = if routine.kind == "procedure" { "PROCEDURE" } else { "FUNCTION" };
+        // Which column of SHOW CREATE … holds the statement.
+        let (kind, column) = match routine.kind.as_str() {
+            "procedure" => ("PROCEDURE", 2),
+            "trigger" => ("TRIGGER", 2),
+            "event" => ("EVENT", 3),
+            _ => ("FUNCTION", 2),
+        };
         let sql = format!(
             "SHOW CREATE {kind} {}.{}",
             Engine::MySql.quote_ident(&routine.schema),
             Engine::MySql.quote_ident(&routine.id)
         );
         let row = sqlx::query(AssertSqlSafe(sql)).fetch_one(p).await?;
-        // Column 3 is the CREATE statement; NULL without the privilege.
+        // The CREATE statement; NULL without the privilege.
         let def: Option<String> = row
-            .try_get::<Option<String>, _>(2)
-            .or_else(|_| row.try_get::<Option<Vec<u8>>, _>(2).map(|b| b.map(|b| String::from_utf8_lossy(&b).into())))?;
+            .try_get::<Option<String>, _>(column)
+            .or_else(|_| row.try_get::<Option<Vec<u8>>, _>(column).map(|b| b.map(|b| String::from_utf8_lossy(&b).into())))?;
         def.context("The server didn't show the definition (missing privilege?)")
     }
 }
@@ -188,6 +218,22 @@ pub(in crate::db) async fn comment_rows(db: &Database) -> Result<Vec<(String, St
     Ok(fetch_all_on_session!(db, p, query))
 }
 
+/// A table's CHECK constraints, MySQL's way: constraint names are the
+/// schema's own.
+const CHECKS_MYSQL: &str = "SELECT CAST(cc.constraint_name AS CHAR), CAST(cc.check_clause AS CHAR)
+     FROM information_schema.table_constraints tc
+     JOIN information_schema.check_constraints cc
+       ON cc.constraint_schema = tc.constraint_schema AND cc.constraint_name = tc.constraint_name
+     WHERE tc.constraint_type = 'CHECK' AND tc.table_schema = ? AND tc.table_name = ?
+     ORDER BY 1";
+
+/// MariaDB's: a name may repeat in other tables, and `check_constraints`
+/// has the table's.
+const CHECKS_MARIADB: &str = "SELECT CAST(constraint_name AS CHAR), CAST(check_clause AS CHAR)
+     FROM information_schema.check_constraints
+     WHERE constraint_schema = ? AND table_name = ?
+     ORDER BY 1";
+
 pub(in crate::db) async fn table_details(db: &Database, schema: &str, table: &str) -> Result<TableDetails> {
     let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
     let indexes: Vec<(String, i64, Option<String>)> = sqlx::query_as(
@@ -213,6 +259,18 @@ pub(in crate::db) async fn table_details(db: &Database, schema: &str, table: &st
     .bind(table)
     .fetch_all(p)
     .await?;
+    // MySQL before 8.0.16 has no CHECK constraints (nor the table): none.
+    // (A server that refuses the query all the same lists none either.)
+    let server = super::server::Server::of(db.version());
+    // MariaDB names a column's CHECK after the column, so names repeat from
+    // table to table: its check_constraints says whose (MySQL's doesn't;
+    // its names are the schema's own).
+    let checks_sql = if server.is_mariadb() { CHECKS_MARIADB } else { CHECKS_MYSQL };
+    let checks: Vec<(String, String)> = if server.has(super::server::Feature::CheckConstraints) {
+        sqlx::query_as(checks_sql).bind(schema).bind(table).fetch_all(p).await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let definition: Option<(Option<String>,)> = sqlx::query_as(
         "SELECT CAST(view_definition AS CHAR) FROM information_schema.views
              WHERE table_schema = ? AND table_name = ?",
@@ -243,6 +301,7 @@ pub(in crate::db) async fn table_details(db: &Database, schema: &str, table: &st
             })
             .collect(),
         definition: definition.and_then(|(d,)| d),
+        checks: checks.into_iter().map(|(name, clause)| CheckInfo { name, definition: check_sql(&clause) }).collect(),
     })
 }
 
@@ -366,7 +425,40 @@ pub(in crate::db) async fn cancel(db: &Database, id: i64) -> Result<()> {
 
 /// Its plans are made on the session (as the user's statements run).
 pub(in crate::db) async fn full_scans_of(db: &Database, statement: &str) -> Result<Vec<Scan>> {
-    db.scans_by_explain(statement).await
+    if super::server::Server::of(db.version()).has(super::server::Feature::ExplainTree) {
+        // The tree says where a LIMIT stops reading early.
+        return db.scans_by_explain(statement).await;
+    }
+    // The classic table (MariaDB, MySQL before 8.0.16) doesn't: one table
+    // read as it comes (no sort, no temporary table) under the statement's
+    // own LIMIT stops early, as the tree would show it.
+    let dialect = super::sql();
+    let plan = db.run_own(&dialect.explain(statement, db.version()), 10_000).await?;
+    let scans = super::plan::table_full_scans(&plan.columns, &plan.rows);
+    let extra = plan.columns.iter().position(|c| c.eq_ignore_ascii_case("Extra"));
+    let as_it_comes = plan.rows.len() == 1
+        && extra.and_then(|e| plan.rows[0].get(e).cloned().flatten()).is_none_or(|x| {
+            let x = x.to_ascii_lowercase();
+            !x.contains("filesort") && !x.contains("temporary")
+        });
+    Ok(if as_it_comes && stops_early(statement) { Vec::new() } else { scans })
+}
+
+/// Whether `statement` stops reading once its LIMIT has its rows: a LIMIT
+/// with nothing that needs every row first (ORDER BY, GROUP BY, DISTINCT,
+/// an aggregate, a UNION), nor a WHERE: the rows it keeps may be far apart
+/// or none, so the whole table may be read (the tree's `Filter` says so);
+/// nor an OFFSET, whose rows are read before the LIMIT's.
+fn stops_early(statement: &str) -> bool {
+    let words = crate::db::dialect::code_words(statement, Engine::MySql);
+    let has = |w: &str| words.iter().any(|x| x == w);
+    let aggregate = words.windows(2).any(|w| matches!(w[0].as_str(), "count" | "sum" | "avg" | "min" | "max") && w[1] == "(");
+    // `LIMIT 10 OFFSET n` and `LIMIT n, 10` read the n rows first.
+    let offset = has("offset") || words.windows(3).any(|w| w[0] == "limit" && w[2] == ",");
+    has("limit")
+        && !offset
+        && !["where", "order", "group", "distinct", "union", "having"].iter().any(|w| has(w))
+        && !aggregate
 }
 
 pub(in crate::db) async fn estimated_rows(db: &Database, scans: Vec<Scan>) -> Vec<(String, f64)> {
@@ -386,4 +478,44 @@ pub(in crate::db) async fn copy_in(
     _chunks: impl Iterator<Item = Result<Vec<u8>>>,
 ) -> Result<u64> {
     anyhow::bail!("{} has no COPY", db.engine().label())
+}
+
+/// `CHECK (…)` for a CHECK constraint's clause: MySQL's comes in brackets
+/// (`(`total` > 0)`), MariaDB's without (`` `total` > 0 ``).
+fn check_sql(clause: &str) -> String {
+    let clause = clause.trim();
+    // Brackets round all of it, not `(a) OR (b)`.
+    let mut depth = 0i32;
+    let wrapped = clause.starts_with('(')
+        && clause.char_indices().all(|(i, c)| {
+            depth += match c {
+                '(' => 1,
+                ')' => -1,
+                _ => 0,
+            };
+            depth > 0 || i + c.len_utf8() == clause.len()
+        });
+    if wrapped { format!("CHECK {clause}") } else { format!("CHECK ({clause})") }
+}
+
+#[cfg(test)]
+mod check_tests {
+    #[test]
+    fn a_limit_stops_early_unless_every_row_is_needed_first() {
+        assert!(super::stops_early("SELECT * FROM scan_big LIMIT 5"));
+        assert!(!super::stops_early("SELECT * FROM scan_big ORDER BY note LIMIT 5"));
+        assert!(!super::stops_early("SELECT * FROM scan_big WHERE note = 'rare' LIMIT 1"), "may read it all");
+        assert!(!super::stops_early("SELECT * FROM scan_big LIMIT 10 OFFSET 50000000"));
+        assert!(!super::stops_early("SELECT * FROM scan_big LIMIT 50000000, 10"));
+        assert!(!super::stops_early("SELECT count(*) FROM scan_big LIMIT 5"));
+        assert!(!super::stops_early("SELECT * FROM scan_big"));
+        assert!(!super::stops_early("SELECT 'limit' FROM scan_big"), "a string isn't the word");
+    }
+
+    #[test]
+    fn a_check_clause_is_bracketed_once() {
+        assert_eq!(super::check_sql("(`total` > 0)"), "CHECK (`total` > 0)");
+        assert_eq!(super::check_sql("`total` > 0"), "CHECK (`total` > 0)");
+        assert_eq!(super::check_sql("(a > 0) or (b > 0)"), "CHECK ((a > 0) or (b > 0))");
+    }
 }

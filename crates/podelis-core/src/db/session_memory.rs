@@ -195,6 +195,30 @@ const LEADING_BYTES: usize = 2048;
 /// The current database's key.
 pub const DATABASE: &str = "database";
 
+/// The functions `statement` calls whose names start with one of `names`
+/// (lowercase, as called in its code, not its strings or comments); none,
+/// without reading it, when its text holds none of them.
+pub fn calls(statement: &str, engine: Engine, names: &[&str]) -> Vec<String> {
+    if !names.iter().any(|n| crate::sql::contains_ignoring_case(statement, n)) {
+        return Vec::new();
+    }
+    // Only a statement that runs them: not a plan of one (Podėlis's own
+    // EXPLAINs too), nor a definition (a routine's body, a view's query),
+    // where they're only written down.
+    let first = leading_words(statement, engine, 1);
+    if first.first().is_some_and(|w| {
+        matches!(w.as_str(), "explain" | "describe" | "desc" | "create" | "alter" | "prepare" | "comment")
+    }) {
+        return Vec::new();
+    }
+    let words = crate::db::dialect::code_words(statement, engine);
+    words
+        .windows(2)
+        .filter(|w| w[1] == "(" && names.iter().any(|n| w[0].starts_with(n)))
+        .map(|w| w[0].clone())
+        .collect()
+}
+
 /// The first `n` words of `statement` (comments and spaces left out),
 /// lowercase, with names unquoted and a `@` kept on the word after it, for
 /// an engine's `remember` to match on.

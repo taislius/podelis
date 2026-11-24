@@ -225,6 +225,43 @@ pub enum PasswordSource {
     None,
 }
 
+/// The files TLS can use, as paths (`~/` for the home folder); each
+/// `None` for the default (the system's CAs, no client certificate).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TlsFiles {
+    /// The CA (PEM) the server's certificate must be signed by
+    /// (`sslrootcert`, MySQL's `--ssl-ca`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca: Option<String>,
+    /// A client certificate (PEM) to log in with (`sslcert`, `--ssl-cert`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert: Option<String>,
+    /// Its private key (PEM) (`sslkey`, `--ssl-key`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+}
+
+impl TlsFiles {
+    /// None of them set.
+    pub fn is_empty(&self) -> bool {
+        self.ca.is_none() && self.cert.is_none() && self.key.is_none()
+    }
+
+    /// From paths as typed: an empty one is none.
+    pub fn typed(ca: &str, cert: &str, key: &str) -> Self {
+        let path = |p: &str| Some(p.trim().to_string()).filter(|p| !p.is_empty());
+        TlsFiles { ca: path(ca), cert: path(cert), key: path(key) }
+    }
+
+    /// `path` with a leading `~/` as the home folder.
+    pub fn expanded(path: &str) -> std::path::PathBuf {
+        match path.strip_prefix("~/").zip(dirs::home_dir()) {
+            Some((rest, home)) => home.join(rest),
+            None => std::path::PathBuf::from(path),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct ConnectParams {
     pub engine: Engine,
@@ -236,6 +273,9 @@ pub struct ConnectParams {
     pub password: String,
     pub database: String,
     pub ssl_mode: SslMode,
+    /// Files TLS uses besides the system's CAs: a CA to verify the server
+    /// with, a client certificate and its key.
+    pub tls: TlsFiles,
     /// Ask the server to reject writes (best effort; see `ConnectionMode`).
     pub read_only: bool,
     /// Reach the database through `ssh -L` via this host (`user@host`,
@@ -262,6 +302,7 @@ impl std::fmt::Debug for ConnectParams {
             .field("password", &if self.password.is_empty() { "" } else { "<hidden>" })
             .field("database", &self.database)
             .field("ssl_mode", &self.ssl_mode)
+            .field("tls", &self.tls)
             .field("read_only", &self.read_only)
             .field("ssh", &self.ssh)
             .field("for_agents", &self.for_agents)
@@ -271,6 +312,23 @@ impl std::fmt::Debug for ConnectParams {
 }
 
 impl ConnectParams {
+    /// The SSL mode to connect with: `prefer` or `require` with a CA file
+    /// set verifies the server's certificate with it (`verify-ca`), as
+    /// libpq does with `sslrootcert` and the mysql client with `--ssl-ca`;
+    /// the drivers' `prefer` and `require` check no certificate (and
+    /// `prefer` would go on without TLS).
+    ///
+    /// A client certificate (or key) under `prefer` makes TLS required: a
+    /// login by certificate mustn't go on without TLS, its password in the
+    /// clear.
+    pub fn tls_mode(&self) -> SslMode {
+        match self.ssl_mode {
+            SslMode::Prefer | SslMode::Require if self.tls.ca.is_some() => SslMode::VerifyCa,
+            SslMode::Prefer if self.tls.cert.is_some() || self.tls.key.is_some() => SslMode::Require,
+            mode => mode,
+        }
+    }
+
     /// With the password to log in with, when none was given: the password
     /// command's, or else from the database's own conventions (environment
     /// variables, password files). Through an SSH tunnel, files are matched
@@ -336,6 +394,7 @@ mod debug_tests {
             password: "hunter2".into(),
             database: "shop".into(),
             ssl_mode: super::SslMode::Prefer,
+            tls: crate::db::TlsFiles::default(),
             read_only: false,
             ssh: None,
             password_command: Vec::new(),

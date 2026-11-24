@@ -88,6 +88,27 @@ pub(super) async fn connected_file_app(mode: ConnectionMode) -> (App, tempfile::
     (app, dir)
 }
 
+/// An app connected to the live MySQL test server (`PODELIS_TEST_MYSQL_*`),
+/// if one is set, on the query screen.
+#[cfg(feature = "mysql")]
+pub(super) async fn live_mysql_app(mode: ConnectionMode) -> Option<(App, tempfile::TempDir)> {
+    let port = std::env::var("PODELIS_TEST_MYSQL_PORT").ok()?;
+    let (mut app, dir) = test_app();
+    let form = &mut app.connection.form;
+    form.engine = Engine::MySql;
+    form.host = std::env::var("PODELIS_TEST_MYSQL_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    form.port = port;
+    form.user = std::env::var("PODELIS_TEST_MYSQL_USER").unwrap_or_else(|_| "root".into());
+    form.password = std::env::var("PODELIS_TEST_MYSQL_PASSWORD").unwrap_or_default();
+    form.ssl_mode = crate::db::SslMode::Disable;
+    form.mode = mode;
+    let db = Database::connect(app.connection.form.params().unwrap()).await.unwrap();
+    let generation = app.generation;
+    app.handle_db_event(DbEvent::connection(generation, DbEventKind::Connected(db)));
+    assert!(matches!(app.screen, Screen::Query));
+    Some((app, dir))
+}
+
 /// Runs `sql` through the normal key path and waits for the result.
 pub(super) async fn run_sql(app: &mut App, sql: &str) {
     app.focus = Focus::Editor;

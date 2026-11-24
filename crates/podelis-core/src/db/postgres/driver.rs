@@ -40,3 +40,10 @@ pub(in crate::db) fn error_facts(cause: &(dyn std::error::Error + 'static)) -> O
         })
     })
 }
+
+/// The notices the server sent since they were last taken (`RAISE
+/// NOTICE`, a DDL's `NOTICE`, warnings): the patched driver keeps them
+/// (`patches/sqlx-postgres`).
+pub(in crate::db) fn take_notices(c: &mut super::DriverConnection) -> Vec<String> {
+    c.take_notices()
+}

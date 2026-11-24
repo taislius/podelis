@@ -920,3 +920,17 @@ fn a_refused_edit_from_the_palette_stays_where_it_is() {
         assert!(app.notes.status_is_error, "{command:?}");
     }
 }
+
+#[test]
+fn every_key_of_the_projects_and_connections_screens_has_help() {
+    use super::super::help::{connections_help, projects_help};
+    use crate::app::manager_keys::{CONNECTIONS_KEYS, PROJECTS_KEYS};
+    let projects = projects_help();
+    for (code, command) in PROJECTS_KEYS {
+        assert!(projects.iter().any(|(cs, _)| cs.contains(command)), "{code:?} ({command:?}) has no help");
+    }
+    let connections = connections_help();
+    for (code, command) in CONNECTIONS_KEYS {
+        assert!(connections.iter().any(|(cs, _)| cs.contains(command)), "{code:?} ({command:?}) has no help");
+    }
+}

@@ -18,6 +18,9 @@ pub(super) struct Settings<'a> {
     password_command: std::borrow::Cow<'a, str>,
     database: &'a str,
     ssl_mode: SslMode,
+    tls_ca: &'a str,
+    tls_cert: &'a str,
+    tls_key: &'a str,
     mode: ConnectionMode,
     tx_mode: TxMode,
     ssh: &'a str,
@@ -36,6 +39,9 @@ impl<'a> From<&'a ConnectForm> for Settings<'a> {
             password_command: (&*form.password_command).into(),
             database: &form.database,
             ssl_mode: form.ssl_mode,
+            tls_ca: &form.tls_ca,
+            tls_cert: &form.tls_cert,
+            tls_key: &form.tls_key,
             mode: form.mode,
             tx_mode: form.tx_mode(),
             ssh: &form.ssh,
@@ -56,6 +62,9 @@ impl<'a> From<&'a ConnectionProfile> for Settings<'a> {
             password_command: crate::db::password_command::join(&p.password_command).into(),
             database: &p.database,
             ssl_mode: p.ssl_mode,
+            tls_ca: p.tls.ca.as_deref().unwrap_or_default(),
+            tls_cert: p.tls.cert.as_deref().unwrap_or_default(),
+            tls_key: p.tls.key.as_deref().unwrap_or_default(),
             mode: p.mode,
             tx_mode: p.transaction.unwrap_or_else(|| TxMode::for_connection(p.mode)),
             ssh: &p.ssh,
@@ -91,19 +100,37 @@ pub(super) fn label_width() -> usize {
     .unwrap_or(11)
 }
 
-/// The settings as rows. `focus` is the field being edited (`None` shows
-/// them read-only); `password` is how to show the password.
-pub(super) fn form_lines(form: &Settings, focus: Option<ConnectField>, password: &str) -> Vec<Line<'static>> {
+/// The settings as rows. `editing`: the field being edited and the form's
+/// fields (`ConnectForm::visible_fields`, which the mouse's rows are
+/// counted by too); `None` shows them read-only. `password` is how to show
+/// the password.
+pub(super) fn form_lines(
+    form: &Settings,
+    editing: Option<(ConnectField, &[ConnectField])>,
+    password: &str,
+) -> Vec<Line<'static>> {
     let t = theme();
     let label_w = label_width();
     let file_based = form.engine.is_file_based();
-    fields_for(form.engine)
-        .iter()
-        // Shown read-only only when set: most connections have none.
-        .filter(|&&field| {
-            field != ConnectField::PasswordCommand || focus.is_some() || !form.password_command.trim().is_empty()
-        })
-        .map(|&field| {
+    let focus = editing.map(|(focus, _)| focus);
+    let fields: Vec<ConnectField> = match editing {
+        Some((_, fields)) => fields.to_vec(),
+        // Read-only: what most connections have none of only when set.
+        None => fields_for(form.engine)
+            .iter()
+            .copied()
+            .filter(|field| match field {
+                ConnectField::PasswordCommand => !form.password_command.trim().is_empty(),
+                ConnectField::TlsCa => !form.tls_ca.trim().is_empty(),
+                ConnectField::TlsCert => !form.tls_cert.trim().is_empty(),
+                ConnectField::TlsKey => !form.tls_key.trim().is_empty(),
+                _ => true,
+            })
+            .collect(),
+    };
+    fields
+        .into_iter()
+        .map(|field| {
             let (label, value) = match field {
                 ConnectField::Name => (t!("form.name"), form.name),
                 ConnectField::Engine => (t!("form.engine"), form.engine.label()),
@@ -119,6 +146,9 @@ pub(super) fn form_lines(form: &Settings, focus: Option<ConnectField>, password:
                 ConnectField::PasswordCommand => (t!("form.password_command"), &*form.password_command),
                 ConnectField::Database => (t!("form.database"), form.database),
                 ConnectField::Ssl => (t!("form.ssl"), form.ssl_mode.label()),
+                ConnectField::TlsCa => (t!("form.tls_ca"), form.tls_ca),
+                ConnectField::TlsCert => (t!("form.tls_cert"), form.tls_cert),
+                ConnectField::TlsKey => (t!("form.tls_key"), form.tls_key),
                 ConnectField::Mode => (t!("form.mode"), form.mode.label()),
                 // Read-only connections don't write, so there's nothing to commit.
                 ConnectField::Transaction if form.mode == ConnectionMode::ReadOnly => {
@@ -188,10 +218,13 @@ pub(super) fn form_message(form: &ConnectForm) -> (String, Style) {
             t!("form.help_password_command")
         }
         ConnectField::Timeout => t!("form.help_timeout"),
+        ConnectField::TlsCa => t!("form.help_tls_ca"),
+        ConnectField::TlsCert | ConnectField::TlsKey => t!("form.help_tls_cert"),
         ConnectField::Ssh => {
             t!("form.help_ssh")
         }
-        _ => t!("form.help_tip"),
+        // The tip, its key filled in below.
+        _ => "",
     };
     if form.connecting {
         (t!("form.connecting").to_string(), bold(t.warn))
@@ -200,6 +233,12 @@ pub(super) fn form_message(form: &ConnectForm) -> (String, Style) {
     } else if let Some(info) = &form.info {
         (info.clone(), fg(t.ok))
     } else {
-        (field_help.to_string(), dim())
+        (if field_help.is_empty() { tip() } else { field_help.to_string() }, dim())
     }
+}
+
+/// The form's tip, its key the form's own.
+fn tip() -> String {
+    use crate::app::{TEST_KEY, ctrl_words};
+    t!("form.help_tip", test = ctrl_words(TEST_KEY))
 }

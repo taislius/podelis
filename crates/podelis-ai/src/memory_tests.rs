@@ -13,6 +13,7 @@ fn shop() -> Ontology {
             bytes: None,
             system: false,
             partition_of: None,
+            materialized: false,
         };
         let columns = columns
             .iter()

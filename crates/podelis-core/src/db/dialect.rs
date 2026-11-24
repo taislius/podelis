@@ -231,6 +231,17 @@ pub trait SqlDialect: Backend {
     fn keeps_only_affinity(&self) -> bool {
         false
     }
+    /// Whether its scripts may change what ends a statement with a
+    /// `DELIMITER x` line (the mysql client's command, for routines'
+    /// bodies), which the server never sees.
+    fn has_delimiter_command(&self) -> bool {
+        false
+    }
+    /// A literal for `value` from a result column of type `ty` it shows
+    /// its own way (MySQL's spatial values as WKT), if it is one.
+    fn typed_literal(&self, _value: &str, _ty: &str) -> Option<String> {
+        None
+    }
     /// Whether it keeps a string's length and fixed width (`varchar(120)`,
     /// `char(3)`): beside one that doesn't, they're any text.
     fn keeps_string_lengths(&self) -> bool {

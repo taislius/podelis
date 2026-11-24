@@ -2,6 +2,7 @@
 //! and connections (projects │ connections │ settings). `Screen` says
 //! which of them has the keys.
 
+use super::keys::{self, ProjectsKey};
 use crate::app::*;
 use crate::config::store::ProjectId;
 
@@ -58,7 +59,7 @@ impl App {
             return self.handle_prompt_key(key);
         }
         if std::mem::take(&mut self.manager.confirm_delete_project) {
-            if matches!(key.code, KeyCode::Char('y' | 'Y')) {
+            if crate::app::confirm::is_yes(key) {
                 self.delete_selected_project();
             } else {
                 self.manager.project_message = None;
@@ -77,30 +78,30 @@ impl App {
             self.manager.project_selected = i;
             return;
         }
-        match key.code {
-            KeyCode::Esc => self.leave_projects(),
-            KeyCode::Char('n') => self.start_prompt(PromptKind::NewProject, String::new()),
+        let Some(command) = keys::lookup(keys::PROJECTS_KEYS, key) else { return };
+        match command {
+            ProjectsKey::Back => self.leave_projects(),
+            ProjectsKey::New => self.start_prompt(PromptKind::NewProject, String::new()),
             // Into the selected project's connections (opening it first if
             // it isn't the open one), or back round to the settings.
-            KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab | KeyCode::BackTab => {
-                self.pane_from_projects(key.code != KeyCode::BackTab);
-            }
-            KeyCode::Enter => match selected {
+            ProjectsKey::Connections | ProjectsKey::NextPane => self.pane_from_projects(true),
+            ProjectsKey::PrevPane => self.pane_from_projects(false),
+            ProjectsKey::Open => match selected {
                 Some(_) if is_current => self.screen = Screen::Connections,
                 Some(id) => self.enter_project(id, false),
                 None => self.start_prompt(PromptKind::NewProject, String::new()),
             },
-            KeyCode::Char('r') => {
+            ProjectsKey::Rename => {
                 if let Some(id) = selected {
                     let name = self.store.project(&id).map(|p| p.name.clone()).unwrap_or_default();
                     self.start_prompt(PromptKind::RenameProject(id), name);
                 }
             }
-            KeyCode::Char('d') if is_current => {
+            ProjectsKey::Delete if is_current => {
                 self.manager.project_message = Some((t!("projects.is_open").to_string(), true));
             }
-            KeyCode::Char('d') if selected.is_some() => self.manager.confirm_delete_project = true,
-            _ => {}
+            ProjectsKey::Delete if selected.is_some() => self.manager.confirm_delete_project = true,
+            ProjectsKey::Delete => {}
         }
     }
 
@@ -337,8 +338,9 @@ impl App {
             // The rows start below the pane's top border.
             ManagerHit::Settings if matches!(self.screen, Screen::Connect) => {
                 let top = self.hits.manager_settings.y + 1;
-                let field = y.checked_sub(top).and_then(|row| self.connection.form.visible_fields().get(row as usize));
-                if let Some(&field) = field {
+                let field =
+                    y.checked_sub(top).and_then(|row| self.connection.form.visible_fields().get(row as usize).copied());
+                if let Some(field) = field {
                     self.connection.form.focus = field;
                     self.connection.form.cursor = None;
                 }

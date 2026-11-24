@@ -28,6 +28,7 @@ mod options;
 pub mod password_command;
 pub mod passwords;
 mod run;
+pub mod server;
 mod session_memory;
 mod supervisor;
 use supervisor::SessionFuture;
@@ -41,7 +42,7 @@ mod via_sqlx;
 
 pub use activity::{Activity, OwnSession, SessionId};
 pub use backend::{Backend, Capabilities, ContainerLogin, ContainerSecret, Transactions};
-pub use details::{Comment, ForeignKey, IndexInfo, Link, RoutineInfo, TableDetails};
+pub use details::{CheckInfo, Comment, ForeignKey, IndexInfo, Link, RoutineInfo, TableDetails};
 pub use diagnose::{Step, StepState, diagnose, is_auth_failure, report, with_hint};
 #[cfg(any(test, feature = "test-support"))]
 pub use dialect::PlanNote;
@@ -50,7 +51,7 @@ pub use errors::{
     CheckOutcome, ErrorPos, error_details, error_message, error_position, is_broken, is_link_failure, is_no_answer,
     is_reconnected, is_unreachable, missing_feature, sql_literal, value_literal,
 };
-pub use options::{AgentAccess, ConnectParams, ConnectionMode, PasswordSource, SslMode, TxMode};
+pub use options::{AgentAccess, ConnectParams, ConnectionMode, PasswordSource, SslMode, TlsFiles, TxMode};
 pub use run::RunError;
 pub use supervisor::{CHECK_WITHIN, Health, HealthState, LOST_CHECKS, lost_wait};
 use tunnel::{Tunnel, open_tunnel};
@@ -123,6 +124,11 @@ struct Inner {
     /// What the user's statements changed on the session, said as gone
     /// after a reconnect (each engine's `session.rs` says what).
     memory: std::sync::Mutex<session_memory::SessionMemory>,
+    /// Notices from runs, until the app takes them (`take_notices`).
+    notices: std::sync::Mutex<Vec<String>>,
+    /// When a check last asked which server session answers (a statement,
+    /// unlike the check's protocol ping: not every time).
+    server_session_checked: std::sync::Mutex<Option<Instant>>,
     /// The server's TCP address, for its engine to check it answers before
     /// a new connection is made for a session or a cancel
     /// (`connect::check_reach`). None for a file, a socket path, or an SSH
@@ -161,6 +167,9 @@ pub struct QueryOutcome {
     /// Which statement of the script produced this result (1-based; 0 when
     /// unknown).
     pub statement: usize,
+    /// What the server said beside the results (PostgreSQL's notices:
+    /// `RAISE NOTICE`, a DDL's NOTICE), as "SEVERITY: message".
+    pub notices: Vec<String>,
 }
 
 impl QueryOutcome {
@@ -227,7 +236,9 @@ struct FetchedRow {
 /// One statement's rows as a driver streams them (`driver::fetch`).
 type Rows<'c> = futures_util::stream::BoxStream<'c, Result<FetchedRow>>;
 
-type FirstPage = (Option<Vec<(String, String)>>, Vec<Vec<Option<String>>>, bool);
+/// A stream's first page: its columns, rows, whether that's all, and the
+/// notices that came before them (only when it's all: else they wait).
+type FirstPage = (Option<Vec<(String, String)>>, Vec<Vec<Option<String>>>, bool, Vec<String>);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TableInfo {
@@ -245,6 +256,9 @@ pub struct TableInfo {
     /// parent's too, so queries read the parent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partition_of: Option<(String, String)>,
+    /// A materialized view (PostgreSQL): a view whose rows are kept.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub materialized: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -349,7 +363,7 @@ impl Database {
         // client can't speak (an old MySQL's TLS 1.0/1.1), try without.
         let (pool, mut session, tls_failed) = match open(params.clone()).await {
             Err(e)
-                if params.ssl_mode == SslMode::Prefer
+                if params.tls_mode() == SslMode::Prefer
                     && !host.starts_with('/')
                     && errors::tls_failure(&e).is_some() =>
             {
@@ -383,6 +397,8 @@ impl Database {
             owns_data,
             told_reconnects: std::sync::atomic::AtomicU64::new(0),
             memory: std::sync::Mutex::new(session_memory::SessionMemory::default()),
+            notices: std::sync::Mutex::new(Vec::new()),
+            server_session_checked: std::sync::Mutex::new(None),
             address,
             service,
         })))
@@ -397,9 +413,35 @@ impl Database {
         self.0.engine
     }
 
+    /// What the server said beside the results of the runs since this was
+    /// last asked (PostgreSQL's notices: `RAISE NOTICE`, a DDL's NOTICE),
+    /// oldest first.
+    pub fn take_notices(&self) -> Vec<String> {
+        self.0.notices.lock().map(|mut n| std::mem::take(&mut *n)).unwrap_or_default()
+    }
+
+    /// Notices a run brought, kept for `take_notices`: at most
+    /// `MAX_NOTICES` waiting, the newest kept.
+    fn keep_notices(&self, new: Vec<String>) {
+        const MAX_NOTICES: usize = 200;
+        if new.is_empty() {
+            return;
+        }
+        if let Ok(mut kept) = self.0.notices.lock() {
+            kept.extend(new);
+            let over = kept.len().saturating_sub(MAX_NOTICES);
+            kept.drain(..over);
+        }
+    }
+
     /// The server version, e.g. "16.2" (empty if it couldn't be read).
     pub fn version(&self) -> &str {
         &self.0.version
+    }
+
+    /// How the server's version stands against what Podėlis supports.
+    pub fn support(&self) -> server::Support {
+        self.0.engine.backend().support(&self.0.version)
     }
 
     /// Which server session the connection's session is (PostgreSQL's

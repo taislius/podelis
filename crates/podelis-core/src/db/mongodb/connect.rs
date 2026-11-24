@@ -44,13 +44,41 @@ fn url(params: &ConnectParams, host: &str, port: u16) -> String {
     if !params.user.is_empty() {
         options.push("authSource=admin".into());
     }
-    if matches!(params.ssl_mode, SslMode::Require | SslMode::VerifyCa | SslMode::VerifyFull) {
+    if matches!(params.tls_mode(), SslMode::Require | SslMode::VerifyCa | SslMode::VerifyFull) {
         options.push("tls=true".into());
     }
-    if params.ssl_mode == SslMode::Require {
+    if params.tls_mode() == SslMode::Require {
         options.push("tlsAllowInvalidCertificates=true".into());
     }
     format!("mongodb://{login}{host}:{port}/?{}", options.join("&"))
+}
+
+/// The form's TLS files in the client's TLS options (which they turn on):
+/// a CA to verify the server with, and a client certificate, which MongoDB
+/// takes with its key in one PEM file.
+fn with_tls_files(options: &mut ::mongodb::options::ClientOptions, files: &TlsFiles) -> Result<()> {
+    use ::mongodb::options::{Tls, TlsOptions};
+    if files.is_empty() {
+        return Ok(());
+    }
+    if files.key.is_some() && files.cert.is_some() && files.key != files.cert {
+        anyhow::bail!(
+            "MongoDB takes the client certificate and its key in one PEM file: put both in one file, \
+             give it as TLS cert, and leave TLS key empty"
+        );
+    }
+    let mut tls = match options.tls.take() {
+        Some(Tls::Enabled(tls)) => tls,
+        _ => TlsOptions::default(),
+    };
+    if let Some(ca) = &files.ca {
+        tls.ca_file_path = Some(TlsFiles::expanded(ca));
+    }
+    if let Some(both) = files.cert.as_ref().or(files.key.as_ref()) {
+        tls.cert_key_file_path = Some(TlsFiles::expanded(both));
+    }
+    options.tls = Some(Tls::Enabled(tls));
+    Ok(())
 }
 
 pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, port: u16) -> Result<(Pool, Session)> {
@@ -63,6 +91,11 @@ pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, port: u16
         && !params.password.is_empty()
     {
         credential.password = Some(params.password.clone());
+    }
+    // Where TLS is asked for: `disable` and `prefer` (none, for MongoDB)
+    // keep files a form left set from using it.
+    if matches!(params.tls_mode(), SslMode::Require | SslMode::VerifyCa | SslMode::VerifyFull) {
+        with_tls_files(&mut options, &params.tls)?;
     }
     options.server_selection_timeout = Some(CONNECT_TIMEOUT);
     options.connect_timeout = Some(CONNECT_TIMEOUT);
@@ -108,6 +141,22 @@ mod tests {
 
     /// The form's fields, with no password (a test gives it one made as
     /// it runs: not a value in the code).
+    #[test]
+    fn tls_files_turn_tls_on_with_them_and_a_split_key_is_said() {
+        use ::mongodb::options::{ClientOptions, Tls};
+        let mut options = ClientOptions::default();
+        let files = TlsFiles { ca: Some("/ca.pem".into()), cert: Some("/both.pem".into()), key: None };
+        with_tls_files(&mut options, &files).unwrap();
+        let Some(Tls::Enabled(tls)) = options.tls else { panic!("TLS on") };
+        assert_eq!(tls.ca_file_path.as_deref(), Some(std::path::Path::new("/ca.pem")));
+        assert_eq!(tls.cert_key_file_path.as_deref(), Some(std::path::Path::new("/both.pem")));
+        let split = TlsFiles { ca: None, cert: Some("/c.pem".into()), key: Some("/k.pem".into()) };
+        assert!(with_tls_files(&mut ClientOptions::default(), &split).unwrap_err().to_string().contains("one PEM file"));
+        let mut none = ClientOptions::default();
+        with_tls_files(&mut none, &TlsFiles::default()).unwrap();
+        assert!(none.tls.is_none(), "nothing set, nothing changed");
+    }
+
     fn params(user: &str, ssl_mode: SslMode) -> ConnectParams {
         ConnectParams {
             engine: Engine::MongoDb,
@@ -117,6 +166,7 @@ mod tests {
             password: String::new(),
             database: String::new(),
             ssl_mode,
+            tls: crate::db::TlsFiles::default(),
             read_only: false,
             ssh: None,
             password_command: Vec::new(),

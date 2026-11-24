@@ -189,6 +189,8 @@ pub(in crate::db) async fn table_details(db: &Database, _schema: &str, table: &s
                 })
                 .collect(),
             definition: definition.and_then(|(d,)| d),
+            // Its CHECKs are in its CREATE statement, shown as it is.
+            checks: Vec::new(),
         })
         })
     })

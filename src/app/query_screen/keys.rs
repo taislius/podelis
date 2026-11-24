@@ -317,8 +317,17 @@ impl App {
             SchemaNode::Index(t, i) => {
                 (quote(&panel.tables[t].details.as_ref()?.indexes.get(i)?.name), t!("kind.index"))
             }
-            // Its name with the argument types, as Postgres shows overloads.
-            SchemaNode::Routine(r) => (panel.routines.get(r)?.name.clone(), t!("kind.routine")),
+            SchemaNode::Routine(r) => {
+                let routine = panel.routines.get(r)?;
+                let kind = match routine.kind.as_str() {
+                    "trigger" => t!("kind.trigger"),
+                    "sequence" => t!("kind.sequence"),
+                    "event" => t!("kind.event"),
+                    "enum" | "domain" | "type" => t!("kind.type"),
+                    _ => t!("kind.routine"),
+                };
+                (routine.sql_name(engine), kind)
+            }
             SchemaNode::Section(_) => return None,
         })
     }

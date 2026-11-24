@@ -219,6 +219,9 @@ fn skip_number(b: &[u8], mut i: usize) -> usize {
 /// A statement's byte range within the text, including its terminating `;`
 /// if any, excluding surrounding whitespace and comments.
 pub(crate) fn segments(text: &str, engine: Engine) -> Vec<(Range<usize>, Option<Range<usize>>)> {
+    if has_delimiter_lines(text, engine) {
+        return delimited(text, engine).segments;
+    }
     // Each segment: (full range up to and including `;`, code range if any).
     let mut segments = Vec::new();
     let mut seg_start = 0;
@@ -248,6 +251,316 @@ pub(crate) fn segments(text: &str, engine: Engine) -> Vec<(Range<usize>, Option<
         }
     }
     segments
+}
+
+/// A script read with its `DELIMITER` lines: its statements, the lines
+/// themselves, and where each statement's own terminator (`$$`, `//`) is.
+struct Delimited {
+    segments: Vec<(Range<usize>, Option<Range<usize>>)>,
+    lines: Vec<Range<usize>>,
+    terminators: Vec<Range<usize>>,
+}
+
+/// Whether `text` has `word` anywhere, in any case (ASCII), without a
+/// lowercased copy of it.
+pub fn contains_ignoring_case(text: &str, word: &str) -> bool {
+    !word.is_empty() && text.as_bytes().windows(word.len()).any(|w| w.eq_ignore_ascii_case(word.as_bytes()))
+}
+
+/// Whether `text` has a `DELIMITER` line its engine reads (the mysql
+/// client's command, not the server's).
+pub fn uses_delimiter(text: &str, engine: Engine) -> bool {
+    has_delimiter_lines(text, engine)
+}
+
+/// Whether `text` may have a `DELIMITER` line its engine reads (a quick
+/// look: `delimited` reads it properly).
+fn has_delimiter_lines(text: &str, engine: Engine) -> bool {
+    engine.dialect().is_some_and(crate::db::SqlDialect::has_delimiter_command)
+        // Most scripts haven't the word at all: one pass over the bytes,
+        // before any line is looked at.
+        && contains_ignoring_case(text, "delimiter")
+        && text.lines().any(|l| {
+            let mut words = l.split_whitespace();
+            words.next().is_some_and(|w| w.eq_ignore_ascii_case("delimiter")) && words.next().is_some()
+        })
+}
+
+/// A `DELIMITER x` command starting at `at`: where its line ends (before
+/// the line break) and `x`.
+fn delimiter_command(text: &str, at: usize) -> Option<(usize, &str)> {
+    let end = text[at..].find(['\n', '\r']).map_or(text.len(), |n| at + n);
+    let mut words = text[at..end].split_whitespace();
+    let (Some(command), Some(terminator)) = (words.next(), words.next()) else { return None };
+    command.eq_ignore_ascii_case("delimiter").then_some((end, terminator))
+}
+
+/// Whether only spaces are between the line's start and `at`.
+fn starts_line(text: &str, at: usize) -> bool {
+    text[..at].bytes().rev().take_while(|&b| b != b'\n' && b != b'\r').all(|b| b == b' ' || b == b'\t')
+}
+
+/// `text`'s statements as the mysql client reads them: a `DELIMITER x`
+/// line (one of its own, not sent) makes `x` end statements until the
+/// next, and `;` is then part of a statement (a routine's body).
+fn delimited(text: &str, engine: Engine) -> Delimited {
+    let mut out = Delimited { segments: Vec::new(), lines: Vec::new(), terminators: Vec::new() };
+    let mut seg_start = 0;
+    let mut code: Option<Range<usize>> = None;
+    let mut terminator = ";".to_string();
+    let mut skip_to = 0;
+    let extend = |code: &mut Option<Range<usize>>, r: Range<usize>| {
+        *code = Some(match code.take() {
+            Some(c) => c.start..r.end,
+            None => r,
+        });
+    };
+    for tok in tokenize(text, engine) {
+        if tok.range.start < skip_to {
+            continue;
+        }
+        // At a line's start, as the mysql client reads it: between
+        // statements; in one (left without its terminator) only as the
+        // whole line, `DELIMITER $$`, which then ends it (else it's a name:
+        // `select\ndelimiter from t`).
+        if tok.kind == TokenKind::Word
+            && starts_line(text, tok.range.start)
+            && let Some((end, new)) = delimiter_command(text, tok.range.start)
+            && (code.is_none() || text[tok.range.start..end].split_whitespace().count() == 2)
+        {
+            if code.is_some() {
+                out.segments.push((seg_start..tok.range.start, code.take()));
+                // Sent ended: the line, blanked, starts with a `;`.
+                out.terminators.push(tok.range.start..tok.range.start + 1);
+                seg_start = tok.range.start;
+            }
+            out.segments.push((seg_start..end, None));
+            out.lines.push(tok.range.start..end);
+            terminator = new.to_string();
+            seg_start = end;
+            skip_to = end;
+            continue;
+        }
+        match tok.kind {
+            TokenKind::Whitespace | TokenKind::Comment => {}
+            TokenKind::Semicolon if terminator == ";" => {
+                out.segments.push((seg_start..tok.range.end, code.take()));
+                seg_start = tok.range.end;
+            }
+            // The mysql client's `\G` ends a statement whatever the
+            // terminator (and is sent as one: `without_delimiters`).
+            TokenKind::Semicolon if &text[tok.range.clone()] == "\\G" => {
+                out.segments.push((seg_start..tok.range.end, code.take()));
+                out.terminators.push(tok.range.clone());
+                seg_start = tok.range.end;
+            }
+            // A name or a string may hold the terminator's characters.
+            TokenKind::String | TokenKind::QuotedIdent => extend(&mut code, tok.range.clone()),
+            _ if terminator == ";" => extend(&mut code, tok.range.clone()),
+            // From within the token on (`END$$` is one word, `//` two, and
+            // `x$$SELECT` two statements' ends and starts).
+            _ => {
+                let mut at = tok.range.start;
+                // In the token, and as far past it as a terminator that
+                // starts in it reaches: not the rest of the script, for
+                // each token.
+                let reach = (tok.range.end + terminator.len() - 1).min(text.len());
+                let find = |at: usize| {
+                    text.as_bytes()
+                        .get(at..reach)?
+                        .windows(terminator.len())
+                        .position(|w| w == terminator.as_bytes())
+                        .map(|k| at + k)
+                        .filter(|&p| p < tok.range.end)
+                };
+                while let Some(found) = find(at) {
+                    if found > at {
+                        extend(&mut code, at..found);
+                    }
+                    let end = found + terminator.len();
+                    push_as_the_server_splits(&mut out.segments, text, engine, seg_start..end, code.take());
+                    out.terminators.push(found..end);
+                    seg_start = end;
+                    at = end;
+                }
+                if at < tok.range.end {
+                    extend(&mut code, at..tok.range.end);
+                }
+                // A terminator past this token (`//`) covers the next ones.
+                skip_to = skip_to.max(at);
+            }
+        }
+    }
+    if seg_start < text.len() || out.segments.is_empty() {
+        out.segments.push((seg_start..text.len(), code));
+    }
+    for (_, code) in &mut out.segments {
+        if code.as_ref().is_some_and(|c| text[c.clone()].trim().is_empty()) {
+            *code = None;
+        }
+    }
+    out
+}
+
+/// A statement ended by a `DELIMITER` terminator, as the server will read
+/// it: it gets the text with each terminator made `;`, and runs every
+/// statement in it. Only a stored program's definition (a procedure,
+/// function, trigger or event, whose body is one `BEGIN … END` block or one
+/// statement), or MariaDB's `BEGIN NOT ATOMIC … END`, keeps its `;`s;
+/// anything else is as many statements as its top-level `;`s make: so
+/// `SELECT 1; DROP TABLE t` under `$$` is two, each checked for what it
+/// does (a write isn't hidden behind the SELECT before it).
+fn push_as_the_server_splits(
+    segments: &mut Vec<(Range<usize>, Option<Range<usize>>)>,
+    text: &str,
+    engine: Engine,
+    full: Range<usize>,
+    code: Option<Range<usize>>,
+) {
+    let Some(code) = code else { return segments.push((full, None)) };
+    let base = code.start;
+    let tokens: Vec<Token> = tokenize(&text[code], engine)
+        .into_iter()
+        .filter(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Comment))
+        .collect();
+    let word = |i: usize| -> Option<String> {
+        tokens
+            .get(i)
+            .filter(|t| t.kind == TokenKind::Word)
+            .map(|t| text[base + t.range.start..base + t.range.end].to_ascii_lowercase())
+    };
+    let is_semicolon = |i: usize| tokens.get(i).is_some_and(|t| t.kind == TokenKind::Semicolon);
+    // Where the first statement ends (an index into `tokens`, past it).
+    let first_end = stored_program_end(&tokens, &word, &is_semicolon);
+    // The statements' code ranges, in the segment.
+    let mut parts: Vec<Range<usize>> = Vec::new();
+    let mut start: Option<usize> = None;
+    let cut = |i: usize, start: &mut Option<usize>, parts: &mut Vec<Range<usize>>| {
+        if let Some(s) = start.take() {
+            parts.push(base + tokens[s].range.start..base + tokens[i - 1].range.end);
+        }
+    };
+    for i in 0..tokens.len() {
+        let inside_first = first_end.is_some_and(|end| i < end);
+        if is_semicolon(i) && !inside_first {
+            cut(i, &mut start, &mut parts);
+            continue;
+        }
+        if start.is_none() {
+            start = Some(i);
+        }
+        if first_end == Some(i + 1) {
+            cut(i + 1, &mut start, &mut parts);
+        }
+    }
+    cut(tokens.len(), &mut start, &mut parts);
+    // Full ranges: each from where the last ended, the last to the segment's end.
+    let mut at = full.start;
+    let n = parts.len();
+    for (k, part) in parts.into_iter().enumerate() {
+        let to = if k + 1 == n { full.end } else { part.end };
+        segments.push((at..to, Some(part.clone())));
+        at = to;
+    }
+    if n == 0 {
+        segments.push((full, None));
+    }
+}
+
+/// Where a stored program's definition at the segment's start ends (an
+/// index past its last token): after its body's `BEGIN … END`, or its one
+/// statement's `;`. `None` when it isn't one.
+fn stored_program_end(
+    tokens: &[Token],
+    word: &dyn Fn(usize) -> Option<String>,
+    is_semicolon: &dyn Fn(usize) -> bool,
+) -> Option<usize> {
+    let w = |i: usize| word(i).unwrap_or_default();
+    // MariaDB's anonymous block, a body of its own.
+    let body_at = if w(0) == "begin" && w(1) == "not" && w(2) == "atomic" {
+        0
+    } else {
+        if w(0) != "create" {
+            return None;
+        }
+        // CREATE [OR REPLACE] [DEFINER = user] [AGGREGATE] PROCEDURE|FUNCTION|
+        // TRIGGER|EVENT, word by word: not any CREATE with such a word in it
+        // (a column named `event`), which would hide what follows.
+        let mut i = 1;
+        if w(i) == "or" && w(i + 1) == "replace" {
+            i += 2;
+        }
+        if w(i) == "definer" {
+            // `= 'u'@'%'`, `= u@h`, `= CURRENT_USER`, `= CURRENT_USER()`.
+            i += 1;
+            let user_ends = (i..tokens.len().min(i + 8))
+                .find(|&j| matches!(w(j).as_str(), "procedure" | "function" | "trigger" | "event" | "aggregate"))?;
+            i = user_ends;
+        }
+        if w(i) == "aggregate" {
+            i += 1;
+        }
+        if !matches!(w(i).as_str(), "procedure" | "function" | "trigger" | "event") {
+            return None;
+        }
+        let kind = i;
+        // The body: the first BEGIN after its name and parameters, or one
+        // statement (to its `;`) where there's none.
+        match (kind + 1..tokens.len()).find(|&i| w(i) == "begin" || is_semicolon(i)) {
+            Some(i) if w(i) == "begin" => i,
+            Some(semicolon) => return Some(semicolon),
+            None => return Some(tokens.len()),
+        }
+    };
+    // BEGIN … END, nested; a CASE's END (or END CASE) closes the CASE, and
+    // END IF, END LOOP, END WHILE, END REPEAT close those, not a block.
+    let (mut blocks, mut cases) = (0usize, 0usize);
+    let mut i = body_at;
+    while i < tokens.len() {
+        match w(i).as_str() {
+            "begin" => blocks += 1,
+            "case" => cases += 1,
+            "end" => match w(i + 1).as_str() {
+                "if" | "loop" | "while" | "repeat" => i += 1,
+                "case" => {
+                    cases = cases.saturating_sub(1);
+                    i += 1;
+                }
+                _ if cases > 0 => cases -= 1,
+                _ => {
+                    blocks = blocks.saturating_sub(1);
+                    if blocks == 0 {
+                        return Some(i + 1);
+                    }
+                }
+            },
+            _ => {}
+        }
+        i += 1;
+    }
+    // Unbalanced: not read as one; split at each `;` (nothing hides then).
+    None
+}
+
+/// `text` for the server: its `DELIMITER` lines blanked and each
+/// statement's own terminator made `;` (the server reads a routine's
+/// body, `;` in it and all, as one statement), the same length, so error
+/// positions still point into the editor. As it is without such lines.
+pub fn without_delimiters(text: &str, engine: Engine) -> std::borrow::Cow<'_, str> {
+    if !has_delimiter_lines(text, engine) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let script = delimited(text, engine);
+    let mut out = text.as_bytes().to_vec();
+    for line in &script.lines {
+        out[line.clone()].fill(b' ');
+    }
+    for end in &script.terminators {
+        out[end.clone()].fill(b' ');
+        out[end.start] = b';';
+    }
+    // Only whole characters were replaced, each by ASCII.
+    std::borrow::Cow::Owned(String::from_utf8(out).unwrap_or_else(|_| text.to_string()))
 }
 
 /// Whether a statement in `text` sets a password: `CREATE`/`ALTER USER` or
@@ -434,6 +747,97 @@ pub const KEYWORDS: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
+    /// What the server runs as several statements is several: a write isn't
+    /// hidden behind the read before it, under a DELIMITER's terminator.
+    #[test]
+    fn a_delimited_block_is_as_many_statements_as_the_server_runs() {
+        let my = Engine::MySql;
+        assert_eq!(
+            split_statements("DELIMITER $$\nSELECT 1; DROP TABLE users$$", my),
+            ["SELECT 1", "DROP TABLE users"]
+        );
+        assert_eq!(
+            split_statements("DELIMITER //\nSELECT * FROM t; DELETE FROM t//", my),
+            ["SELECT * FROM t", "DELETE FROM t"]
+        );
+        // A routine's body is one: CASE's END, END IF, a block in it.
+        let routine = "CREATE PROCEDURE p() BEGIN IF x THEN SELECT CASE WHEN a THEN 1 END; END IF; \
+                       BEGIN SELECT 2; END; END";
+        assert_eq!(
+            split_statements(&format!("DELIMITER $$\n{routine}; DROP TABLE t$$"), my),
+            [routine, "DROP TABLE t"],
+            "what follows its END is another statement"
+        );
+        // A body of one statement (no BEGIN) ends at its `;`.
+        assert_eq!(
+            split_statements("DELIMITER $$\nCREATE PROCEDURE p() SELECT 1; DROP TABLE t$$", my),
+            ["CREATE PROCEDURE p() SELECT 1", "DROP TABLE t"]
+        );
+        // Not every CREATE with such a word: a column named `event` (and one
+        // named `begin`) doesn't hide the DROP after it.
+        assert_eq!(
+            split_statements("DELIMITER $$\nCREATE TABLE t (event INT, begin INT); DROP TABLE users$$", my),
+            ["CREATE TABLE t (event INT, begin INT)", "DROP TABLE users"]
+        );
+        // A body that doesn't balance isn't one statement either.
+        assert_eq!(
+            split_statements("DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1; DROP TABLE users$$", my),
+            ["CREATE PROCEDURE p() BEGIN SELECT 1", "DROP TABLE users"]
+        );
+        // MariaDB's anonymous block, and a definer.
+        assert_eq!(split_statements("DELIMITER $$\nBEGIN NOT ATOMIC SELECT 1; SELECT 2; END$$", my).len(), 1);
+        let definer = "CREATE DEFINER = `u`@`%` FUNCTION f() RETURNS INT BEGIN RETURN 1; END";
+        assert_eq!(split_statements(&format!("DELIMITER $$\n{definer}$$"), my), [definer]);
+        let replaced =
+            "CREATE OR REPLACE DEFINER = CURRENT_USER() AGGREGATE FUNCTION f() RETURNS INT BEGIN RETURN 1; END";
+        assert_eq!(split_statements(&format!("DELIMITER $$\n{replaced}$$"), my), [replaced]);
+        // The text sent is the same: only how it's read changed.
+        let script = "DELIMITER $$\nSELECT 1; DROP TABLE users$$";
+        assert_eq!(without_delimiters(script, my), "            \nSELECT 1; DROP TABLE users; ");
+    }
+
+    #[test]
+    fn mysql_scripts_with_delimiter_lines_keep_routine_bodies_whole() {
+        let my = Engine::MySql;
+        let script = "DROP PROCEDURE IF EXISTS p;\nDELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1; SELECT ';$$'; END$$\nDELIMITER ;\nCALL p();";
+        assert_eq!(
+            split_statements(script, my),
+            ["DROP PROCEDURE IF EXISTS p", "CREATE PROCEDURE p() BEGIN SELECT 1; SELECT ';$$'; END", "CALL p()"]
+        );
+        let sent = without_delimiters(script, my);
+        assert_eq!(sent.len(), script.len(), "the same length: errors point into the editor");
+        assert_eq!(
+            sent,
+            "DROP PROCEDURE IF EXISTS p;\n            \nCREATE PROCEDURE p() BEGIN SELECT 1; SELECT ';$$'; END; \n           \nCALL p();"
+        );
+        // `//` and a terminator after a name, as mysqldump writes them.
+        let dump = "delimiter //\nCREATE TRIGGER t BEFORE INSERT ON x FOR EACH ROW SET NEW.a = 1//\ndelimiter ;";
+        assert_eq!(split_statements(dump, my), ["CREATE TRIGGER t BEFORE INSERT ON x FOR EACH ROW SET NEW.a = 1"]);
+        // Not a MySQL script, or no such line: as it is.
+        assert!(matches!(without_delimiters("select 1; select 2", my), std::borrow::Cow::Borrowed(_)));
+        assert_eq!(split_statements("DELIMITER $$\nselect 1$$", Engine::Postgres).len(), 1);
+        // Terminators inside one word, and the next statement after them.
+        assert_eq!(split_statements("DELIMITER $$\nSELECT x$$SELECT 2$$", my), ["SELECT x", "SELECT 2"]);
+        // After a statement left without its `;`: it ends there.
+        let unended = "SELECT 1\nDELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1; END$$";
+        assert_eq!(split_statements(unended, my), ["SELECT 1", "CREATE PROCEDURE p() BEGIN SELECT 1; END"]);
+        assert_eq!(
+            without_delimiters(unended, my),
+            "SELECT 1\n;           \nCREATE PROCEDURE p() BEGIN SELECT 1; END; "
+        );
+        // `\G` under another terminator ends its statement, sent as `;`.
+        let vertical = "DELIMITER $$\nselect * from t\\G\nselect 2$$";
+        assert_eq!(split_statements(vertical, my), ["select * from t", "select 2"]);
+        assert_eq!(without_delimiters(vertical, my), "            \nselect * from t; \nselect 2; ");
+        // Tabs, as some editors write it.
+        assert_eq!(split_statements("DELIMITER\t$$\nCREATE PROCEDURE p() BEGIN SELECT 2; END$$", my).len(), 1);
+        // A column named `delimiter` isn't the command.
+        assert_eq!(
+            split_statements("select\ndelimiter from t; select 2", my),
+            ["select\ndelimiter from t", "select 2"]
+        );
+    }
+
     use super::*;
     use crate::language::*;
 

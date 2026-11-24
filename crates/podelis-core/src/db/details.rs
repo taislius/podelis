@@ -10,6 +10,16 @@ pub struct TableDetails {
     pub foreign_keys: Vec<ForeignKey>,
     /// A view's query, or (SQLite) the table's CREATE statement.
     pub definition: Option<String>,
+    /// Its CHECK constraints (PostgreSQL, MySQL 8.0.16 on, MariaDB).
+    #[serde(default)]
+    pub checks: Vec<CheckInfo>,
+}
+
+/// A CHECK constraint: its name and `CHECK (…)` as the server writes it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckInfo {
+    pub name: String,
+    pub definition: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -39,10 +49,33 @@ pub struct RoutineInfo {
     pub schema: String,
     /// Name, with the argument types on Postgres (overloads differ by them).
     pub name: String,
-    /// "function" or "procedure".
+    /// "function" or "procedure"; or another object kept with them:
+    /// "trigger", "sequence", "enum", "domain", "type" (composite), "event".
     pub kind: String,
     /// How to look the definition up again (an oid on Postgres).
     pub(super) id: String,
+}
+
+impl RoutineInfo {
+    /// A function or a procedure, not another object listed with them.
+    pub fn is_function(&self) -> bool {
+        matches!(self.kind.as_str(), "function" | "procedure")
+    }
+
+    /// Its name as SQL writes it on `engine`: a function's with its
+    /// argument types, as listed (Postgres's overloads differ by them); a
+    /// trigger's alone, quoted (it's listed with its table: `audit
+    /// (orders)`); anything else's quoted, with its schema.
+    pub fn sql_name(&self, engine: Engine) -> String {
+        match self.kind.as_str() {
+            "function" | "procedure" => self.name.clone(),
+            "trigger" => {
+                let name = self.name.rsplit_once(" (").map_or(self.name.as_str(), |(name, _)| name);
+                engine.quote_ident(name)
+            }
+            _ => format!("{}.{}", engine.quote_ident(&self.schema), engine.quote_ident(&self.name)),
+        }
+    }
 }
 
 /// A comment the database keeps on a table or view (`column` is `None`)
@@ -188,16 +221,35 @@ impl Database {
             .collect())
     }
 
-    /// User-defined functions and procedures (none on SQLite). Postgres
-    /// leaves out those that belong to extensions.
+    /// User-defined functions and procedures, and the objects kept beside
+    /// them: triggers, sequences and types (PostgreSQL), triggers and
+    /// events (MySQL). Postgres leaves out those that belong to extensions.
     pub async fn routines(&self) -> Result<Vec<RoutineInfo>> {
         let rows: Vec<(String, String, String, String)> =
             on_driver!(self.0.engine, engine::queries::routine_rows(self).await?);
         Ok(rows.into_iter().map(|(schema, name, kind, id)| RoutineInfo { schema, name, kind, id }).collect())
     }
 
-    /// The CREATE statement of a function or procedure.
+    /// The CREATE statement of a function, procedure or other object.
     pub async fn routine_definition(&self, routine: &RoutineInfo) -> Result<String> {
         on_driver!(self.0.engine, engine::queries::routine_definition(self, routine).await)
+    }
+}
+
+#[cfg(test)]
+mod routine_tests {
+    use super::*;
+
+    #[test]
+    fn an_objects_name_as_sql_writes_it() {
+        let routine = |kind: &str, name: &str| RoutineInfo {
+            schema: "App".into(),
+            name: name.into(),
+            kind: kind.into(),
+            id: String::new(),
+        };
+        assert_eq!(routine("function", "f(x integer)").sql_name(Engine::Postgres), "f(x integer)");
+        assert_eq!(routine("trigger", "audit (orders)").sql_name(Engine::Postgres), "audit");
+        assert_eq!(routine("sequence", "Tickets").sql_name(Engine::Postgres), "\"App\".\"Tickets\"");
     }
 }

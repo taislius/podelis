@@ -126,7 +126,8 @@ fn table_definition(engine: Engine, table: &SchemaTable) -> String {
     let details = table.details.clone().unwrap_or_default();
     if let Some(def) = &details.definition {
         if info.is_view && !def.trim_start().to_ascii_uppercase().starts_with("CREATE") {
-            return format!("CREATE VIEW {qualified} AS\n{def}");
+            let what = if info.materialized { "MATERIALIZED VIEW" } else { "VIEW" };
+            return format!("CREATE {what} {qualified} AS\n{def}");
         }
         if info.is_view {
             return def.clone();
@@ -166,6 +167,12 @@ fn table_definition(engine: Engine, table: &SchemaTable) -> String {
         let w = details.foreign_keys.iter().map(|f| f.column.chars().count()).max().unwrap_or(0);
         for fk in &details.foreign_keys {
             let _ = writeln!(out, "{:<w$}  → {}", fk.column, fk.target);
+        }
+    }
+    if !details.checks.is_empty() {
+        let _ = write!(out, "\n-- {}\n", t!("schema.checks"));
+        for check in &details.checks {
+            let _ = writeln!(out, "CONSTRAINT {} {}", engine.quote_ident(&check.name), check.definition);
         }
     }
     if !details.indexes.is_empty() {
@@ -209,6 +216,8 @@ pub enum SchemaSection {
     /// The database's own catalog tables and views, when shown.
     System,
     Routines,
+    /// Triggers, sequences, types, events: what's kept beside the tables.
+    Objects,
 }
 
 impl SchemaSection {
@@ -218,7 +227,7 @@ impl SchemaSection {
             SchemaSection::Tables => !info.system && !info.is_view,
             SchemaSection::Views => !info.system && info.is_view,
             SchemaSection::System => info.system,
-            SchemaSection::Routines => false,
+            SchemaSection::Routines | SchemaSection::Objects => false,
         }
     }
 }
@@ -371,12 +380,16 @@ impl SchemaPanel {
                 }
             }
         }
-        let mut routines: Vec<(u8, usize)> =
-            (0..self.routines.len()).filter_map(|r| Some((rank(&self.routines[r].name)?, r))).collect();
-        routines.sort_by_key(|&(rank, _)| rank);
-        if !routines.is_empty() {
-            nodes.push(SchemaNode::Section(SchemaSection::Routines));
-            nodes.extend(routines.into_iter().map(|(_, r)| SchemaNode::Routine(r)));
+        for (section, functions) in [(SchemaSection::Routines, true), (SchemaSection::Objects, false)] {
+            let mut routines: Vec<(u8, usize)> = (0..self.routines.len())
+                .filter(|&r| self.routines[r].is_function() == functions)
+                .filter_map(|r| Some((rank(&self.routines[r].name)?, r)))
+                .collect();
+            routines.sort_by_key(|&(rank, _)| rank);
+            if !routines.is_empty() {
+                nodes.push(SchemaNode::Section(section));
+                nodes.extend(routines.into_iter().map(|(_, r)| SchemaNode::Routine(r)));
+            }
         }
         nodes
     }

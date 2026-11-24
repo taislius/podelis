@@ -105,12 +105,23 @@ pub(super) fn draw_library(f: &mut Frame, app: &mut App, area: Rect) {
     }
     let Some(view) = &app.popups.library_view else { return };
 
-    let hint = if view.confirm_delete {
-        Line::from(Span::styled(format!(" {}", t!("library.delete")), bold(t.warn)))
-    } else {
-        Line::from(Span::styled(format!(" {}", t!("library.keys")), dim()))
-    };
+    let hint = library_hint(view.confirm_delete);
     f.render_widget(Paragraph::new(hint).style(Style::default().bg(t.inset)), hints);
+}
+
+/// The library's line of keys, or its question while deleting.
+fn library_hint(confirm_delete: bool) -> Line<'static> {
+    let t = theme();
+    if confirm_delete {
+        return Line::from(Span::styled(format!(" {}", t!("library.delete")), bold(t.warn)));
+    }
+    use crate::app::windows::library::{DELETE_KEY, RENAME_KEY};
+    let keys = t!(
+        "library.keys",
+        rename = crate::app::commands::key_label(RENAME_KEY),
+        delete = crate::app::key_table::ctrl_label(DELETE_KEY)
+    );
+    Line::from(Span::styled(format!(" {keys}"), dim()))
 }
 
 /// How many of the selected query's lines the library shows under the list.
@@ -130,6 +141,45 @@ fn when_label(at: i64, now: chrono::DateTime<chrono::Local>) -> String {
     }
 }
 
+/// The memory list's keys: with the ontology, its scope and the editor too.
+fn list_hints(ontology: bool) -> String {
+    use crate::app::key_table::hint_line;
+    use crate::app::windows::memory::{MEMORY_KEYS, MemoryKey as M};
+    let mut hints = vec![
+        (M::Add, t!("memory.key_add")),
+        (M::Change, t!("memory.key_change")),
+        (M::Confirm, t!("memory.key_confirm")),
+        (M::Forget, t!("memory.key_forget")),
+    ];
+    if ontology {
+        hints.extend([(M::Scope, t!("memory.key_scope")), (M::Editor, t!("memory.key_editor"))]);
+    }
+    hints.push((M::Close, t!("memory.key_close")));
+    hint_line(MEMORY_KEYS, &hints)
+}
+
+/// The keys of edits made in the editor: those that `failed` to load, or
+/// else the plan of loading them.
+fn edits_hints(failed: bool) -> String {
+    use crate::app::key_table::hint_line;
+    use crate::app::windows::memory::{EDITS_KEYS, EditsKey as E};
+    if failed {
+        hint_line(
+            EDITS_KEYS,
+            &[(E::EditAgain, t!("memory.key_edit_failed")), (E::Discard, t!("memory.key_discard_failed"))],
+        )
+    } else {
+        hint_line(
+            EDITS_KEYS,
+            &[
+                (E::Apply, t!("memory.key_apply")),
+                (E::EditAgain, t!("memory.key_edit_again")),
+                (E::Discard, t!("memory.key_discard_edits")),
+            ],
+        )
+    }
+}
+
 /// The activity monitor: one line per session on the server.
 pub(super) fn draw_activity(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
@@ -137,7 +187,21 @@ pub(super) fn draw_activity(f: &mut Frame, app: &App, area: Rect) {
     let rect = centered_box(area, area.width.saturating_sub(6).max(40), area.height.saturating_sub(4).max(8));
     f.render_widget(Clear, rect);
     let title = format!("{} · {}", t!("activity.title"), tn!("activity.sessions", view.rows.len()));
-    let keys = format!(" {} ", t!("activity.keys"));
+    let keys = {
+        use crate::app::key_table::{UP_DOWN, hint_line};
+        use crate::app::windows::activity::{ACTIVITY_KEYS, ActivityKey as A};
+        let line = hint_line(
+            ACTIVITY_KEYS,
+            &[
+                (A::Details, t!("activity.key_details")),
+                (A::CancelQuery, t!("activity.key_cancel")),
+                (A::EndSession, t!("activity.key_end")),
+                (A::Refresh, t!("activity.key_refresh")),
+                (A::Close, t!("activity.key_close")),
+            ],
+        );
+        format!(" {UP_DOWN} {} · {line} ", t!("activity.key_select"))
+    };
     let block = popup(&title, t.accent).title_bottom(Line::from(Span::styled(keys, dim())).right_aligned());
     let inner = block.inner(rect);
     f.render_widget(block, rect);
@@ -235,7 +299,7 @@ pub(super) fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
                 fg(t.text),
             )),
             Line::default(),
-            Line::from(Span::styled(format!(" {}", t!("memory.edit_failed_keys")), dim())),
+            Line::from(Span::styled(format!(" {}", edits_hints(true)), dim())),
         ];
         let title = format!("{} · {project}{database}", t!("memory.edit_failed_title"));
         return f.render_widget(Paragraph::new(lines).block(popup(&title, t.warn)), rect);
@@ -264,7 +328,7 @@ pub(super) fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
         } else {
             lines.push(Line::default());
         }
-        lines.push(Line::from(Span::styled(format!(" {}", t!("memory.plan_keys")), dim())));
+        lines.push(Line::from(Span::styled(format!(" {}", edits_hints(false)), dim())));
         let title = format!("{} · {project}{database}", t!("memory.plan_title"));
         return f.render_widget(Paragraph::new(lines).block(popup(&title, t.warn)), rect);
     }
@@ -299,8 +363,7 @@ pub(super) fn draw_memory(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(Span::styled(format!(" {help}"), dim())));
     } else {
         lines.push(Line::from(Span::styled(format!(" {}", t!("memory.shown")), dim())));
-        let keys = if ontology { t!("memory.ontology_keys") } else { t!("memory.keys") };
-        lines.push(Line::from(Span::styled(format!(" {keys}"), dim())));
+        lines.push(Line::from(Span::styled(format!(" {}", list_hints(ontology)), dim())));
     }
     let name = if ontology { t!("memory.ontology_title") } else { t!("memory.title") };
     let title = format!("{name} · {project}{database}");

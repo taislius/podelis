@@ -20,6 +20,9 @@ pub struct ConnectionProfile {
     pub database: String,
     #[serde(default)]
     pub ssl_mode: SslMode,
+    /// A CA file, a client certificate and key for TLS, if not the default.
+    #[serde(default, skip_serializing_if = "crate::db::TlsFiles::is_empty")]
+    pub tls: crate::db::TlsFiles,
     #[serde(default)]
     pub mode: ConnectionMode,
     /// The transaction mode it starts in, if not the mode's default
@@ -669,6 +672,7 @@ pub(crate) fn file_profile(name: &str, path: &std::path::Path) -> ConnectionProf
         user: String::new(),
         database: String::new(),
         ssl_mode: crate::db::SslMode::Disable,
+        tls: crate::db::TlsFiles::default(),
         mode: crate::db::ConnectionMode::Normal,
         transaction: None,
         ssh: String::new(),
@@ -693,6 +697,7 @@ mod tests {
             user: "me".to_string(),
             database: "db".to_string(),
             ssl_mode: SslMode::Prefer,
+            tls: crate::db::TlsFiles::default(),
             mode: ConnectionMode::Normal,
             transaction: None,
             ssh: String::new(),

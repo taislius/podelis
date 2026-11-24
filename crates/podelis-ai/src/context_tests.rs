@@ -9,6 +9,7 @@ fn table(name: &str, rows: i64, columns: &[(&str, &str, bool)]) -> (TableInfo, V
         bytes: None,
         system: false,
         partition_of: None,
+        materialized: false,
     };
     let cols = columns
         .iter()

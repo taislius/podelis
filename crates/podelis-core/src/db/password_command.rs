@@ -309,6 +309,7 @@ mod tests {
             password: String::new(),
             database: "shop".into(),
             ssl_mode: SslMode::Prefer,
+            tls: crate::db::TlsFiles::default(),
             read_only: false,
             ssh: None,
             password_command: Vec::new(),

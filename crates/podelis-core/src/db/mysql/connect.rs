@@ -14,10 +14,19 @@ pub(in crate::db) async fn connect(params: &ConnectParams, host: &str, port: u16
     let mut opts = MySqlConnectOptions::new()
         .port(port)
         .username(&params.user)
-        .ssl_mode(ssl_mode(params.ssl_mode))
+        .ssl_mode(ssl_mode(params.tls_mode()))
         .pipes_as_concat(false);
     if !params.password.is_empty() {
         opts = opts.password(&params.password);
+    }
+    if let Some(ca) = &params.tls.ca {
+        opts = opts.ssl_ca(TlsFiles::expanded(ca));
+    }
+    if let Some(cert) = &params.tls.cert {
+        opts = opts.ssl_client_cert(TlsFiles::expanded(cert));
+    }
+    if let Some(key) = &params.tls.key {
+        opts = opts.ssl_client_key(TlsFiles::expanded(key));
     }
     opts = if host.starts_with('/') { opts.socket(host) } else { opts.host(host) };
     if !params.database.is_empty() {

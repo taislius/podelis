@@ -47,6 +47,7 @@ async fn serve_stream(
     mut req_rx: mpsc::Receiver<PageRequest>,
     broken: &AtomicBool,
     db: &Database,
+    last: &mut Option<(FirstPage, oneshot::Sender<Result<FirstPage>>)>,
 ) -> Option<(anyhow::Error, oneshot::Sender<Result<FirstPage>>)> {
     let mut columns = None;
     let mut rows = Vec::new();
@@ -54,10 +55,13 @@ async fn serve_stream(
         Ok(done) => done,
         Err(e) => return Some((e, first_tx)),
     };
-    let _ = first_tx.send(Ok((columns.clone(), rows, done)));
+    // All of it in the first page: handed back, to go with the notices
+    // the server sent (taken once the rows let go of the connection).
     if done {
+        *last = Some(((columns, rows, done, Vec::new()), first_tx));
         return None;
     }
+    let _ = first_tx.send(Ok((columns.clone(), rows, done, Vec::new())));
     while let Some((n, reply)) = req_rx.recv().await {
         let mut rows = Vec::new();
         match read_page(db, &mut stream, n, &mut columns, &mut rows).await {
@@ -210,7 +214,10 @@ impl Database {
         let broken = Arc::new(AtomicBool::new(false));
         let broke = Arc::clone(&broken);
         let db = self.clone();
-        let sql_owned = sql.to_string();
+        // A `DELIMITER` line is the editor's (as in `run_on`): sent blanked,
+        // what ran read from the script as written.
+        let sent = crate::sql::without_delimiters(sql, self.0.engine);
+        let sql_owned = sent.to_string();
         // It holds the session while its rows are read: given up on with
         // the session.
         self.stream_on_session(move |session| {
@@ -224,7 +231,24 @@ impl Database {
                 db.clear_interrupt();
                 let first_failed = on_session!(
                     session,
-                    |c| serve_stream(engine::driver::fetch(c, sql_owned), page, first_tx, req_rx, &broke, &db).await,
+                    |c| {
+                        // Podėlis's own statements' notices aren't this run's.
+                        drop(engine::driver::take_notices(c));
+                        let mut last = None;
+                        let failed =
+                            serve_stream(engine::driver::fetch(c, sql_owned), page, first_tx, req_rx, &broke, &db, &mut last)
+                                .await;
+                        // The notices before the rows go with them; those
+                        // of a longer stream wait for the next run.
+                        let notices = engine::driver::take_notices(c);
+                        match last {
+                            Some(((columns, rows, done, _), first_tx)) => {
+                                let _ = first_tx.send(Ok((columns, rows, done, notices)));
+                            }
+                            None => db.keep_notices(notices),
+                        }
+                        failed
+                    },
                     closed => {
                         let _ = first_tx.send(Err(anyhow::anyhow!("disconnected")));
                         None
@@ -255,15 +279,26 @@ impl Database {
             })
         })
         .await?;
-        let (columns, rows, done) = first_rx.await.map_err(|_| anyhow::anyhow!("query task ended"))??;
+        let had_locks = self.holds_locks();
+        let first = first_rx.await.map_err(|_| anyhow::anyhow!("query task ended"))?;
+        // Failed, it may still have taken what no error lets go of (an
+        // advisory lock before the error): read as a failed run is.
+        let (columns, rows, done, notices) = first.inspect_err(|_| self.read_ran(sql, Some(0)))?;
         self.report_live();
+        // What it did to the session (a lock taken, `SELECT
+        // pg_advisory_lock(1)`), as a run notes it.
+        self.read_ran(sql, None);
+        if !had_locks {
+            self.forget_untaken_locks([(sql, rows.as_slice())]);
+        }
         let elapsed = start.elapsed();
         // No rows: recover the column names by preparing the statement.
         let columns = if let Some(c) = columns {
             c
         } else {
             let db = self.clone();
-            let sql = sql.to_string();
+            // Prepared as the server takes it (no DELIMITER lines).
+            let sql = sent.to_string();
             self.with_session(move |session| {
                 Box::pin(async move {
                     db.clear_interrupt();
@@ -283,6 +318,7 @@ impl Database {
             elapsed,
             earlier: Vec::new(),
             statement: 1,
+            notices,
         };
         Ok((outcome, (!done).then_some(RowStream { tx: req_tx, broken })))
     }
@@ -317,12 +353,26 @@ impl Database {
         }
         self.clear_interrupt();
         let mut ran = 0;
-        let result = session.run_counted(sql, row_limit, &mut ran).await;
+        // The mysql client's `DELIMITER` lines are the editor's, not the
+        // server's: sent blanked, while what ran is read from the script as
+        // written (a routine's body one statement, not its `SET`s).
+        let sent = crate::sql::without_delimiters(sql, self.0.engine);
+        // What Podėlis's own statements on the session left (a catalog read,
+        // a check) isn't this run's to show.
+        drop(session.take_notices());
+        let result = session.run_counted(&sent, row_limit, &mut ran).await;
+        // The run's notices go with its outcome; a failed run's wait for the
+        // app (`take_notices`).
+        let mut notices = session.take_notices();
+        if result.is_err() {
+            self.keep_notices(std::mem::take(&mut notices));
+        }
         let elapsed = start.elapsed();
         // What the statements before a failing one changed on the session
         // stands: remembered (and so said gone if the session's reopened).
         // (Read against the transaction as it was before the run: noted as
         // it is after only then.)
+        let had_locks = self.holds_locks();
         self.read_ran(sql, result.as_ref().err().map(|_| ran));
 
         let mut results = match result {
@@ -360,6 +410,9 @@ impl Database {
         // prepare the statement to recover them (e.g. an empty SELECT): the
         // last one, and earlier reads, which get their own result sets.
         let parts = crate::language::split_statements(sql, self.0.engine);
+        if !had_locks && parts.len() == statements {
+            self.forget_untaken_locks(parts.iter().copied().zip(results.iter().map(|r| r.rows.as_slice())));
+        }
         if parts.len() == statements {
             for (i, result) in results.iter_mut().enumerate() {
                 let read = || {
@@ -374,19 +427,61 @@ impl Database {
         }
         let has_rows = |r: &StatementResult| r.columns.as_ref().is_some_and(|c| !c.is_empty());
         let Some(shown) = results.iter().rposition(has_rows).or(statements.checked_sub(1)) else {
-            return Ok(QueryOutcome { elapsed, ..QueryOutcome::default() });
+            return Ok(QueryOutcome { elapsed, notices, ..QueryOutcome::default() });
         };
         let mut earlier = Vec::new();
         for (i, result) in results.drain(..=shown).enumerate() {
             let outcome = result.into_outcome(i + 1, statements, elapsed);
             if i == shown {
-                return Ok(QueryOutcome { earlier, ..outcome });
+                return Ok(QueryOutcome { earlier, notices, ..outcome });
             }
             if !outcome.columns.is_empty() {
                 earlier.push(outcome);
             }
         }
         unreachable!("the shown statement is among the drained results")
+    }
+
+    /// Whether the session's memory says it holds locks.
+    fn holds_locks(&self) -> bool {
+        let keys = on_driver!(self.0.engine, engine::session::LOCK_KEYS);
+        self.0.memory.lock().is_ok_and(|m| m.settings.iter().any(|s| keys.contains(&s.key.as_str())))
+    }
+
+    /// After a run that began holding no locks: where every lock call in
+    /// it came back not taken (a `pg_try_advisory_lock` saying false, a
+    /// `GET_LOCK` timing out), the locks noted as it was read go again.
+    ///
+    /// A call's answer is read only from a result of one row and one
+    /// column (`SELECT pg_try_advisory_lock(1)`): any other (no rows, as
+    /// `DO GET_LOCK(…)`; several, or the call not the only column) says
+    /// nothing, and the locks stay noted.
+    fn forget_untaken_locks<'a>(&self, ran: impl IntoIterator<Item = (&'a str, &'a [Vec<Option<String>>])>) {
+        let engine = self.0.engine;
+        let taken: Vec<bool> = ran
+            .into_iter()
+            .filter_map(|(statement, rows)| {
+                let single = match rows {
+                    [row] if row.len() == 1 => row[0].as_deref(),
+                    _ => None,
+                };
+                on_driver!(engine, engine::session::lock_taken(statement, single))
+            })
+            .collect();
+        if taken.is_empty() || taken.iter().any(|&t| t) {
+            return;
+        }
+        if let Ok(mut memory) = self.0.memory.lock() {
+            for key in on_driver!(engine, engine::session::LOCK_KEYS) {
+                memory.reset(key);
+            }
+        }
+    }
+
+    /// What's remembered of the session now (as a reconnect would say it).
+    #[cfg(test)]
+    pub(in crate::db) fn remembered(&self) -> Vec<String> {
+        self.0.memory.lock().map(|m| m.lost()).unwrap_or_default()
     }
 
     /// After a run that changed the session's settings (`USE`, `SET`…).
@@ -451,8 +546,16 @@ impl Database {
     /// they're not kept.
     ///
     /// `ran`: only its first statements ran (the next one failed).
-    fn remember(&self, statements: Vec<&str>, failed: bool) {
+    fn remember(&self, statements: Vec<&str>, failed: bool, failing: Option<&str>) {
         let engine = self.0.engine;
+        // What no ROLLBACK undoes (PostgreSQL's session advisory locks):
+        // from every statement that ran, in a transaction or a failed run,
+        // and the one that failed.
+        if let Ok(mut memory) = self.0.memory.lock() {
+            for statement in statements.iter().chain(&failing) {
+                on_driver!(engine, engine::session::remember_kept(statement, &mut memory));
+            }
+        }
         let undone = on_driver!(engine, engine::session::UNDONE_BY_ROLLBACK);
         let statements = if failed && on_driver!(engine, engine::session::FAILED_RUN_UNDONE) {
             session_memory::before_last_end(&statements, engine)
@@ -480,7 +583,10 @@ impl Database {
         let lower = if sql_words { String::new() } else { sql.to_ascii_lowercase() };
         let has = |word: &&str| if sql_words { starts_a_line(sql, word) } else { lower.contains(word) };
         let remembers = on_driver!(engine, engine::session::KEEPS)
-            && on_driver!(engine, engine::session::CHANGED_BY).iter().any(has);
+            && (on_driver!(engine, engine::session::CHANGED_BY).iter().any(has)
+                || on_driver!(engine, engine::session::CALLS)
+                    .iter()
+                    .any(|call| crate::sql::contains_ignoring_case(sql, call)));
         let open = self.in_transaction();
         let ddl_commits = engine.capabilities().ddl_commits;
         let notes = if open {
@@ -495,11 +601,16 @@ impl Database {
             return;
         }
         let mut statements = crate::language::split_statements(sql, engine);
+        // The one that failed ran too, up to its error: what it took that no
+        // ROLLBACK lets go of (an advisory lock before a `1/0`) is held.
+        let mut failing = None;
         if let Some(ran) = ran {
-            statements.truncate(surely_ran(&statements, engine, ran));
+            let cut = surely_ran(&statements, engine, ran);
+            failing = statements.get(cut).copied();
+            statements.truncate(cut);
         }
         if remembers {
-            self.remember(statements.clone(), ran.is_some());
+            self.remember(statements.clone(), ran.is_some(), failing);
         }
         if notes {
             self.note_ran_transaction(&statements, open, ddl_commits);
@@ -633,11 +744,15 @@ impl Database {
     /// session was reopened.
     pub(super) async fn ping_on(&self, session: &mut Session) -> Result<bool> {
         let renewed = self.renew_if_stale(session).await?;
-        let ping = self.0.engine.backend().ping();
+        let backend = self.0.engine.backend();
+        let ping = backend.session_ping().unwrap_or_else(|| backend.ping());
         match session.run(ping, 1).await {
-            Ok(_) => {
+            Ok(results) => {
                 if !renewed {
                     self.report_live();
+                    if backend.session_ping().is_some() {
+                        self.note_server_session(&results);
+                    }
                 }
                 Ok(renewed)
             }
@@ -649,6 +764,38 @@ impl Database {
                 Ok(true)
             }
             Err(e) => Err(e),
+        }
+    }
+
+    /// The same server session as the connection's, unless a pooler moved
+    /// it (no reconnect gave it a new one): `results`, the engine's
+    /// `session_ping`'s.
+    fn note_server_session(&self, results: &[StatementResult]) {
+        let answered = results.first().and_then(|r| r.rows.first()).and_then(|row| row.first()).cloned().flatten();
+        let id = answered.and_then(|t| t.parse::<i64>().ok());
+        if id.is_some_and(|id| id != self.0.backend_id.load(Ordering::SeqCst)) {
+            tracing::warn!("the session's server session changed without a reconnect: a pooler");
+            self.report_pooled();
+        }
+    }
+
+    /// After a check's ping answered, outside a transaction (a statement
+    /// fails in an aborted one): which server session answers. A statement,
+    /// in the server's logs and `pg_stat_activity` (it replaces the user's
+    /// last query there): at most every `SERVER_SESSION_EVERY`, unless the
+    /// check was `asked` for.
+    pub(super) async fn check_server_session(&self, session: &mut Session, asked: bool) {
+        const SERVER_SESSION_EVERY: Duration = Duration::from_secs(300);
+        let Some(sql) = self.0.engine.backend().session_ping() else { return };
+        {
+            let Ok(mut last) = self.0.server_session_checked.lock() else { return };
+            if !asked && last.is_some_and(|at| at.elapsed() < SERVER_SESSION_EVERY) {
+                return;
+            }
+            *last = Some(Instant::now());
+        }
+        if let Ok(results) = session.run(sql, 1).await {
+            self.note_server_session(&results);
         }
     }
 
@@ -810,6 +957,7 @@ impl StatementResult {
             elapsed,
             earlier: Vec::new(),
             statement,
+            notices: Vec::new(),
         }
     }
 }
@@ -822,11 +970,22 @@ impl Session {
     }
 
     pub(super) async fn server_version(&mut self) -> String {
-        let version = on_session!(
+        let first = on_session!(
             self,
-            |c| engine::driver::text(c, engine::DIALECT.version_query()).await,
+            |c| match engine::DIALECT.version_query_first() {
+                Some(sql) => engine::driver::text(c, sql).await.ok(),
+                None => None,
+            },
             closed => return String::new()
         );
+        let version = match first {
+            Some(version) => Ok(version),
+            None => on_session!(
+                self,
+                |c| engine::driver::text(c, engine::DIALECT.version_query()).await,
+                closed => return String::new()
+            ),
+        };
         // "16.2 (Debian 16.2-1)" → "16.2"
         version.map(|v| v.split_whitespace().next().unwrap_or_default().to_string()).unwrap_or_default()
     }
@@ -852,6 +1011,11 @@ impl Session {
             Ok(false) => Answer::Broke,
             Err(_) => Answer::Silent,
         }
+    }
+
+    /// The notices the server sent since they were last taken.
+    pub(super) fn take_notices(&mut self) -> Vec<String> {
+        on_session!(self, |c| engine::driver::take_notices(c), closed => Vec::new())
     }
 
     pub(super) async fn backend_id(&mut self) -> Result<i64> {

@@ -1,6 +1,7 @@
 //! The results' keys: moving, sorting, filtering, the cell and record
 //! views, copying, and scrolling the result tabs.
 
+use crate::app::key_table::{Move, movement};
 use crate::app::*;
 
 impl App {
@@ -37,26 +38,23 @@ impl App {
         if len == 0 {
             return;
         }
-        if self.tab.grid.vertical && self.vertical_move(key.code, len, cols) {
+        if self.tab.grid.vertical && self.vertical_move(key, len, cols) {
             return self.maybe_fetch_more();
         }
         let current = self.tab.grid.table_state.selected().unwrap_or(0);
-        let row = match key.code {
-            KeyCode::Char('g') => 0,
-            KeyCode::Char('G') => len - 1,
-            _ => list::step(current, len, key, Nav::LIST).unwrap_or(current),
-        };
+        let row = list::step(current, len, key, Nav::LIST).unwrap_or(current);
         self.tab.grid.table_state.select(Some(row));
         self.maybe_fetch_more();
-        match key.code {
-            KeyCode::Left | KeyCode::Char('h') => {
+        match (key.code, movement(key)) {
+            (_, Some(Move::Left)) => {
                 self.tab.grid.selected_col = self.tab.grid.selected_col.saturating_sub(1);
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            (_, Some(Move::Right)) => {
                 self.tab.grid.selected_col = (self.tab.grid.selected_col + 1).min(cols - 1);
             }
-            KeyCode::Char('0' | '^') => self.tab.grid.selected_col = 0,
-            KeyCode::Char('$') => self.tab.grid.selected_col = cols - 1,
+            // vim's first and last column.
+            (KeyCode::Char('0' | '^'), _) => self.tab.grid.selected_col = 0,
+            (KeyCode::Char('$'), _) => self.tab.grid.selected_col = cols - 1,
             _ => {}
         }
     }
@@ -72,18 +70,18 @@ impl App {
 
     /// Moving in the vertical layout: ↑/↓ go field by field, on into the
     /// next or previous row; PageUp/PageDown a whole row. True if handled.
-    pub(in crate::app) fn vertical_move(&mut self, code: KeyCode, len: usize, cols: usize) -> bool {
+    pub(in crate::app) fn vertical_move(&mut self, key: KeyEvent, len: usize, cols: usize) -> bool {
         let grid = &mut self.tab.grid;
         let row = grid.table_state.selected().unwrap_or(0);
         let col = grid.selected_col;
-        let (row, col) = match code {
-            KeyCode::Down | KeyCode::Char('j') if col + 1 < cols => (row, col + 1),
-            KeyCode::Down | KeyCode::Char('j') if row + 1 < len => (row + 1, 0),
-            KeyCode::Up | KeyCode::Char('k') if col > 0 => (row, col - 1),
-            KeyCode::Up | KeyCode::Char('k') if row > 0 => (row - 1, cols - 1),
-            KeyCode::Down | KeyCode::Up | KeyCode::Char('j' | 'k') => (row, col),
-            KeyCode::PageDown => ((row + 1).min(len - 1), col),
-            KeyCode::PageUp => (row.saturating_sub(1), col),
+        let (row, col) = match movement(key) {
+            Some(Move::Down) if col + 1 < cols => (row, col + 1),
+            Some(Move::Down) if row + 1 < len => (row + 1, 0),
+            Some(Move::Up) if col > 0 => (row, col - 1),
+            Some(Move::Up) if row > 0 => (row - 1, cols - 1),
+            Some(Move::Down | Move::Up) => (row, col),
+            Some(Move::PageDown) => ((row + 1).min(len - 1), col),
+            Some(Move::PageUp) => (row.saturating_sub(1), col),
             _ => return false,
         };
         grid.table_state.select(Some(row));
@@ -190,21 +188,22 @@ impl App {
     /// ←/→ scroll across (drawing stops at the widest line).
     pub(in crate::app) fn handle_tab_scroll_key(&mut self, key: KeyEvent) {
         let page = self.panes.editor_height.max(5) as u16;
-        match key.code {
-            KeyCode::Left | KeyCode::Char('h') => return self.scroll_tab_across(-1),
-            KeyCode::Right | KeyCode::Char('l') => return self.scroll_tab_across(1),
-            KeyCode::Char('0') => {
+        let step = movement(key);
+        match (key.code, step) {
+            (_, Some(Move::Left)) => return self.scroll_tab_across(-1),
+            (_, Some(Move::Right)) => return self.scroll_tab_across(1),
+            (KeyCode::Char('0'), _) => {
                 self.tab.tab_hscroll = 0;
                 return;
             }
             _ => {}
         }
-        let delta: i32 = match key.code {
-            KeyCode::Down | KeyCode::Char('j') => 1,
-            KeyCode::Up | KeyCode::Char('k') => -1,
-            KeyCode::PageDown => i32::from(page),
-            KeyCode::PageUp => -i32::from(page),
-            KeyCode::Home => {
+        let delta: i32 = match step {
+            Some(Move::Down) => 1,
+            Some(Move::Up) => -1,
+            Some(Move::PageDown) => i32::from(page),
+            Some(Move::PageUp) => -i32::from(page),
+            Some(Move::Home) => {
                 self.tab.tab_scroll = 0;
                 self.tab.tab_hscroll = 0;
                 return;

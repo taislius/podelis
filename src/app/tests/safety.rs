@@ -53,6 +53,17 @@ async fn production_mode_confirms_every_write() {
     assert!(app.popups.confirm.as_ref().unwrap().message.contains("PRODUCTION"));
 }
 
+/// A write under a DELIMITER's terminator, after a read: asked about on
+/// production, as it would be alone (the server runs both).
+#[cfg(feature = "mysql")]
+#[tokio::test]
+async fn a_write_behind_a_delimiter_asks_on_production() {
+    let Some((mut app, _dir)) = super::live_mysql_app(ConnectionMode::Production).await else { return };
+    run_sql(&mut app, "DELIMITER //\nSELECT 1; DELETE FROM podelis_nowhere//").await;
+    let confirm = app.popups.confirm.as_ref().expect("the DELETE asks first");
+    assert!(confirm.message.contains("PRODUCTION"), "{}", confirm.message);
+}
+
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn tx_modes_auto_manual_and_rollback_only() {

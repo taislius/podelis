@@ -129,6 +129,7 @@ fn s_in_the_navigator_adds_the_select_after_everything() {
                 bytes: None,
                 system: false,
                 partition_of: None,
+                materialized: false,
             },
             expanded: false,
             columns: Vec::new(),
@@ -162,6 +163,7 @@ fn the_navigators_filter_picks_opens_and_takes_a_paste() {
             bytes: None,
             system: false,
             partition_of: None,
+            materialized: false,
         },
         expanded: false,
         columns: Vec::new(),
@@ -204,6 +206,7 @@ fn tab_in_the_navigators_filter_hands_the_keys_to_the_one_picked() {
             bytes: None,
             system: false,
             partition_of: None,
+            materialized: false,
         },
         expanded: false,
         columns: Vec::new(),
@@ -245,6 +248,7 @@ fn a_definition_lists_the_foreign_keys() {
             target_table: "users".into(),
             target_column: Some("id".into()),
         }],
+        checks: vec![crate::db::CheckInfo { name: "positive".into(), definition: "CHECK ((total > 0))".into() }],
         ..crate::db::TableDetails::default()
     };
     let col = |name: &str| crate::db::ColumnInfo {
@@ -262,6 +266,7 @@ fn a_definition_lists_the_foreign_keys() {
             bytes: None,
             system: false,
             partition_of: None,
+            materialized: false,
         },
         expanded: false,
         columns: vec![col("id"), col("user_id")],
@@ -273,6 +278,7 @@ fn a_definition_lists_the_foreign_keys() {
     app.handle_schema_key(key(KeyCode::Char('d')));
     let text = &app.popups.cell_view.as_ref().expect("definition").text;
     assert!(text.contains("-- foreign keys") && text.contains("user_id  → users.id"), "{text}");
+    assert!(text.contains("-- check constraints\nCONSTRAINT positive CHECK ((total > 0))"), "{text}");
 }
 
 #[test]
@@ -287,6 +293,7 @@ fn arrows_in_a_definition_go_to_the_next_table() {
             bytes: None,
             system: false,
             partition_of: None,
+            materialized: false,
         },
         expanded: false,
         columns: Vec::new(),

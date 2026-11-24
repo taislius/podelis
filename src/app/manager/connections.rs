@@ -1,3 +1,4 @@
+use super::keys::{self, ConnectionsKey};
 use crate::app::*;
 use crate::config::store::ProjectId;
 
@@ -12,6 +13,10 @@ pub enum ConnectField {
     PasswordCommand,
     Database,
     Ssl,
+    /// TLS's CA file, client certificate and key.
+    TlsCa,
+    TlsCert,
+    TlsKey,
     Mode,
     Transaction,
     Timeout,
@@ -19,7 +24,7 @@ pub enum ConnectField {
     Ssh,
 }
 
-const SERVER_FIELDS: [ConnectField; 14] = [
+const SERVER_FIELDS: [ConnectField; 17] = [
     ConnectField::Name,
     ConnectField::Engine,
     ConnectField::Host,
@@ -29,6 +34,9 @@ const SERVER_FIELDS: [ConnectField; 14] = [
     ConnectField::PasswordCommand,
     ConnectField::Database,
     ConnectField::Ssl,
+    ConnectField::TlsCa,
+    ConnectField::TlsCert,
+    ConnectField::TlsKey,
     ConnectField::Mode,
     ConnectField::Transaction,
     ConnectField::Timeout,
@@ -46,6 +54,30 @@ const FILE_FIELDS: [ConnectField; 7] = [
     ConnectField::Timeout,
     ConnectField::Agents,
 ];
+
+impl ConnectField {
+    /// One of TLS's files (CA, certificate, key).
+    pub fn is_tls_file(self) -> bool {
+        matches!(self, ConnectField::TlsCa | ConnectField::TlsCert | ConnectField::TlsKey)
+    }
+}
+
+/// Whether TLS's files are offered: where TLS is required, or one is set.
+pub fn shows_tls_files(mode: crate::db::SslMode, files: &crate::db::TlsFiles) -> bool {
+    use crate::db::SslMode;
+    matches!(mode, SslMode::Require | SslMode::VerifyCa | SslMode::VerifyFull) || !files.is_empty()
+}
+
+/// The connect form's keys with Ctrl (its letters are typed into fields):
+/// Ctrl+S saves the connection, Ctrl+T tests it, Ctrl+Y copies the field.
+pub const SAVE_KEY: char = 's';
+pub const TEST_KEY: char = 't';
+pub const COPY_KEY: char = 'y';
+
+/// Ctrl+`c` as a sentence says it (`Ctrl+S`).
+pub fn ctrl_words(c: char) -> String {
+    format!("Ctrl+{}", c.to_ascii_uppercase())
+}
 
 /// The fields a connection to `engine` has, in order.
 pub fn fields_for(engine: Engine) -> &'static [ConnectField] {
@@ -159,6 +191,9 @@ impl ConnectForm {
             ConnectField::Password => Some(&mut draft.password),
             ConnectField::PasswordCommand => Some(&mut draft.password_command),
             ConnectField::Database => Some(&mut draft.database),
+            ConnectField::TlsCa => Some(&mut draft.tls_ca),
+            ConnectField::TlsCert => Some(&mut draft.tls_cert),
+            ConnectField::TlsKey => Some(&mut draft.tls_key),
         }
     }
 
@@ -178,6 +213,9 @@ impl ConnectForm {
             ConnectField::Password => &d.password,
             ConnectField::PasswordCommand => &d.password_command,
             ConnectField::Database => &d.database,
+            ConnectField::TlsCa => &d.tls_ca,
+            ConnectField::TlsCert => &d.tls_cert,
+            ConnectField::TlsKey => &d.tls_key,
             _ => return None,
         };
         let at = self.cursor.filter(|&c| text.is_char_boundary(c)).unwrap_or(text.len());
@@ -210,9 +248,16 @@ impl ConnectForm {
         }
     }
 
-    /// The fields shown for the selected engine, in order.
-    pub fn visible_fields(&self) -> &'static [ConnectField] {
+    /// The fields shown for the selected engine, in order: TLS's files
+    /// only where TLS is required (or one is set, or has the focus: one
+    /// just emptied stays till the focus moves on).
+    pub fn visible_fields(&self) -> Vec<ConnectField> {
+        let tls = shows_tls_files(self.ssl_mode, &self.tls()) || self.focus.is_tls_file();
         fields_for(self.engine)
+            .iter()
+            .copied()
+            .filter(|f| tls || !matches!(f, ConnectField::TlsCa | ConnectField::TlsCert | ConnectField::TlsKey))
+            .collect()
     }
 
     /// A key in the focused field, at its cursor.
@@ -287,7 +332,7 @@ impl App {
         }
         if self.manager.confirm_delete {
             self.manager.confirm_delete = false;
-            if matches!(key.code, KeyCode::Char('y' | 'Y')) {
+            if crate::app::confirm::is_yes(key) {
                 self.delete_selected();
             } else {
                 self.manager.connection_message = None;
@@ -304,13 +349,14 @@ impl App {
             self.manager.connection_selected = i;
             return;
         }
-        match key.code {
-            KeyCode::Esc => self.leave_connections(),
-            KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => {
+        let Some(command) = keys::lookup(keys::CONNECTIONS_KEYS, key) else { return };
+        match command {
+            ConnectionsKey::Back => self.leave_connections(),
+            ConnectionsKey::Projects => {
                 self.manager.connection_message = None;
                 self.screen = Screen::Projects;
             }
-            KeyCode::Char('m') if on_profile => {
+            ConnectionsKey::Move if on_profile => {
                 if self.move_targets().is_empty() {
                     self.manager.connection_message = Some((t!("connections.need_other_project").to_string(), true));
                 } else {
@@ -318,21 +364,21 @@ impl App {
                     self.manager.moving_to = Some(0);
                 }
             }
-            KeyCode::Char('d') if on_profile => self.manager.confirm_delete = true,
-            KeyCode::Char('c') => self.find_containers(),
-            // Into the settings pane, to change them.
-            KeyCode::Right | KeyCode::Char('l' | 'e') | KeyCode::Tab => self.edit_selected_connection(),
-            KeyCode::Enter if on_profile => {
+            ConnectionsKey::Delete if on_profile => self.manager.confirm_delete = true,
+            ConnectionsKey::Containers => self.find_containers(),
+            ConnectionsKey::Edit => self.edit_selected_connection(),
+            ConnectionsKey::Connect if on_profile => {
                 let profile = self.profiles()[self.manager.connection_selected].clone();
                 self.open_saved_here(profile);
             }
-            KeyCode::Char('t') if on_profile => {
+            ConnectionsKey::NewTab if on_profile => {
                 self.free_tab_for_form();
                 self.connection.slots.auto_connect = true;
                 self.load_profile(self.profiles()[self.manager.connection_selected].clone());
             }
-            KeyCode::Char('n') | KeyCode::Enter => self.new_connection(),
-            _ => {}
+            // Enter on "+ New connection" makes one.
+            ConnectionsKey::New | ConnectionsKey::Connect => self.new_connection(),
+            ConnectionsKey::Move | ConnectionsKey::Delete | ConnectionsKey::NewTab => {}
         }
     }
 
@@ -526,7 +572,8 @@ impl App {
         profile.name = self.free_name(&project_id, &profile.name);
         self.new_connection();
         self.connection.form = ConnectionDraft::from_profile(&profile, String::new()).into();
-        self.connection.form.info = Some(t!("connections.from_container", container = container));
+        self.connection.form.info =
+            Some(t!("connections.from_container", container = container, save = ctrl_words(SAVE_KEY)));
     }
 
     /// A saved connection of the open project to the same place: server,
@@ -681,9 +728,9 @@ impl App {
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
-                KeyCode::Char('s') => self.save_connection(),
-                KeyCode::Char('t') => self.test_connection(),
-                KeyCode::Char('y') => self.copy_connect_field(),
+                KeyCode::Char(c) if c == SAVE_KEY => self.save_connection(),
+                KeyCode::Char(c) if c == TEST_KEY => self.test_connection(),
+                KeyCode::Char(c) if c == COPY_KEY => self.copy_connect_field(),
                 // Where the terminal doesn't paste by itself.
                 KeyCode::Char('v') => match crate::system::clipboard::read() {
                     Ok(text) => self.handle_paste(&text),
@@ -835,7 +882,7 @@ impl App {
         self.save_connection();
         let form = &mut self.connection.form;
         let said = match form.error.take() {
-            Some(e) => (t!("connections.not_saved", e = e), true),
+            Some(e) => (t!("connections.not_saved", e = e, save = ctrl_words(SAVE_KEY)), true),
             None => (t!("connections.saved_in_project", name = form.name), false),
         };
         form.info = None;

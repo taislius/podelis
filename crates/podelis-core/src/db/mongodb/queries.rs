@@ -123,7 +123,7 @@ pub(in crate::db) async fn table_details(db: &Database, _schema: &str, table: &s
             }
         })
         .collect();
-    Ok(TableDetails { indexes, foreign_keys: Vec::new(), definition: None })
+    Ok(TableDetails { indexes, foreign_keys: Vec::new(), definition: None, checks: Vec::new() })
 }
 
 /// The session-info query and the name of each column it returns:

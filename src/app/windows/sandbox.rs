@@ -2,7 +2,26 @@
 //! they changed per table, and how to end it. The sandbox itself is
 //! `app::sandbox`.
 
+use crate::app::key_table::{Move, Table, lookup, movement};
 use crate::app::*;
+
+/// What a key does in the sandbox window (scrolling is `MOVE_KEYS`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SandboxKey {
+    Undo,
+    Discard,
+    KeepScript,
+    RunForReal,
+    Close,
+}
+
+pub const SANDBOX_KEYS: Table<SandboxKey> = &[
+    (KeyCode::Char('u'), SandboxKey::Undo),
+    (KeyCode::Char('d'), SandboxKey::Discard),
+    (KeyCode::Char('s'), SandboxKey::KeepScript),
+    (KeyCode::Char('r'), SandboxKey::RunForReal),
+    (KeyCode::Esc, SandboxKey::Close),
+];
 
 /// The sandbox window (`Ctrl+K x` while one is open).
 #[derive(Debug, Default)]
@@ -48,27 +67,30 @@ impl App {
 
     pub(in crate::app) fn handle_sandbox_key(&mut self, key: KeyEvent) {
         let Some(view) = &mut self.popups.sandbox_view else { return };
-        match key.code {
-            KeyCode::Esc => self.popups.sandbox_view = None,
-            KeyCode::Down | KeyCode::Char('j') => view.scroll = view.scroll.saturating_add(1),
-            KeyCode::Up | KeyCode::Char('k') => view.scroll = view.scroll.saturating_sub(1),
-            KeyCode::Char('u') => {
+        match movement(key) {
+            Some(Move::Down) => return view.scroll = view.scroll.saturating_add(1),
+            Some(Move::Up) => return view.scroll = view.scroll.saturating_sub(1),
+            _ => {}
+        }
+        let Some(command) = lookup(SANDBOX_KEYS, key) else { return };
+        match command {
+            SandboxKey::Close => self.popups.sandbox_view = None,
+            SandboxKey::Undo => {
                 self.popups.sandbox_view = None;
                 self.undo_sandbox_step();
             }
-            KeyCode::Char('d') => {
+            SandboxKey::Discard => {
                 self.popups.sandbox_view = None;
                 self.end_transaction(TxEnd::Rollback);
             }
-            KeyCode::Char('s') => {
+            SandboxKey::KeepScript => {
                 self.popups.sandbox_view = None;
                 self.keep_sandbox_as_script();
             }
-            KeyCode::Char('r') => {
+            SandboxKey::RunForReal => {
                 self.popups.sandbox_view = None;
                 self.run_sandbox_for_real();
             }
-            _ => {}
         }
     }
 }

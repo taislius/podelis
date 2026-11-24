@@ -171,3 +171,4 @@ clone_on_ref_ptr = "warn"          # Arc::clone(&x), so a cheap clone reads as o
 # the `rsa` crate (RUSTSEC-2023-0071). See patches/README.md.
 [patch.crates-io]
 sqlx-mysql = { path = "patches/sqlx-mysql" }
+sqlx-postgres = { path = "patches/sqlx-postgres" }

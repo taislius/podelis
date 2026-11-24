@@ -10,6 +10,10 @@ pub(in crate::db) const KEEPS: bool = false;
 /// none of them isn't read for it.
 pub(in crate::db) const CHANGED_BY: &[&str] = &[];
 
+/// Functions whose call anywhere in a statement changes the session
+/// (lowercase, as they start): none here.
+pub(in crate::db) const CALLS: &[&str] = &[];
+
 /// (Nothing is kept.)
 pub(in crate::db) const FAILED_RUN_UNDONE: bool = false;
 
@@ -34,3 +38,15 @@ pub(in crate::db) fn owns_data(_target: &str) -> bool {
 }
 
 pub(in crate::db) fn remember(_statement: &str, _memory: &mut SessionMemory) {}
+/// Notes what `statement` changed on the session that no ROLLBACK undoes,
+/// beside `remember`'s: nothing here.
+pub(in crate::db) fn remember_kept(_statement: &str, _memory: &mut SessionMemory) {}
+
+/// The memory's keys for locks: none here.
+pub(in crate::db) const LOCK_KEYS: &[&str] = &[];
+
+/// Whether `statement` took a lock: it takes none here.
+pub(in crate::db) fn lock_taken(_statement: &str, _first: Option<&str>) -> Option<bool> {
+    None
+}
+

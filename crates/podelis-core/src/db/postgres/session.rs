@@ -3,7 +3,7 @@
 //! undo), so a reconnect can say what's gone with the old one. There's no
 //! `USE`: another database is another connection.
 
-use super::super::session_memory::{SessionMemory, leading_words};
+use super::super::session_memory::{SessionMemory, calls, leading_words};
 use super::super::*;
 
 /// Whether it keeps anything of a session (else what runs isn't read for
@@ -13,6 +13,11 @@ pub(in crate::db) const KEEPS: bool = true;
 /// Words a statement that changes a session has (lowercase): a run with
 /// none of them isn't read for it.
 pub(in crate::db) const CHANGED_BY: &[&str] = &["set", "reset", "discard", "deallocate", "create", "prepare", "listen", "unlisten"];
+
+/// Functions whose call anywhere in a statement changes the session
+/// (lowercase, as they start): advisory locks held by the session (not a
+/// transaction's, `pg_advisory_xact_lock`, which end with it).
+pub(in crate::db) const CALLS: &[&str] = &["pg_advisory_lock", "pg_try_advisory_lock", "pg_advisory_unlock_all"];
 
 /// A run (one query string) that fails is undone back to its last `COMMIT`
 /// or `ROLLBACK`: the statements sent together run as one transaction.
@@ -82,6 +87,39 @@ pub(in crate::db) fn remember(statement: &str, memory: &mut SessionMemory) {
     }
 }
 
+/// The memory's keys for locks: forgotten again after a run whose lock
+/// calls all came back not taken (`lock_taken`).
+pub(in crate::db) const LOCK_KEYS: &[&str] = &["advisory locks"];
+
+/// Whether `statement` took a lock, by what it returned (`single`: its one
+/// cell, when its result is one row of one column): a
+/// `pg_try_advisory_lock` that says false didn't; without a single cell,
+/// it may have. `None` when it calls no lock function.
+pub(in crate::db) fn lock_taken(statement: &str, single: Option<&str>) -> Option<bool> {
+    let calls = calls(statement, Engine::Postgres, CALLS);
+    let called = |name: &str| calls.iter().any(|c| c.starts_with(name));
+    if called("pg_try_advisory_lock") && !called("pg_advisory_lock") {
+        return Some(!matches!(single, Some("f" | "false")));
+    }
+    called("pg_advisory_lock").then_some(true)
+}
+
+/// Notes what `statement` changed on the session that no ROLLBACK undoes:
+/// advisory locks taken or all let go of by a call in it (its code, not its
+/// strings), even in a transaction rolled back or a run that failed later.
+/// One let go of (`pg_advisory_unlock`) may leave others: they're still
+/// said to be held.
+pub(in crate::db) fn remember_kept(statement: &str, memory: &mut SessionMemory) {
+    let calls = calls(statement, Engine::Postgres, CALLS);
+    let called = |name: &str| calls.iter().any(|c| c.starts_with(name));
+    if called("pg_advisory_unlock_all") {
+        memory.reset("advisory locks");
+    }
+    if called("pg_advisory_lock") || called("pg_try_advisory_lock") {
+        memory.set("advisory locks", "advisory locks");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,6 +127,7 @@ mod tests {
     fn remembered(statements: &[&str]) -> SessionMemory {
         let mut memory = SessionMemory::default();
         for s in statements {
+            remember_kept(s, &mut memory);
             remember(s, &mut memory);
         }
         memory
@@ -125,6 +164,25 @@ mod tests {
         assert_eq!(memory.lost(), ["app.tenant_id"]);
         let memory = remembered(&["SET search_path TO app", "CREATE TEMPORARY TABLE t (x int)", "DISCARD ALL"]);
         assert!(memory.is_empty());
+    }
+
+    #[test]
+    fn session_advisory_locks_are_remembered_not_a_transactions() {
+        assert_eq!(remembered(&["SELECT pg_advisory_lock(42)"]).lost(), ["advisory locks"]);
+        assert_eq!(remembered(&["select pg_try_advisory_lock_shared(1, 2)"]).lost(), ["advisory locks"]);
+        assert!(remembered(&["SELECT pg_advisory_xact_lock(42)"]).is_empty(), "ends with the transaction");
+        assert!(remembered(&["SELECT 'pg_advisory_lock(1)'"]).is_empty(), "a string, not a call");
+        assert!(remembered(&["SELECT pg_advisory_lock(1)", "SELECT pg_advisory_unlock_all()"]).is_empty());
+        assert!(remembered(&["SELECT pg_advisory_lock(1)", "DISCARD ALL"]).is_empty());
+        assert_eq!(lock_taken("SELECT pg_try_advisory_lock(1)", Some("f")), Some(false));
+        assert_eq!(lock_taken("SELECT pg_try_advisory_lock(1)", Some("true")), Some(true));
+        assert_eq!(lock_taken("SELECT pg_advisory_lock(1)", None), Some(true));
+        assert_eq!(lock_taken("SELECT id, pg_try_advisory_lock(id) FROM jobs", None), Some(true), "unknown: kept");
+        assert_eq!(lock_taken("SELECT pg_advisory_xact_lock(1)", None), None);
+        // Written down, not run: a plan of it, a function made with it.
+        assert!(remembered(&["EXPLAIN SELECT pg_advisory_lock(1)"]).is_empty());
+        assert!(remembered(&["CREATE FUNCTION f() RETURNS void AS 'SELECT pg_advisory_lock(1)' LANGUAGE sql"]).is_empty());
+        assert_eq!(lock_taken("EXPLAIN SELECT pg_try_advisory_lock(1)", None), None);
     }
 
     #[test]

@@ -16,11 +16,14 @@ mod plan;
 pub(super) mod queries;
 #[cfg(feature = "mysql")]
 pub(super) mod session;
+pub(super) mod server;
 mod versions;
+mod wkb;
 
 use super::backend::{Backend, Capabilities};
 use super::dialect::{SqlDialect, LexerRules, Placeholders, Plan, hex_digits};
 use crate::language::TokenKind;
+use server::{Feature, Server};
 
 pub struct MySql;
 
@@ -78,6 +81,15 @@ impl Backend for MySql {
     }
     fn version_query(&self) -> &'static str {
         "SELECT VERSION()"
+    }
+    /// Aurora's `VERSION()` is its MySQL's (`8.0.28`): its own version, in
+    /// `@@aurora_version`, says it's Aurora (`8.0.28-mysql_aurora.3.04.0`).
+    /// Elsewhere the variable doesn't exist, and this fails.
+    fn version_query_first(&self) -> Option<&'static str> {
+        Some("SELECT CONCAT(VERSION(), '-mysql_aurora.', @@aurora_version)")
+    }
+    fn support(&self, version: &str) -> crate::db::server::Support {
+        Server::of(version).support(version)
     }
     fn sql_mode_query(&self) -> Option<&'static str> {
         Some("SELECT @@SESSION.sql_mode")
@@ -165,6 +177,10 @@ impl Backend for MySql {
 }
 
 impl SqlDialect for MySql {
+    fn has_delimiter_command(&self) -> bool {
+        true
+    }
+
     fn load_queries(&self) -> &'static [(&'static str, &'static str)] {
         &[
             ("Connections", "SHOW GLOBAL STATUS LIKE 'Threads_connected'"),
@@ -277,6 +293,13 @@ impl SqlDialect for MySql {
             .iter()
             .any(|t| ty.eq_ignore_ascii_case(t))
     }
+    fn typed_literal(&self, value: &str, ty: &str) -> Option<String> {
+        // A spatial value, shown as WKT: its bytes as MySQL keeps them.
+        if ty.eq_ignore_ascii_case("GEOMETRY") {
+            return wkb::from_wkt(value).map(|bytes| self.hex(&bytes));
+        }
+        None
+    }
     fn binary_literal(&self, shown: &str) -> Option<String> {
         let digits = shown.strip_prefix("0x")?;
         if digits.is_empty() {
@@ -287,19 +310,20 @@ impl SqlDialect for MySql {
     /// FORMAT=TREE where the server has it (MySQL 8.0.16+); older MySQL
     /// and MariaDB get the classic table.
     fn explain(&self, stmt: &str, version: &str) -> String {
-        match Server::of(version) {
-            Server::MySql(v) if v < (8, 0, 16) => format!("EXPLAIN {stmt}"),
-            Server::MariaDb => format!("EXPLAIN {stmt}"),
-            Server::MySql(_) => format!("EXPLAIN FORMAT=TREE {stmt}"),
+        if Server::of(version).has(Feature::ExplainTree) {
+            format!("EXPLAIN FORMAT=TREE {stmt}")
+        } else {
+            format!("EXPLAIN {stmt}")
         }
     }
     /// The classic table: every index it could use, how much of a key it
     /// uses, rows per table. Named only from 8.0.32, where `explain_format`
     /// can make a bare EXPLAIN something else.
     fn explain_to_read(&self, stmt: &str, version: &str) -> String {
-        match Server::of(version) {
-            Server::MySql(v) if v >= (8, 0, 32) => format!("EXPLAIN FORMAT=TRADITIONAL {stmt}"),
-            _ => format!("EXPLAIN {stmt}"),
+        if Server::of(version).has(Feature::ExplainTraditional) {
+            format!("EXPLAIN FORMAT=TRADITIONAL {stmt}")
+        } else {
+            format!("EXPLAIN {stmt}")
         }
     }
     fn too_new(&self, sql: &str, version: &str) -> Option<crate::db::dialect::TooNew> {
@@ -309,10 +333,13 @@ impl SqlDialect for MySql {
     /// that way; MariaDB's is ANALYZE (a table with the actual rows next to
     /// the estimates).
     fn explain_analyze(&self, stmt: &str, version: &str) -> Option<String> {
-        match Server::of(version) {
-            Server::MySql(v) if v < (8, 0, 18) => None,
-            Server::MariaDb => Some(format!("ANALYZE {stmt}")),
-            Server::MySql(_) => runs_under_explain_analyze(stmt).then(|| format!("EXPLAIN ANALYZE {stmt}")),
+        let server = Server::of(version);
+        if !server.has(Feature::ExplainAnalyze) {
+            None
+        } else if server.is_mariadb() {
+            Some(format!("ANALYZE {stmt}"))
+        } else {
+            runs_under_explain_analyze(stmt).then(|| format!("EXPLAIN ANALYZE {stmt}"))
         }
     }
     /// FORMAT=TREE is already a readable tree; the classic table is lined
@@ -326,7 +353,7 @@ impl SqlDialect for MySql {
     /// Where `explain` gives the tree (MySQL 8.0.16+): the classic table
     /// doesn't say what a statement returns.
     fn plans_rows(&self, version: &str) -> bool {
-        matches!(Server::of(version), Server::MySql(v) if v >= (8, 0, 16))
+        Server::of(version).has(Feature::ExplainTree)
     }
     /// The tree's top step's. (The classic table has a row
     /// per table read, which says nothing of what comes out of a join.)
@@ -355,28 +382,6 @@ impl SqlDialect for MySql {
     fn modify_column(&self, table: &str, column: &str, data_type: &str, nullable: bool) -> Option<String> {
         let null = if nullable { "NULL" } else { "NOT NULL" };
         Some(format!("ALTER TABLE {table} MODIFY COLUMN {column} {data_type} {null}"))
-    }
-}
-
-/// The kind of server, from its version string (`8.0.36`, `5.7.44-log`,
-/// `10.11.6-MariaDB-0+deb12u1`).
-#[derive(Debug, PartialEq)]
-enum Server {
-    MySql((u32, u32, u32)),
-    MariaDb,
-}
-
-impl Server {
-    /// A version that can't be read is taken to be a current MySQL.
-    fn of(version: &str) -> Self {
-        if version.to_ascii_lowercase().contains("mariadb") {
-            return Server::MariaDb;
-        }
-        let mut parts = version.split(|c: char| !c.is_ascii_digit()).map(|p| p.parse::<u32>().ok());
-        match (parts.next().flatten(), parts.next().flatten(), parts.next().flatten()) {
-            (Some(major), Some(minor), patch) => Server::MySql((major, minor, patch.unwrap_or(0))),
-            _ => Server::MySql((u32::MAX, 0, 0)),
-        }
     }
 }
 

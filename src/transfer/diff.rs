@@ -215,7 +215,10 @@ fn create(table: &TableShape, schema: &str, from: Engine, engine: Engine) -> Vec
     let same_engine = from == engine;
     if table.info.is_view {
         return match table.details.as_ref().and_then(|d| d.definition.as_deref()) {
-            Some(def) if same_engine => vec![format!("CREATE VIEW {name} AS {};", def.trim().trim_end_matches(';'))],
+            Some(def) if same_engine => {
+                let what = if table.info.materialized { "MATERIALIZED VIEW" } else { "VIEW" };
+                vec![format!("CREATE {what} {name} AS {};", def.trim().trim_end_matches(';'))]
+            }
             _ => vec![format!("-- view {name}: copy its definition by hand")],
         };
     }
@@ -327,7 +330,11 @@ pub fn schema_diff(here: &[TableShape], there: &[TableShape], this: Side, other:
         }
     }
     for (_, table) in &extra {
-        let what = if table.info.is_view { "VIEW" } else { "TABLE" };
+        let what = match (table.info.is_view, table.info.materialized) {
+            (true, true) => "MATERIALIZED VIEW",
+            (true, false) => "VIEW",
+            _ => "TABLE",
+        };
         let _ = write!(sql, "\n-- DROP {what} {};\n", qualified(other.engine, &table.info.schema, &table.info.name));
     }
     let differences = missing.len() + extra.len() + altered.iter().map(|(_, c)| c.lines.len()).sum::<usize>();
@@ -452,6 +459,7 @@ mod tests {
                 bytes: None,
                 system: false,
                 partition_of: None,
+                materialized: false,
             },
             columns,
             details: Some(TableDetails { indexes, ..TableDetails::default() }),
@@ -507,6 +515,24 @@ mod tests {
         ] {
             assert!(diff.sql.contains(expected), "missing {expected:?} in\n{}", diff.sql);
         }
+    }
+
+    #[test]
+    fn a_materialized_view_is_made_and_dropped_as_one() {
+        let mv = |schema: &str| {
+            let mut t = table(schema, "totals", vec![col("n", "bigint", true, false)], vec![]);
+            t.info.is_view = true;
+            t.info.materialized = true;
+            t.details = Some(TableDetails {
+                definition: Some("SELECT count(*) AS n FROM orders".into()),
+                ..TableDetails::default()
+            });
+            t
+        };
+        let made = schema_diff(&[mv("public")], &[], PG, PG_PROD).sql;
+        assert!(made.contains("CREATE MATERIALIZED VIEW totals AS SELECT count(*) AS n FROM orders;"), "{made}");
+        let dropped = schema_diff(&[], &[mv("prod")], PG, PG_PROD).sql;
+        assert!(dropped.contains("-- DROP MATERIALIZED VIEW ") && dropped.contains("totals;"), "{dropped}");
     }
 
     #[test]

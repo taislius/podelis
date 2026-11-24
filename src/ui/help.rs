@@ -65,50 +65,70 @@ fn query_help(app: &App) -> Vec<(&'static str, Vec<(String, String)>)> {
     out
 }
 
+/// The projects screen's help: which commands each line is about.
+pub(super) fn projects_help() -> Vec<(&'static [crate::app::manager_keys::ProjectsKey], &'static str)> {
+    use crate::app::manager_keys::ProjectsKey as P;
+    vec![
+        (&[P::Open], t!("help.open_project")),
+        (&[P::New, P::Rename, P::Delete], t!("help.new_rename_delete")),
+        (&[P::NextPane, P::PrevPane], t!("help.next_pane_round")),
+        (&[P::Connections], t!("help.its_connections")),
+        (&[P::Back], t!("help.back_to_tabs")),
+    ]
+}
+
+/// The connections screen's help, as `projects_help`.
+pub(super) fn connections_help() -> Vec<(&'static [crate::app::manager_keys::ConnectionsKey], &'static str)> {
+    use crate::app::manager_keys::ConnectionsKey as C;
+    vec![
+        (&[C::Connect], t!("help.connect")),
+        (&[C::NewTab], t!("help.new_tab")),
+        (&[C::Edit], t!("help.edit_settings")),
+        (&[C::New, C::Delete, C::Move], t!("help.new_delete_move")),
+        (&[C::Containers], t!("help.containers")),
+        (&[C::Projects], t!("hint.projects")),
+        (&[C::Back], t!("help.back_to_tabs")),
+    ]
+}
+
+/// Help lines with their keys from the screen's table.
+fn manager_help<C: PartialEq + Copy + 'static>(
+    table: crate::app::manager_keys::Table<C>,
+    lines: Vec<(&'static [C], &'static str)>,
+) -> Vec<(String, &'static str)> {
+    lines.into_iter().map(|(commands, what)| (crate::app::manager_keys::all_keys(table, commands), what)).collect()
+}
+
 /// The keys of the screen by section, as (keys, what they do).
 pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String)>)> {
-    let sections: Vec<(&'static str, Vec<(&str, &str)>)> = match app.screen {
+    use crate::app::manager_keys::{CONNECTIONS_KEYS, PROJECTS_KEYS};
+    let sections: Vec<(&'static str, Vec<(String, &str)>)> = match app.screen {
         Screen::Query => return query_help(app),
         Screen::Projects | Screen::Connections | Screen::Connect => vec![
             (
                 t!("help.projects"),
-                vec![
-                    ("↵", t!("help.open_project")),
-                    ("n · r · d", t!("help.new_rename_delete")),
-                    ("Tab / Shift+Tab", t!("help.next_pane_round")),
-                    ("→", t!("help.its_connections")),
-                    ("Esc", t!("help.back_to_tabs")),
-                    ("Ctrl+Q", t!("help.quit")),
-                ],
+                manager_help(PROJECTS_KEYS, projects_help())
+                    .into_iter()
+                    .chain([("Ctrl+Q".to_string(), t!("help.quit"))])
+                    .collect(),
             ),
-            (
-                t!("help.connections"),
-                vec![
-                    ("↵", t!("help.connect")),
-                    ("t", t!("help.new_tab")),
-                    ("e · →", t!("help.edit_settings")),
-                    ("n · d · m", t!("help.new_delete_move")),
-                    ("c", t!("help.containers")),
-                    ("←", t!("hint.projects")),
-                    ("Esc", t!("help.back_to_tabs")),
-                ],
-            ),
+            (t!("help.connections"), manager_help(CONNECTIONS_KEYS, connections_help())),
             (
                 t!("help.settings"),
                 vec![
-                    ("↑↓", t!("help.fields")),
-                    ("← →", t!("help.change_option")),
-                    ("↵ · Ctrl+S", t!("help.connect_save")),
-                    ("Ctrl+T", t!("help.test")),
-                    (t!("help.key_paste_url"), t!("help.fills_form")),
-                    ("Esc", t!("help.back_to_connections")),
+                    ("↑↓".to_string(), t!("help.fields")),
+                    ("← →".to_string(), t!("help.change_option")),
+                    (format!("↵ · {}", crate::app::ctrl_words(crate::app::SAVE_KEY)), t!("help.connect_save")),
+                    (crate::app::ctrl_words(crate::app::TEST_KEY), t!("help.test")),
+                    (t!("help.key_paste_url").to_string(), t!("help.fills_form")),
+                    ("Esc".to_string(), t!("help.back_to_connections")),
                 ],
             ),
         ],
     };
     sections
         .into_iter()
-        .map(|(title, keys)| (title, keys.into_iter().map(|(k, w)| (k.to_string(), w.to_string())).collect()))
+        .map(|(title, keys)| (title, keys.into_iter().map(|(k, w)| (k, w.to_string())).collect()))
         .collect()
 }
 

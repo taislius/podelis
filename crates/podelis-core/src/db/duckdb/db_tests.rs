@@ -20,6 +20,7 @@ fn params(path: &std::path::Path, read_only: bool) -> ConnectParams {
         password: String::new(),
         database: String::new(),
         ssl_mode: SslMode::Disable,
+        tls: crate::db::TlsFiles::default(),
         read_only,
         ssh: None,
         password_command: Vec::new(),

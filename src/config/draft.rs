@@ -23,6 +23,10 @@ pub struct ConnectionDraft {
     pub password_command: String,
     pub database: String,
     pub ssl_mode: SslMode,
+    /// TLS's CA file, client certificate and key, as typed; empty for none.
+    pub tls_ca: String,
+    pub tls_cert: String,
+    pub tls_key: String,
     pub mode: ConnectionMode,
     /// The transaction mode chosen for the connection; None follows the
     /// mode's default (see [`ConnectionDraft::tx_mode`]).
@@ -55,6 +59,7 @@ impl ConnectionDraft {
             && same(&self.ssh, &other.ssh)
             && same(&self.password_command, &other.password_command)
             && self.ssl_mode == other.ssl_mode
+            && self.tls() == other.tls()
             && self.mode == other.mode
     }
 
@@ -70,6 +75,9 @@ impl ConnectionDraft {
             password_command: String::new(),
             database: String::new(),
             ssl_mode: SslMode::default(),
+            tls_ca: String::new(),
+            tls_cert: String::new(),
+            tls_key: String::new(),
             mode: ConnectionMode::default(),
             transaction: None,
             ssh: String::new(),
@@ -89,6 +97,9 @@ impl ConnectionDraft {
             password_command: crate::db::password_command::join(&profile.password_command),
             database: profile.database.clone(),
             ssl_mode: profile.ssl_mode,
+            tls_ca: profile.tls.ca.clone().unwrap_or_default(),
+            tls_cert: profile.tls.cert.clone().unwrap_or_default(),
+            tls_key: profile.tls.key.clone().unwrap_or_default(),
             mode: profile.mode,
             transaction: profile.transaction,
             ssh: profile.ssh.clone(),
@@ -138,6 +149,7 @@ impl ConnectionDraft {
             user: self.user.clone(),
             database: self.database.clone(),
             ssl_mode: self.ssl_mode,
+            tls: self.tls(),
             mode: self.mode,
             // Only a choice: the mode's default follows the mode.
             transaction: self.transaction.filter(|t| *t != TxMode::for_connection(self.mode)),
@@ -213,6 +225,7 @@ impl ConnectionDraft {
         self.user = decode(url.username());
         self.password = url.password().map(decode).unwrap_or_default();
         self.database = decode(url.path().trim_start_matches('/'));
+        let mut system_cas = false;
         for (key, value) in url.query_pairs() {
             if matches!(key.as_ref(), "sslmode" | "ssl-mode" | "ssl_mode") {
                 self.ssl_mode = match value.to_ascii_lowercase().replace('_', "-").as_str() {
@@ -223,8 +236,30 @@ impl ConnectionDraft {
                     _ => SslMode::Prefer,
                 };
             }
+            // libpq's names, and the mysql client's.
+            match key.as_ref() {
+                // libpq's word for the system's CAs, not a file: it means
+                // the server's verified fully with them (whatever `sslmode`
+                // says, before or after it: set once all are read).
+                "sslrootcert" if value.eq_ignore_ascii_case("system") => {
+                    self.tls_ca.clear();
+                    system_cas = true;
+                }
+                "sslrootcert" | "ssl-ca" | "ssl_ca" => self.tls_ca = value.to_string(),
+                "sslcert" | "ssl-cert" | "ssl_cert" => self.tls_cert = value.to_string(),
+                "sslkey" | "ssl-key" | "ssl_key" => self.tls_key = value.to_string(),
+                _ => {}
+            }
+        }
+        if system_cas {
+            self.ssl_mode = SslMode::VerifyFull;
         }
         Ok(())
+    }
+
+    /// The TLS files as typed.
+    pub fn tls(&self) -> crate::db::TlsFiles {
+        crate::db::TlsFiles::typed(&self.tls_ca, &self.tls_cert, &self.tls_key)
     }
 
     /// The query timeout, if one is set.
@@ -256,6 +291,7 @@ impl ConnectionDraft {
                 password: String::new(),
                 database: String::new(),
                 ssl_mode: SslMode::Disable,
+                tls: crate::db::TlsFiles::default(),
                 read_only: self.mode == ConnectionMode::ReadOnly,
                 ssh: None,
                 password_command: Vec::new(),
@@ -280,6 +316,7 @@ impl ConnectionDraft {
             password,
             database: self.database.trim().to_string(),
             ssl_mode: self.ssl_mode,
+            tls: self.tls(),
             read_only: self.mode == ConnectionMode::ReadOnly,
             ssh,
             password_command,

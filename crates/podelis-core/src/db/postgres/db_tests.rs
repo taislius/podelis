@@ -183,6 +183,27 @@ async fn live_postgres_partitions_name_their_parent() {
 }
 
 #[tokio::test]
+async fn live_postgres_materialized_views_are_listed_with_their_columns() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    db.run(
+        "DROP MATERIALIZED VIEW IF EXISTS mv_totals; \
+         CREATE MATERIALIZED VIEW mv_totals AS \
+           SELECT 3::int AS z, 'a'::varchar(12) AS name, 1.5::numeric(6,2) AS amount",
+        DEFAULT_ROW_LIMIT,
+    )
+    .await
+    .unwrap();
+    let catalog = db.catalog(false).await.unwrap();
+    let (view, columns) = catalog.iter().find(|(t, _)| t.name == "mv_totals").expect("mv_totals listed");
+    assert!(view.is_view && view.materialized && !view.system);
+    let columns: Vec<(&str, &str)> = columns.iter().map(|c| (c.name.as_str(), c.data_type.as_str())).collect();
+    assert_eq!(columns, [("z", "int4"), ("name", "varchar(12)"), ("amount", "numeric(6,2)")], "in their order");
+    let details = db.table_details("public", "mv_totals").await.unwrap();
+    assert!(details.definition.is_some_and(|d| d.contains("amount")));
+    db.run("DROP MATERIALIZED VIEW mv_totals", DEFAULT_ROW_LIMIT).await.unwrap();
+}
+
+#[tokio::test]
 async fn live_own_session_postgres() {
     crate::db::tests::live_own_session(Engine::Postgres, "SELECT pg_sleep(2)", "SELECT pg_terminate_backend({pid})").await;
 }
@@ -342,4 +363,201 @@ async fn live_a_runs_settings_are_read_against_the_transaction_before_it() {
     db.run("SET application_name = 'podelis_before'; BEGIN", 1).await.unwrap();
     assert!(lost(&db).iter().any(|l| l.contains("application_name")), "{:?}", lost(&db));
     db.run("ROLLBACK", 1).await.unwrap();
+}
+
+#[tokio::test]
+async fn live_postgres_details_have_check_constraints() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    db.run("DROP TABLE IF EXISTS checked_orders; CREATE TABLE checked_orders (total int CONSTRAINT positive CHECK (total > 0))", DEFAULT_ROW_LIMIT)
+        .await
+        .unwrap();
+    let details = db.table_details("public", "checked_orders").await.unwrap();
+    assert_eq!(details.checks.len(), 1, "{:?}", details.checks);
+    assert_eq!(details.checks[0].name, "positive");
+    assert!(details.checks[0].definition.starts_with("CHECK") && details.checks[0].definition.contains("total > 0"));
+    db.run("DROP TABLE checked_orders", DEFAULT_ROW_LIMIT).await.unwrap();
+}
+
+/// One value of each kind of type there is, as `psql` shows it: a new
+/// server's new way of sending one fails here, not in someone's grid.
+#[tokio::test]
+async fn live_postgres_shows_every_kind_of_type_as_text() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    let values: &[(&str, &str)] = &[
+        ("1::int2", "1"),
+        ("9007199254740993::int8", "9007199254740993"),
+        ("1.10::numeric(5,2)", "1.10"),
+        ("'NaN'::numeric", "NaN"),
+        ("1.5::float8", "1.5"),
+        ("'$1.50'::money", "$1.50"),
+        ("'ž'::char(2)", "ž "),
+        ("'2024-02-29'::date", "2024-02-29"),
+        ("'infinity'::timestamp", "infinity"),
+        ("'2024-01-01 12:00+00'::timestamptz", "2024-01-01 14:00:00+02"),
+        ("'12:30+00'::timetz", "12:30:00+00"),
+        ("'1 year 2 days'::interval", "1 year 2 days"),
+        ("'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"),
+        ("'192.168.0.1/24'::inet", "192.168.0.1/24"),
+        ("'08:00:2b:01:02:03'::macaddr", "08:00:2b:01:02:03"),
+        ("B'101'::bit(3)", "101"),
+        ("'[1,5)'::int4range", "[1,5)"),
+        ("'(1,2)'::point", "(1,2)"),
+        ("'<a/>'::xml", "<a/>"),
+        ("'a fat cat'::tsvector", "'a' 'cat' 'fat'"),
+        ("ARRAY[[1,2],[3,4]]", "{{1,2},{3,4}}"),
+        ("ROW(1, 'x')", "(1,x)"),
+        ("'{\"a\": [1, null]}'::json", "{\"a\": [1, null]}"),
+        ("'\\x00ff'::bytea", "\\x00ff"),
+    ];
+    // The session's zone, for timestamptz.
+    db.run("SET TIME ZONE 'Europe/Vilnius'", DEFAULT_ROW_LIMIT).await.unwrap();
+    for (sql, shown) in values {
+        let o = db.run(&format!("SELECT {sql}"), DEFAULT_ROW_LIMIT).await.unwrap_or_else(|e| panic!("{sql}: {e:#}"));
+        assert_eq!(cells(&o), vec![vec![Some(*shown)]], "{sql}");
+    }
+    db.run("RESET TIME ZONE", DEFAULT_ROW_LIMIT).await.unwrap();
+}
+
+#[tokio::test]
+async fn live_postgres_lists_triggers_sequences_and_types_with_their_definitions() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    db.run(
+        "DROP SCHEMA IF EXISTS podelis_obj CASCADE; CREATE SCHEMA podelis_obj; SET search_path = podelis_obj;
+         CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
+         CREATE DOMAIN positive AS int NOT NULL CHECK (VALUE > 0);
+         CREATE TYPE pair AS (a int, b text);
+         CREATE SEQUENCE tickets START 100;
+         CREATE TABLE logged (id serial, m mood);
+         CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END';
+         CREATE TRIGGER logged_touch BEFORE INSERT ON logged FOR EACH ROW EXECUTE FUNCTION touch();
+         CREATE TABLE parted (id int) PARTITION BY RANGE (id);
+         CREATE TABLE parted_a PARTITION OF parted FOR VALUES FROM (0) TO (10);
+         CREATE TABLE parted_b PARTITION OF parted FOR VALUES FROM (10) TO (20);
+         CREATE TRIGGER parted_touch BEFORE INSERT ON parted FOR EACH ROW EXECUTE FUNCTION touch();",
+        DEFAULT_ROW_LIMIT,
+    )
+    .await
+    .unwrap();
+    let objects = db.routines().await.unwrap();
+    let ours: Vec<(&str, &str)> = objects
+        .iter()
+        .filter(|r| r.schema == "podelis_obj")
+        .map(|r| (r.name.as_str(), r.kind.as_str()))
+        .collect();
+    for wanted in [
+        ("mood", "enum"),
+        ("positive", "domain"),
+        ("pair", "type"),
+        ("tickets", "sequence"),
+        ("logged_touch (logged)", "trigger"),
+        ("touch()", "function"),
+    ] {
+        assert!(ours.contains(&wanted), "{wanted:?} in {ours:?}");
+    }
+    assert!(!ours.iter().any(|(n, _)| n.starts_with("logged_id_seq")), "a serial's own sequence isn't listed");
+    let parted: Vec<_> = ours.iter().filter(|(n, _)| n.starts_with("parted_touch")).collect();
+    assert_eq!(parted, [&("parted_touch (parted)", "trigger")], "the parent's, not each partition's copy");
+    let def = |name: &str| {
+        let r = objects.iter().find(|r| r.schema == "podelis_obj" && r.name == name).unwrap().clone();
+        let db = db.clone();
+        async move { db.routine_definition(&r).await.unwrap() }
+    };
+    assert!(def("mood").await.contains("ENUM ('sad', 'ok', 'happy')"));
+    let positive = def("positive").await;
+    assert!(positive.contains("NOT NULL") && positive.contains("CHECK"), "{positive}");
+    assert_eq!(positive.matches("NOT NULL").count(), 1, "said once: {positive}");
+    assert!(def("pair").await.contains("b text"));
+    assert!(def("tickets").await.contains("START WITH 100"));
+    // (The table's schema is left off while it's on the search path.)
+    let trigger = def("logged_touch (logged)").await;
+    assert!(trigger.contains("BEFORE INSERT ON") && trigger.contains("logged"), "{trigger}");
+    db.run("DROP SCHEMA podelis_obj CASCADE; RESET search_path", DEFAULT_ROW_LIMIT).await.unwrap();
+}
+
+#[tokio::test]
+async fn live_postgres_notices_are_kept_for_the_app() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    let _ = db.take_notices();
+    let o = db
+        .run("DO $$ BEGIN RAISE NOTICE 'counted %', 3; RAISE WARNING 'careful'; END $$", DEFAULT_ROW_LIMIT)
+        .await
+        .unwrap();
+    assert_eq!(o.notices, ["NOTICE: counted 3", "WARNING: careful"], "with the run's own outcome");
+    assert!(db.take_notices().is_empty(), "not left waiting too");
+    // What Podėlis's own statements left on the session isn't the next run's.
+    db.with_session(|session| {
+        Box::pin(async move {
+            let _ = session.run("DO $$ BEGIN RAISE NOTICE 'podelis own'; END $$", 1).await;
+        })
+    })
+    .await
+    .unwrap();
+    let o = db.run("SELECT 1", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert!(o.notices.is_empty(), "{:?}", o.notices);
+    // A streamed read's, with its first page.
+    db.run("CREATE OR REPLACE FUNCTION podelis_says() RETURNS int LANGUAGE plpgsql AS \
+            'BEGIN RAISE NOTICE ''said''; RETURN 1; END'", DEFAULT_ROW_LIMIT)
+        .await
+        .unwrap();
+    let (o, _) = db.run_streaming("SELECT podelis_says()", 10).await.unwrap();
+    assert_eq!(o.notices, ["NOTICE: said"]);
+    db.run("DROP FUNCTION podelis_says()", DEFAULT_ROW_LIMIT).await.unwrap();
+    // A failing run's notices before it failed are kept too.
+    let failed = db.run("DO $$ BEGIN RAISE NOTICE 'before'; RAISE EXCEPTION 'no'; END $$", DEFAULT_ROW_LIMIT).await;
+    assert!(failed.is_err());
+    assert_eq!(db.take_notices(), ["NOTICE: before"]);
+}
+
+/// A session advisory lock outlives a ROLLBACK: remembered all the same.
+#[tokio::test]
+async fn live_an_advisory_lock_in_a_rolled_back_transaction_is_remembered() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    db.run("BEGIN; SELECT pg_advisory_lock(4242); ROLLBACK", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert!(db.remembered().iter().any(|s| s == "advisory locks"), "{:?}", db.remembered());
+    db.run("SELECT pg_advisory_unlock_all()", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert!(!db.remembered().iter().any(|s| s == "advisory locks"));
+    // In a run that fails after it, too.
+    assert!(db.run("SELECT pg_advisory_lock(4243); SELECT 1/0", DEFAULT_ROW_LIMIT).await.is_err());
+    assert!(db.remembered().iter().any(|s| s == "advisory locks"), "{:?}", db.remembered());
+    db.run("SELECT pg_advisory_unlock_all()", DEFAULT_ROW_LIMIT).await.unwrap();
+    // A try that another session's lock turns down: not held, not said.
+    let Some(other) = live_db(Engine::Postgres).await else { return };
+    other.run("SELECT pg_advisory_lock(4244)", DEFAULT_ROW_LIMIT).await.unwrap();
+    let o = db.run("SELECT pg_try_advisory_lock(4244)", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert_eq!(cells(&o), vec![vec![Some("false")]]);
+    assert!(!db.remembered().iter().any(|s| s == "advisory locks"), "{:?}", db.remembered());
+    other.run("SELECT pg_advisory_unlock_all()", DEFAULT_ROW_LIMIT).await.unwrap();
+    // A statement that fails after taking one: held all the same, by a
+    // run and streamed. (Divided by what's known only as it runs: `1/0`
+    // fails while being planned, before the lock is taken.)
+    assert!(db.run("SELECT pg_advisory_lock(4247), 1 / (pg_backend_pid() * 0)", DEFAULT_ROW_LIMIT).await.is_err());
+    let held = db.run("SELECT count(*)::text FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid()", 1);
+    assert_eq!(cells(&held.await.unwrap()), vec![vec![Some("1")]], "the server holds it");
+    assert!(db.remembered().iter().any(|s| s == "advisory locks"), "{:?}", db.remembered());
+    db.run("SELECT pg_advisory_unlock_all()", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert!(db.run_streaming("SELECT pg_advisory_lock(4248), 1 / (pg_backend_pid() * 0)", 10).await.is_err());
+    assert!(db.remembered().iter().any(|s| s == "advisory locks"), "{:?}", db.remembered());
+    db.run("SELECT pg_advisory_unlock_all()", DEFAULT_ROW_LIMIT).await.unwrap();
+    // Streamed, as the app runs a lone read.
+    let (_, _) = db.run_streaming("SELECT pg_advisory_lock(4245)", 10).await.unwrap();
+    assert!(db.remembered().iter().any(|s| s == "advisory locks"), "{:?}", db.remembered());
+    db.run("SELECT pg_advisory_unlock_all()", DEFAULT_ROW_LIMIT).await.unwrap();
+    // Several rows, or the call not the only column: what came back says
+    // nothing, and the locks stay noted.
+    db.run("SELECT 1 AS id, pg_try_advisory_lock(4246)", DEFAULT_ROW_LIMIT).await.unwrap();
+    assert!(db.remembered().iter().any(|s| s == "advisory locks"), "{:?}", db.remembered());
+    db.run("SELECT pg_advisory_unlock_all()", DEFAULT_ROW_LIMIT).await.unwrap();
+}
+
+/// A check that finds another server session than the connection's, with
+/// no reconnect, says a pooler moved it.
+#[tokio::test]
+async fn live_a_server_session_that_changes_by_itself_is_said() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    db.check_now().await.unwrap();
+    assert!(!db.health().borrow().pooled, "the same session: no pooler");
+    // As a pooler would show it: the session's pid isn't the one it had.
+    db.0.backend_id.store(-1, std::sync::atomic::Ordering::SeqCst);
+    db.check_now().await.unwrap();
+    assert!(db.health().borrow().pooled);
 }

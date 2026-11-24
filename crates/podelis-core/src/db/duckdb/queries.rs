@@ -177,6 +177,7 @@ pub(in crate::db) async fn table_details(db: &Database, schema: &str, table: &st
             })
             .collect(),
         definition: definition.first().and_then(|r| r.first().cloned().flatten()),
+        checks: Vec::new(),
     })
 }
 

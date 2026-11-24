@@ -2,4 +2,5 @@
 //! the connections list and the connect form.
 
 pub mod connections;
+pub mod keys;
 pub mod projects;

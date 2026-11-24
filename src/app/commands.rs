@@ -261,13 +261,28 @@ pub(super) fn is_plain(key: KeyEvent) -> bool {
     (key.modifiers - KeyModifiers::SHIFT).is_empty()
 }
 
-fn key_label(code: KeyCode) -> String {
+/// A key as the footer and help name it.
+pub fn key_label(code: KeyCode) -> String {
     match code {
         KeyCode::Enter => "↵".to_string(),
         KeyCode::Char(' ') => "Space".to_string(),
         KeyCode::Char(c) => c.to_string(),
+        KeyCode::Right => "→".to_string(),
+        KeyCode::Left => "←".to_string(),
+        KeyCode::BackTab => "Shift+Tab".to_string(),
+        KeyCode::F(n) => format!("F{n}"),
         other => format!("{other:?}"),
     }
+}
+
+/// The first key of `command` in pane `here`, for its footer hint.
+pub fn pane_key(here: Here, command: Command) -> String {
+    keys_of(here)
+        .iter()
+        .flat_map(|keys| keys.iter())
+        .find(|(_, c)| *c == command)
+        .map(|&(code, _)| key_label(code))
+        .unwrap_or_default()
 }
 
 /// The pane's keys for help, a command's keys together: (keys, command).

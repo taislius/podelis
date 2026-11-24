@@ -5,7 +5,7 @@ use sqlx::mysql::MySqlRow;
 
 /// Formats a MySQL value. `raw_sql` uses the text protocol, so every value
 /// is its textual form; binary data is shown in hex (`0xDEADBEEF`), as is
-/// text that isn't UTF-8 or has control characters.
+/// text that isn't UTF-8 or has control characters; spatial values as WKT.
 pub(in crate::db) fn mysql_cell(row: &MySqlRow, idx: usize) -> Option<String> {
     let Ok(raw) = row.try_get_raw(idx) else {
         return Some("<error>".to_string());
@@ -17,6 +17,12 @@ pub(in crate::db) fn mysql_cell(row: &MySqlRow, idx: usize) -> Option<String> {
     let is_bit = ty == "BIT";
     let bytes: Vec<u8> = row.try_get_unchecked(idx).unwrap_or_default();
     let dialect = super::sql();
+    // Spatial values as WKT, as `ST_AsText` writes them.
+    if ty == "GEOMETRY"
+        && let Some(text) = super::wkb::wkt(&bytes)
+    {
+        return Some(text);
+    }
     if dialect.is_binary_type(&ty) {
         return Some(dialect.hex(&bytes));
     }

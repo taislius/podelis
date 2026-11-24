@@ -10,6 +10,7 @@ fn table(name: &str, columns: &[&str]) -> (TableInfo, Vec<ColumnInfo>) {
         bytes: None,
         system: false,
         partition_of: None,
+        materialized: false,
     };
     let cols = columns
         .iter()

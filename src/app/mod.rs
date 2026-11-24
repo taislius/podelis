@@ -44,8 +44,10 @@ mod conn_state;
 mod events;
 mod hits;
 mod input;
+pub(crate) mod key_table;
 mod list;
 mod manager;
+pub(crate) use manager::keys as manager_keys;
 mod mouse;
 pub(crate) mod query_screen;
 mod session;
@@ -61,7 +63,7 @@ use crate::config::draft::{ConnectionDraft, looks_like_url};
 pub use confirm::{Confirm, ConfirmAction};
 use events::{Background, ConnEvent, DbEventKind, RunEvent};
 pub use events::{DbEvent, Ping};
-pub use manager::connections::{ConnectField, ConnectForm, fields_for};
+pub use manager::connections::{ConnectField, ConnectForm, SAVE_KEY, TEST_KEY, ctrl_words, fields_for};
 pub use query_screen::navigator::details::{SchemaNode, SchemaPanel, SchemaSection, SchemaSort, SchemaTable};
 pub use query_screen::results::view::CellEdit;
 pub use query_screen::results::view::{NULL_TEXT, display_prefix, format_elapsed, visible_columns};
@@ -868,11 +870,13 @@ impl App {
                     self.help.visible = false;
                     self.help.scroll = 0;
                 }
-                KeyCode::Down | KeyCode::Char('j') => self.help.scroll = self.help.scroll.saturating_add(1),
-                KeyCode::Up | KeyCode::Char('k') => self.help.scroll = self.help.scroll.saturating_sub(1),
-                KeyCode::PageDown => self.help.scroll = self.help.scroll.saturating_add(10),
-                KeyCode::PageUp => self.help.scroll = self.help.scroll.saturating_sub(10),
-                _ => {}
+                _ => match key_table::movement(key) {
+                    Some(key_table::Move::Down) => self.help.scroll = self.help.scroll.saturating_add(1),
+                    Some(key_table::Move::Up) => self.help.scroll = self.help.scroll.saturating_sub(1),
+                    Some(key_table::Move::PageDown) => self.help.scroll = self.help.scroll.saturating_add(10),
+                    Some(key_table::Move::PageUp) => self.help.scroll = self.help.scroll.saturating_sub(10),
+                    _ => {}
+                },
             }
             return;
         }

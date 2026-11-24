@@ -41,6 +41,7 @@ fn system_tables_in_their_own_section() {
             bytes: None,
             system: true,
             partition_of: None,
+            materialized: false,
         };
         panel.tables.push(SchemaTable {
             info,
@@ -81,6 +82,7 @@ fn navigator_pages_reveals_expanded_columns_and_sorts() {
                 bytes: Some(1000 - i),
                 system: false,
                 partition_of: None,
+                materialized: false,
             },
             expanded: false,
             columns: (0..8).map(col).collect(),

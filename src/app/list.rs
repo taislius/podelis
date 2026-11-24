@@ -3,6 +3,8 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 
+use crate::app::key_table::{Move, movement};
+
 /// How a list moves.
 #[derive(Clone, Copy, Debug)]
 pub struct Nav {
@@ -36,17 +38,26 @@ pub fn step(selected: usize, len: usize, key: KeyEvent, nav: Nav) -> Option<usiz
     let last = len.checked_sub(1)?;
     let down = |s: usize| if nav.wrap && s >= last { 0 } else { (s + 1).min(last) };
     let up = |s: usize| if nav.wrap && s == 0 { last } else { s.saturating_sub(1) };
-    Some(match key.code {
-        KeyCode::Down => down(selected),
-        KeyCode::Up => up(selected),
-        KeyCode::Char('j') if nav.letters => down(selected),
-        KeyCode::Char('k') if nav.letters => up(selected),
-        KeyCode::Tab if nav.tab => down(selected),
-        KeyCode::BackTab if nav.tab => up(selected),
-        KeyCode::PageDown => (selected + PAGE).min(last),
-        KeyCode::PageUp => selected.saturating_sub(PAGE),
-        KeyCode::Home if nav.letters => 0,
-        KeyCode::End if nav.letters => last,
+    // A letter (`j`, `g`…) moves only a list that doesn't take typing, and
+    // only plain; the arrows and page keys with Ctrl or Alt too (some
+    // terminals send them so).
+    let step = if matches!(key.code, KeyCode::Char(_)) {
+        if !nav.letters {
+            return None;
+        }
+        movement(key)
+    } else {
+        movement(KeyEvent::new(key.code, crossterm::event::KeyModifiers::NONE))
+    };
+    Some(match (key.code, step) {
+        (KeyCode::Tab, _) if nav.tab => down(selected),
+        (KeyCode::BackTab, _) if nav.tab => up(selected),
+        (_, Some(Move::Down)) => down(selected),
+        (_, Some(Move::Up)) => up(selected),
+        (_, Some(Move::PageDown)) => (selected + PAGE).min(last),
+        (_, Some(Move::PageUp)) => selected.saturating_sub(PAGE),
+        (_, Some(Move::Home)) if nav.letters => 0,
+        (_, Some(Move::End)) if nav.letters => last,
         _ => return None,
     })
 }
@@ -68,6 +79,15 @@ mod tests {
         assert_eq!(step(0, 3, key(KeyCode::BackTab), Nav::MENU), Some(2));
         assert_eq!(step(1, 30, key(KeyCode::PageDown), Nav::SEARCHED), Some(11));
         assert_eq!(step(5, 30, key(KeyCode::End), Nav::LIST), Some(29));
+    }
+
+    #[test]
+    fn arrows_move_with_ctrl_or_alt_too_and_letters_only_plain() {
+        use crossterm::event::KeyModifiers;
+        let with = |code, m| KeyEvent::new(code, m);
+        assert_eq!(step(0, 3, with(KeyCode::Down, KeyModifiers::CONTROL), Nav::LIST), Some(1));
+        assert_eq!(step(0, 30, with(KeyCode::PageDown, KeyModifiers::ALT), Nav::LIST), Some(10));
+        assert_eq!(step(0, 3, with(KeyCode::Char('j'), KeyModifiers::CONTROL), Nav::LIST), None);
     }
 
     #[test]

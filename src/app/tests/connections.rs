@@ -135,6 +135,7 @@ async fn picking_a_database_container_fills_in_a_new_connection() {
         user: "app".into(),
         database: "shop".into(),
         ssl_mode: crate::db::SslMode::Prefer,
+        tls: crate::db::TlsFiles::default(),
         mode: ConnectionMode::Normal,
         transaction: None,
         ssh: String::new(),
@@ -584,6 +585,70 @@ fn connection_urls_fill_the_form() {
     assert_eq!(f.host, "local.db");
 
     assert!(f.apply_url("redis://x").unwrap_err().contains("Unsupported"));
+}
+
+#[test]
+fn tls_files_come_from_a_url_and_go_to_the_connection_and_the_saved_profile() {
+    let mut f = ConnectForm::new();
+    f.apply_url("postgresql://ann@db/sales?sslmode=verify-full&sslrootcert=~/ca.pem&sslcert=/c.pem&sslkey=/k.pem")
+        .unwrap();
+    let tls =
+        crate::db::TlsFiles { ca: Some("~/ca.pem".into()), cert: Some("/c.pem".into()), key: Some("/k.pem".into()) };
+    assert_eq!(f.params().unwrap().tls, tls);
+    let profile = f.to_profile();
+    assert_eq!(profile.tls, tls);
+    assert_eq!(crate::config::draft::ConnectionDraft::from_profile(&profile, String::new()).tls(), tls);
+    // MySQL's names, and none set: none saved.
+    f.apply_url("mysql://root@db/app?ssl-mode=verify_ca&ssl-ca=/ca.pem").unwrap();
+    assert_eq!(f.tls().ca.as_deref(), Some("/ca.pem"));
+    assert!(crate::db::TlsFiles::typed(" ", "", "").is_empty());
+    assert!(crate::db::TlsFiles::expanded("~/ca.pem").is_absolute());
+    // A CA file under `require` verifies the server with it.
+    let mut f = ConnectForm::new();
+    f.apply_url("postgresql://ann@db/sales?sslmode=require&sslrootcert=/ca.pem").unwrap();
+    assert_eq!(f.params().unwrap().tls_mode(), SslMode::VerifyCa);
+    f.tls_ca.clear();
+    assert_eq!(f.params().unwrap().tls_mode(), SslMode::Require);
+    // And under `prefer` (the default), as the mysql client takes --ssl-ca.
+    let mut f = ConnectForm::new();
+    f.apply_url("mysql://u@db/x?ssl-ca=/ca.pem").unwrap();
+    assert_eq!((f.ssl_mode, f.params().unwrap().tls_mode()), (SslMode::Prefer, SslMode::VerifyCa));
+    f.ssl_mode = SslMode::Disable;
+    assert_eq!(f.params().unwrap().tls_mode(), SslMode::Disable, "disable stays");
+    // A client certificate under `prefer`: TLS required, no plain fallback.
+    let mut f = ConnectForm::new();
+    f.tls_cert = "/c.pem".into();
+    assert_eq!((f.ssl_mode, f.params().unwrap().tls_mode()), (SslMode::Prefer, SslMode::Require));
+    // libpq's `sslrootcert=system`: the system's CAs, verified fully.
+    let mut f = ConnectForm::new();
+    f.apply_url("postgresql://u@db/x?sslmode=require&sslrootcert=system").unwrap();
+    assert_eq!((f.tls_ca.as_str(), f.params().unwrap().tls_mode()), ("", SslMode::VerifyFull));
+    // Whichever comes first in the URL.
+    let mut f = ConnectForm::new();
+    f.apply_url("postgresql://u@db/x?sslrootcert=system&sslmode=require").unwrap();
+    assert_eq!(f.params().unwrap().tls_mode(), SslMode::VerifyFull);
+}
+
+#[test]
+fn tls_files_are_offered_where_tls_is_required_or_one_is_set() {
+    // A server's form: a file's has no TLS (with DuckDB alone, none's built).
+    let Some(&server) = Engine::BUILT.iter().find(|e| !e.is_file_based()) else { return };
+    let mut f = ConnectForm::new();
+    f.engine = server;
+    let offered = |f: &ConnectForm| f.visible_fields().contains(&ConnectField::TlsCa);
+    f.ssl_mode = SslMode::Prefer;
+    assert!(!offered(&f));
+    f.ssl_mode = SslMode::VerifyFull;
+    assert!(offered(&f));
+    f.ssl_mode = SslMode::Disable;
+    f.tls_key = "/k.pem".into();
+    assert!(offered(&f), "one set stays in sight");
+    // Emptied while it has the focus: still there, till the focus moves.
+    f.focus = ConnectField::TlsKey;
+    f.tls_key.clear();
+    assert!(f.visible_fields().contains(&ConnectField::TlsKey));
+    f.focus = ConnectField::Host;
+    assert!(!offered(&f));
 }
 
 #[test]

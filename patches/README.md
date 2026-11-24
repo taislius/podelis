@@ -37,3 +37,27 @@ aws-lc-rs's); they're left in to keep the copy to its two changes.
 patch once a sqlx-mysql release has both fixes (`cargo update -p
 sqlx-mysql` shows a newer version), then check that Rfam still connects,
 and a MySQL 8 connection with SSL off right after the server restarts.
+
+## sqlx-postgres 0.9.0
+
+A copy of the published crate with one change and a lint: **notices
+kept for the client**. sqlx 0.9.0 only logs a server's notices
+(`RAISE NOTICE`, a DDL's `NOTICE`, warnings) to `tracing`; there's no way
+to get them. In `src/connection/stream.rs` (`recv`'s `NoticeResponse`)
+each is also kept on the stream as "SEVERITY: message" (its detail after
+it), the newest 200 and each at most 2000 characters, so a server sending
+them without end can't fill the memory (see podelis-planai's
+hostile-servers.md); `PgConnection::take_notices` (`src/connection/mod.rs`)
+hands them over. Podėlis takes them after each run
+(`postgres::driver::take_notices`) and shows them in the messages.
+
+The lint: `PgNumeric::size_hint` (`src/types/numeric.rs`) is used only
+with the `bigdecimal` feature, which Podėlis doesn't build; as a path
+dependency its dead-code warning isn't capped as a registry crate's is,
+so it's allowed when that feature is off.
+
+Upstream: notices have been asked for (a notice handler, as libpq's
+`PQsetNoticeReceiver`), not added. Remove the folder and its line in
+`[patch.crates-io]` if a release gives them some way; until then, a new
+sqlx-postgres version means copying it again and making the change again
+(search for "Podėlis" in the copy).

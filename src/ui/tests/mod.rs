@@ -102,6 +102,7 @@ pub(super) fn query_app() -> (App, tempfile::TempDir) {
             bytes: None,
             system: false,
             partition_of: None,
+            materialized: false,
         },
         expanded,
         columns,

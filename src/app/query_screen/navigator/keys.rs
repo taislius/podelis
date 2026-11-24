@@ -156,18 +156,20 @@ impl App {
         let Some(panel) = &mut self.connection.schema else { return };
         let nodes = panel.nodes();
         let Some(&node) = nodes.get(panel.selected) else { return };
-        match key.code {
-            KeyCode::Down | KeyCode::Char('j') => panel.selected = step_selectable(&nodes, panel.selected + 1, 1),
-            KeyCode::PageDown => panel.selected = step_selectable(&nodes, panel.selected + panel.page.max(1), -1),
-            KeyCode::PageUp => {
+        let Some(step) = crate::app::key_table::movement(key) else { return };
+        use crate::app::key_table::Move;
+        match step {
+            Move::Down => panel.selected = step_selectable(&nodes, panel.selected + 1, 1),
+            Move::PageDown => panel.selected = step_selectable(&nodes, panel.selected + panel.page.max(1), -1),
+            Move::PageUp => {
                 panel.selected = step_selectable(&nodes, panel.selected.saturating_sub(panel.page.max(1)), 1);
             }
-            KeyCode::Home | KeyCode::Char('g') => panel.selected = step_selectable(&nodes, 0, 1),
-            KeyCode::End | KeyCode::Char('G') => panel.selected = step_selectable(&nodes, nodes.len(), -1),
-            KeyCode::Up | KeyCode::Char('k') => {
+            Move::Home => panel.selected = step_selectable(&nodes, 0, 1),
+            Move::End => panel.selected = step_selectable(&nodes, nodes.len(), -1),
+            Move::Up => {
                 panel.selected = step_selectable(&nodes, panel.selected.saturating_sub(1), -1);
             }
-            KeyCode::Right | KeyCode::Char('l') => match node {
+            Move::Right => match node {
                 SchemaNode::Table(t) => {
                     panel.tables[t].expanded = true;
                     self.request_details(t);
@@ -175,13 +177,12 @@ impl App {
                 SchemaNode::Routine(r) => self.show_routine(r),
                 _ => {}
             },
-            KeyCode::Left | KeyCode::Char('h') => {
+            Move::Left => {
                 if let Some(t) = node.table() {
                     panel.tables[t].expanded = false;
                     panel.selected = panel.nodes().iter().position(|n| *n == SchemaNode::Table(t)).unwrap_or(0);
                 }
             }
-            _ => {}
         }
     }
 

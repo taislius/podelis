@@ -64,14 +64,15 @@ impl App {
         let page = usize::from(self.hits.messages.height.max(2) - 1);
         // From the newest, where the list starts.
         let at = self.notes.selected.unwrap_or(n);
-        let select = match key.code {
-            KeyCode::Up | KeyCode::Char('k') => at.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => (at + 1).min(n - 1),
-            KeyCode::PageUp => at.saturating_sub(page),
-            KeyCode::PageDown => (at + page).min(n - 1),
-            KeyCode::Home | KeyCode::Char('g') => 0,
-            KeyCode::End | KeyCode::Char('G') => n - 1,
-            KeyCode::Esc if self.notes.selected.is_some() => {
+        use crate::app::key_table::{Move, movement};
+        let select = match (key.code, movement(key)) {
+            (_, Some(Move::Up)) => at.saturating_sub(1),
+            (_, Some(Move::Down)) => (at + 1).min(n - 1),
+            (_, Some(Move::PageUp)) => at.saturating_sub(page),
+            (_, Some(Move::PageDown)) => (at + page).min(n - 1),
+            (_, Some(Move::Home)) => 0,
+            (_, Some(Move::End)) => n - 1,
+            (KeyCode::Esc, _) if self.notes.selected.is_some() => {
                 self.notes.selected = None;
                 return true;
             }

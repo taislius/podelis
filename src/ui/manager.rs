@@ -363,7 +363,8 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
         let inner = block.inner(area);
         f.render_widget(block, area);
         let mask = "•".repeat(form.password.chars().count());
-        let lines = form_lines(&Settings::from(form), Some(form.focus), &mask);
+        let fields = form.visible_fields();
+        let lines = form_lines(&Settings::from(form), Some((form.focus, &fields)), &mask);
         let n = lines.len() as u16;
         f.render_widget(Paragraph::new(lines), inner);
         // The cursor in the field being typed in.
@@ -382,7 +383,8 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
         if saved.is_some() && form.unsaved(saved) {
             keys.push(Span::styled(format!("{} ", t!("form.unsaved")), bold(theme().warn)));
         }
-        keys.push(Span::styled(t!("form.keys"), dim()));
+        let (save, test) = (crate::app::ctrl_words(crate::app::SAVE_KEY), crate::app::ctrl_words(crate::app::TEST_KEY));
+        keys.push(Span::styled(t!("form.keys", save = save, test = test), dim()));
         let keys = Paragraph::new(Line::from(keys)).wrap(Wrap { trim: true });
         let keys_width = inner.width.saturating_sub(2);
         let keys_height = u16::try_from(keys.line_count(keys_width)).unwrap_or(u16::MAX);
