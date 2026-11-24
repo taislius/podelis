@@ -30,6 +30,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `d` on a table (or one of its columns or indexes) shows its overview as before; `c` there shows it as the server writes it, and `c` again goes back. On MySQL that's `SHOW CREATE TABLE`; on PostgreSQL a `CREATE TABLE` written from the server's own functions, every name qualified, with identity columns (their sequence's options), generated and default columns, collations, every constraint whole (a foreign key with ON DELETE, ON UPDATE, DEFERRABLE; 18's named, NO INHERIT and NOT VALID NOT NULLs), the access method, storage parameters and tablespace, then the indexes and triggers no constraint made, replica identity, row-level security and its policies, and comments (on the table, its columns, constraints, indexes and triggers). A partition is written `PARTITION OF` its parent, a child `INHERITS`, a typed table `OF` its type, a foreign table with its server and options, a temporary table `TEMPORARY` (`pg_temp.` after). The server gives up on it after 5 s behind a lock; if it fails, the overview stays and why is said.
+- Foreign keys carry their ON DELETE and ON UPDATE everywhere: the navigator, agents, schema compare (a changed rule is one change). On MySQL, RESTRICT is its NO ACTION, so it isn't said on every key.
 - Each connection's session is owned by a task of its own (an actor), which runs what's asked of the session in turn. Nothing on screen changes.
 - A connection's supervisor reports what happened to it (it answers, it's lost and why, its session was reopened, it's closed), and that's what the status bar and the tabs show: the app no longer decides a connection is lost from the words of an error message.
 - A connection is kept by its supervisor: with the heartbeat on it checks an idle connection (a hidden tab's too); a lost one it checks again by itself at growing waits (5 s, doubling to a minute, a little jittered), reconnecting unless a transaction is open, and after five failed checks it pauses ("paused after 5 tries · R in the results (Ctrl+K s c elsewhere) tries again") rather than trying for hours. R checks at once and ends a pause.
@@ -70,6 +72,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Stepping (`←`/`→`) in a definition from a function on to a table: the function's text arriving late took over the table's popup. Now only the definition asked for last opens, and none once the popup's closed.
+- `d` on a table whose details weren't loaded showed nothing until they came, and then opened even if you'd closed it or moved to another table, under the wrong row. Now it says "Loading…" at once, and shows the definition only if it's still open on that table. If they fail, the popup says why, and another table's details failing no longer drops it.
 - A COMMIT in a PostgreSQL transaction that had failed was reported as committed, though the server rolled it back: the commit key now says to roll back, and a typed `COMMIT` says it was rolled back.
 - A grid's rows read on one connection could be edited or deleted after the tab moved to another database with a table of the same name, writing there: they're refused now (run the query again on the tab's connection).
 - Starting a SQLite file's sandbox deleted every sandbox's copy, another tab's or another Podėlis's open one too: each has a locked folder of its own now, and only those whose sandbox has ended are cleaned up.
