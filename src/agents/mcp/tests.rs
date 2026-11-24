@@ -113,6 +113,7 @@ async fn duckdb_for_agents_reaches_no_file() {
                 password: String::new(),
                 database: String::new(),
                 ssl_mode: crate::db::SslMode::Disable,
+                tls: crate::db::TlsFiles::default(),
                 read_only: false,
                 ssh: None,
                 password_command: Vec::new(),
