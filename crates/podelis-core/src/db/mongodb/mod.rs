@@ -104,6 +104,7 @@ impl Backend for MongoDb {
             // ("no dry run: … don't run in a transaction").
             ddl_commits: false,
             stores_create_sql: false,
+            server_ddl: false,
             table_sizes: false,
             plan_as_grid: false,
             copy_in: false,

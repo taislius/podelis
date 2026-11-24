@@ -154,6 +154,7 @@ impl Backend for MySql {
             server_txn_state: false,
             ddl_commits: true,
             stores_create_sql: false,
+            server_ddl: true,
             table_sizes: true,
             plan_as_grid: true,
             copy_in: false,

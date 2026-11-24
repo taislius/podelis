@@ -27,6 +27,9 @@ pub struct Capabilities {
     pub ddl_commits: bool,
     /// The catalog keeps each table's CREATE statement (SQLite).
     pub stores_create_sql: bool,
+    /// The server writes a table's CREATE TABLE (`table_ddl`): PostgreSQL's
+    /// from its functions, MySQL's SHOW CREATE TABLE.
+    pub server_ddl: bool,
     /// The catalog knows each table's size on disk (not SQLite).
     pub table_sizes: bool,
     /// A plan with several columns is a table worth a grid (MySQL's classic

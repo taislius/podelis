@@ -54,12 +54,19 @@ pub struct ForeignKey {
 impl ForeignKey {
     /// Its rules as SQL writes them, after the target: ` ON DELETE CASCADE`.
     pub fn actions(&self) -> String {
+        self.actions_where(false)
+    }
+
+    /// Its rules, RESTRICT left out with `restrict_is_no_action` (where
+    /// RESTRICT is how the engine says a rule left unsaid: MySQL).
+    pub fn actions_where(&self, restrict_is_no_action: bool) -> String {
         use std::fmt::Write as _;
+        let said = |r: &Option<String>| r.clone().filter(|r| !restrict_is_no_action || r != "RESTRICT");
         let mut out = String::new();
-        if let Some(rule) = &self.on_delete {
+        if let Some(rule) = said(&self.on_delete) {
             let _ = write!(out, " ON DELETE {rule}");
         }
-        if let Some(rule) = &self.on_update {
+        if let Some(rule) = said(&self.on_update) {
             let _ = write!(out, " ON UPDATE {rule}");
         }
         out

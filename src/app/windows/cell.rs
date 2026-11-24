@@ -14,6 +14,9 @@ pub enum CellKey {
     Copy,
     /// The text's SQL, or the rows it follows to, in a tab.
     Open,
+    /// A table's definition: its CREATE TABLE as the server writes it, or
+    /// back to the overview.
+    CreateTable,
 }
 
 pub const CELL_KEYS: Table<CellKey> = &[
@@ -24,6 +27,7 @@ pub const CELL_KEYS: Table<CellKey> = &[
     (KeyCode::Char('x'), CellKey::CloseRow),
     (KeyCode::Char('y'), CellKey::Copy),
     (KeyCode::Char('e'), CellKey::Open),
+    (KeyCode::Char('c'), CellKey::CreateTable),
 ];
 
 pub struct CellView {
@@ -41,6 +45,14 @@ pub struct CellView {
     /// A definition opened from the navigator (`d`): ←/→ show the previous
     /// or next table's, view's or function's.
     pub browse: bool,
+    /// A table's definition (`schema`, `table`) whose CREATE TABLE the
+    /// server writes: `c` shows it.
+    pub create_table: Option<(String, String)>,
+    /// Showing (or waiting for) that CREATE TABLE: the overview, for `c` to
+    /// go back to.
+    pub overview: Option<String>,
+    /// The CREATE TABLE request the text waits for.
+    pub awaiting: Option<u64>,
     /// `y` copies the text itself (a message), saying this.
     pub copies_text: Option<&'static str>,
     /// A row a foreign key points to (`f`): `e` opens its lookup (the
@@ -58,6 +70,9 @@ impl CellView {
             sql: None,
             max_scroll: u16::MAX,
             browse: false,
+            create_table: None,
+            overview: None,
+            awaiting: None,
             copies_text: None,
             follow: None,
         }
@@ -94,7 +109,11 @@ impl App {
         }
         let Some(command) = lookup(CELL_KEYS, key) else { return };
         match command {
-            CellKey::Close => self.popups.cell_view = None,
+            CellKey::Close => {
+                self.popups.cell_view = None;
+                // A function's on its way doesn't open it again.
+                self.routine_wanted = None;
+            }
             CellKey::CloseRow if view.record => self.popups.cell_view = None,
             CellKey::Copy if view.sql.is_some() => {
                 let text = view.sql.as_ref().map(|(sql, _)| sql.clone()).unwrap_or_default();
@@ -113,7 +132,8 @@ impl App {
                 self.popups.cell_view = None;
                 self.open_tab_on(conn, &sql);
             }
-            CellKey::Open | CellKey::CloseRow => {}
+            CellKey::CreateTable if view.create_table.is_some() => self.toggle_create_table(),
+            CellKey::Open | CellKey::CloseRow | CellKey::CreateTable => {}
             CellKey::Copy if view.browse => {
                 let text = view.text.clone();
                 self.copy_text(text, t!("copy.definition"));

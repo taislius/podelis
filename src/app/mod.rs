@@ -312,15 +312,17 @@ pub struct App {
     /// While a hidden tab's event is applied (`apply_in_tab`): that tab,
     /// whose run ending is announced even with the terminal in front.
     hidden_tab: Option<usize>,
-    /// A function's definition on its way is for the navigator's popup.
-    routine_definition_pending: bool,
+    /// The function definition asked for last (`d`, `Enter`, stepping to
+    /// one): only its answer opens the navigator's popup, and none once a
+    /// table's is shown there instead.
+    routine_wanted: Option<u64>,
     /// Clickable areas from the last frame.
     pub hits: Hits,
     /// `f` is waiting for the result table's foreign keys to load.
     pending_follow: bool,
-    /// The last table definition `d` asked the server's DDL of: an older
-    /// request, waiting its moment, sees it isn't wanted and asks nothing.
-    ddl_wanted: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// The last definition asked for (a CREATE TABLE with `c`, a
+    /// function's): each answer lands only where it's still waited for.
+    definition_requests: u64,
     pub should_quit: bool,
     /// What the main loop does for the app, outside the screen.
     for_terminal: ForTerminal,
@@ -414,8 +416,8 @@ impl App {
             hidden_tab: None,
             hits: Hits::default(),
             pending_follow: false,
-            ddl_wanted: std::sync::Arc::default(),
-            routine_definition_pending: false,
+            definition_requests: 0,
+            routine_wanted: None,
             should_quit: false,
             for_terminal: ForTerminal::default(),
             terminal_focused: None,

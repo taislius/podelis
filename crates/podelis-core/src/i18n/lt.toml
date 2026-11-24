@@ -286,6 +286,8 @@ null = "NULL"
 save = "išsaugoti"
 
 [cell_view]
+create_table = "CREATE TABLE"
+overview = "apžvalga"
 select = "Shift+tempimas pažymi (macOS: Option)"
 close = "uždaryti"
 copy = "kopijuoti"
@@ -1325,6 +1327,8 @@ checks = "CHECK apribojimai"
 links_failed = "Nepavyko perskaityti išorinių raktų: {e}"
 related = "SUSIJUSIOS"
 ddl_failed = "Rodoma {name} santrauka: serveris nepateikė jos CREATE TABLE ({e})"
+ddl_no_answer = "jokio atsakymo per {s} s"
+ddl_no_table = "serveryje tokios lentelės dabar nėra"
 
 [session]
 again = "paleidus bandoma vėl, Ctrl+O – kitas"

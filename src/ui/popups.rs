@@ -19,12 +19,20 @@ fn text_view_keys(view: &crate::app::CellView) -> Vec<String> {
             close,
         ]
     } else if view.browse {
-        vec![
-            moving(LEFT_RIGHT, t!("cell_view.prev_next_table")),
-            moving(UP_DOWN, t!("cell_view.scroll")),
-            key(CellKey::Copy, t!("cell_view.copy")),
-            close,
-        ]
+        // A table's: its CREATE TABLE, or back from it.
+        let create = view.create_table.as_ref().map(|_| {
+            let what = if view.overview.is_some() { t!("cell_view.overview") } else { t!("cell_view.create_table") };
+            key(CellKey::CreateTable, what)
+        });
+        create
+            .into_iter()
+            .chain([
+                moving(LEFT_RIGHT, t!("cell_view.prev_next_table")),
+                moving(UP_DOWN, t!("cell_view.scroll")),
+                key(CellKey::Copy, t!("cell_view.copy")),
+                close,
+            ])
+            .collect()
     } else if view.follow.is_some() {
         vec![
             key(CellKey::Open, t!("cell_view.open_tab")),

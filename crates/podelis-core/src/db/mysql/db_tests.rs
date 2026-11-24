@@ -596,5 +596,18 @@ async fn live_mysql_table_ddl_and_key_rules() {
     let plain = db.table_details("podelis_ddl", "plain").await.unwrap();
     let fk = plain.foreign_keys.first().expect("its foreign key");
     assert!(fk.on_delete.as_deref().is_none_or(|r| r == "RESTRICT"), "{:?}", fk.on_delete);
+    // Its time limit asked on a connection of its own: none in the pool
+    // keeps it.
+    for _ in 0..3 {
+        db.table_ddl("podelis_ddl", "orders").await.unwrap();
+    }
+    let Pool::MySql(p) = &db.0.pool else { unreachable!() };
+    let mut held = Vec::new();
+    for _ in 0..p.size() {
+        let mut c = p.acquire().await.unwrap();
+        let (limit,): (u64,) = sqlx::query_as("SELECT @@SESSION.lock_wait_timeout").fetch_one(&mut *c).await.unwrap();
+        assert_ne!(limit, 5, "a pooled connection kept the DDL's lock wait");
+        held.push(c);
+    }
     db.run("DROP DATABASE podelis_ddl", DEFAULT_ROW_LIMIT).await.unwrap();
 }

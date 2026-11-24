@@ -93,14 +93,6 @@ fn fk_key(fk: &ForeignKey) -> String {
     format!("{}→{}", fk.column.to_lowercase(), fk.target.to_lowercase())
 }
 
-/// Its rules as they're compared. With `loose` (a side whose RESTRICT is
-/// how it says a rule left unsaid: MySQL), RESTRICT as NO ACTION; elsewhere
-/// they differ (PostgreSQL checks RESTRICT at once, never deferred).
-fn fk_rules(fk: &ForeignKey, loose: bool) -> String {
-    let rule = |r: &Option<String>| r.as_deref().filter(|r| !loose || *r != "RESTRICT").map(str::to_string);
-    ForeignKey { on_delete: rule(&fk.on_delete), on_update: rule(&fk.on_update), ..fk.clone() }.actions()
-}
-
 /// The differences inside one table that exists on both sides.
 struct TableChanges {
     lines: Vec<String>,
@@ -210,9 +202,12 @@ fn table_changes(here: &TableShape, there: &TableShape, this: Side, other: Side)
                 && r.as_deref().is_none_or(|r| dialect.is_some_and(|d| d.takes_fk_rule(r)))
         };
         for fk in &a.foreign_keys {
-            let rules = fk_rules(fk, loose);
+            // Its rules as they're compared: with `loose` (a side whose RESTRICT is
+            // how it says a rule left unsaid: MySQL), RESTRICT as NO ACTION;
+            // elsewhere they differ (PostgreSQL checks RESTRICT at once).
+            let rules = fk.actions_where(loose);
             match b.foreign_keys.iter().find(|other| same_key(fk, other)) {
-                Some(other) if fk_rules(other, loose) == rules => {}
+                Some(other) if other.actions_where(loose) == rules => {}
                 Some(_) if !(keeps(&fk.on_delete) && keeps(&fk.on_update)) => {}
                 Some(other) => {
                     let said = |r: &str| if r.is_empty() { "none".to_string() } else { r.trim().to_string() };
@@ -221,7 +216,7 @@ fn table_changes(here: &TableShape, there: &TableShape, this: Side, other: Side)
                         fk.column,
                         fk.target,
                         said(&rules),
-                        said(&fk_rules(other, loose))
+                        said(&other.actions_where(loose))
                     ));
                     // Its name isn't known here: dropped by hand, added again.
                     sql.push(format!(

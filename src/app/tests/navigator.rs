@@ -37,12 +37,13 @@ async fn schema_details_load_on_expand_and_definitions_open() {
     assert!(view.title.contains("child") && view.text.contains("references parent"), "{}", view.text);
     app.handle_key(key(KeyCode::Esc));
 
-    // On a table whose details aren't loaded yet, `d` opens it once they arrive.
+    // On a table whose details aren't loaded yet, `d` says so at once, and
+    // shows it once they arrive.
     let panel = app.connection.schema.as_mut().unwrap();
     let parent = panel.tables.iter().position(|t| t.info.name == "parent").unwrap();
     panel.selected = panel.nodes().iter().position(|n| *n == SchemaNode::Table(parent)).unwrap();
     app.handle_key(key(KeyCode::Char('d')));
-    assert!(app.popups.cell_view.is_none());
+    assert_eq!(app.popups.cell_view.as_ref().map(|v| v.text.as_str()), Some(t!("navigator.loading_tables")));
     wait_details(&mut app).await;
     assert!(app.popups.cell_view.as_ref().is_some_and(|v| v.text.contains("CREATE TABLE parent")));
 }
@@ -398,15 +399,16 @@ async fn a_in_the_navigator_analyzes_the_table() {
     assert_eq!(app.focus, Focus::Schema);
 }
 
-/// A table's DDL lands in the popup that asked, still open on that table
-/// (its schema too: two named `orders` aren't the same), keeping its
-/// browsing and scroll; not in one closed or on another table.
-#[test]
-fn a_tables_ddl_comes_into_its_own_popup_only() {
-    let (mut app, _dir) = test_app();
-    let info = |schema: &str| crate::db::TableInfo {
-        schema: schema.into(),
-        name: "orders".into(),
+/// Two tables, `orders` (expanded, a column and its details) and `users`
+/// (its details on their way), on PostgreSQL (not connected), for the `d`
+/// and `c` tests below.
+fn definition_app() -> (App, tempfile::TempDir) {
+    let (mut app, dir) = test_app();
+    app.connection.form.name = "pg".into();
+    app.connection.form.engine = Engine::Postgres;
+    let info = |name: &str| crate::db::TableInfo {
+        schema: "public".into(),
+        name: name.into(),
         is_view: false,
         rows: None,
         bytes: None,
@@ -414,37 +416,240 @@ fn a_tables_ddl_comes_into_its_own_popup_only() {
         partition_of: None,
         materialized: false,
     };
-    let tables = vec![SchemaTable::new(info("audit"), Vec::new()), SchemaTable::new(info("public"), Vec::new())];
-    app.connection.schema = Some(SchemaPanel { tables, ..SchemaPanel::default() });
-    let select = |app: &mut App, schema: &str| {
-        let panel = app.connection.schema.as_mut().unwrap();
-        let t = panel.tables.iter().position(|t| t.info.schema == schema).unwrap();
-        panel.selected = panel.nodes().iter().position(|n| *n == SchemaNode::Table(t)).unwrap();
-    };
-    let ddl = |app: &mut App, schema: &str| {
-        let generation = app.generation;
-        app.handle_db_event(DbEvent::connection(
-            generation,
-            DbEventKind::TableDdl {
-                schema: schema.into(),
-                table: "orders".into(),
-                result: Ok(format!("CREATE TABLE {schema}.orders ();")),
-            },
-        ));
-    };
-    select(&mut app, "public");
-    app.popups.cell_view = Some(CellView::definition("TABLE orders".into(), "-- summary".into()));
-    app.popups.cell_view.as_mut().unwrap().scroll = 3;
-    ddl(&mut app, "public");
+    let column =
+        crate::db::ColumnInfo { name: "id".into(), data_type: "integer".into(), nullable: false, primary_key: true };
+    let mut orders = SchemaTable::new(info("orders"), vec![column]);
+    orders.expanded = true;
+    orders.details = Some(crate::db::TableDetails::default());
+    let mut users = SchemaTable::new(info("users"), Vec::new());
+    users.details_loading = true;
+    app.connection.schema = Some(SchemaPanel { tables: vec![orders, users], ..SchemaPanel::default() });
+    app.focus = Focus::Schema;
+    (app, dir)
+}
+
+fn select_node(app: &mut App, node: SchemaNode) {
+    let panel = app.connection.schema.as_mut().unwrap();
+    panel.selected = panel.nodes().iter().position(|n| *n == node).unwrap();
+}
+
+fn send_details(app: &mut App, table: &str, result: Result<crate::db::TableDetails, String>) {
+    let generation = app.generation;
+    let (schema, table) = ("public".to_string(), table.to_string());
+    app.handle_db_event(DbEvent::connection(generation, DbEventKind::TableDetails { schema, table, result }));
+}
+
+fn send_ddl(app: &mut App, id: u64, result: Result<Option<String>, String>) {
+    let generation = app.generation;
+    app.handle_db_event(DbEvent::connection(generation, DbEventKind::TableDdl { id, table: "orders".into(), result }));
+}
+
+/// The popup as if `c` had asked for its CREATE TABLE as request `id`.
+fn waiting_for_ddl(app: &mut App, id: u64) {
+    let view = app.popups.cell_view.as_mut().unwrap();
+    view.overview = Some(std::mem::replace(&mut view.text, t!("navigator.loading_tables").to_string()));
+    view.awaiting = Some(id);
+}
+
+/// `d` shows a table's overview, on a column of it too; `c` there asks for
+/// its CREATE TABLE (not connected: said, the overview staying), which
+/// lands in that popup only while it waits for that very request; `c`
+/// again goes back to the overview.
+#[test]
+fn c_in_a_definition_shows_the_create_table_and_back() {
+    let (mut app, _dir) = definition_app();
+    select_node(&mut app, SchemaNode::Column(0, 0));
+    app.handle_schema_key(key(KeyCode::Char('d')));
     let view = app.popups.cell_view.as_ref().unwrap();
-    assert_eq!((view.text.as_str(), view.browse, view.scroll), ("CREATE TABLE public.orders ();", true, 3));
-    // Stepped on to audit.orders (the same title): not public's.
-    select(&mut app, "audit");
-    app.popups.cell_view = Some(CellView::definition("TABLE orders".into(), "-- summary".into()));
-    ddl(&mut app, "public");
-    assert_eq!(app.popups.cell_view.as_ref().unwrap().text, "-- summary");
-    // Closed: it stays closed.
+    assert_eq!(view.title, "TABLE orders");
+    assert_eq!(view.create_table, Some(("public".to_string(), "orders".to_string())));
+    let overview = view.text.clone();
+    assert!(overview.contains("public.orders"), "{overview}");
+
+    app.handle_cell_view_key(key(KeyCode::Char('c')));
+    let view = app.popups.cell_view.as_ref().unwrap();
+    assert_eq!((view.text.as_str(), view.awaiting), (overview.as_str(), None), "not connected: nothing asked");
+    assert!(app.notes.status.contains("orders"), "said why: {}", app.notes.status);
+
+    // An answer to another request, or to a closed popup, doesn't land.
+    waiting_for_ddl(&mut app, 7);
+    send_ddl(&mut app, 6, Ok(Some("CREATE TABLE old ();".into())));
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().text, t!("navigator.loading_tables"));
+    send_ddl(&mut app, 7, Ok(Some("CREATE TABLE public.orders ();".into())));
+    let view = app.popups.cell_view.as_ref().unwrap();
+    assert_eq!((view.text.as_str(), view.awaiting, view.browse), ("CREATE TABLE public.orders ();", None, true));
+    app.handle_cell_view_key(key(KeyCode::Char('c')));
+    let view = app.popups.cell_view.as_ref().unwrap();
+    assert_eq!((view.text.as_str(), view.overview.is_none()), (overview.as_str(), true), "back to the overview");
+
+    // Failed: back to the overview, and why it's said.
+    waiting_for_ddl(&mut app, 8);
+    send_ddl(&mut app, 8, Err("permission denied".into()));
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().text, overview);
+    assert!(app.notes.status.contains("permission denied"));
+
+    // Closed meanwhile: it stays closed.
+    waiting_for_ddl(&mut app, 9);
     app.popups.cell_view = None;
-    ddl(&mut app, "audit");
+    send_ddl(&mut app, 9, Ok(Some("CREATE TABLE public.orders ();".into())));
     assert!(app.popups.cell_view.is_none());
+}
+
+/// `c` on a table the server no longer has: back to the overview, and
+/// said, not silently.
+#[test]
+fn c_on_a_table_gone_from_the_server_says_so() {
+    let (mut app, _dir) = definition_app();
+    select_node(&mut app, SchemaNode::Table(0));
+    app.handle_schema_key(key(KeyCode::Char('d')));
+    let overview = app.popups.cell_view.as_ref().unwrap().text.clone();
+    waiting_for_ddl(&mut app, 3);
+    send_ddl(&mut app, 3, Ok(None));
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().text, overview);
+    assert!(app.notes.status.contains(t!("schema.ddl_no_table")), "{}", app.notes.status);
+}
+
+/// A function's definition opens the popup only if it's the one asked for
+/// last and still wanted: not once a table's is shown there, nor after the
+/// popup was closed.
+#[test]
+fn a_late_function_definition_doesnt_take_a_tables_popup() {
+    let (mut app, _dir) = definition_app();
+    let routine = |app: &mut App, id: u64| {
+        let generation = app.generation;
+        let (title, text) = ("FUNCTION f".to_string(), Ok("CREATE FUNCTION f()".to_string()));
+        app.handle_db_event(DbEvent::connection(generation, DbEventKind::RoutineDefinition { id, title, text }));
+    };
+    // Asked for, then a table stepped to: the table's stays.
+    app.routine_wanted = Some(4);
+    select_node(&mut app, SchemaNode::Table(0));
+    app.handle_schema_key(key(KeyCode::Char('d')));
+    routine(&mut app, 4);
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().title, "TABLE orders");
+    // An older one than the one asked for last: not it.
+    app.routine_wanted = Some(6);
+    routine(&mut app, 5);
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().title, "TABLE orders");
+    // Closed: it stays closed.
+    app.handle_cell_view_key(key(KeyCode::Esc));
+    routine(&mut app, 6);
+    assert!(app.popups.cell_view.is_none());
+    // The one asked for, still wanted: shown, browsable.
+    app.routine_wanted = Some(7);
+    routine(&mut app, 7);
+    let view = app.popups.cell_view.as_ref().unwrap();
+    assert_eq!((view.title.as_str(), view.browse), ("FUNCTION f", true));
+}
+
+/// No `c` where the server writes no CREATE TABLE: a view (its query is
+/// its definition), SQLite (its stored CREATE is the definition).
+#[test]
+fn c_is_offered_only_where_the_server_writes_one() {
+    let (mut app, _dir) = definition_app();
+    app.connection.schema.as_mut().unwrap().tables[0].info.is_view = true;
+    app.connection.schema.as_mut().unwrap().tables[0].details.as_mut().unwrap().definition = Some("SELECT 1".into());
+    select_node(&mut app, SchemaNode::Table(0));
+    app.handle_schema_key(key(KeyCode::Char('d')));
+    assert!(app.popups.cell_view.as_ref().unwrap().create_table.is_none());
+    let (mut app, _dir) = definition_app();
+    app.connection.form.engine = file_engine();
+    select_node(&mut app, SchemaNode::Table(0));
+    app.handle_schema_key(key(KeyCode::Char('d')));
+    assert!(app.popups.cell_view.as_ref().unwrap().create_table.is_none());
+}
+
+/// `d` on a table whose details are on their way says so at once; they
+/// open in it when they come, unless it was closed or moved from
+/// meanwhile.
+#[test]
+fn a_definition_waiting_on_details_opens_only_where_asked() {
+    let (mut app, _dir) = definition_app();
+    let on_their_way = |app: &mut App| {
+        let users = &mut app.connection.schema.as_mut().unwrap().tables[1];
+        (users.details, users.details_loading) = (None, true);
+    };
+    select_node(&mut app, SchemaNode::Table(1));
+    app.handle_schema_key(key(KeyCode::Char('d')));
+    let view = app.popups.cell_view.as_ref().expect("said at once");
+    assert_eq!((view.title.as_str(), view.text.as_str()), ("TABLE users", t!("navigator.loading_tables")));
+    // Closed: the details don't open it again.
+    app.popups.cell_view = None;
+    send_details(&mut app, "users", Ok(crate::db::TableDetails::default()));
+    assert!(app.popups.cell_view.is_none());
+
+    // Moved on to another table: not shown there under the wrong row.
+    on_their_way(&mut app);
+    select_node(&mut app, SchemaNode::Table(1));
+    app.handle_schema_key(key(KeyCode::Char('d')));
+    select_node(&mut app, SchemaNode::Table(0));
+    send_details(&mut app, "users", Ok(crate::db::TableDetails::default()));
+    assert_eq!(app.popups.cell_view.as_ref().unwrap().text, t!("navigator.loading_tables"));
+
+    // Still on it: the definition opens.
+    on_their_way(&mut app);
+    select_node(&mut app, SchemaNode::Table(1));
+    app.handle_schema_key(key(KeyCode::Char('d')));
+    send_details(&mut app, "users", Ok(crate::db::TableDetails::default()));
+    assert!(app.popups.cell_view.as_ref().unwrap().text.contains("public.users"));
+
+    // Not connected and none on their way: what's known, not "Loading…".
+    app.connection.schema.as_mut().unwrap().tables[1].details = None;
+    app.handle_schema_key(key(KeyCode::Char('d')));
+    assert!(app.popups.cell_view.as_ref().unwrap().text.contains("public.users"));
+}
+
+/// Another table's details failing doesn't drop a definition waiting on
+/// its own; its own failing is said in its popup, not "Loading…" on.
+#[test]
+fn a_failed_details_load_is_said_in_the_popup_waiting_on_it() {
+    let (mut app, _dir) = definition_app();
+    select_node(&mut app, SchemaNode::Table(1));
+    app.handle_schema_key(key(KeyCode::Char('d')));
+    send_details(&mut app, "orders", Err("boom".into()));
+    let wanted = app.connection.schema.as_ref().unwrap().show_definition_of.clone();
+    assert_eq!(wanted, Some(("public".to_string(), "users".to_string())));
+    send_details(&mut app, "users", Err("no privilege".into()));
+    let text = &app.popups.cell_view.as_ref().unwrap().text;
+    assert!(text.contains("users") && text.contains("no privilege"), "{text}");
+}
+
+/// `d`, then `c`, on a live PostgreSQL table: the server's CREATE TABLE.
+#[tokio::test]
+async fn live_c_shows_the_servers_create_table() {
+    let Some((mut app, _dir)) = live_app(Engine::Postgres, "podelis_create_table").await else { return };
+    run_sql(&mut app, "CREATE TABLE IF NOT EXISTS ddl_orders (id int PRIMARY KEY, total numeric DEFAULT 0)").await;
+    finish_catalog(&mut app).await;
+    let panel = app.connection.schema.as_mut().unwrap();
+    let t = panel.tables.iter().position(|t| t.info.name == "ddl_orders").expect("listed");
+    panel.selected = panel.nodes().iter().position(|n| *n == SchemaNode::Table(t)).unwrap();
+    app.focus = Focus::Schema;
+    app.handle_key(key(KeyCode::Char('d')));
+    while app.popups.cell_view.as_ref().is_some_and(|v| v.text == t!("navigator.loading_tables")) {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    app.handle_key(key(KeyCode::Char('c')));
+    while app.popups.cell_view.as_ref().is_some_and(|v| v.awaiting.is_some()) {
+        let event = app.poll_db_event().await.unwrap();
+        app.handle_db_event(event);
+    }
+    let text = &app.popups.cell_view.as_ref().unwrap().text;
+    assert!(text.starts_with("CREATE TABLE public.ddl_orders (") && text.contains("DEFAULT 0"), "{text}");
+}
+
+/// MySQL's RESTRICT is its NO ACTION: a definition doesn't say it on
+/// every key; elsewhere RESTRICT is its own rule, and said.
+#[test]
+fn restrict_is_said_only_where_it_differs() {
+    let fk = crate::db::ForeignKey {
+        column: "user_id".into(),
+        target: "users.id".into(),
+        target_schema: "public".into(),
+        target_table: "users".into(),
+        target_column: Some("id".into()),
+        on_delete: Some("RESTRICT".into()),
+        on_update: Some("CASCADE".into()),
+    };
+    assert_eq!(fk.actions_where(true), " ON UPDATE CASCADE");
+    assert_eq!(fk.actions_where(false), " ON DELETE RESTRICT ON UPDATE CASCADE");
 }

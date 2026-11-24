@@ -418,22 +418,19 @@ impl App {
                 let (found, result) = *followed;
                 self.followed(found, result);
             }
-            // In the popup that asked, still open on that table: its text
-            // only, as it browses and where it's scrolled to. Not one
-            // that's been closed, or has stepped on to another.
-            DbEventKind::TableDdl { schema, table, result } => {
-                let Some(view) = self.definition_open_on(&schema, &table) else { return };
-                match result {
-                    Ok(ddl) => view.text = ddl,
-                    // The summary stays; why the server's didn't come is said.
-                    Err(e) => self.set_status(t!("schema.ddl_failed", name = table, e = e), true),
+            // In the popup that asked, if it still waits on it.
+            DbEventKind::TableDdl { id, table, result } => self.apply_ddl(id, &table, result),
+            DbEventKind::Definition { title, text: result } => match result {
+                Ok(text) => self.popups.cell_view = Some(CellView::new(title, text)),
+                Err(e) => self.set_status(e, true),
+            },
+            // Only the one asked for last, still wanted.
+            DbEventKind::RoutineDefinition { id, title, text } => {
+                if self.routine_wanted.take_if(|wanted| *wanted == id).is_none() {
+                    return;
                 }
-            }
-            DbEventKind::Definition { title, text: result } => {
-                let browse = std::mem::take(&mut self.routine_definition_pending);
-                match result {
-                    Ok(text) if browse => self.popups.cell_view = Some(CellView::definition(title, text)),
-                    Ok(text) => self.popups.cell_view = Some(CellView::new(title, text)),
+                match text {
+                    Ok(text) => self.popups.cell_view = Some(CellView::definition(title, text)),
                     Err(e) => self.set_status(e, true),
                 }
             }
@@ -1049,12 +1046,20 @@ pub(super) enum DbEventKind {
         title: String,
         text: Result<String, String>,
     },
-    /// A table's CREATE TABLE as the server writes it (or why not), for
-    /// the definition popup open on it (`d`), if it still is.
+    /// A function's definition (or why not) for the navigator's popup,
+    /// asked for as request `id`.
+    RoutineDefinition {
+        id: u64,
+        title: String,
+        text: Result<String, String>,
+    },
+    /// A table's CREATE TABLE as the server writes it (`None`: it has
+    /// none), or why not, asked for by `c` in its definition (request
+    /// `id`).
     TableDdl {
-        schema: String,
+        id: u64,
         table: String,
-        result: Result<String, String>,
+        result: Result<Option<String>, String>,
     },
     /// Rows opened in an app (`what` they were, by `command`), or why they
     /// couldn't be.

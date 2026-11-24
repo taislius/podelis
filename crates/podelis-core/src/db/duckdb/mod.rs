@@ -113,6 +113,7 @@ impl Backend for DuckDb {
             server_txn_state: false,
             ddl_commits: false,
             stores_create_sql: true,
+            server_ddl: false,
             table_sizes: false,
             plan_as_grid: false,
             copy_in: false,

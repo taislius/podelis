@@ -3,8 +3,10 @@
 
 use crate::app::*;
 
-/// How long `d`'s popup stays on a table before its DDL is asked for.
-const DDL_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
+/// How long the server has to write a table's CREATE TABLE (`c`): it's
+/// told to give up sooner (`table_ddl`), this is in case it doesn't.
+const DDL_TIMEOUT: std::time::Duration =
+    if cfg!(test) { std::time::Duration::from_secs(2) } else { std::time::Duration::from_secs(30) };
 
 impl App {
     /// Loads table `t`'s details unless they're loaded or on their way.
@@ -29,11 +31,14 @@ impl App {
             return;
         };
         panel.tables[t].details_loading = false;
+        // Its definition was asked for (`d`): shown if its popup still
+        // waits on it (not closed, not stepped on to another).
+        let wanted = (schema.to_string(), name.to_string());
+        let asked = panel.show_definition_of.take_if(|w| *w == wanted).is_some();
         match result {
             Ok(details) => {
                 panel.tables[t].details = Some(details);
-                let wanted = (schema.to_string(), name.to_string());
-                if panel.show_definition_of.take_if(|w| *w == wanted).is_some() {
+                if asked && self.definition_open_on(schema, name).is_some() {
                     self.show_table_definition(t);
                 }
                 if std::mem::take(&mut self.pending_follow) {
@@ -41,67 +46,102 @@ impl App {
                 }
             }
             Err(e) => {
-                panel.show_definition_of = None;
-                self.set_status(t!("schema.details_failed", name = name, e = e), true);
+                let e = t!("schema.details_failed", name = name, e = e);
+                // The popup waiting on it says why, rather than loading on.
+                if asked && let Some(view) = self.definition_open_on(schema, name) {
+                    view.text.clone_from(&e);
+                }
+                self.set_status(e, true);
             }
         }
     }
 
     /// Opens table `t`'s definition, loading its details first if needed.
     pub(in crate::app) fn show_table_definition(&mut self, t: usize) {
+        // A function's asked for before isn't wanted now.
+        self.routine_wanted = None;
         let engine = self.engine();
-        let database = self.connection.database.clone();
-        let send = self.sender();
-        let wanted = std::sync::Arc::clone(&self.ddl_wanted);
+        let connected = self.connection.database.is_some();
         let Some(panel) = &mut self.connection.schema else { return };
         let Some(table) = panel.tables.get(t) else { return };
         let kind = if table.info.is_view { t!("navigator.view_title") } else { t!("navigator.table_title") };
         let title = format!("{kind} {}", table.info.name);
-        if table.details.is_none() {
+        // Its details on their way (or to ask for): said at once, in the
+        // popup; Esc or stepping on stops waiting. Not connected (and none
+        // on their way), what's known is shown.
+        if table.details.is_none() && (connected || table.details_loading) {
             panel.show_definition_of = Some((table.info.schema.clone(), table.info.name.clone()));
-            // Browsing: the popup says so rather than showing the last one.
-            if self.popups.cell_view.as_ref().is_some_and(|v| v.browse) {
-                self.popups.cell_view = Some(CellView::definition(title, t!("navigator.loading_tables").to_string()));
-            }
+            self.popups.cell_view = Some(CellView::definition(title, t!("navigator.loading_tables").to_string()));
             return self.request_details(t);
         }
-        let summary = table_definition(engine, table);
-        // A table as the server writes it (MySQL's SHOW CREATE TABLE,
-        // PostgreSQL's from its functions), every detail, ON DELETE
-        // included: asked for now, by itself; the summary till it comes,
-        // and where the engine has none.
-        //
-        // Asked once the popup stays on it a moment (stepping through with
-        // ←/→ doesn't ask for each), and only if still wanted then.
-        if !table.info.is_view
-            && let Some(db) = database
-        {
-            use std::sync::atomic::Ordering;
-            let (schema, name) = (table.info.schema.clone(), table.info.name.clone());
-            let this = wanted.fetch_add(1, Ordering::SeqCst) + 1;
-            tokio::spawn(async move {
-                tokio::time::sleep(DDL_SETTLE).await;
-                if wanted.load(Ordering::SeqCst) != this {
-                    return;
-                }
-                let result = match db.table_ddl(&schema, &name).await {
-                    Ok(Some(ddl)) => Ok(ddl),
-                    Ok(None) => return,
-                    Err(e) => Err(crate::db::error_message(&e)),
-                };
-                send(DbEventKind::TableDdl { schema, table: name, result });
-            });
+        let mut view = CellView::definition(title, table_definition(engine, table));
+        // `c` shows it as the server writes it, where it does.
+        if !table.info.is_view && engine.capabilities().server_ddl {
+            view.create_table = Some((table.info.schema.clone(), table.info.name.clone()));
         }
-        self.popups.cell_view = Some(CellView::definition(title, summary));
+        self.popups.cell_view = Some(view);
+    }
+
+    /// `c` in a table's definition: its CREATE TABLE as the server writes
+    /// it (MySQL's SHOW CREATE TABLE, PostgreSQL's from its functions),
+    /// asked for now; `c` again goes back to the overview.
+    pub(in crate::app) fn toggle_create_table(&mut self) {
+        let database = self.connection.database.clone();
+        self.definition_requests += 1;
+        let id = self.definition_requests;
+        let send = self.sender();
+        let Some(view) = &mut self.popups.cell_view else { return };
+        let Some((schema, name)) = view.create_table.clone() else { return };
+        view.scroll = 0;
+        if let Some(overview) = view.overview.take() {
+            view.text = overview;
+            view.awaiting = None;
+            return;
+        }
+        let Some(db) = database else {
+            return self.set_status(t!("schema.ddl_failed", name = name, e = t!("bar.not_connected")), true);
+        };
+        view.overview = Some(std::mem::replace(&mut view.text, t!("navigator.loading_tables").to_string()));
+        view.awaiting = Some(id);
+        tokio::spawn(async move {
+            let result = match tokio::time::timeout(DDL_TIMEOUT, db.table_ddl(&schema, &name)).await {
+                Ok(Ok(ddl)) => Ok(ddl),
+                Ok(Err(e)) => Err(crate::db::error_message(&e)),
+                Err(_) => Err(t!("schema.ddl_no_answer", s = DDL_TIMEOUT.as_secs().to_string())),
+            };
+            send(DbEventKind::TableDdl { id, table: name, result });
+        });
+    }
+
+    /// The server's CREATE TABLE asked for by `c` (request `id`), or why
+    /// not: into the popup that asked, if it's still open and waiting on
+    /// it (not closed, not stepped on); failed, back to the overview.
+    pub(in crate::app) fn apply_ddl(&mut self, id: u64, table: &str, result: Result<Option<String>, String>) {
+        let Some(view) = self.popups.cell_view.as_mut().filter(|v| v.awaiting == Some(id)) else { return };
+        view.awaiting = None;
+        if let Ok(Some(ddl)) = result {
+            view.text = ddl;
+            return;
+        }
+        if let Some(overview) = view.overview.take() {
+            view.text = overview;
+        }
+        // None: the server has no such table now (dropped, renamed).
+        let e = result.err().unwrap_or_else(|| t!("schema.ddl_no_table").to_string());
+        self.set_status(t!("schema.ddl_failed", name = table, e = e), true);
     }
 
     /// The table definition popup open on `schema.table`, if it still is:
-    /// the navigator's selection on it (stepping moves it), the popup
-    /// browsing.
+    /// the navigator's selection on it, or on one of its columns or indexes
+    /// (stepping moves it), the popup browsing.
     pub(in crate::app) fn definition_open_on(&mut self, schema: &str, table: &str) -> Option<&mut CellView> {
         let on_it = self.connection.schema.as_ref().is_some_and(|panel| {
-            matches!(panel.nodes().get(panel.selected), Some(SchemaNode::Table(t))
-                if panel.tables.get(*t).is_some_and(|x| x.info.schema == schema && x.info.name == table))
+            panel
+                .nodes()
+                .get(panel.selected)
+                .and_then(|n| n.table())
+                .and_then(|t| panel.tables.get(t))
+                .is_some_and(|x| x.info.schema == schema && x.info.name == table)
         });
         self.popups.cell_view.as_mut().filter(|v| on_it && v.browse)
     }
@@ -142,6 +182,8 @@ impl App {
                 if let Some(view) = &mut self.popups.cell_view {
                     view.text = t!("navigator.loading_tables").to_string();
                     view.scroll = 0;
+                    // A function's: no CREATE TABLE to ask for, or to come.
+                    (view.create_table, view.overview, view.awaiting) = (None, None, None);
                 }
                 self.show_routine(r);
             }
@@ -153,11 +195,13 @@ impl App {
         let Some(db) = self.connection.database.clone() else { return };
         let Some(routine) = self.connection.schema.as_ref().and_then(|p| p.routines.get(r)).cloned() else { return };
         let send = self.sender();
-        self.routine_definition_pending = true;
+        self.definition_requests += 1;
+        let id = self.definition_requests;
+        self.routine_wanted = Some(id);
         tokio::spawn(async move {
             let title = format!("{} {}", routine.kind.to_uppercase(), routine.name);
-            let result = db.routine_definition(&routine).await.map_err(|e| crate::db::error_message(&e));
-            send(DbEventKind::Definition { title, text: result });
+            let text = db.routine_definition(&routine).await.map_err(|e| crate::db::error_message(&e));
+            send(DbEventKind::RoutineDefinition { id, title, text });
         });
     }
 }
@@ -168,6 +212,8 @@ fn table_definition(engine: Engine, table: &SchemaTable) -> String {
     let info = &table.info;
     let qualified = format!("{}.{}", engine.quote_ident(&info.schema), engine.quote_ident(&info.name));
     let details = table.details.clone().unwrap_or_default();
+    // MySQL's RESTRICT is its NO ACTION: not said on every key.
+    let loose = engine.dialect().is_some_and(crate::db::SqlDialect::restrict_is_no_action);
     if let Some(def) = &details.definition {
         if info.is_view && !def.trim_start().to_ascii_uppercase().starts_with("CREATE") {
             let what = if info.materialized { "MATERIALIZED VIEW" } else { "VIEW" };
@@ -183,7 +229,7 @@ fn table_definition(engine: Engine, table: &SchemaTable) -> String {
             if !details.foreign_keys.is_empty() {
                 let _ = write!(out, "\n\n-- {}\n", t!("schema.foreign_keys"));
                 for fk in &details.foreign_keys {
-                    let _ = writeln!(out, "-- {} → {}{}", fk.column, fk.target, fk.actions());
+                    let _ = writeln!(out, "-- {} → {}{}", fk.column, fk.target, fk.actions_where(loose));
                 }
             }
             return out;
@@ -210,7 +256,7 @@ fn table_definition(engine: Engine, table: &SchemaTable) -> String {
         let _ = write!(out, "\n-- {}\n", t!("schema.foreign_keys"));
         let w = details.foreign_keys.iter().map(|f| f.column.chars().count()).max().unwrap_or(0);
         for fk in &details.foreign_keys {
-            let _ = writeln!(out, "{:<w$}  → {}{}", fk.column, fk.target, fk.actions());
+            let _ = writeln!(out, "{:<w$}  → {}{}", fk.column, fk.target, fk.actions_where(loose));
         }
     }
     if !details.checks.is_empty() {

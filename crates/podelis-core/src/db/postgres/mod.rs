@@ -166,6 +166,7 @@ impl Backend for Postgres {
             server_txn_state: true,
             ddl_commits: false,
             stores_create_sql: false,
+            server_ddl: true,
             table_sizes: true,
             plan_as_grid: false,
             copy_in: true,

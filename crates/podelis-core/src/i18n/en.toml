@@ -276,6 +276,8 @@ null = "null"
 save = "save"
 
 [cell_view]
+create_table = "CREATE TABLE"
+overview = "overview"
 close = "close"
 copy = "copy"
 select = "Shift+drag selects (Option on macOS)"
@@ -1294,6 +1296,8 @@ checks = "check constraints"
 links_failed = "Couldn't read the foreign keys: {e}"
 related = "RELATED"
 ddl_failed = "Showing a summary of {name}: the server didn't give its CREATE TABLE ({e})"
+ddl_no_answer = "no answer in {s} s"
+ddl_no_table = "the server has no such table now"
 
 [session]
 again = "a run tries again, Ctrl+O picks another"

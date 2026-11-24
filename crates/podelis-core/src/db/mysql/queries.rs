@@ -249,6 +249,8 @@ pub(in crate::db) async fn table_details(db: &Database, schema: &str, table: &st
     .fetch_all(p)
     .await?;
     // Column, its target's schema, table and column, ON DELETE, ON UPDATE.
+    // The rules' table named by its schema and table as constants too:
+    // MySQL 5.7 reads only that table's then, not every schema's.
     type FkRow = (String, String, String, String, Option<String>, Option<String>);
     let fks: Vec<FkRow> = sqlx::query_as(
         "SELECT CAST(k.column_name AS CHAR), CAST(k.referenced_table_schema AS CHAR),
@@ -256,11 +258,14 @@ pub(in crate::db) async fn table_details(db: &Database, schema: &str, table: &st
                     CAST(r.delete_rule AS CHAR), CAST(r.update_rule AS CHAR)
              FROM information_schema.key_column_usage k
              LEFT JOIN information_schema.referential_constraints r
-               ON r.constraint_schema = k.constraint_schema AND r.constraint_name = k.constraint_name
+               ON r.constraint_schema = ? AND r.table_name = ?
+              AND r.constraint_schema = k.constraint_schema AND r.constraint_name = k.constraint_name
               AND r.table_name = k.table_name
              WHERE k.table_schema = ? AND k.table_name = ? AND k.referenced_table_name IS NOT NULL
              ORDER BY k.constraint_name, k.ordinal_position",
     )
+    .bind(schema)
+    .bind(table)
     .bind(schema)
     .bind(table)
     .fetch_all(p)
@@ -490,7 +495,16 @@ pub(in crate::db) async fn copy_in(
 
 pub(in crate::db) async fn table_ddl(db: &Database, schema: &str, table: &str) -> Result<Option<String>> {
     let Pool::MySql(p) = &db.0.pool else { unreachable!("engine matches pool") };
-    show_create_table(p, schema, table).await
+    // Given up on by the server after 5 s behind a lock (an ALTER's), not
+    // a year (its default). Set on a connection of its own, taken out of
+    // the pool: closed after (or if it's given up on while it asks), it
+    // never goes back to the pool with the setting. A server (a proxy)
+    // that refuses the setting is asked all the same.
+    let mut c = p.acquire().await?.detach();
+    let _ = sqlx::query("SET SESSION lock_wait_timeout = 5").execute(&mut c).await;
+    let ddl = show_create_table(&mut c, schema, table).await;
+    let _ = sqlx::Connection::close(c).await;
+    ddl
 }
 
 /// The table as MySQL writes it (`SHOW CREATE TABLE`): every column with
@@ -498,10 +512,10 @@ pub(in crate::db) async fn table_ddl(db: &Database, schema: &str, table: &str) -
 /// character set, comments. `None` for a view (its query is `definition`);
 /// an error the server gives (a privilege it lacks) is said, not taken for
 /// "none".
-async fn show_create_table(p: &sqlx::MySqlPool, schema: &str, table: &str) -> Result<Option<String>> {
+async fn show_create_table(c: &mut sqlx::MySqlConnection, schema: &str, table: &str) -> Result<Option<String>> {
     use sqlx::{Column as _, Row as _};
     let sql = format!("SHOW CREATE TABLE {}.{}", Engine::MySql.quote_ident(schema), Engine::MySql.quote_ident(table));
-    let row = sqlx::query(AssertSqlSafe(sql)).fetch_one(p).await?;
+    let row = sqlx::query(AssertSqlSafe(sql)).fetch_one(&mut *c).await?;
     // A view's says `Create View`: not a table's.
     if row.columns().get(1).is_none_or(|c| !c.name().eq_ignore_ascii_case("Create Table")) {
         return Ok(None);
