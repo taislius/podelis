@@ -21,6 +21,8 @@ mod app;
 mod chart;
 mod cli;
 mod config;
+#[cfg(test)]
+mod database_cases;
 mod gateway;
 #[cfg(test)]
 mod i18n_keys;

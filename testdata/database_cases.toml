@@ -1,0 +1,625 @@
+# Every case of the database interface, and what proves each.
+#
+# One entry a case: what Podėlis must do with a database. Each engine's
+# status (`pg`, `mysql`, `sqlite`, `duckdb`, `mongo`; a missing one isn't
+# assessed yet):
+#
+#   tested   handled, and the tests named show it (on a live server)
+#   partial  some of it: `note` says what's missing
+#   code     handled in code, no live test yet
+#   driver   the driver can't (sqlx, the MongoDB driver): a patch or a workaround
+#   no       not handled
+#   na       doesn't apply to that engine
+#
+# `tests` are test functions in the workspace. `src/database_cases.rs`
+# checks this file: every test named exists, a `tested` case names one,
+# every live test (`fn live_…` with a test attribute) is claimed by a
+# case, ids are unique; and prints what's left to do per area.
+#
+# Versions: CI's `versions` job runs the live tests on PostgreSQL 13, 16
+# and 18, MySQL 5.7 and 8.0, MariaDB 11.4; the main job on PostgreSQL 17
+# and MySQL 8.4. A case `tested` holds for those.
+
+# ── Versions and servers ─────────────────────────────────────────────
+
+[[case]]
+id = "server.version_said"
+what = "The server's version read and said against what's supported (Aurora, TiDB, Redshift… named)"
+pg = "code"
+mysql = "code"
+note = "Backend::support in db/server.rs; no live test asserts the words"
+
+[[case]]
+id = "server.mariadb"
+what = "MariaDB: its version, ANALYZE <statement>, its classic EXPLAIN, CHECKs by table"
+mysql = "partial"
+tests = ["live_mysql", "live_mysql_details_have_check_constraints"]
+note = "the live tests run on MariaDB 11.4 in CI (experimental); ANALYZE not asserted"
+
+[[case]]
+id = "server.proxysql"
+what = "ProxySQL in front of MySQL: cancel by its id, a session it tied to one server"
+mysql = "tested"
+tests = ["live_cancel_behind_proxysql", "live_a_session_proxysql_tied_is_said_and_replaced", "live_session_memory_behind_proxysql"]
+note = "with PODELIS_TEST_PROXYSQL_*, not in CI"
+
+[[case]]
+id = "server.pooler_pg"
+what = "A pooler in front of PostgreSQL: transaction mode refused at connect, noticed later"
+pg = "partial"
+tests = ["live_a_server_session_that_changes_by_itself_is_said"]
+note = "no PgBouncer in CI; the pid comparison is what's tested"
+
+[[case]]
+id = "server.hosted"
+what = "Hosted servers (RDS, Aurora, Cloud SQL, Azure, Supabase, Neon, PlanetScale, TiDB)"
+pg = "no"
+mysql = "no"
+note = "nothing tested; no containers for most"
+
+# ── Connecting ───────────────────────────────────────────────────────
+
+[[case]]
+id = "connect.tcp"
+what = "TCP to a host and port"
+pg = "tested"
+mysql = "tested"
+sqlite = "na"
+duckdb = "na"
+mongo = "tested"
+tests = ["live_postgres", "live_mysql", "live_mongodb"]
+
+[[case]]
+id = "connect.file"
+what = "A database file (or in memory)"
+pg = "na"
+mysql = "na"
+sqlite = "tested"
+duckdb = "tested"
+tests = ["live_sqlite", "live_duckdb", "live_one_instance_per_file_duckdb"]
+
+[[case]]
+id = "connect.socket"
+what = "A Unix socket (a host starting with /)"
+pg = "code"
+mysql = "code"
+
+[[case]]
+id = "connect.passwords"
+what = "Passwords: the field, ~/.pgpass, the keychain, a command"
+pg = "partial"
+mysql = "partial"
+tests = ["live_keychain_round_trip", "live_keychain_accounts_of_connections"]
+note = "the keychain tested (opt-in); ~/.pgpass and a password command in code only"
+
+[[case]]
+id = "connect.auth_pg"
+what = "PostgreSQL auth: md5, SCRAM-SHA-256"
+pg = "tested"
+tests = ["live_postgres"]
+note = "SCRAM is 17's default, which CI's server uses; SCRAM-PLUS, GSSAPI, SSPI, certificates: driver"
+
+[[case]]
+id = "connect.auth_mysql"
+what = "MySQL auth: caching_sha2_password, mysql_native_password"
+mysql = "tested"
+tests = ["live_mysql"]
+note = "sha256_password, clear text (LDAP/PAM), auth_socket, Kerberos: driver"
+
+[[case]]
+id = "connect.ssh"
+what = "An SSH tunnel (ssh -L)"
+pg = "tested"
+mysql = "code"
+tests = ["live_ssh_tunnel"]
+note = "with PODELIS_TEST_SSH_*, not in CI"
+
+[[case]]
+id = "connect.read_only"
+what = "A read-only session (the server refuses writes)"
+pg = "tested"
+mysql = "tested"
+tests = ["live_postgres_transaction_state_and_read_only", "live_mysql_error_line_and_read_only"]
+
+[[case]]
+id = "connect.no_database"
+what = "Connecting with no database given"
+pg = "code"
+mysql = "code"
+
+[[case]]
+id = "connect.other_database"
+what = "Another database on the same server for a tab"
+pg = "tested"
+mysql = "code"
+tests = ["live_another_database_opens_for_the_tab"]
+
+[[case]]
+id = "connect.failover"
+what = "Several hosts, target_session_attrs (failover)"
+pg = "driver"
+mysql = "na"
+
+# ── TLS ──────────────────────────────────────────────────────────────
+
+[[case]]
+id = "tls.modes"
+what = "disable / prefer / require / verify-ca / verify-full"
+pg = "code"
+mysql = "code"
+note = "CI's servers have no certificates"
+
+[[case]]
+id = "tls.files"
+what = "Own CA, client certificate and key"
+pg = "code"
+mysql = "code"
+
+[[case]]
+id = "tls.info"
+what = "The session's TLS version and cipher shown"
+pg = "code"
+mysql = "code"
+
+[[case]]
+id = "tls.limits"
+what = "CRL, minimum TLS version, ciphers; PostgreSQL 17's direct TLS"
+pg = "no"
+mysql = "no"
+
+# ── Running statements ───────────────────────────────────────────────
+
+[[case]]
+id = "run.script"
+what = "Several statements in one run, comments, the last row-producing one shown"
+pg = "tested"
+mysql = "tested"
+sqlite = "tested"
+duckdb = "tested"
+tests = ["live_postgres", "live_mysql", "live_sqlite", "live_duckdb"]
+
+[[case]]
+id = "run.result_sets"
+what = "Several result sets (MySQL CALL, a script)"
+pg = "partial"
+mysql = "tested"
+tests = ["live_a_call_doesnt_make_a_failed_runs_count_wrong_mysql"]
+note = "PostgreSQL: only the last set of a script is asserted (live_postgres)"
+
+[[case]]
+id = "run.delimiter"
+what = "MySQL scripts with DELIMITER lines (routines)"
+mysql = "tested"
+tests = ["live_a_script_with_delimiter_lines_makes_its_routine"]
+
+[[case]]
+id = "run.cancel"
+what = "Cancelling a running statement"
+pg = "tested"
+mysql = "tested"
+mongo = "tested"
+tests = ["live_postgres", "live_mysql", "live_cancel_mongodb", "live_cancel_behind_proxysql"]
+
+[[case]]
+id = "run.check_statement"
+what = "A statement checked by the server without running it (the syntax hint)"
+pg = "tested"
+mysql = "tested"
+sqlite = "tested"
+duckdb = "tested"
+tests = ["live_check_statement_postgres", "live_check_statement_mysql", "live_check_statement_sqlite", "live_check_statement_duckdb"]
+
+[[case]]
+id = "run.copy_in"
+what = "PostgreSQL COPY … FROM STDIN (imports), stopped part-way"
+pg = "tested"
+tests = ["live_a_stopped_copy_keeps_nothing", "live_an_unanswered_copy_abort_gives_the_session_up", "live_postgres_import_types"]
+
+[[case]]
+id = "run.copy_out"
+what = "COPY … TO STDOUT typed by the user"
+pg = "no"
+
+[[case]]
+id = "run.load_data"
+what = "MySQL LOAD DATA LOCAL INFILE"
+mysql = "driver"
+
+[[case]]
+id = "run.prepared"
+what = "The user's own PREPARE / EXECUTE, server-side parameters"
+pg = "partial"
+mysql = "partial"
+note = "remembered as session state; parameters not bound by the app"
+
+[[case]]
+id = "run.notices"
+what = "PostgreSQL notices (RAISE NOTICE, a DDL's)"
+pg = "tested"
+tests = ["live_postgres_notices_are_kept_for_the_app"]
+
+[[case]]
+id = "run.warnings"
+what = "MySQL warnings (SHOW WARNINGS) with their run"
+mysql = "tested"
+tests = ["live_a_check_keeps_the_last_runs_warnings_mysql"]
+
+[[case]]
+id = "run.listen"
+what = "PostgreSQL LISTEN / NOTIFY messages shown"
+pg = "no"
+
+[[case]]
+id = "run.pipelining"
+what = "Pipelining, protocol compression"
+pg = "driver"
+mysql = "driver"
+
+# ── Results ──────────────────────────────────────────────────────────
+
+[[case]]
+id = "results.empty"
+what = "An empty result keeps its columns"
+pg = "tested"
+mysql = "tested"
+sqlite = "tested"
+duckdb = "tested"
+tests = ["live_postgres", "live_mysql", "live_sqlite", "live_duckdb"]
+
+[[case]]
+id = "results.row_cap"
+what = "Every row counted, only the row limit kept"
+pg = "tested"
+mysql = "tested"
+sqlite = "tested"
+duckdb = "tested"
+tests = ["live_postgres", "live_mysql", "live_sqlite", "live_duckdb"]
+
+[[case]]
+id = "results.streaming"
+what = "Streaming: the first page now, the rest on demand; a stream dropped part-way frees the session"
+pg = "tested"
+mysql = "tested"
+sqlite = "tested"
+duckdb = "tested"
+tests = ["live_postgres", "live_mysql", "live_sqlite", "live_duckdb"]
+
+[[case]]
+id = "results.broken_stream"
+what = "A stream whose link breaks mid-rows: its session reopened"
+pg = "tested"
+mysql = "tested"
+tests = ["live_a_broken_stream_reopens_its_session_postgres", "live_a_broken_stream_reopens_its_session_mysql"]
+
+[[case]]
+id = "results.huge_values"
+what = "Very large values (TOAST, LONGBLOB), a byte cap per cell"
+pg = "partial"
+mysql = "partial"
+note = "no cap per cell (hostile-servers.md)"
+
+# ── Errors ───────────────────────────────────────────────────────────
+
+[[case]]
+id = "errors.position"
+what = "A statement's error with its SQLSTATE and position or line"
+pg = "tested"
+mysql = "tested"
+tests = ["live_postgres", "live_mysql_error_line_and_read_only"]
+
+[[case]]
+id = "errors.words"
+what = "Each server's own words for a missing table, a syntax error, a duplicate key, drawn as they are"
+pg = "tested"
+mysql = "tested"
+sqlite = "tested"
+tests = ["record_what_servers_say", "every_servers_words_keep_the_rules_at_every_size"]
+note = "recorded with PODELIS_RECORD=1: PostgreSQL 17/18, MySQL 8.4, MariaDB 11.4, SQLite"
+
+[[case]]
+id = "errors.connect"
+what = "A wrong password, a refused connection, a missing database: said"
+pg = "tested"
+mysql = "tested"
+tests = ["record_what_servers_say", "every_servers_words_keep_the_rules_at_every_size"]
+
+[[case]]
+id = "errors.permission"
+what = "A permission refused (a table, a function, the catalog)"
+pg = "partial"
+mysql = "code"
+note = "a restricted user's catalog tested in live_details (PostgreSQL); a refused statement's words not recorded"
+tests = ["live_details_postgres"]
+
+[[case]]
+id = "errors.deadlock"
+what = "A deadlock, a lock wait timeout, a statement timeout"
+pg = "no"
+mysql = "no"
+note = "nothing tests them; each needs two sessions"
+
+[[case]]
+id = "errors.lost_link"
+what = "The link lost mid-statement (rustls, I/O): said, whether it ran not known"
+pg = "tested"
+mysql = "tested"
+tests = ["live_dead_link_postgres", "live_dead_link_mysql"]
+note = "the words of a TLS link lost after idling (the 2026-11-21 list) not recorded"
+
+# ── Transactions ─────────────────────────────────────────────────────
+
+[[case]]
+id = "txn.state"
+what = "The server says whether a transaction is open"
+pg = "tested"
+mysql = "partial"
+tests = ["live_postgres_transaction_state_and_read_only"]
+note = "MySQL's is inferred from what ran"
+
+[[case]]
+id = "txn.begin_in_script"
+what = "BEGIN in a script opens one; what follows is in it"
+pg = "tested"
+mysql = "tested"
+tests = ["live_begin_in_script_postgres", "live_begin_in_script_mysql"]
+
+[[case]]
+id = "txn.failed"
+what = "A failed run's effect on the transaction (aborted, kept open, its statements remembered)"
+pg = "tested"
+mysql = "tested"
+tests = ["live_a_commit_of_a_failed_transaction_keeps_nothing", "live_a_failed_batch_leaves_its_transaction_open_mysql", "live_a_failed_runs_earlier_statements_are_remembered_mysql", "live_a_call_doesnt_end_a_transaction_that_stays_open_mysql"]
+
+[[case]]
+id = "txn.unrollable"
+what = "Tables a rollback can't undo (MyISAM, MEMORY) found"
+mysql = "tested"
+tests = ["live_mysql"]
+
+[[case]]
+id = "txn.ddl_commits"
+what = "MySQL DDL commits what's open (said, refused in a transaction of the app's)"
+mysql = "code"
+note = "the ddl_commits capability; no live test opens a transaction then runs DDL"
+
+[[case]]
+id = "txn.savepoints"
+what = "Savepoints (the write modes', the sandbox's)"
+pg = "code"
+mysql = "code"
+
+[[case]]
+id = "txn.two_phase"
+what = "XA / PREPARE TRANSACTION"
+pg = "no"
+mysql = "no"
+
+[[case]]
+id = "txn.mongo"
+what = "MongoDB transactions on a replica set"
+mongo = "tested"
+tests = ["live_transactions_mongodb"]
+
+# ── Session state ────────────────────────────────────────────────────
+
+[[case]]
+id = "session.memory"
+what = "What the session holds (SET, role, search_path/USE, temp tables, prepared) remembered"
+pg = "tested"
+mysql = "tested"
+tests = ["live_session_memory_postgres", "live_session_memory_mysql", "live_a_runs_settings_are_read_against_the_transaction_before_it"]
+
+[[case]]
+id = "session.locks"
+what = "Advisory, named and table locks remembered, said lost on reconnect"
+pg = "tested"
+mysql = "tested"
+tests = ["live_an_advisory_lock_in_a_rolled_back_transaction_is_remembered", "live_a_named_lock_not_taken_isnt_remembered", "live_start_transaction_lets_go_of_table_locks"]
+
+[[case]]
+id = "session.own"
+what = "Whether the session is busy or idle, as the server says while a query runs"
+pg = "tested"
+mysql = "tested"
+tests = ["live_own_session_postgres", "live_own_session_mysql"]
+
+[[case]]
+id = "session.in_calls"
+what = "SET inside a function, set_config(), SET @x := inside a SELECT"
+pg = "no"
+mysql = "no"
+
+# ── Keeping the connection ───────────────────────────────────────────
+
+[[case]]
+id = "keep.supervisor"
+what = "A connection checked while idle, a lost one reopened, paused after five"
+pg = "tested"
+mysql = "tested"
+tests = ["live_supervisor_keeps_the_connection_postgres", "live_supervisor_keeps_the_connection_mysql", "live_reconnect_postgres", "live_reconnect_mysql"]
+
+[[case]]
+id = "keep.killed"
+what = "A killed session: a run after it reconnects, a check reopens it (in a transaction too)"
+pg = "tested"
+mysql = "tested"
+tests = ["live_a_run_after_a_killed_session_reconnects_postgres", "live_a_run_after_a_killed_session_reconnects_mysql", "live_a_check_reopens_a_killed_session_in_a_transaction_postgres", "live_a_check_reopens_a_killed_session_in_a_transaction_mysql", "live_a_check_cut_short_while_reopening_postgres", "live_a_check_cut_short_while_reopening_mysql"]
+
+[[case]]
+id = "keep.lost_transaction"
+what = "A lost session with a transaction isn't reopened behind its back"
+pg = "tested"
+mysql = "tested"
+tests = ["live_a_lost_transaction_isnt_reopened_behind_its_back_postgres", "live_a_lost_transaction_isnt_reopened_behind_its_back_mysql"]
+
+[[case]]
+id = "keep.close"
+what = "Closing stops what the session runs"
+pg = "tested"
+tests = ["live_a_close_stops_what_the_session_runs"]
+
+[[case]]
+id = "keep.busy"
+what = "Work beside a busy session: plans on a connection of their own, the catalog not waiting"
+pg = "tested"
+mysql = "tested"
+tests = ["live_plans_aside_while_the_session_is_busy", "live_the_catalog_follows_use_while_the_session_is_busy", "live_the_catalog_after_use_doesnt_wait_behind_an_open_result"]
+
+# ── Types ────────────────────────────────────────────────────────────
+
+[[case]]
+id = "types.every_kind"
+what = "Every kind of type shown as text (numbers, text, binary, dates, JSON, arrays, enums, spatial…)"
+pg = "tested"
+mysql = "tested"
+tests = ["live_postgres_shows_every_kind_of_type_as_text", "live_mysql_shows_every_kind_of_type_as_text"]
+note = "from a list written by hand; database-test-coverage.md step 5 makes it the server's own"
+
+[[case]]
+id = "types.edit_literals"
+what = "Literals built for edits survive the trip (quotes, backslashes, newlines)"
+pg = "tested"
+mysql = "tested"
+sqlite = "tested"
+duckdb = "tested"
+tests = ["live_postgres", "live_mysql", "live_sqlite", "live_duckdb"]
+
+[[case]]
+id = "types.imports"
+what = "Imported values keep their types"
+pg = "tested"
+mysql = "tested"
+tests = ["live_postgres_import_types", "live_mysql_import_types"]
+
+[[case]]
+id = "types.dates"
+what = "Dates, times, time zones, intervals as the server has them"
+pg = "partial"
+mysql = "partial"
+note = "interval tested; timestamptz in the session's zone and MySQL's TIMESTAMP conversion not asserted"
+
+[[case]]
+id = "types.mongo_values"
+what = "MongoDB documents as rows; the catalog holds no value"
+mongo = "tested"
+tests = ["live_mongodb", "live_catalog_holds_no_value_mongodb"]
+
+# ── Catalog ──────────────────────────────────────────────────────────
+
+[[case]]
+id = "catalog.tables"
+what = "Tables, columns, keys, indexes, foreign keys and their rules, comments"
+pg = "tested"
+mysql = "tested"
+sqlite = "tested"
+duckdb = "tested"
+tests = ["live_details_postgres", "live_details_mysql", "live_details_sqlite", "live_details_duckdb", "live_schemas_across_engines"]
+
+[[case]]
+id = "catalog.checks"
+what = "CHECK and unique constraints"
+pg = "tested"
+mysql = "tested"
+tests = ["live_postgres_details_have_check_constraints", "live_mysql_details_have_check_constraints"]
+
+[[case]]
+id = "catalog.partitions"
+what = "Partitions, naming their parent"
+pg = "tested"
+mysql = "no"
+tests = ["live_postgres_partitions_name_their_parent"]
+
+[[case]]
+id = "catalog.materialized"
+what = "Materialized views with their columns"
+pg = "tested"
+mysql = "na"
+tests = ["live_postgres_materialized_views_are_listed_with_their_columns"]
+
+[[case]]
+id = "catalog.objects"
+what = "Triggers, sequences, types, domains, enums, events, each with its definition"
+pg = "tested"
+mysql = "tested"
+tests = ["live_postgres_lists_triggers_sequences_and_types_with_their_definitions", "live_mysql_lists_triggers_and_events_with_their_definitions"]
+
+[[case]]
+id = "catalog.table_ddl"
+what = "A table's CREATE TABLE as the server writes it (d, then c)"
+pg = "tested"
+mysql = "tested"
+tests = ["live_postgres_table_ddl_has_every_detail", "live_postgres_ddl_of_partitions_children_and_typed_tables", "live_postgres_ddl_keeps_storage_identity_and_foreign_tables", "live_postgres_18_ddl_keeps_not_null_constraints", "live_mysql_table_ddl_and_key_rules", "live_c_shows_the_servers_create_table"]
+
+[[case]]
+id = "catalog.follows_use"
+what = "The catalog follows USE"
+mysql = "tested"
+tests = ["live_the_catalog_follows_use_while_the_session_is_busy"]
+
+[[case]]
+id = "catalog.temp_tables"
+what = "A temporary table: found, planned, written as the server has it"
+pg = "tested"
+tests = ["live_a_temp_tables_read_is_planned_postgres", "live_postgres_ddl_of_partitions_children_and_typed_tables"]
+
+[[case]]
+id = "catalog.missing_kinds"
+what = "Extensions, roles, users, grants"
+pg = "no"
+mysql = "no"
+
+# ── Plans and activity ───────────────────────────────────────────────
+
+[[case]]
+id = "plans.explain"
+what = "EXPLAIN as a tree with notes; full scans found"
+pg = "tested"
+mysql = "tested"
+sqlite = "tested"
+duckdb = "tested"
+mongo = "tested"
+tests = ["live_postgres", "live_mysql", "live_sqlite", "live_duckdb", "live_full_scans_duckdb", "live_full_scans_mongodb"]
+
+[[case]]
+id = "plans.analyze"
+what = "EXPLAIN ANALYZE"
+pg = "code"
+mysql = "code"
+note = "no live test runs it; MySQL's from 8.0.18"
+
+[[case]]
+id = "plans.version_limits"
+what = "A version's missing feature named when a statement fails"
+pg = "code"
+mysql = "code"
+note = "versions.rs: 15 PostgreSQL features, 17 MySQL"
+
+[[case]]
+id = "activity.sessions"
+what = "The server's sessions listed, one stopped"
+pg = "tested"
+mysql = "tested"
+tests = ["live_activity_postgres", "live_activity_mysql", "live_stopping_a_gone_session_is_done_mysql"]
+
+[[case]]
+id = "activity.load"
+what = "The server's load (connections, the queries load_queries asks)"
+pg = "tested"
+mysql = "tested"
+tests = ["live_server_load"]
+
+[[case]]
+id = "activity.locks_and_slow"
+what = "Locks and waits, slow statements"
+pg = "no"
+mysql = "no"
+
+# ── Through the app ──────────────────────────────────────────────────
+
+[[case]]
+id = "app.agents"
+what = "Agents' tools on a live server: their reads, writes, dry runs and sandboxes"
+pg = "tested"
+mysql = "tested"
+mongo = "tested"
+tests = ["live_agents_on_servers", "live_agents_on_mongodb", "live_dry_run_notes_and_sandbox_ends"]
