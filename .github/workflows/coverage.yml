@@ -1,0 +1,58 @@
+name: Coverage
+
+# Which code the tests reach, the live ones on real servers included: the
+# lines no case of testdata/database_cases.toml runs show where cases are
+# missing (podelis-planai's database-test-coverage.md, step 1). By hand
+# only: an instrumented build is slow and large, and its report is read,
+# not checked.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  coverage:
+    name: Coverage (live PostgreSQL, MySQL, SQLite)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -proot" --health-interval 2s --health-timeout 5s --health-retries 60
+    env:
+      PODELIS_TEST_PG_PORT: 5432
+      PODELIS_TEST_PG_PASSWORD: postgres
+      PODELIS_TEST_MYSQL_PORT: 3306
+      PODELIS_TEST_MYSQL_PASSWORD: root
+    steps:
+      - uses: actions/checkout@v5
+      # The version pinned in rust-toolchain.toml, with LLVM's tools for the
+      # instrumented build.
+      - run: rustup toolchain install && rustup component add llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - run: cargo llvm-cov --workspace --locked --no-report
+      - run: cargo llvm-cov report --html --output-dir coverage
+      # The totals per file on the run's page; the lines in the artifact.
+      - run: cargo llvm-cov report --summary-only >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: coverage/html
+          retention-days: 14
