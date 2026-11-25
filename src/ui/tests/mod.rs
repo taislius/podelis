@@ -31,6 +31,7 @@ use crate::sql::complete::{CandKind, Candidate};
 
 mod agents;
 mod editor;
+mod fit;
 mod layout;
 mod menus;
 mod navigator;
@@ -45,7 +46,7 @@ pub(super) fn render(app: &mut App, width: u16, height: u16) -> String {
 }
 
 /// An app with projects "shop" (two connections) and "analytics".
-pub(super) fn app() -> (App, tempfile::TempDir) {
+pub(crate) fn app() -> (App, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let (mut store, _) = ConnectionStore::load_from(dir.path().join("c.toml"));
     let shop = store.add_project("shop").unwrap();
@@ -65,7 +66,7 @@ pub(super) fn app() -> (App, tempfile::TempDir) {
 }
 
 /// The query screen with a small result set.
-pub(super) fn query_app() -> (App, tempfile::TempDir) {
+pub(crate) fn query_app() -> (App, tempfile::TempDir) {
     let (mut app, dir) = app();
     app.screen = Screen::Query;
     app.pretend_connected();

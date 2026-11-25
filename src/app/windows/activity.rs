@@ -39,6 +39,14 @@ pub struct ActivityView {
     refreshed: Option<Instant>,
 }
 
+impl ActivityView {
+    /// The view as it opens, its sessions on their way.
+    #[cfg(test)]
+    pub fn waiting() -> Self {
+        ActivityView { rows: Vec::new(), selected: 0, error: None, confirm: None, loading: true, refreshed: None }
+    }
+}
+
 impl App {
     pub(in crate::app) fn open_activity(&mut self) {
         if self.connection.database.is_none() {

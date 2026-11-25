@@ -35,6 +35,9 @@ pub use query_screen::results::grid::ResultGrid;
 pub use query_screen::sandbox::Sandbox;
 pub use query_screen::tabs::{PlanSource, TabState};
 pub use query_screen::tabs::{TabMeta, TabPrompt, TabPromptKind};
+// For the UI's tests, which draw a review or a sandbox of their own.
+#[cfg(test)]
+pub use query_screen::{review::Review, sandbox::Step as SandboxStep};
 pub use windows::agents::{AgentQuery, Agents, short_dir, short_time};
 pub use windows::library::{LibraryItem, LibraryView};
 

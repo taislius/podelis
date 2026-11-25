@@ -31,8 +31,11 @@ mod popups;
 mod query_screen;
 mod settings;
 mod splash;
+// The rules each frame keeps, for the app's tests and these.
 #[cfg(test)]
-mod tests;
+pub(crate) mod fit_rules;
+#[cfg(test)]
+pub(crate) mod tests;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();

@@ -1,0 +1,49 @@
+{
+  "MariaDB 11.4": {
+    "create_table": "CREATE TABLE `words_orders` (\n  `id` int(11) NOT NULL,\n  `note` varchar(40) NOT NULL DEFAULT 'none',\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;",
+    "duplicate_key": "Duplicate entry '1' for key 'PRIMARY'",
+    "engine": "MySQL",
+    "missing_table": "Table 'podelis_words.podelis_no_such_table' doesn't exist",
+    "refused": "can't reach 127.0.0.1:1: connection refused",
+    "syntax_error": "syntax error near 'SELEC id FROM orders' at line 1",
+    "unknown_database": "couldn't connect: Unknown database 'podelis_no_such_database'",
+    "wrong_password": "couldn't connect: Access denied for user 'root'@'172.17.0.1' (using password: YES)"
+  },
+  "MySQL 8.4": {
+    "create_table": "CREATE TABLE `words_orders` (\n  `id` int NOT NULL,\n  `note` varchar(40) NOT NULL DEFAULT 'none',\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;",
+    "duplicate_key": "Duplicate entry '1' for key 'words_orders.PRIMARY'",
+    "engine": "MySQL",
+    "missing_table": "Table 'podelis_words.podelis_no_such_table' doesn't exist",
+    "refused": "can't reach 127.0.0.1:1: connection refused",
+    "syntax_error": "syntax error near 'SELEC id FROM orders' at line 1",
+    "unknown_database": "couldn't connect: Unknown database 'podelis_no_such_database'",
+    "wrong_password": "couldn't connect: Access denied for user 'root'@'172.17.0.1' (using password: YES)"
+  },
+  "PostgreSQL 17": {
+    "create_table": "CREATE TABLE public.words_orders (\n  id integer NOT NULL,\n  note character varying(40) DEFAULT 'none'::character varying NOT NULL,\n  CONSTRAINT words_orders_pkey PRIMARY KEY (id)\n);",
+    "duplicate_key": "duplicate key value violates unique constraint \"words_orders_pkey\". Key (id)=(1) already exists.",
+    "engine": "PostgreSQL",
+    "missing_table": "relation \"podelis_no_such_table\" does not exist",
+    "refused": "can't reach 127.0.0.1:1: connection refused",
+    "syntax_error": "syntax error at or near \"SELEC\"",
+    "unknown_database": "couldn't connect: database \"podelis_no_such_database\" does not exist",
+    "wrong_password": "couldn't connect: password authentication failed for user \"postgres\""
+  },
+  "PostgreSQL 18": {
+    "create_table": "CREATE TABLE public.words_orders (\n  id integer NOT NULL,\n  note character varying(40) DEFAULT 'none'::character varying NOT NULL,\n  CONSTRAINT words_orders_pkey PRIMARY KEY (id)\n);",
+    "duplicate_key": "duplicate key value violates unique constraint \"words_orders_pkey\". Key (id)=(1) already exists.",
+    "engine": "PostgreSQL",
+    "missing_table": "relation \"podelis_no_such_table\" does not exist",
+    "refused": "can't reach 127.0.0.1:1: connection refused",
+    "syntax_error": "syntax error at or near \"SELEC\"",
+    "unknown_database": "couldn't connect: database \"podelis_no_such_database\" does not exist",
+    "wrong_password": "couldn't connect: password authentication failed for user \"postgres\""
+  },
+  "SQLite": {
+    "create_table": "CREATE TABLE words_orders (id INT PRIMARY KEY, note VARCHAR(40) NOT NULL DEFAULT 'none')",
+    "duplicate_key": "UNIQUE constraint failed: words_orders.id",
+    "engine": "SQLite",
+    "missing_table": "no such table: podelis_no_such_table",
+    "syntax_error": "near \"SELEC\": syntax error"
+  }
+}

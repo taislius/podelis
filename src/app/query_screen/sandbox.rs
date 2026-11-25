@@ -67,6 +67,12 @@ pub(in crate::app) enum Then {
 }
 
 impl Sandbox {
+    /// A sandbox that ran `steps`, opened just now.
+    #[cfg(test)]
+    pub fn for_tests(steps: Vec<Step>) -> Self {
+        Sandbox { steps, started: Some(Instant::now()), warned: false, copy: None }
+    }
+
     /// Per table: the rows the steps changed there, and whether its schema
     /// changed, in the order first written.
     pub fn summary(&self) -> Vec<(String, u64, bool)> {

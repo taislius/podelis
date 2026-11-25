@@ -9,6 +9,9 @@ use crate::db::tests::file_engine;
 use crate::db::{ConnectionMode, SslMode, TxnState};
 
 mod agents;
+// Its scenarios bring a database of their own: SQLite's, in memory.
+#[cfg(feature = "sqlite")]
+mod behaviours;
 mod connections;
 mod editor;
 mod navigator;
@@ -16,6 +19,8 @@ mod plans;
 mod results;
 mod running;
 mod safety;
+// What real servers say, recorded for the scenarios (`behaviours`).
+mod server_words;
 mod settings;
 mod tabs;
 

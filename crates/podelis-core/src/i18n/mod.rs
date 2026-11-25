@@ -26,9 +26,45 @@ static LOADED: [OnceLock<Catalog>; LANGUAGES.len()] = [const { OnceLock::new() }
 /// chosen, as in tests).
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
 
+/// The chosen language: this thread's for a test that set one (tests run
+/// side by side, each in its own language), else the app's.
+fn current() -> usize {
+    #[cfg(feature = "test-support")]
+    if let Some(i) = THIS_THREAD.get() {
+        return i;
+    }
+    CURRENT.load(Ordering::Relaxed)
+}
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static THIS_THREAD: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// A test's language, on its thread only, till the guard is dropped (other
+/// tests, running beside it, keep theirs).
+#[cfg(feature = "test-support")]
+#[must_use]
+pub fn on_this_thread(code: &str) -> ThreadLanguage {
+    let i = LANGUAGES.iter().position(|(c, _, _)| *c == code).expect("a language there is");
+    ThreadLanguage(THIS_THREAD.replace(Some(i)), std::marker::PhantomData)
+}
+
+/// What [`on_this_thread`] gives: the thread's language before, put back
+/// when dropped; on that thread only (it can't be sent to another).
+#[cfg(feature = "test-support")]
+pub struct ThreadLanguage(Option<usize>, std::marker::PhantomData<*const ()>);
+
+#[cfg(feature = "test-support")]
+impl Drop for ThreadLanguage {
+    fn drop(&mut self) {
+        THIS_THREAD.set(self.0);
+    }
+}
+
 /// The chosen language's words.
 fn words() -> &'static Catalog {
-    loaded(CURRENT.load(Ordering::Relaxed))
+    loaded(current())
 }
 
 /// Language `i`'s words over English's, made the first time they're asked for.
@@ -44,7 +80,7 @@ fn loaded(i: usize) -> &'static Catalog {
 
 /// The chosen language's code (`en`, `lt`).
 pub fn code() -> &'static str {
-    LANGUAGES[CURRENT.load(Ordering::Relaxed)].0
+    LANGUAGES[current()].0
 }
 
 /// A language's words, its keys flattened (`section.key`).
