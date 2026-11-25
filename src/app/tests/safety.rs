@@ -739,3 +739,37 @@ async fn a_reconnect_ends_a_files_sandbox_on_the_original() {
     }
     assert!(!copy.parent().unwrap().exists(), "the copy's folder deleted");
 }
+
+/// MySQL commits what's open before a DDL statement: a transaction the
+/// user began is over after it (the app says it isn't open any more), and
+/// what it wrote stays, a ROLLBACK after it undoing nothing.
+#[tokio::test]
+async fn live_mysql_ddl_ends_the_transaction_the_user_began() {
+    let Some((mut app, _dir)) = super::live_mysql_app(ConnectionMode::Normal).await else { return };
+    // Run as a user does: a destructive statement asked about, and said yes to.
+    async fn run_confirmed(app: &mut App, sql: &str) {
+        run_sql(app, sql).await;
+        if app.popups.confirm.is_some() {
+            app.handle_key(key(KeyCode::Char('y')));
+            finish(app).await;
+        }
+    }
+    run_confirmed(&mut app, "DROP DATABASE IF EXISTS podelis_ddl_commits; CREATE DATABASE podelis_ddl_commits").await;
+    run_sql(&mut app, "USE podelis_ddl_commits").await;
+    run_sql(&mut app, "CREATE TABLE t (id INT PRIMARY KEY)").await;
+    run_sql(&mut app, "BEGIN; INSERT INTO t VALUES (1)").await;
+    assert_eq!(app.connection.txn, TxnState::Open, "{:?}", app.tab.run_error);
+    run_sql(&mut app, "CREATE TABLE u (x INT)").await;
+    assert_eq!(
+        app.connection.txn,
+        TxnState::Idle,
+        "the DDL committed it; said {:?}, asked {:?}, error {:?}",
+        app.notes.status,
+        app.popups.confirm.as_ref().map(|c| c.message.clone()),
+        app.tab.run_error
+    );
+    run_sql(&mut app, "ROLLBACK").await;
+    run_sql(&mut app, "SELECT COUNT(*) FROM t").await;
+    assert_eq!(app.tab.grid.results.as_ref().unwrap().rows, vec![vec![Some("1".to_string())]], "the row stayed");
+    run_confirmed(&mut app, "DROP DATABASE podelis_ddl_commits").await;
+}

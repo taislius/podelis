@@ -504,6 +504,102 @@ async fn live_postgres_shows_every_base_type_as_the_server_writes_it() {
     assert!(differ.is_empty(), "shown otherwise than the server writes them:\n  {}", differ.join("\n  "));
 }
 
+/// Every kind of object PostgreSQL has, as the navigator accounts for it:
+/// `relkind`s (tables listed, views, materialized views, foreign and
+/// partitioned tables; sequences and composite types with the functions;
+/// indexes under their table; TOAST tables internal), `prokind`s
+/// (functions, procedures, aggregates, window functions) and `typtype`s
+/// (base and pseudo types the server's; composite, domain, enum, range
+/// listed; a multirange with its range).
+#[cfg(test)]
+const PG_RELKINDS: &[char] = &['r', 'p', 'v', 'm', 'f', 'S', 'c', 'i', 'I', 't'];
+#[cfg(test)]
+const PG_PROKINDS: &[char] = &['f', 'p', 'a', 'w'];
+#[cfg(test)]
+const PG_TYPTYPES: &[char] = &['b', 'p', 'c', 'd', 'e', 'r', 'm'];
+
+/// One of each kind of object a user makes, found in the navigator with
+/// its kind and its definition; and every kind the server's catalogs have
+/// accounted for (`PG_RELKINDS`…): a new version's new kind fails here
+/// until the navigator knows what to do with it.
+#[tokio::test]
+async fn live_postgres_lists_every_kind_of_object() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    db.run(
+        "DROP SCHEMA IF EXISTS podelis_kinds CASCADE; CREATE SCHEMA podelis_kinds; SET search_path = podelis_kinds;
+         CREATE TABLE t (id int PRIMARY KEY);
+         CREATE TABLE p (id int) PARTITION BY RANGE (id);
+         CREATE TABLE p1 PARTITION OF p FOR VALUES FROM (0) TO (10);
+         CREATE INDEX p_id ON p (id);
+         CREATE VIEW v AS SELECT 1 AS x;
+         CREATE MATERIALIZED VIEW m AS SELECT 1 AS x;
+         CREATE SEQUENCE s;
+         CREATE TYPE c AS (a int);
+         CREATE TYPE e AS ENUM ('a', 'b');
+         CREATE DOMAIN d AS int CHECK (VALUE > 0);
+         CREATE TYPE r AS RANGE (SUBTYPE = int8);
+         CREATE FUNCTION f() RETURNS int LANGUAGE sql AS 'SELECT 1';
+         CREATE PROCEDURE pr() LANGUAGE sql AS 'SELECT 1';
+         CREATE AGGREGATE ag(int) (SFUNC = int4pl, STYPE = int, INITCOND = '0');
+         CREATE EXTENSION IF NOT EXISTS postgres_fdw SCHEMA public;
+         DROP SERVER IF EXISTS podelis_kinds_far CASCADE;
+         CREATE SERVER podelis_kinds_far FOREIGN DATA WRAPPER postgres_fdw OPTIONS (host 'localhost');
+         CREATE FOREIGN TABLE ft (a int) SERVER podelis_kinds_far;
+         RESET search_path",
+        DEFAULT_ROW_LIMIT,
+    )
+    .await
+    .unwrap();
+    // The tables, views and the rest of their kind, as the navigator lists them.
+    let tables = db.tables(false).await.unwrap();
+    let ours: Vec<_> = tables.iter().filter(|t| t.schema == "podelis_kinds").collect();
+    let kind = |name: &str| {
+        let t = ours.iter().find(|t| t.name == name).unwrap_or_else(|| panic!("{name} listed: {ours:?}"));
+        (t.is_view, t.materialized, t.partition_of.is_some())
+    };
+    assert_eq!(kind("t"), (false, false, false));
+    assert_eq!(kind("p"), (false, false, false));
+    assert_eq!(kind("p1"), (false, false, true), "a partition names its parent");
+    assert_eq!(kind("v"), (true, false, false));
+    assert_eq!(kind("m"), (true, true, false));
+    assert_eq!(kind("ft"), (false, false, false), "a foreign table is listed with the tables");
+    // The rest with the functions, each with its kind and a definition.
+    let routines = db.routines().await.unwrap();
+    for (name, wanted) in [
+        ("s", "sequence"),
+        ("c", "type"),
+        ("e", "enum"),
+        ("d", "domain"),
+        ("r", "range"),
+        ("f()", "function"),
+        ("pr()", "procedure"),
+        ("ag(integer)", "aggregate"),
+    ] {
+        let routine = routines
+            .iter()
+            .find(|r| r.schema == "podelis_kinds" && r.name == name)
+            .unwrap_or_else(|| panic!("{name} listed with the functions"));
+        assert_eq!(routine.kind, wanted, "{name}");
+        let definition = db.routine_definition(routine).await.unwrap_or_else(|e| panic!("{name}: {e:#}"));
+        assert!(definition.contains("CREATE"), "{name}: {definition}");
+    }
+    // Every kind the server's catalogs have, accounted for.
+    for (sql, known) in [
+        ("SELECT DISTINCT relkind::text FROM pg_class", PG_RELKINDS),
+        ("SELECT DISTINCT prokind::text FROM pg_proc", PG_PROKINDS),
+        ("SELECT DISTINCT typtype::text FROM pg_type", PG_TYPTYPES),
+    ] {
+        let o = db.run(sql, 1000).await.unwrap();
+        let new: Vec<String> = cells(&o)
+            .into_iter()
+            .filter_map(|row| row[0].map(str::to_string))
+            .filter(|k| !k.chars().next().is_some_and(|c| known.contains(&c)))
+            .collect();
+        assert!(new.is_empty(), "{sql}: kinds the navigator doesn't account for: {new:?}");
+    }
+    db.run("DROP SCHEMA podelis_kinds CASCADE; DROP SERVER podelis_kinds_far CASCADE", 1).await.unwrap();
+}
+
 #[tokio::test]
 async fn live_postgres_lists_triggers_sequences_and_types_with_their_definitions() {
     let Some(db) = live_db(Engine::Postgres).await else { return };

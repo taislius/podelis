@@ -483,6 +483,62 @@ async fn live_mysql_details_have_check_constraints() {
     db.run("DROP DATABASE podelis_checks", DEFAULT_ROW_LIMIT).await.unwrap();
 }
 
+/// MySQL's and MariaDB's kinds of table (`TABLE_TYPE`) and routine
+/// (`ROUTINE_TYPE`) the navigator accounts for: tables and views listed
+/// (a MariaDB sequence or system-versioned table with the tables);
+/// functions and procedures with their definitions. MariaDB's packages
+/// (Oracle mode) aren't: a server with one fails here.
+#[cfg(test)]
+const MYSQL_TABLE_TYPES: &[&str] = &["BASE TABLE", "VIEW", "SYSTEM VIEW", "SEQUENCE", "SYSTEM VERSIONED", "TEMPORARY"];
+#[cfg(test)]
+const MYSQL_ROUTINE_TYPES: &[&str] = &["FUNCTION", "PROCEDURE"];
+
+/// One of each kind of object a user makes, found in the navigator with
+/// its kind and its definition; and every kind the server's catalog has,
+/// accounted for: a new version's new kind fails here until the navigator
+/// knows what to do with it.
+#[tokio::test]
+async fn live_mysql_lists_every_kind_of_object() {
+    let Some((db, _)) = own_live_db("podelis_kinds").await else { return };
+    db.run(
+        "CREATE TABLE t (id INT PRIMARY KEY);
+         CREATE VIEW v AS SELECT 1 AS x;
+         CREATE FUNCTION f() RETURNS INT DETERMINISTIC RETURN 1;
+         CREATE PROCEDURE pr() SELECT 1;
+         CREATE TRIGGER tr BEFORE INSERT ON t FOR EACH ROW SET NEW.id = NEW.id;
+         CREATE EVENT ev ON SCHEDULE EVERY 1 DAY DISABLE DO SELECT 1",
+        DEFAULT_ROW_LIMIT,
+    )
+    .await
+    .unwrap();
+    let tables = db.tables(false).await.unwrap();
+    let is_view = |name: &str| {
+        tables.iter().find(|t| t.name == name).unwrap_or_else(|| panic!("{name} listed: {tables:?}")).is_view
+    };
+    assert!(!is_view("t") && is_view("v"));
+    let routines = db.routines().await.unwrap();
+    for (name, wanted) in [("f", "function"), ("pr", "procedure"), ("tr (t)", "trigger"), ("ev", "event")] {
+        let routine = routines.iter().find(|r| r.name == name).unwrap_or_else(|| panic!("{name} listed: {routines:?}"));
+        assert_eq!(routine.kind, wanted, "{name}");
+        let definition = db.routine_definition(routine).await.unwrap_or_else(|e| panic!("{name}: {e:#}"));
+        assert!(definition.contains("CREATE"), "{name}: {definition}");
+    }
+    // Every kind the server's catalog has, accounted for.
+    for (sql, known) in [
+        ("SELECT DISTINCT CAST(TABLE_TYPE AS CHAR) FROM information_schema.TABLES", MYSQL_TABLE_TYPES),
+        ("SELECT DISTINCT CAST(ROUTINE_TYPE AS CHAR) FROM information_schema.ROUTINES", MYSQL_ROUTINE_TYPES),
+    ] {
+        let o = db.run(sql, 1000).await.unwrap();
+        let new: Vec<String> = cells(&o)
+            .into_iter()
+            .filter_map(|row| row[0].map(str::to_string))
+            .filter(|k| !known.contains(&k.as_str()))
+            .collect();
+        assert!(new.is_empty(), "{sql}: kinds the navigator doesn't account for: {new:?}");
+    }
+    db.run("DROP DATABASE podelis_kinds", 1).await.unwrap();
+}
+
 /// MySQL's types: the column type, its `DATA_TYPE` name, a sample value.
 #[cfg(test)]
 const MYSQL_TYPES: &[(&str, &str, &str)] = &[

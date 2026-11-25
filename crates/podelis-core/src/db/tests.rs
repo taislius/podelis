@@ -1252,3 +1252,236 @@ async fn a_certificate_that_isnt_trusted_is_said_in_plain_words() {
         assert!(!said.contains("can't reach"), "{engine:?}: it answered: {said}");
     }
 }
+
+/// The TLS test servers (`scripts/tls-test-servers.sh`): their files'
+/// folder and the engine's port, if they're up.
+#[cfg(all(test, any(feature = "postgres", feature = "mysql")))]
+fn tls_server(port_var: &str) -> Option<(std::path::PathBuf, u16)> {
+    let dir = std::env::var("PODELIS_TEST_TLS_DIR").ok()?;
+    let port = std::env::var(port_var).ok()?.parse().ok()?;
+    Some((std::path::PathBuf::from(dir), port))
+}
+
+/// Every TLS mode against a server with a certificate of a test CA's for
+/// `localhost` only: disable has none; require has it, and says it;
+/// verify-full checks the CA and the name (`localhost` passes, 127.0.0.1
+/// doesn't); verify-ca the CA only (127.0.0.1 passes); another CA is
+/// refused, and said to be TLS's fault; a user who logs in only with a
+/// client certificate does with it, and doesn't without.
+#[cfg(all(test, any(feature = "postgres", feature = "mysql")))]
+async fn live_tls(engine: Engine, port_var: &str, (admin, password): (&str, &str), cert_user: (&str, &str)) {
+    let Some((dir, port)) = tls_server(port_var) else { return };
+    let file = |name: &str| Some(dir.join(name).to_string_lossy().into_owned());
+    let params = |host: &str, ssl_mode: SslMode, tls: crate::db::TlsFiles, (user, password): (&str, &str)| {
+        ConnectParams {
+            engine,
+            host: host.into(),
+            port,
+            user: user.into(),
+            password: password.into(),
+            // (PostgreSQL's default is the user's own name: none such.)
+            database: if engine == Engine::Postgres { "postgres".into() } else { String::new() },
+            ssl_mode,
+            tls,
+            read_only: false,
+            ssh: None,
+            password_command: Vec::new(),
+            for_agents: false,
+        }
+    };
+    let ca = || crate::db::TlsFiles { ca: file("ca.crt"), ..crate::db::TlsFiles::default() };
+    let connect = |p: ConnectParams| async move { Database::connect(p).await };
+    let admin = (admin, password);
+
+    let plain =
+        connect(params("127.0.0.1", SslMode::Disable, crate::db::TlsFiles::default(), admin)).await.expect("disable");
+    assert_eq!(plain.tls_info().await, None, "{engine:?}: disable has no TLS");
+    let required =
+        connect(params("127.0.0.1", SslMode::Require, crate::db::TlsFiles::default(), admin)).await.expect("require");
+    let info = required.tls_info().await.unwrap_or_default();
+    assert!(info.contains("TLS"), "{engine:?}: the session's TLS said: {info:?}");
+    connect(params("localhost", SslMode::VerifyFull, ca(), admin)).await.expect("verify-full by its name");
+    connect(params("127.0.0.1", SslMode::VerifyCa, ca(), admin)).await.expect("verify-ca without the name");
+    let wrong_name = connect(params("127.0.0.1", SslMode::VerifyFull, ca(), admin)).await;
+    let err = wrong_name.err().unwrap_or_else(|| panic!("{engine:?}: verify-full took a name not in the certificate"));
+    assert!(crate::db::errors::tls_failure(&err).is_some(), "{engine:?}: said to be TLS's: {err:#}");
+    let other = crate::db::TlsFiles { ca: file("other-ca.crt"), ..crate::db::TlsFiles::default() };
+    let wrong_ca = connect(params("localhost", SslMode::VerifyCa, other, admin)).await;
+    let err = wrong_ca.err().unwrap_or_else(|| panic!("{engine:?}: verify-ca took another CA's certificate"));
+    assert!(crate::db::errors::tls_failure(&err).is_some(), "{engine:?}: said to be TLS's: {err:#}");
+    let with_cert = crate::db::TlsFiles { cert: file("client.crt"), key: file("client.key"), ..ca() };
+    connect(params("localhost", SslMode::VerifyFull, with_cert, cert_user))
+        .await
+        .expect("the client certificate's user");
+    let without = connect(params("localhost", SslMode::VerifyFull, ca(), cert_user)).await;
+    assert!(without.is_err(), "{engine:?}: the certificate's user logged in without it");
+}
+
+#[cfg(feature = "postgres")]
+#[tokio::test]
+async fn live_tls_postgres() {
+    live_tls(Engine::Postgres, "PODELIS_TEST_TLS_PG_PORT", ("postgres", "postgres"), ("podelis_cert", "")).await;
+}
+
+#[cfg(feature = "mysql")]
+#[tokio::test]
+async fn live_tls_mysql() {
+    live_tls(Engine::MySql, "PODELIS_TEST_TLS_MYSQL_PORT", ("root", "root"), ("podelis_cert", "certpw")).await;
+}
+
+/// Two sessions each waiting for the other's row: the server refuses one
+/// (a deadlock), and what Podėlis says of it says so; the other goes on.
+/// PostgreSQL leaves the refused one's transaction failed (a ROLLBACK
+/// ends it); MySQL has rolled it back. A session waiting for a row longer
+/// than its limit (`lock_timeout`) is told the wait timed out.
+#[cfg(all(test, any(feature = "postgres", feature = "mysql")))]
+async fn live_deadlock_and_lock_wait(engine: Engine, lock_limit: &str) {
+    let Some((a, params)) = own_live_db(engine, "podelis_locks").await else { return };
+    let b = Database::connect(params).await.expect("a second session");
+    let said = |r: Result<QueryOutcome>| r.map(|_| ()).map_err(|e| crate::db::error_message(&e));
+    a.run(
+        "DROP TABLE IF EXISTS dl; CREATE TABLE dl (id INT PRIMARY KEY, n INT); INSERT INTO dl VALUES (1, 0), (2, 0)",
+        1,
+    )
+    .await
+    .unwrap();
+    a.run("BEGIN; UPDATE dl SET n = 1 WHERE id = 1", 1).await.unwrap();
+    b.run("BEGIN; UPDATE dl SET n = 1 WHERE id = 2", 1).await.unwrap();
+    // a waits for b's row; b then for a's: a deadlock, one of them refused.
+    let waiting = {
+        let a = a.clone();
+        tokio::spawn(async move { a.run("UPDATE dl SET n = 2 WHERE id = 2", 1).await })
+    };
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let from_b = said(b.run("UPDATE dl SET n = 2 WHERE id = 1", 1).await);
+    let from_a = said(waiting.await.unwrap());
+    let refused: Vec<&String> = [&from_a, &from_b].into_iter().filter_map(|r| r.as_ref().err()).collect();
+    assert_eq!(refused.len(), 1, "{engine:?}: one refused: {from_a:?} {from_b:?}");
+    assert!(refused[0].to_lowercase().contains("deadlock"), "{engine:?}: said to be a deadlock: {}", refused[0]);
+    let victim = if from_a.is_err() { &a } else { &b };
+    if engine == Engine::Postgres {
+        assert_eq!(victim.transaction_state().await, Some(TxnState::Aborted), "its transaction failed");
+    }
+    a.run("ROLLBACK", 1).await.unwrap();
+    b.run("ROLLBACK", 1).await.unwrap();
+    // A lock waited for longer than the session's limit.
+    a.run("BEGIN; UPDATE dl SET n = 3 WHERE id = 1", 1).await.unwrap();
+    b.run(lock_limit, 1).await.unwrap();
+    let waited = said(b.run("BEGIN; UPDATE dl SET n = 4 WHERE id = 1", 1).await);
+    let why = waited.expect_err("the wait ended by its limit").to_lowercase();
+    assert!(why.contains("lock") && why.contains("timeout"), "{engine:?}: said to be the lock's wait: {why}");
+    a.run("ROLLBACK", 1).await.unwrap();
+    b.run("ROLLBACK", 1).await.unwrap();
+    assert_eq!(cells(&b.run("SELECT n FROM dl WHERE id = 1", 1).await.unwrap()), vec![vec![Some("0")]]);
+}
+
+#[cfg(feature = "postgres")]
+#[tokio::test]
+async fn live_deadlock_and_lock_wait_postgres() {
+    live_deadlock_and_lock_wait(Engine::Postgres, "SET lock_timeout = '500ms'").await;
+}
+
+#[cfg(feature = "mysql")]
+#[tokio::test]
+async fn live_deadlock_and_lock_wait_mysql() {
+    live_deadlock_and_lock_wait(Engine::MySql, "SET SESSION innodb_lock_wait_timeout = 1").await;
+}
+
+/// EXPLAIN ANALYZE, as each engine writes it (PostgreSQL's JSON, MySQL's
+/// tree from 8.0.18, MariaDB's ANALYZE), made a plan with what it measured.
+#[cfg(all(test, any(feature = "postgres", feature = "mysql")))]
+async fn live_explain_analyze(engine: Engine, measured: &[&str]) {
+    let Some((db, _)) = own_live_db(engine, "podelis_analyze").await else { return };
+    db.run("DROP TABLE IF EXISTS pa; CREATE TABLE pa (id INT PRIMARY KEY, n INT); INSERT INTO pa VALUES (1, 1), (2, 2), (3, 3)", 1)
+        .await
+        .unwrap();
+    let dialect = engine.dialect().unwrap();
+    let Some(sql) = dialect.explain_analyze("SELECT * FROM pa WHERE n > 1", db.version()) else {
+        // A server without it (MySQL before 8.0.18) says so where it's asked.
+        return;
+    };
+    let o = db.run(&sql, 1000).await.unwrap_or_else(|e| panic!("{engine:?} {sql}: {e:#}"));
+    let plan = dialect.format_plan(&o.columns, &o.rows).unwrap_or_else(|| panic!("{engine:?}: a plan from {o:?}"));
+    let text = plan.text.to_lowercase();
+    assert!(measured.iter().any(|m| text.contains(m)), "{engine:?}: what it measured, in\n{}", plan.text);
+}
+
+#[cfg(feature = "postgres")]
+#[tokio::test]
+async fn live_explain_analyze_postgres() {
+    live_explain_analyze(Engine::Postgres, &["actual"]).await;
+}
+
+#[cfg(feature = "mysql")]
+#[tokio::test]
+async fn live_explain_analyze_mysql() {
+    live_explain_analyze(Engine::MySql, &["actual", "r_rows"]).await;
+}
+
+/// What a newer server has, said for an older one, both ways on whatever
+/// server this is: a statement Podėlis says this server is too old for
+/// (`too_new`) is refused by it, and one it refuses as unknown syntax is
+/// one Podėlis names the version for. CI's `versions` job runs it on the
+/// old servers; on the newest, nothing's refused, and that's checked too.
+#[cfg(all(test, any(feature = "postgres", feature = "mysql")))]
+async fn live_version_limits(engine: Engine, setup: &str, samples: &[&str]) {
+    let Some((db, _)) = own_live_db(engine, "podelis_versions").await else { return };
+    db.run(setup, 1).await.unwrap();
+    let dialect = engine.dialect().unwrap();
+    let mut wrong = Vec::new();
+    for sql in samples {
+        let said = dialect.too_new(sql, db.version());
+        match (db.run(sql, 1).await, &said) {
+            (Ok(_), Some(too_new)) => {
+                wrong.push(format!("{sql}: said to need {}, but {} ran it", too_new.needs, db.version()));
+            }
+            (Err(e), None) if crate::db::missing_feature(&e) => {
+                wrong.push(format!("{sql}: refused by {} as unknown, and no version said: {e:#}", db.version()));
+            }
+            _ => {}
+        }
+    }
+    assert!(wrong.is_empty(), "{engine:?} {}:\n  {}", db.version(), wrong.join("\n  "));
+}
+
+#[cfg(feature = "postgres")]
+#[tokio::test]
+async fn live_version_limits_postgres() {
+    live_version_limits(
+        Engine::Postgres,
+        "DROP TABLE IF EXISTS vt; CREATE TABLE vt (id int); INSERT INTO vt VALUES (1), (1), (2)",
+        &[
+            "MERGE INTO vt USING (SELECT 3 AS id) s ON vt.id = s.id WHEN NOT MATCHED THEN INSERT VALUES (s.id)",
+            "SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS (x int PATH '$'))",
+            "SELECT JSON_VALUE('{\"a\": 1}', '$.a')",
+            "SELECT '1' IS JSON",
+            "SELECT ANY_VALUE(id) FROM vt",
+            "SELECT JSON_ARRAY(1, 2)",
+            "CREATE TEMPORARY TABLE nnd (a int UNIQUE NULLS NOT DISTINCT)",
+            "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) \
+             SEARCH DEPTH FIRST BY n SET o SELECT n FROM r",
+            "SELECT id FROM vt ORDER BY id FETCH FIRST 1 ROWS WITH TIES",
+        ],
+    )
+    .await;
+}
+
+#[cfg(feature = "mysql")]
+#[tokio::test]
+async fn live_version_limits_mysql() {
+    live_version_limits(
+        Engine::MySql,
+        "DROP TABLE IF EXISTS vt; CREATE TABLE vt (id INT); INSERT INTO vt VALUES (1), (2)",
+        &[
+            "WITH x AS (SELECT 1 AS a) SELECT a FROM x",
+            "SELECT id, ROW_NUMBER() OVER (ORDER BY id) FROM vt",
+            "SELECT * FROM vt, LATERAL (SELECT vt.id AS j) d",
+            "SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS (x INT PATH '$')) t",
+            "VALUES ROW(1, 2)",
+            "TABLE vt",
+            "EXPLAIN ANALYZE SELECT * FROM vt",
+            "CREATE TEMPORARY TABLE rc (a INT); ALTER TABLE rc RENAME COLUMN a TO b",
+        ],
+    )
+    .await;
+}

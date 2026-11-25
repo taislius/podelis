@@ -144,22 +144,32 @@ mysql = "na"
 
 [[case]]
 id = "tls.modes"
-what = "disable / prefer / require / verify-ca / verify-full"
-pg = "code"
-mysql = "code"
-note = "CI's servers have no certificates"
+what = "disable / prefer / require / verify-ca / verify-full: the CA checked, the name by verify-full only, another CA refused and said to be TLS's"
+pg = "tested"
+mysql = "tested"
+tests = ["live_tls_postgres", "live_tls_mysql"]
+note = "against scripts/tls-test-servers.sh's servers (CI's tls job); prefer not asserted apart from require"
 
 [[case]]
 id = "tls.files"
-what = "Own CA, client certificate and key"
-pg = "code"
-mysql = "code"
+what = "Own CA, client certificate and key: a user who logs in only with the certificate does, and doesn't without"
+pg = "tested"
+mysql = "tested"
+tests = ["live_tls_postgres", "live_tls_mysql"]
 
 [[case]]
 id = "tls.info"
-what = "The session's TLS version and cipher shown"
-pg = "code"
-mysql = "code"
+what = "The session's TLS version and cipher shown, none without TLS"
+pg = "tested"
+mysql = "tested"
+tests = ["live_tls_postgres", "live_tls_mysql"]
+
+[[case]]
+id = "tls.after_idle"
+what = "A TLS session dropped after idling: reopened, its error said in words (the 2026-11-21 list's TLS handshake failed)"
+pg = "no"
+mysql = "no"
+note = "needs the link cut while idle (a proxy, or the fake server of hostile-servers.md)"
 
 [[case]]
 id = "tls.limits"
@@ -333,10 +343,17 @@ tests = ["live_details_postgres"]
 
 [[case]]
 id = "errors.deadlock"
-what = "A deadlock, a lock wait timeout, a statement timeout"
-pg = "no"
-mysql = "no"
-note = "nothing tests them; each needs two sessions"
+what = "A deadlock and a lock wait timeout between two sessions: refused, said in words, the transaction known"
+pg = "tested"
+mysql = "tested"
+tests = ["live_deadlock_and_lock_wait_postgres", "live_deadlock_and_lock_wait_mysql"]
+
+[[case]]
+id = "errors.statement_timeout"
+what = "A statement timeout (statement_timeout, max_execution_time) said as such"
+pg = "code"
+mysql = "code"
+note = "the app's own time limit cancels (run.cancel); the server's own limit not tested"
 
 [[case]]
 id = "errors.lost_link"
@@ -378,9 +395,10 @@ tests = ["live_mysql"]
 
 [[case]]
 id = "txn.ddl_commits"
-what = "MySQL DDL commits what's open (said, refused in a transaction of the app's)"
-mysql = "code"
-note = "the ddl_commits capability; no live test opens a transaction then runs DDL"
+what = "MySQL DDL commits what's open: the app knows a transaction the user began is over, and a ROLLBACK after it undoes nothing"
+mysql = "tested"
+tests = ["live_mysql_ddl_ends_the_transaction_the_user_began"]
+note = "refusing DDL in a transaction of the app's own (review.ddl_commits) is a unit check"
 
 [[case]]
 id = "txn.savepoints"
@@ -538,10 +556,18 @@ tests = ["live_postgres_materialized_views_are_listed_with_their_columns"]
 
 [[case]]
 id = "catalog.objects"
-what = "Triggers, sequences, types, domains, enums, events, each with its definition"
+what = "Triggers, sequences, types, domains, enums, ranges, aggregates, events, each with its definition"
 pg = "tested"
 mysql = "tested"
 tests = ["live_postgres_lists_triggers_sequences_and_types_with_their_definitions", "live_mysql_lists_triggers_and_events_with_their_definitions"]
+
+[[case]]
+id = "catalog.every_kind"
+what = "Every kind of object the server has accounted for, one of each a user makes listed with its kind and definition"
+pg = "tested"
+mysql = "tested"
+tests = ["live_postgres_lists_every_kind_of_object", "live_mysql_lists_every_kind_of_object"]
+note = "PostgreSQL's relkind, prokind and typtype from its catalogs (aggregates and range types weren't listed: now they are); MySQL's TABLE_TYPE and ROUTINE_TYPE; MariaDB's packages (Oracle mode) not handled, and fail the test where a server has one"
 
 [[case]]
 id = "catalog.table_ddl"
@@ -582,17 +608,19 @@ tests = ["live_postgres", "live_mysql", "live_sqlite", "live_duckdb", "live_full
 
 [[case]]
 id = "plans.analyze"
-what = "EXPLAIN ANALYZE"
-pg = "code"
-mysql = "code"
-note = "no live test runs it; MySQL's from 8.0.18"
+what = "EXPLAIN ANALYZE as each engine writes it, made a plan with what it measured"
+pg = "tested"
+mysql = "tested"
+tests = ["live_explain_analyze_postgres", "live_explain_analyze_mysql"]
+note = "MySQL's tree from 8.0.18, MariaDB's ANALYZE <statement>"
 
 [[case]]
 id = "plans.version_limits"
-what = "A version's missing feature named when a statement fails"
-pg = "code"
-mysql = "code"
-note = "versions.rs: 15 PostgreSQL features, 17 MySQL"
+what = "A version's missing feature named, both ways: what Podėlis says a server lacks it refuses, what it refuses as unknown Podėlis names"
+pg = "tested"
+mysql = "tested"
+tests = ["live_version_limits_postgres", "live_version_limits_mysql"]
+note = "on the newest servers nothing's refused (checked too); CI's versions job runs the old ones. MariaDB said nothing for MySQL 8's LATERAL, VALUES ROW, TABLE, EXPLAIN ANALYZE: now each is said, with MariaDB's own form"
 
 [[case]]
 id = "activity.sessions"

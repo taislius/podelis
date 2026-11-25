@@ -55,6 +55,32 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
 
+  # TLS against servers with certificates of a test CA's
+  # (scripts/tls-test-servers.sh): every SSL mode, a CA file, a client
+  # certificate's login, the session's TLS said. The servers above have
+  # none; these are started by the script, not as services, since their
+  # certificates are made first.
+  tls:
+    name: TLS (PostgreSQL 17, MySQL 8.4)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # Its last line names the variables the tests read: one a line, for
+      # the steps after it.
+      # (pipefail: a failing script mustn't pass for one that worked, its
+      # servers missing and the tests skipped.)
+      - run: |
+          set -o pipefail
+          scripts/tls-test-servers.sh "$RUNNER_TEMP/tls" | tail -1 | tr ' ' '\n' >> "$GITHUB_ENV"
+      - run: |
+          test -n "$PODELIS_TEST_TLS_PG_PORT" && test -n "$PODELIS_TEST_TLS_MYSQL_PORT"
+          cargo test --locked -p podelis-core --lib live_tls
+      - if: always()
+        run: scripts/tls-test-servers.sh stop
+
   # Built with fewer engines (`--no-default-features --features …`): the
   # README's PostgreSQL and SQLite, and each engine alone; and with the
   # opt-in ones, beside the others and alone: DuckDB (its driver builds
