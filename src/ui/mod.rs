@@ -189,6 +189,67 @@ pub(super) fn chip(key: &str, label: &str, primary: bool) -> Vec<Span<'static>> 
     ]
 }
 
+/// Keys to act on (each a chip: its key, what it does), on as many lines
+/// of `width` as they need: a chip isn't split between lines, it goes to
+/// the next one whole. What's acted on stays in sight however narrow; a
+/// chip wider than a whole line has one of its own, cut at its end (`…`).
+pub(super) fn key_lines(chips: Vec<Vec<Span<'static>>>, width: u16) -> Vec<Line<'static>> {
+    let width = usize::from(width);
+    // A line's last chip without the spaces that part it from the next:
+    // nothing past `width`, nothing for a wrap to make a row of.
+    let finish = |mut line: Vec<Span<'static>>| {
+        if let Some(last) = line.last_mut() {
+            let trimmed = last.content.trim_end().to_string();
+            last.content = trimmed.into();
+        }
+        Line::from(line)
+    };
+    let mut lines = Vec::new();
+    let mut line: Vec<Span<'static>> = Vec::new();
+    let mut used = 0;
+    for chip in chips {
+        let chip = fit_chip(chip, width);
+        let w: usize = chip.iter().map(Span::width).sum();
+        // Its own trailing spaces may go past the edge (they're trimmed).
+        let trailing = chip.last().map_or(0, |s| cells(&s.content) - cells(s.content.trim_end()));
+        if used > 0 && used + w - trailing > width {
+            lines.push(finish(std::mem::take(&mut line)));
+            used = 0;
+        }
+        line.extend(chip);
+        used += w;
+    }
+    if !line.is_empty() {
+        lines.push(finish(line));
+    }
+    lines
+}
+
+/// A chip in `width` cells: as it is if it fits (its trailing spaces
+/// aside), else cut there with `…` (its key, first, kept as far as it goes).
+fn fit_chip(chip: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    let trailing = chip.last().map_or(0, |s| cells(&s.content) - cells(s.content.trim_end()));
+    if chip.iter().map(Span::width).sum::<usize>() - trailing <= width {
+        return chip;
+    }
+    let mut room = width;
+    let mut out = Vec::new();
+    for span in chip {
+        if room == 0 {
+            break;
+        }
+        let w = span.width();
+        if w < room {
+            room -= w;
+            out.push(span);
+        } else {
+            out.push(Span::styled(truncate_cols(&span.content, room), span.style));
+            room = 0;
+        }
+    }
+    out
+}
+
 /// A filled label, e.g. ` PRODUCTION `.
 pub(super) fn badge(text: &str, fg_color: ratatui::style::Color, bg: ratatui::style::Color) -> Span<'static> {
     Span::styled(format!(" {text} "), bold(fg_color).bg(bg))
@@ -256,6 +317,10 @@ pub(super) fn truncate_cols(s: &str, cols: usize) -> String {
     if s.width() <= cols {
         return s.to_string();
     }
+    // No room at all: nothing, not even the `…`.
+    if cols == 0 {
+        return String::new();
+    }
     let mut out = String::new();
     let mut used = 0;
     for c in s.chars() {
@@ -278,6 +343,62 @@ pub(super) fn truncate_start(s: &str, max: usize) -> String {
     } else {
         "…".to_string() + &s.chars().skip(len - max.saturating_sub(1)).collect::<String>()
     }
+}
+
+/// How many terminal cells `s` takes (a wide character two): what the
+/// screen's layout measures in, everywhere.
+pub(super) fn cells(s: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(s)
+}
+
+/// `text` in lines of at most `width` cells, broken between words; a word
+/// longer than a line is broken where the line ends.
+pub(super) fn wrap_cells(text: &str, width: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthChar as _;
+    let width = width.max(1);
+    let mut lines = vec![String::new()];
+    for word in text.split_whitespace() {
+        let last = lines.last_mut().expect("never empty");
+        if !last.is_empty() && cells(last) + 1 + cells(word) <= width {
+            last.push(' ');
+            last.push_str(word);
+            continue;
+        }
+        if !last.is_empty() {
+            lines.push(String::new());
+        }
+        for c in word.chars() {
+            let last = lines.last_mut().expect("never empty");
+            if !last.is_empty() && cells(last) + c.width().unwrap_or(0) > width {
+                lines.push(String::new());
+            }
+            lines.last_mut().expect("never empty").push(c);
+        }
+    }
+    lines
+}
+
+/// `s` in `cols` terminal cells, cut from its start (`…` first): a path's
+/// end, its file's name, stays.
+pub(super) fn truncate_start_cols(s: &str, cols: usize) -> String {
+    use unicode_width::{UnicodeWidthChar as _, UnicodeWidthStr as _};
+    if s.width() <= cols {
+        return s.to_string();
+    }
+    if cols == 0 {
+        return String::new();
+    }
+    let mut kept = Vec::new();
+    let mut used = 0;
+    for c in s.chars().rev() {
+        let w = c.width().unwrap_or(0);
+        if used + w + 1 > cols {
+            break;
+        }
+        kept.push(c);
+        used += w;
+    }
+    "…".to_string() + &kept.into_iter().rev().collect::<String>()
 }
 
 /// A size in bytes, e.g. `12.4 MB` (powers of 1024, as `du -h`).

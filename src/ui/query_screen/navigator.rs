@@ -146,13 +146,7 @@ fn routine_marks(routine: &crate::db::RoutineInfo) -> (&'static str, String) {
 /// One row of the tree: a name on the left, details right-aligned.
 fn schema_item(panel: &SchemaPanel, node: SchemaNode, width: usize, show_schema: bool) -> ListItem<'static> {
     let t = theme();
-    let row = |left: Vec<Span<'static>>, right: String, right_style: Style| -> Line<'static> {
-        let used: usize = left.iter().map(|s| s.content.chars().count()).sum::<usize>() + right.chars().count() + 1;
-        let mut spans = left;
-        spans.push(Span::raw(" ".repeat(width.saturating_sub(used).max(1))));
-        spans.push(Span::styled(right, right_style));
-        Line::from(spans)
-    };
+    let row = |left, right, right_style| row(left, right, right_style, width);
     match node {
         SchemaNode::Section(section) => {
             let title = format!(
@@ -222,19 +216,7 @@ fn schema_item(panel: &SchemaPanel, node: SchemaNode, width: usize, show_schema:
                 if col.primary_key { fg(t.accent) } else { dim() },
             ))
         }
-        SchemaNode::Index(i, x) => {
-            let ix = &panel.tables[i].details.as_ref().expect("index rows come from details").indexes[x];
-            let kind = if ix.primary {
-                " PK".to_string()
-            } else if ix.unique {
-                format!(" {}", t!("navigator.unique"))
-            } else {
-                String::new()
-            };
-            let right = truncate(&format!("({}){kind}", ix.columns), width / 2);
-            let name = truncate(&ix.name, width.saturating_sub(right.chars().count() + 9));
-            ListItem::new(row(vec![Span::styled("      ≡ ", dim()), Span::styled(name, muted())], right, dim()))
-        }
+        SchemaNode::Index(i, x) => index_item(panel, i, x, width),
         SchemaNode::Routine(r) => {
             let routine = &panel.routines[r];
             let (icon, right) = routine_marks(routine);
@@ -247,4 +229,41 @@ fn schema_item(panel: &SchemaPanel, node: SchemaNode, width: usize, show_schema:
             ListItem::new(row(vec![Span::styled(icon, dim()), Span::styled(name, fg(t.ident))], right, dim()))
         }
     }
+}
+
+/// A row of the tree `width` wide: `left`, then `right` at its end.
+fn row(left: Vec<Span<'static>>, right: String, right_style: Style, width: usize) -> Line<'static> {
+    let used: usize = left.iter().map(|s| cells(&s.content)).sum::<usize>() + cells(&right) + 1;
+    let mut spans = left;
+    spans.push(Span::raw(" ".repeat(width.saturating_sub(used).max(1))));
+    spans.push(Span::styled(right, right_style));
+    Line::from(spans)
+}
+
+/// An index's row under its table: its name first, then whether it's
+/// unique, then its columns, as far as they fit.
+fn index_item(panel: &SchemaPanel, i: usize, x: usize, width: usize) -> ListItem<'static> {
+    let ix = &panel.tables[i].details.as_ref().expect("index rows come from details").indexes[x];
+    let kind = if ix.primary {
+        " PK".to_string()
+    } else if ix.unique {
+        format!(" {}", t!("navigator.unique"))
+    } else {
+        String::new()
+    };
+    // Its name first; then whether it's primary or unique, which stays
+    // (the name gives way to it, down to a few letters), then its columns,
+    // as far as they fit beside it.
+    let room = width.saturating_sub(9);
+    let after_name = room.saturating_sub(cells(&ix.name) + 1);
+    let full = format!("({}){kind}", ix.columns);
+    let right = if cells(&full) <= after_name {
+        full
+    } else if !kind.is_empty() && room >= cells(kind.trim()) + 1 + 4 {
+        kind.trim().to_string()
+    } else {
+        String::new()
+    };
+    let name = truncate_cols(&ix.name, room.saturating_sub(cells(&right) + usize::from(!right.is_empty())));
+    ListItem::new(row(vec![Span::styled("      ≡ ", dim()), Span::styled(name, muted())], right, dim(), width))
 }

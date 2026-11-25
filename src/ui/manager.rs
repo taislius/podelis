@@ -350,58 +350,78 @@ fn draw_connections(f: &mut Frame, app: &mut App, area: Rect) {
     draw_message(f, message_area, message);
 }
 
+/// The connection form being edited: its fields, what's said of it, its keys.
+fn draw_form(f: &mut Frame, app: &App, area: Rect) {
+    let form = &app.connection.form;
+    let title =
+        if form.original_name.is_some() { t!("manager.edit_connection") } else { t!("manager.new_connection_title") };
+    let block = pane(title, form.engine.label(), true);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let mask = "•".repeat(form.password.chars().count());
+    let fields = form.visible_fields();
+    let lines = form_lines(&Settings::from(form), Some((form.focus, &fields)), &mask);
+    let n = lines.len() as u16;
+    // What saving and connecting do: Enter connects with the form as it
+    // is, Ctrl+S keeps it.
+    let saved = form.original_name.as_ref().and_then(|name| app.profiles().iter().find(|p| &p.name == name));
+    let mut keys = Vec::new();
+    if saved.is_some() && form.unsaved(saved) {
+        keys.push(Span::styled(format!("{} ", t!("form.unsaved")), bold(theme().warn)));
+    }
+    let (save, test) = (crate::app::ctrl_words(crate::app::SAVE_KEY), crate::app::ctrl_words(crate::app::TEST_KEY));
+    keys.push(Span::styled(t!("form.keys", save = save, test = test), dim()));
+    let keys = Paragraph::new(Line::from(keys)).wrap(Wrap { trim: true });
+    let text_width = inner.width.saturating_sub(2);
+    let keys_height = u16::try_from(keys.line_count(text_width)).unwrap_or(u16::MAX);
+    // Its error (or progress, a test's outcome) keeps its lines first: then
+    // the keys, where there's room after it; without room for the message
+    // beside every field, the fields scroll above it (the one typed in, at
+    // least, in sight). Help for a field
+    // gives way to all of them. The fields scroll to the one being typed
+    // in whenever they don't all fit.
+    let (message, style) = form_message(form);
+    let said = form.connecting || form.error.is_some() || form.info.is_some();
+    let message = Paragraph::new(message).style(style).wrap(Wrap { trim: true });
+    let message_height = u16::try_from(message.line_count(text_width)).unwrap_or(u16::MAX).max(1);
+    let room = inner.height;
+    // (A blank line between the fields and the message where there's room.)
+    let (fields_height, keys_shown, blank) = if !said {
+        // (Keys where a row is left for the field's help too.)
+        (n.min(room), room > n + 1 + keys_height, true)
+    } else if room >= n + 1 + message_height {
+        (n, room >= n + 1 + message_height + keys_height, true)
+    } else {
+        // All of it: the field being typed in, at least, above it.
+        (room.saturating_sub(message_height.min(room.saturating_sub(1)).max(1)).min(n), false, false)
+    };
+    let row = fields.iter().position(|&field| field == form.focus);
+    let offset = row.map_or(0, |r| (r as u16).saturating_sub(fields_height.saturating_sub(1)));
+    let fields_at = Rect { height: fields_height, ..inner };
+    f.render_widget(Paragraph::new(lines).scroll((offset, 0)), fields_at);
+    // The cursor in the field being typed in.
+    if let (Some(row), Some(before)) = (row, form.before_cursor())
+        && (row as u16) >= offset
+        && (row as u16 - offset) < fields_at.height
+    {
+        let x = inner.x as usize + 1 + super::connect::label_width() + 2 + before.chars().count();
+        let x = (x as u16).min(inner.right().saturating_sub(1));
+        f.set_cursor_position((x, inner.y + row as u16 - offset));
+    }
+    let keys_rows = if keys_shown { keys_height } else { 0 };
+    if keys_shown {
+        let at = Rect { x: inner.x + 1, y: inner.bottom() - keys_height, width: text_width, height: keys_height };
+        f.render_widget(keys, at);
+    }
+    let top = fields_at.bottom() + u16::from(blank);
+    let height = inner.bottom().saturating_sub(keys_rows).saturating_sub(top);
+    f.render_widget(message, Rect { x: inner.x + 1, y: top.min(inner.bottom()), width: text_width, height });
+}
+
 fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let editing = app.screen == Screen::Connect;
     if editing {
-        let form = &app.connection.form;
-        let title = if form.original_name.is_some() {
-            t!("manager.edit_connection")
-        } else {
-            t!("manager.new_connection_title")
-        };
-        let block = pane(title, form.engine.label(), true);
-        let inner = block.inner(area);
-        f.render_widget(block, area);
-        let mask = "•".repeat(form.password.chars().count());
-        let fields = form.visible_fields();
-        let lines = form_lines(&Settings::from(form), Some((form.focus, &fields)), &mask);
-        let n = lines.len() as u16;
-        f.render_widget(Paragraph::new(lines), inner);
-        // The cursor in the field being typed in.
-        let row = form.visible_fields().iter().position(|&field| field == form.focus);
-        if let (Some(row), Some(before)) = (row, form.before_cursor())
-            && (row as u16) < inner.height
-        {
-            let x = inner.x as usize + 1 + super::connect::label_width() + 2 + before.chars().count();
-            let x = (x as u16).min(inner.right().saturating_sub(1));
-            f.set_cursor_position((x, inner.y + row as u16));
-        }
-        // What saving and connecting do, always in sight: Enter connects
-        // with the form as it is, Ctrl+S keeps it.
-        let saved = form.original_name.as_ref().and_then(|name| app.profiles().iter().find(|p| &p.name == name));
-        let mut keys = Vec::new();
-        if saved.is_some() && form.unsaved(saved) {
-            keys.push(Span::styled(format!("{} ", t!("form.unsaved")), bold(theme().warn)));
-        }
-        let (save, test) = (crate::app::ctrl_words(crate::app::SAVE_KEY), crate::app::ctrl_words(crate::app::TEST_KEY));
-        keys.push(Span::styled(t!("form.keys", save = save, test = test), dim()));
-        let keys = Paragraph::new(Line::from(keys)).wrap(Wrap { trim: true });
-        let keys_width = inner.width.saturating_sub(2);
-        let keys_height = u16::try_from(keys.line_count(keys_width)).unwrap_or(u16::MAX);
-        let keys_shown = inner.height > n + 1 + keys_height;
-        if keys_shown {
-            let at = Rect { x: inner.x + 1, y: inner.bottom() - keys_height, width: keys_width, height: keys_height };
-            f.render_widget(keys, at);
-        }
-        let (message, style) = form_message(form);
-        let rest = Rect {
-            x: inner.x + 1,
-            y: inner.y + n + 1,
-            width: inner.width.saturating_sub(2),
-            height: inner.height.saturating_sub(n + 1 + if keys_shown { keys_height } else { 0 }),
-        };
-        f.render_widget(Paragraph::new(message).style(style).wrap(Wrap { trim: true }), rest);
-        return;
+        return draw_form(f, app, area);
     }
     // The container being picked: what its connection would be.
     if let Some(c) = app.manager.containers.as_ref().and_then(|p| p.found.get(p.selected)) {

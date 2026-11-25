@@ -609,8 +609,6 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
     if let Some(bar) = &app.editing.find {
         return draw_find_bar(f, app, bar, area);
     }
-    let right = Line::from(tx_status(app, area.width));
-    let right_w = right.width() as u16;
     // The cursor's statement, worked out once for the frame: which one F6
     // runs, and whether a problem is in it.
     let (position, here) = with_statements(app, |s, cursor| Some((s.position(cursor), s.at(cursor)))).unzip();
@@ -621,6 +619,15 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
     // text, and `Ctrl+K w` goes to each.
     let hint_is_here =
         |offset: Option<usize>| offset.is_none_or(|o| here.as_ref().is_none_or(|r| r.contains(&o) || o == r.end));
+    // What the left says, decided once: the editor's own message first
+    // (what was done here, or why not), else the cursor's statement's
+    // problem. Something to say: the write mode gives it room, said
+    // without its label where the footer's narrow.
+    let note = app.notes.editor_note.as_ref();
+    let hint = app.tab.syntax_hint.as_ref().filter(|h| note.is_none() && hint_is_here(h.offset));
+    let saying = note.is_some() || hint.is_some();
+    let right = Line::from(tx_status(app, area.width, saying));
+    let right_w = right.width() as u16;
     // Which statement F6 runs, when there's more than one and no selection.
     let position = position
         .filter(|&(_, total)| total > 1 && area.width >= 60 && app.tab.editor.selection().is_none())
@@ -635,13 +642,13 @@ fn draw_controls(f: &mut Frame, app: &mut App, area: Rect) {
         ])
         .areas(area);
     f.render_widget(Paragraph::new(Span::styled(position, muted())), middle);
-    // The editor's own messages first: what was done here, or why not. In the
-    // room the write modes leave; a click or Ctrl+K Space shows them whole.
-    let left = if let Some(note) = &app.notes.editor_note {
+    // In the room the write modes leave; a click or Ctrl+K Space shows the
+    // message whole.
+    let left = if let Some(note) = note {
         let style = if app.notes.editor_note_is_error { bold(t.error) } else { fg(t.text) };
         let room = usize::from(l.width.saturating_sub(1));
         Line::from(Span::styled(format!(" {}", truncate_cols(&one_line(note), room)), style))
-    } else if let Some(hint) = app.tab.syntax_hint.as_ref().filter(|h| hint_is_here(h.offset)) {
+    } else if let Some(hint) = hint {
         let (label, color, rule) = match hint.source {
             HintSource::Server => (t!("hint.server"), t.error, ""),
             HintSource::Parser => (t!("hint.parser"), t.warn, ""),
@@ -727,10 +734,14 @@ fn with_statements<T>(app: &App, ask: impl FnOnce(&crate::language::Statements, 
 /// The `?` after the modes and the room around it, to click.
 const TX_HELP_WIDTH: u16 = 3;
 
-/// The transaction modes to pick from, or, while a transaction is open,
-/// what to do about it. (The status bar shows the
-/// connection's production or read-only mode.)
-fn tx_status(app: &App, width: u16) -> Vec<Span<'static>> {
+/// The footer's right: the transaction modes to pick from, or, while a
+/// transaction is open, what to do about it (the status bar shows the
+/// connection's production or read-only mode). `saying`: the footer's left
+/// says something (a note, a problem it shows): every mode isn't listed
+/// then, and under 100 columns an idle one's is said without its label (an
+/// open or failed transaction is said whole: it's what matters most).
+fn tx_status(app: &App, width: u16, saying: bool) -> Vec<Span<'static>> {
+    let compact = saying && width < 100;
     let t = theme();
     let key = |a: Action| app.keymap.short_label(a);
     let mut spans = match app.connection.txn {
@@ -751,8 +762,8 @@ fn tx_status(app: &App, width: u16) -> Vec<Span<'static>> {
         }
         // All four modes when there's room next to the run key, else the current one.
         TxnState::Idle => {
-            let mut spans = vec![Span::styled(t!("tx.label"), muted())];
-            let all = width >= 100 && app.tab.syntax_hint.is_none();
+            let mut spans = if compact { Vec::new() } else { vec![Span::styled(t!("tx.label"), muted())] };
+            let all = width >= 100 && !saying;
             for mode in TxMode::ALL {
                 if mode == app.connection.tx_mode {
                     spans.push(Span::raw(" "));

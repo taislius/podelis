@@ -333,7 +333,8 @@ fn a_long_message_is_cut_beside_the_write_modes_and_opens_whole() {
     app.focus = Focus::Editor;
     app.notes.editor_note = Some(long.clone());
     let screen = render(&mut app, 120, 30);
-    let row = screen.lines().find(|l| l.contains("Transaction:")).unwrap_or_else(|| panic!("{screen}"));
+    // (The write mode said without its label: the message has the room.)
+    let row = screen.lines().find(|l| l.contains("auto-commit")).unwrap_or_else(|| panic!("{screen}"));
     assert!(row.contains("Refused because") && row.contains('…') && row.contains('?'), "{row}");
     assert!(app.hits.tx_mode.width > 0 && !row.contains("the end"), "{row}");
 
@@ -553,10 +554,42 @@ fn the_footer_says_only_the_cursors_statements_problem() {
     });
     let footer = |app: &mut App| {
         let screen = render(app, 100, 20);
-        screen.lines().find(|l| l.contains("Transaction")).unwrap_or_default().to_string()
+        screen.lines().find(|l| l.contains("auto-commit")).unwrap_or_default().to_string()
     };
     app.tab.editor.set_cursor((0, 3));
     assert!(footer(&mut app).contains("SERVER line 1"), "{}", footer(&mut app));
     app.tab.editor.set_cursor((1, 3));
     assert!(!footer(&mut app).contains("SERVER"), "{}", footer(&mut app));
+}
+
+/// Beside a problem it shows, the write mode is said without its label
+/// where the footer's under 100 columns; with room, with nothing to say,
+/// or with a problem it doesn't show (another statement's), with it.
+#[test]
+fn the_write_mode_gives_a_shown_problem_room_where_the_footer_is_narrow() {
+    let (mut app, _dir) = query_app();
+    let hint = |offset| SyntaxHint {
+        message: "syntax error at or near \"form\"".into(),
+        offset: Some(offset),
+        len: Some(4),
+        source: HintSource::Server,
+        nth: None,
+    };
+    let footer = |app: &mut App, width| {
+        let screen = render(app, width, 24);
+        screen.lines().find(|l| l.contains("auto-commit")).unwrap_or_else(|| panic!("{screen}")).to_string()
+    };
+    app.tab.syntax_hint = Some(hint(0));
+    let narrow = footer(&mut app, 90);
+    assert!(narrow.contains("syntax error") && !narrow.contains("Transaction"), "{narrow}");
+    let wide = footer(&mut app, 170);
+    assert!(wide.contains("syntax error") && wide.contains("Transaction"), "{wide}");
+    app.tab.syntax_hint = None;
+    assert!(footer(&mut app, 90).contains("Transaction"));
+    // Another statement's problem isn't shown: nothing to give room to.
+    app.tab.editor.set_text("select * from nope;\nselect * from users;");
+    app.tab.editor.set_cursor((1, 3));
+    app.tab.syntax_hint = Some(hint(14));
+    let other = footer(&mut app, 90);
+    assert!(!other.contains("SERVER") && other.contains("Transaction"), "{other}");
 }

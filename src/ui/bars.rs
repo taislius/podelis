@@ -184,10 +184,20 @@ fn connection_status(app: &App, room: usize) -> Vec<Span<'static>> {
     let room = room.saturating_sub(used + 4);
     let at = endpoint(&app.connection.form);
     let details = if app.connection.form.engine.is_file_based() {
-        let fits = room.saturating_sub(rest.trim_end().chars().count()).max(12);
-        format!("{}{}", truncate_start(&at, fits), rest.trim_end())
+        // The engine beside it, whole, while the path keeps 12 of its own;
+        // past that both cut (the path to 12, the engine after it), then
+        // the path alone where even that leaves the engine no room.
+        let rest = rest.trim_end();
+        let rest_w = cells(rest);
+        if room >= rest_w + 12 {
+            format!("{}{rest}", truncate_start_cols(&at, room - rest_w))
+        } else {
+            let path = truncate_start_cols(&at, room.min(12));
+            let left = room.saturating_sub(cells(&path));
+            if left >= 6 { format!("{path}{}", truncate_cols(rest, left)) } else { truncate_start_cols(&at, room) }
+        }
     } else {
-        truncate(&format!("{at}{}", rest.trim_end()), room)
+        truncate_cols(&format!("{at}{}", rest.trim_end()), room)
     };
     spans.push(Span::styled(format!("  {details}  "), muted()));
     spans

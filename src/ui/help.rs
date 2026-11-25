@@ -132,33 +132,120 @@ pub(super) fn help_sections(app: &App) -> Vec<(&'static str, Vec<(String, String
         .collect()
 }
 
-pub(super) fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
+/// Where the help's layout is decided, for laying it out ([`help_lines`])
+/// and for measuring it ([`help_width`]) alike.
+const KEY_INDENT: usize = 2;
+/// A long key's words, below it.
+const WORDS_INDENT: usize = 6;
+
+/// The key column's width in a box whose inside is `inner` wide, for keys
+/// at most `longest` wide: as wide as they are (22 at least), two fifths
+/// of the box at most.
+fn key_column(longest: usize, inner: usize) -> usize {
+    longest.max(22).min((inner * 2 / 5).max(10))
+}
+
+/// An entry's widest line, its key `key` wide and its words `what`: beside
+/// each other where the key fits the column, else the key alone and the
+/// words below it.
+fn entry_width(key: usize, what: usize, key_w: usize) -> usize {
+    if key <= key_w { KEY_INDENT + key_w + 1 + what } else { (KEY_INDENT + key).max(WORDS_INDENT + what) }
+}
+
+/// A section's heading as shown: AI's with why it's dimmed when off.
+fn heading(app: &App, title: &str) -> (String, bool) {
+    let off = app.ai_state() == crate::app::AiState::Off && title == crate::app::commands::Group::Ai.title();
+    let text = if off { format!("{} · {}", title.to_uppercase(), t!("bar.ai_off")) } else { title.to_uppercase() };
+    (text, off)
+}
+
+/// The help's lines in a box `width` wide (its borders too): each key
+/// beside its words in a column ([`key_column`]); a key longer than that
+/// on a line of its own, its words wrapped below it. Widths are the
+/// terminal's cells, not characters.
+pub(super) fn help_lines(app: &App, sections: &Sections, width: u16) -> Vec<Line<'static>> {
     let t = theme();
-    let sections = help_sections(app);
-    // Configured keys can be long: size the key column to the longest.
-    let key_w = sections.iter().flat_map(|(_, keys)| keys).map(|(k, _)| k.chars().count()).max().unwrap_or(0).max(22);
+    let inner = usize::from(width.saturating_sub(2));
+    let longest = sections.iter().flat_map(|(_, keys)| keys).map(|(k, _)| cells(k)).max().unwrap_or(0);
+    let key_w = key_column(longest, inner);
     // A long description ends in `…`, not at the border.
-    let what_w = usize::from(area.width).saturating_sub(key_w + 7);
+    let what_w = inner.saturating_sub(KEY_INDENT + key_w + 2);
     let mut lines = Vec::new();
-    // With no model, AI's keys are there but dimmed, and say why.
-    let ai_off = app.ai_state() == crate::app::AiState::Off;
     for (title, keys) in sections {
-        let off = ai_off && title == crate::app::commands::Group::Ai.title();
-        let heading =
-            if off { format!("{} · {}", title.to_uppercase(), t!("bar.ai_off")) } else { title.to_uppercase() };
-        lines.push(Line::from(Span::styled(heading, if off { dim() } else { bold(t.accent) })));
+        // With no model, AI's keys are there but dimmed, and say why.
+        let (text, off) = heading(app, title);
+        lines.push(Line::from(Span::styled(text, if off { dim() } else { bold(t.accent) })));
+        let (key_style, what_style) = if off { (dim(), dim()) } else { (bold(t.text), muted()) };
+        let indent = " ".repeat(KEY_INDENT);
         for (key, what) in keys {
-            lines.push(Line::from(vec![
-                Span::styled(format!("  {key:<key_w$} "), if off { dim() } else { bold(t.text) }),
-                Span::styled(truncate(&what, what_w), if off { dim() } else { muted() }),
-            ]));
+            if cells(key) <= key_w {
+                let pad = " ".repeat(key_w - cells(key));
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{indent}{key}{pad} "), key_style),
+                    Span::styled(truncate_cols(what, what_w), what_style),
+                ]));
+                continue;
+            }
+            // Too long for the column: alone, its words wrapped beneath.
+            let key = truncate_cols(key, inner.saturating_sub(KEY_INDENT));
+            lines.push(Line::from(Span::styled(format!("{indent}{key}"), key_style)));
+            let words = " ".repeat(WORDS_INDENT);
+            for part in wrap_cells(what, inner.saturating_sub(WORDS_INDENT)) {
+                lines.push(Line::from(Span::styled(format!("{words}{part}"), what_style)));
+            }
         }
         lines.push(Line::default());
     }
     lines.push(Line::from(Span::styled(t!("help.closes"), dim())));
+    lines
+}
+
+/// The help's sections, as [`help_sections`] gives them: a title, and
+/// each key with what it does.
+pub(super) type Sections = Vec<(&'static str, Vec<(String, String)>)>;
+
+/// How wide the help's box is on a screen `width` wide: as wide as its
+/// widest line as [`help_lines`] lays them, 64 at least, the screen at
+/// most. Measured from the sections with the same rules, without building
+/// the lines; the key column depends on the width, so it's narrowed in
+/// rounds while what's laid out at the narrower width still fits it.
+pub(super) fn help_width(app: &App, sections: &Sections, width: u16) -> u16 {
+    let longest = sections.iter().flat_map(|(_, keys)| keys).map(|(k, _)| cells(k)).max().unwrap_or(0);
+    let headings = sections
+        .iter()
+        .map(|(title, _)| cells(&heading(app, title).0))
+        .chain([cells(t!("help.closes"))])
+        .max()
+        .unwrap_or(0);
+    // The widest line in a box whose inside is `inner` wide.
+    let widest = |inner: usize| {
+        let key_w = key_column(longest, inner);
+        let entries = sections.iter().flat_map(|(_, keys)| keys).map(|(k, w)| entry_width(cells(k), cells(w), key_w));
+        entries.max().unwrap_or(0).max(headings)
+    };
+    // A box `w` wide as it would be: 64 at least, the screen at most.
+    let boxed = |w: usize| fit(u16::try_from(w).unwrap_or(u16::MAX).max(64), 20, width);
+    // Every key beside its words first; then narrower, as far as the lines
+    // laid out at the narrower box still fit in it: the box is always the
+    // width they're laid out at.
+    let mut chosen = boxed(widest(usize::MAX / 4) + 4);
+    for _ in 0..8 {
+        let next = boxed(widest(usize::from(chosen).saturating_sub(2)) + 4);
+        if next >= chosen || widest(usize::from(next).saturating_sub(2)) + 4 > usize::from(next) {
+            break;
+        }
+        chosen = next;
+    }
+    chosen
+}
+
+pub(super) fn draw_help(f: &mut Frame, app: &mut App, area: Rect) {
+    let sections = help_sections(app);
+    let width = help_width(app, &sections, area.width);
+    let lines = help_lines(app, &sections, width);
+    let t = theme();
     let height = fit(lines.len() as u16 + 2, 5, area.height);
-    let width = lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4;
-    let rect = centered_box(area, fit(width.max(64), 20, area.width), height);
+    let rect = centered_box(area, width, height);
     // Longer than the screen: the arrows scroll it, as far as there's more.
     let most = (lines.len() as u16 + 2).saturating_sub(height);
     app.help.scroll = app.help.scroll.min(most);

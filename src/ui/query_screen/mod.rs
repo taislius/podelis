@@ -33,10 +33,35 @@ pub(in crate::ui) fn draw_query(f: &mut Frame, app: &mut App, body: Rect) {
     } else {
         (None, body)
     };
-    let [editor_area, results_area] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(app.panes.editor_percent), Constraint::Min(5)])
-        .areas(main);
+    // The editor needs 5 rows for a line of text, the results 7 for a row.
+    // With room for both, as split, neither short of them; without, as
+    // split, the pane with the keys short of nothing.
+    const EDITOR_MIN: u16 = 5;
+    const RESULTS_MIN: u16 = 7;
+    // (As split: unless that leaves either short of its rows, then moved
+    // just as far as it needs.)
+    let share = u32::from(main.height) * u32::from(app.panes.editor_percent) / 100;
+    let constraints = if main.height >= EDITOR_MIN + RESULTS_MIN {
+        match u16::try_from(share).unwrap_or(u16::MAX) {
+            e if e < EDITOR_MIN => [Constraint::Length(EDITOR_MIN), Constraint::Min(0)],
+            e if main.height - e.min(main.height) < RESULTS_MIN => {
+                [Constraint::Length(main.height - RESULTS_MIN), Constraint::Min(0)]
+            }
+            _ => [Constraint::Percentage(app.panes.editor_percent), Constraint::Min(RESULTS_MIN)],
+        }
+    } else {
+        // Too short for both: as split (Ctrl+↑/↓ still moves it), the pane
+        // with the keys given what it needs first.
+        let share = u16::try_from(share).unwrap_or(u16::MAX).min(main.height);
+        let editor = if app.focus == Focus::Results {
+            share.min(main.height.saturating_sub(RESULTS_MIN))
+        } else {
+            share.max(EDITOR_MIN.min(main.height))
+        };
+        [Constraint::Length(editor), Constraint::Min(0)]
+    };
+    let [editor_area, results_area] =
+        Layout::default().direction(Direction::Vertical).constraints(constraints).areas(main);
 
     // Zoomed: only the focused pane, using the whole body.
     let cursor = if app.panes.zoomed {

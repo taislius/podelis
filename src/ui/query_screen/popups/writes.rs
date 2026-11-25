@@ -137,7 +137,7 @@ pub(super) fn draw_export_form(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 /// The sandbox: its steps, what they changed per table, and how to end it.
-pub(super) fn draw_sandbox(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_sandbox(f: &mut Frame, app: &mut App, area: Rect) {
     let t = theme();
     let (Some(view), Some(sandbox)) = (&app.popups.sandbox_view, &app.connection.sandbox) else { return };
     let width = fit(area.width.saturating_sub(8).min(100), 40, area.width);
@@ -171,56 +171,74 @@ pub(super) fn draw_sandbox(f: &mut Frame, app: &App, area: Rect) {
     let key = |command, what: &str, bg| {
         use crate::app::windows::sandbox::SANDBOX_KEYS;
         let k = crate::app::key_table::first_key(SANDBOX_KEYS, command);
-        [Span::styled(format!(" {k} "), bold(t.on_accent).bg(bg)), Span::styled(format!(" {what}  "), fg(t.text))]
+        vec![Span::styled(format!(" {k} "), bold(t.on_accent).bg(bg)), Span::styled(format!(" {what}  "), fg(t.text))]
     };
     use crate::app::windows::sandbox::SandboxKey as S;
-    lines.push(Line::from(
-        [
-            key(S::Undo, t!("sandbox.undo"), t.accent),
-            key(S::Discard, t!("sandbox.discard"), t.error),
-            key(S::KeepScript, t!("sandbox.keep_script"), t.accent),
-            key(S::RunForReal, t!("sandbox.run_for_real"), t.ok),
-        ]
-        .concat(),
-    ));
-    let height = (lines.len() as u16 + 2).min(area.height);
+    // Its keys under the steps, kept there: the steps scroll above them.
+    let mut chips = vec![
+        key(S::Undo, t!("sandbox.undo"), t.accent),
+        key(S::Discard, t!("sandbox.discard"), t.error),
+        key(S::KeepScript, t!("sandbox.keep_script"), t.accent),
+        key(S::RunForReal, t!("sandbox.run_for_real"), t.ok),
+    ];
+    // How to close it, and that it stays open: with the keys, each part
+    // whole (on a line of its own where they don't fit together).
+    let close = crate::app::key_table::first_key(crate::app::windows::sandbox::SANDBOX_KEYS, S::Close);
+    let esc = t!("sandbox.esc", key = close);
+    chips.extend(esc.split(" · ").map(|part| vec![Span::styled(format!(" {part}  "), dim())]));
+    let keys = key_lines(chips, width.saturating_sub(2));
+    let keys_h = keys.len() as u16;
+    // Short of the whole screen: the status bar stays clear of its border.
+    // Wrapped (a long line isn't cut at the border), once: its lines say how
+    // tall it is and how far it scrolls.
+    let text = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let body_lines = u16::try_from(text.line_count(width.saturating_sub(2))).unwrap_or(u16::MAX);
+    let height = body_lines.saturating_add(keys_h).saturating_add(2).min(area.height.saturating_sub(2));
     let rect = centered_box(area, width, height);
     f.render_widget(Clear, rect);
-    let block = popup(t!("sandbox.title"), t.warn).title_bottom(
-        Line::from(Span::styled(
-            format!(
-                " {} ",
-                t!(
-                    "sandbox.esc",
-                    key = crate::app::key_table::first_key(crate::app::windows::sandbox::SANDBOX_KEYS, S::Close)
-                )
-            ),
-            dim(),
-        ))
-        .right_aligned(),
-    );
-    f.render_widget(Paragraph::new(lines).scroll((view.scroll, 0)).block(block), rect);
+    let block = popup(t!("sandbox.title"), t.warn);
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    let [body, footer] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(keys_h.min(inner.height))])
+        .areas(inner);
+    // Scrolled no further than its last line shows.
+    let most = body_lines.saturating_sub(body.height);
+    let Some(view) = &mut app.popups.sandbox_view else { return };
+    view.scroll = view.scroll.min(most);
+    f.render_widget(text.scroll((view.scroll, 0)), body);
+    f.render_widget(Paragraph::new(keys), footer);
 }
 
-/// After writes ran in a transaction: commit or roll back?
+/// After writes ran in a transaction: commit or roll back? Its keys on as
+/// many lines as the width needs, none cut.
 pub(super) fn draw_review(f: &mut Frame, app: &App, area: Rect) {
     let t = theme();
     let Some(review) = &app.popups.review else { return };
     let rows = review.rows_affected;
-    let lines = vec![
-        Line::from(Span::styled(tn!("review.changed", rows), bold(t.warn))),
-        Line::default(),
-        Line::from(vec![
+    let chips = vec![
+        vec![
             Span::styled(" c ", bold(t.on_accent).bg(t.ok)),
             Span::styled(format!(" {}   ", t!("review.commit")), fg(t.text)),
+        ],
+        vec![
             Span::styled(" r ", bold(t.on_accent).bg(t.error)),
             Span::styled(format!(" {}   ", t!("review.rollback")), fg(t.text)),
+        ],
+        vec![
             Span::styled(" Esc ", bold(t.text).bg(t.active)),
             Span::styled(format!(" {}", t!("review.keep_open")), muted()),
-        ]),
+        ],
     ];
-    let width = fit(lines.iter().map(Line::width).max().unwrap_or(0) as u16 + 4, 40, area.width.saturating_sub(4));
-    let rect = centered_box(area, width, 5);
+    // As wide as all on one line, if the screen has room.
+    let one_line: usize = chips.iter().flatten().map(Span::width).sum();
+    let width = fit(one_line as u16 + 4, 40, area.width.saturating_sub(4));
+    let mut lines = vec![Line::from(Span::styled(tn!("review.changed", rows), bold(t.warn))), Line::default()];
+    lines.extend(key_lines(chips, width.saturating_sub(2)));
+    let text = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let height = (text.line_count(width.saturating_sub(2)) as u16 + 2).min(area.height);
+    let rect = centered_box(area, width, height);
     f.render_widget(Clear, rect);
-    f.render_widget(Paragraph::new(lines).block(popup(t!("review.title"), t.warn)), rect);
+    f.render_widget(text.block(popup(t!("review.title"), t.warn)), rect);
 }
