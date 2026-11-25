@@ -8,7 +8,30 @@ use crate::db::dialect::{TooNew, code_words, has_seq, starts_with};
 
 type Version = (u32, u32, u32);
 
-/// The first of `sql`'s features a MySQL `version` hasn't got.
+/// What MariaDB has of MySQL's features (by `too_new`'s names): since
+/// which of its versions (`None`: not at all), and what to say, its own way
+/// of writing it where it has one. One not here is taken to be there.
+const MARIADB: &[(&str, Option<Version>, &str)] = &[
+    ("EXPLAIN ANALYZE", None, "MySQL 8.0.18 or newer: MariaDB writes it ANALYZE SELECT … (Shift+F7)"),
+    ("EXPLAIN FORMAT=TREE", None, "MySQL 8.0.16 or newer: MariaDB has FORMAT=JSON"),
+    ("WITH (a common table expression)", Some((10, 2, 1)), "MariaDB 10.2.1 or newer"),
+    ("window functions (OVER)", Some((10, 2, 0)), "MariaDB 10.2 or newer"),
+    ("LATERAL", None, "MySQL 8.0.14 or newer: MariaDB hasn't it"),
+    ("JSON_TABLE", Some((10, 6, 0)), "MariaDB 10.6 or newer"),
+    ("INTERSECT and EXCEPT", Some((10, 3, 0)), "MariaDB 10.3 or newer"),
+    ("VALUES ROW(…)", None, "MySQL 8.0.19 or newer: MariaDB writes VALUES (…), without ROW"),
+    ("the TABLE statement", None, "MySQL 8.0.19 or newer: MariaDB writes SELECT * FROM …"),
+    ("RENAME COLUMN", Some((10, 5, 2)), "MariaDB 10.5.2 or newer"),
+    ("SKIP LOCKED and NOWAIT", Some((10, 6, 0)), "MariaDB 10.6 or newer (NOWAIT alone from 10.3)"),
+    ("roles", Some((10, 0, 5)), "MariaDB 10.0.5 or newer"),
+    ("JSON_VALUE", Some((10, 2, 3)), "MariaDB 10.2.3 or newer"),
+    ("JSON_ARRAYAGG and JSON_OBJECTAGG", Some((10, 5, 0)), "MariaDB 10.5 or newer"),
+    ("UUID_TO_BIN and BIN_TO_UUID", None, "MySQL 8.0 or newer: MariaDB has a UUID type instead (10.7)"),
+    ("GROUPING()", None, "MySQL 8.0 or newer: MariaDB hasn't it"),
+];
+
+/// The first of `sql`'s features a MySQL `version` hasn't got; on MariaDB,
+/// the first of MySQL's it hasn't (`MARIADB`).
 pub(super) fn too_new(sql: &str, version: &str) -> Option<TooNew> {
     // Only a version that reads as MySQL's or MariaDB's own: `5.7.44`,
     // `8.0.36-log`, `10.11.6-MariaDB`. Aurora (`8.0.mysql_aurora.3.04.0`),
@@ -34,7 +57,11 @@ pub(super) fn too_new(sql: &str, version: &str) -> Option<TooNew> {
             server: format!("MySQL {version}"),
         });
     }
-    let Server::MySql(v) = server else { return None };
+    let (v, mariadb) = match server {
+        Server::MySql(v) => (v, false),
+        Server::MariaDb(v) => (v, true),
+        Server::Compatible { .. } => return None,
+    };
     let features: [(&'static str, Version, &'static str, bool); 17] = [
         ("EXPLAIN ANALYZE", (8, 0, 18), "MySQL 8.0.18 or newer", starts_with(&words, &["explain", "analyze"])),
         (
@@ -90,6 +117,16 @@ pub(super) fn too_new(sql: &str, version: &str) -> Option<TooNew> {
         ),
         ("GROUPING()", (8, 0, 1), "MySQL 8.0 or newer", call("grouping")),
     ];
+    if mariadb {
+        return features.into_iter().filter(|f| f.3).find_map(|(feature, ..)| {
+            let (_, since, needs) = MARIADB.iter().find(|(name, ..)| *name == feature)?;
+            since.is_none_or(|s| v < s).then(|| TooNew {
+                feature,
+                needs,
+                server: format!("MariaDB {}.{}.{}", v.0, v.1, v.2),
+            })
+        });
+    }
     let (feature, _, needs, _) = features.into_iter().find(|(_, since, _, used)| *used && v < *since)?;
     Some(TooNew { feature, needs, server: format!("MySQL {version}") })
 }
@@ -121,5 +158,18 @@ mod tests {
         assert!(too_new("explain analyze select 1", "5.7.44-log").is_some());
         // After another statement.
         assert!(too_new("set @a = 1; with c as (select 1) select * from c", "5.7.44").is_some());
+    }
+
+    #[test]
+    fn what_mariadb_hasnt_got_of_mysqls() {
+        let lateral = too_new("select * from t, lateral (select 1) d", "11.4.13-MariaDB-ubu2404").unwrap();
+        assert_eq!((lateral.feature, lateral.server.as_str()), ("LATERAL", "MariaDB 11.4.13"));
+        assert!(too_new("explain analyze select 1", "11.4.13-MariaDB").unwrap().needs.contains("ANALYZE SELECT"));
+        // What it has since a version: said before it, not after.
+        assert!(too_new("with c as (select 1) select * from c", "10.1.48-MariaDB").is_some());
+        assert!(too_new("with c as (select 1) select * from c", "10.6.16-MariaDB").is_none());
+        assert!(too_new("select * from json_table('[1]', '$[*]' columns (x int path '$')) t", "10.5.9-MariaDB").is_some());
+        // Its own ANALYZE <statement> is its own.
+        assert!(too_new("analyze select 1", "10.11.6-MariaDB").is_none());
     }
 }
