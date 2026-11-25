@@ -15,6 +15,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- PostgreSQL: aggregates and range types are listed in the navigator with the functions and types, `d` showing each as a `CREATE AGGREGATE` or `CREATE TYPE … AS RANGE`. A test now checks every kind of object the server's catalog has, so one a new version adds fails it until the navigator knows it.
 - `Ctrl+K s c` checks the connection now and reconnects a lost one, as `R` does in the results (whose menu lists it too).
 - Another database on the same server for a tab: `D` in the navigator, a click on its database line, or `Ctrl+K` "Databases…" lists the server's databases to search; the one picked opens as the tab's connection with that database (a reconnect keeps it; other tabs stay on theirs). A connection with no database set is no longer stuck with the server's default.
 - `R` in the results checks the connection at once and reconnects a lost one; a lost connection shows `×` in the status bar.
@@ -72,6 +73,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- MariaDB: a MySQL 8 form it hasn't got (`LATERAL`, `VALUES ROW(…)`, the `TABLE` statement, `EXPLAIN ANALYZE`, and others) failed with a bare syntax error; now the note says it's MySQL's, and MariaDB's own form where it has one (`ANALYZE SELECT …`, `VALUES (…)`), or the MariaDB version that added it.
 - MySQL and MariaDB: text in a binary collation (`utf8mb4_bin`, a case-sensitive column) and MariaDB's JSON were shown as hex (`0x62696E…`), taken for bytes; they're shown as their text. Found by a test that now checks every type the server has against what the server itself writes (PostgreSQL's every type from `pg_type`, MySQL's every type its own tables use).
 - On narrow and short screens what's to be read or pressed stays in sight: the transaction review's keys wrap instead of being cut; the sandbox's keys (and Esc) stay under its steps, which scroll and wrap above them; help puts a long key on a line of its own, its words below; the connection form's error stays at the bottom with the fields scrolling above it; the editor's footer gives a problem the room before the write mode's label; an index's name comes before its columns in the navigator; on a short screen the pane with the keys gets the room it needs; on SQLite and DuckDB at 40 columns a message is no longer squeezed out of the status bar by the file's path.
 - Stepping (`←`/`→`) in a definition from a function on to a table: the function's text arriving late took over the table's popup. Now only the definition asked for last opens, and none once the popup's closed.
