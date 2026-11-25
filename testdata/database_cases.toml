@@ -469,11 +469,11 @@ tests = ["live_plans_aside_while_the_session_is_busy", "live_the_catalog_follows
 
 [[case]]
 id = "types.every_kind"
-what = "Every kind of type shown as text (numbers, text, binary, dates, JSON, arrays, enums, spatial…)"
+what = "Every type the server has, shown as the server writes it (its output; on purpose otherwise, listed)"
 pg = "tested"
 mysql = "tested"
-tests = ["live_postgres_shows_every_kind_of_type_as_text", "live_mysql_shows_every_kind_of_type_as_text"]
-note = "from a list written by hand; database-test-coverage.md step 5 makes it the server's own"
+tests = ["live_postgres_shows_every_base_type_as_the_server_writes_it", "live_mysql_shows_every_type_as_the_server_writes_it", "live_postgres_shows_every_kind_of_type_as_text", "live_mysql_shows_every_kind_of_type_as_text"]
+note = "PostgreSQL's every base, range and multirange type from pg_type (8 internal ones without input listed); MySQL's every type its own tables use; text in a binary collation (utf8mb4_bin, MariaDB's JSON) was shown as hex: fixed in patches/sqlx-mysql"
 
 [[case]]
 id = "types.edit_literals"

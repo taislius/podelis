@@ -418,6 +418,92 @@ async fn live_postgres_shows_every_kind_of_type_as_text() {
     db.run("RESET TIME ZONE", DEFAULT_ROW_LIMIT).await.unwrap();
 }
 
+/// Sample texts a value of a type may be made from: the first a type
+/// takes is its value.
+#[cfg(test)]
+const SAMPLES: &[&str] = &[
+    "1", "t", "a", "2024-01-02", "12:30", "12:30+02", "2024-01-02 12:30", "2024-01-02 12:30+02", "1 day",
+    "(1,2)", "((0,0),(1,1))", "[(0,0),(1,1)]", "<(0,0),1>", "{1,2,3}", "[1,5)", "{[1,5)}",
+    "[2024-01-01,2024-02-01)", "{[2024-01-01,2024-02-01)}", "[2024-01-01 00:00,2024-02-01 00:00)",
+    "{[2024-01-01 00:00,2024-02-01 00:00)}", "127.0.0.1", "192.168.0.0/24", "08:00:2b:01:02:03",
+    "08:00:2b:01:02:03:04:05", "101", "{\"a\": [1, null]}", "<a/>", "a fat cat", "fat & cat", "0/16B3748",
+    "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "\\x00ff", "$.a", "10:20:10,14,15", "1 2", "0",
+];
+
+/// PostgreSQL's base types no sample fits, and why: internal ones, made by
+/// the server only, or needing a value of a kind no sample is.
+#[cfg(test)]
+const NO_SAMPLE: &[(&str, &str)] = &[
+    ("aclitem", "a privilege, naming a role that must exist"),
+    ("gtsvector", "a text search index's own, no input"),
+    ("pg_brin_bloom_summary", "a BRIN index's summary, made by the server"),
+    ("pg_brin_minmax_multi_summary", "a BRIN index's summary, made by the server"),
+    ("pg_dependencies", "extended statistics, made by ANALYZE"),
+    ("pg_mcv_list", "extended statistics, made by ANALYZE"),
+    ("pg_ndistinct", "extended statistics, made by ANALYZE"),
+    ("pg_node_tree", "a stored expression's tree, made by the server"),
+];
+
+/// Where Podėlis shows a type otherwise than the server writes it, on
+/// purpose: the type, the server's text, what's shown, why.
+#[cfg(test)]
+const SHOWN_OTHERWISE: &[(&str, &str, &str, &str)] =
+    &[("bool", "t", "true", "true and false read at a glance, as MySQL's and SQLite's are shown")];
+
+/// Every base, range and multirange type the server has (`pg_type`), not a
+/// list written by hand: each made from the first sample it takes, then
+/// shown by Podėlis as the server itself writes it (its output function,
+/// as psql shows it), or as `SHOWN_OTHERWISE` says on purpose. A type no
+/// sample fits is in `NO_SAMPLE`, with why: a new version's new type fails
+/// here until it's looked at.
+#[tokio::test]
+async fn live_postgres_shows_every_base_type_as_the_server_writes_it() {
+    let Some(db) = live_db(Engine::Postgres).await else { return };
+    let types = db
+        .run(
+            "SELECT t.typname::text FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+             WHERE n.nspname = 'pg_catalog' AND t.typtype IN ('b', 'r', 'm') AND t.typisdefined
+               AND t.typcategory <> 'A' ORDER BY 1",
+            10_000,
+        )
+        .await
+        .unwrap();
+    let mut differ = Vec::new();
+    let mut unsampled = Vec::new();
+    for row in cells(&types) {
+        let name = row[0].unwrap().to_string();
+        let ty = format!("pg_catalog.\"{name}\"");
+        let mut found = None;
+        for sample in SAMPLES {
+            let value = format!("CAST({} AS {ty})", crate::db::sql_literal(sample, Engine::Postgres));
+            // The type's own output (as psql shows it), not a cast to text
+            // (inet's adds its netmask).
+            if let Ok(o) = db.run(&format!("SELECT format('%s', {value})"), 1).await {
+                found = Some((value, cells(&o)[0][0].map(str::to_string)));
+                break;
+            }
+        }
+        let Some((value, server)) = found else {
+            if !NO_SAMPLE.iter().any(|(t, _)| *t == name) {
+                unsampled.push(name);
+            }
+            continue;
+        };
+        let shown = db.run(&format!("SELECT {value}"), 1).await.map(|o| cells(&o)[0][0].map(str::to_string));
+        let chosen = SHOWN_OTHERWISE
+            .iter()
+            .find(|(t, written, _, _)| *t == name && server.as_deref() == Some(*written))
+            .map(|(_, _, shown, _)| (*shown).to_string());
+        match shown {
+            Ok(shown) if shown == server || (chosen.is_some() && shown == chosen) => {}
+            Ok(shown) => differ.push(format!("{name}: the server writes {server:?}, Podėlis shows {shown:?}")),
+            Err(e) => differ.push(format!("{name}: {e:#}")),
+        }
+    }
+    assert!(unsampled.is_empty(), "no sample fits these types (add one, or put them in NO_SAMPLE with why): {unsampled:?}");
+    assert!(differ.is_empty(), "shown otherwise than the server writes them:\n  {}", differ.join("\n  "));
+}
+
 #[tokio::test]
 async fn live_postgres_lists_triggers_sequences_and_types_with_their_definitions() {
     let Some(db) = live_db(Engine::Postgres).await else { return };

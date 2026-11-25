@@ -81,7 +81,15 @@ impl TypeInfo for MySqlTypeInfo {
     }
 
     fn name(&self) -> &str {
-        self.r#type.name(self.flags, self.max_size)
+        // Podėlis: the server sets BINARY on a `_bin` collation's text too
+        // (`utf8mb4_bin`, MariaDB's JSON): bytes only where the collation is
+        // `binary` itself, else its text is named as text.
+        let flags = if self.collation == Collation::BINARY {
+            self.flags
+        } else {
+            self.flags.difference(ColumnFlags::BINARY)
+        };
+        self.r#type.name(flags, self.max_size)
     }
 }
 

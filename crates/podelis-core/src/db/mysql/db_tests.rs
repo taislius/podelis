@@ -483,6 +483,117 @@ async fn live_mysql_details_have_check_constraints() {
     db.run("DROP DATABASE podelis_checks", DEFAULT_ROW_LIMIT).await.unwrap();
 }
 
+/// MySQL's types: the column type, its `DATA_TYPE` name, a sample value.
+#[cfg(test)]
+const MYSQL_TYPES: &[(&str, &str, &str)] = &[
+    ("TINYINT", "tinyint", "1"),
+    ("SMALLINT", "smallint", "-2"),
+    ("MEDIUMINT", "mediumint", "3"),
+    ("INT", "int", "4"),
+    ("BIGINT UNSIGNED", "bigint", "18446744073709551615"),
+    ("DECIMAL(10,2)", "decimal", "1.10"),
+    ("FLOAT", "float", "1.5"),
+    ("DOUBLE", "double", "2.25"),
+    ("BIT(3)", "bit", "b'101'"),
+    ("DATE", "date", "'2024-02-29'"),
+    ("DATETIME(3)", "datetime", "'2024-01-02 12:30:00.123'"),
+    ("TIMESTAMP", "timestamp", "'2024-01-02 12:30:00'"),
+    ("TIME", "time", "'-12:30:05'"),
+    ("YEAR", "year", "2024"),
+    ("CHAR(3)", "char", "'ž'"),
+    ("VARCHAR(10)", "varchar", "'a;b'"),
+    // Text compared byte by byte: text all the same, not bytes.
+    ("VARCHAR(10) COLLATE utf8mb4_bin", "varchar", "'bin text'"),
+    ("BINARY(2)", "binary", "0x00ff"),
+    ("VARBINARY(4)", "varbinary", "0x00ff"),
+    ("TINYBLOB", "tinyblob", "0x01"),
+    ("BLOB", "blob", "0x0102"),
+    ("MEDIUMBLOB", "mediumblob", "0x03"),
+    ("LONGBLOB", "longblob", "0x04"),
+    ("TINYTEXT", "tinytext", "'t'"),
+    ("TEXT", "text", "'line one\nline two'"),
+    ("MEDIUMTEXT", "mediumtext", "'m'"),
+    ("LONGTEXT", "longtext", "'l'"),
+    ("ENUM('sad','ok')", "enum", "'ok'"),
+    ("SET('a','b')", "set", "'a,b'"),
+    ("JSON", "json", "'{\"a\": [1, null]}'"),
+    ("GEOMETRY", "geometry", "ST_GeomFromText('POINT(1 2)')"),
+    ("POINT", "point", "ST_GeomFromText('POINT(1 2)')"),
+    ("LINESTRING", "linestring", "ST_GeomFromText('LINESTRING(0 0,1 1)')"),
+    ("POLYGON", "polygon", "ST_GeomFromText('POLYGON((0 0,1 0,1 1,0 0))')"),
+    ("MULTIPOINT", "multipoint", "ST_GeomFromText('MULTIPOINT((0 0),(1 1))')"),
+    ("MULTILINESTRING", "multilinestring", "ST_GeomFromText('MULTILINESTRING((0 0,1 1))')"),
+    ("MULTIPOLYGON", "multipolygon", "ST_GeomFromText('MULTIPOLYGON(((0 0,1 0,1 1,0 0)))')"),
+    ("GEOMETRYCOLLECTION", "geomcollection", "ST_GeomFromText('GEOMETRYCOLLECTION(POINT(1 2))')"),
+];
+
+/// How the server writes a column of each type as text, where `CAST(… AS
+/// CHAR)` doesn't: binary as hex (as `mysql --binary-as-hex` shows it),
+/// spatial as WKT, BIT as its bits.
+#[cfg(test)]
+fn mysql_written(data_type: &str) -> &'static str {
+    match data_type {
+        "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" => "CONCAT('0x', HEX(c))",
+        "bit" => "BIN(c)",
+        t if t.contains("point") || t.contains("line") || t.contains("polygon") || t.contains("geom") => {
+            "ST_AsText(c)"
+        }
+        _ => "CAST(c AS CHAR)",
+    }
+}
+
+/// Where Podėlis shows a type otherwise than the server writes it, on
+/// purpose: the type, the server's text, what's shown, why.
+#[cfg(test)]
+const MYSQL_SHOWN_OTHERWISE: &[(&str, &str, &str, &str)] =
+    &[("bit", "101", "5", "BIT as its number, as `b + 0` gives it: the mysql client shows its raw bytes")];
+
+/// Every type MySQL's own tables use (`information_schema.COLUMNS`), each
+/// shown by Podėlis as the server writes it, or as `MYSQL_SHOWN_OTHERWISE`
+/// says on purpose: a type the server uses that `MYSQL_TYPES` doesn't know
+/// fails here, until it's looked at. (Text in a binary collation, MariaDB's
+/// JSON with it, was shown as hex before patches/sqlx-mysql's fix.)
+#[tokio::test]
+async fn live_mysql_shows_every_type_as_the_server_writes_it() {
+    let Some((db, _)) = own_live_db("podelis_server_types").await else { return };
+    // The server's own schemas only: other databases' tables, being made
+    // meanwhile, aren't locked by the reading.
+    let used = db
+        .run(
+            "SELECT DISTINCT LOWER(CAST(DATA_TYPE AS CHAR)) FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA IN ('mysql', 'information_schema', 'performance_schema', 'sys')",
+            10_000,
+        )
+        .await;
+    let known: Vec<&str> = MYSQL_TYPES.iter().map(|(_, name, _)| *name).collect();
+    let unknown: Vec<String> = cells(&used.unwrap())
+        .into_iter()
+        .filter_map(|row| row[0].map(str::to_string))
+        .filter(|t| !known.contains(&t.as_str()) && t != "geometrycollection")
+        .collect();
+    assert!(unknown.is_empty(), "types the server's own tables use that MYSQL_TYPES doesn't know: {unknown:?}");
+    let mut differ = Vec::new();
+    for (column, name, sample) in MYSQL_TYPES {
+        let setup = format!("DROP TABLE IF EXISTS ty; CREATE TABLE ty (c {column}); INSERT INTO ty VALUES ({sample})");
+        if let Err(e) = db.run(&setup, 1).await {
+            differ.push(format!("{name}: {e:#}"));
+            continue;
+        }
+        let written = db.run(&format!("SELECT {} FROM ty", mysql_written(name)), 1).await.unwrap();
+        let shown = db.run("SELECT c FROM ty", 1).await.unwrap();
+        let (written, shown) = (cells(&written)[0][0].map(str::to_string), cells(&shown)[0][0].map(str::to_string));
+        let chosen = MYSQL_SHOWN_OTHERWISE
+            .iter()
+            .find(|(t, w, _, _)| t == name && written.as_deref() == Some(*w))
+            .map(|(_, _, s, _)| (*s).to_string());
+        if written != shown && (chosen.is_none() || shown != chosen) {
+            differ.push(format!("{name}: the server writes {written:?}, Podėlis shows {shown:?}"));
+        }
+    }
+    assert!(differ.is_empty(), "shown otherwise than the server writes them:\n  {}", differ.join("\n  "));
+    db.run("DROP DATABASE podelis_server_types", 1).await.unwrap();
+}
+
 /// One value of each kind of type there is, as the mysql client shows it.
 #[tokio::test]
 async fn live_mysql_shows_every_kind_of_type_as_text() {

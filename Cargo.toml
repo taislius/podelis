@@ -165,10 +165,12 @@ unwrap_used = "warn"
 redundant_clone = "warn"
 clone_on_ref_ptr = "warn"          # Arc::clone(&x), so a cheap clone reads as one
 
-# sqlx-mysql 0.9.0 with two fixes: a user without a password gets an empty
+# sqlx-mysql 0.9.0 with three fixes: a user without a password gets an empty
 # auth response, not a scramble of "" (public servers that switch the auth
-# plugin, such as Rfam's, refuse that); and RSA through aws-lc-rs instead of
-# the `rsa` crate (RUSTSEC-2023-0071). See patches/README.md.
+# plugin, such as Rfam's, refuse that); RSA through aws-lc-rs instead of
+# the `rsa` crate (RUSTSEC-2023-0071); and text with a binary collation
+# (`utf8mb4_bin`, MariaDB's JSON) named as text, not bytes. See
+# patches/README.md.
 [patch.crates-io]
 sqlx-mysql = { path = "patches/sqlx-mysql" }
 sqlx-postgres = { path = "patches/sqlx-postgres" }

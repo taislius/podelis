@@ -2,7 +2,7 @@
 
 ## sqlx-mysql 0.9.0
 
-A copy of the published crate with two changes. **A user without a
+A copy of the published crate with three changes. **A user without a
 password**, in
 `src/connection/auth.rs` (`AuthPlugin::scramble`): with no password, the
 `mysql_native_password` and `caching_sha2_password` plugins send an empty
@@ -29,12 +29,21 @@ our report #4482, 2026-10-31) but not yet released; aws-lc-rs instead of
 `rsa` is still an open request (#4082). When a release has the first, the
 copy here needs only the second.
 
+**And text with a binary collation named as text.** The server sets a
+column's BINARY flag for a `_bin` collation's text too (`utf8mb4_bin`, a
+case-sensitive column; MariaDB's JSON, which is `LONGTEXT` in
+`utf8mb4_bin`), and `MySqlTypeInfo::name` (`src/type_info.rs`) named such
+a column BLOB or VARBINARY from the flag alone: Podėlis showed its text
+as hex (`0x62696E…`). The name now takes the flag only where the
+collation is `binary` itself (63). Found by
+`live_mysql_shows_every_type_as_the_server_writes_it`.
+
 Its `Cargo.toml` tells cargo-machete to skip `rand` and `generic-array`,
 upstream's dependencies that this copy no longer uses (its RSA is
-aws-lc-rs's); they're left in to keep the copy to its two changes.
+aws-lc-rs's); they're left in to keep the copy to its changes.
 
 `Cargo.toml` points `[patch.crates-io]` here. Remove the folder and the
-patch once a sqlx-mysql release has both fixes (`cargo update -p
+patch once a sqlx-mysql release has all three (`cargo update -p
 sqlx-mysql` shows a newer version), then check that Rfam still connects,
 and a MySQL 8 connection with SSL off right after the server restarts.
 
