@@ -189,15 +189,16 @@ pub(in crate::db) async fn column_info_rows(
     })
 }
 
-/// Functions and procedures, not those of extensions.
+/// Functions, procedures and aggregates (a window function is listed as
+/// a function), not those of extensions.
 const ROUTINE_FUNCTIONS: &str = "SELECT n.nspname::text,
                             p.proname::text || '(' || pg_get_function_identity_arguments(p.oid) || ')',
-                            CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END,
+                            CASE p.prokind WHEN 'p' THEN 'procedure' WHEN 'a' THEN 'aggregate' ELSE 'function' END,
                             p.oid::text
                      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                      WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
                        AND n.nspname NOT LIKE 'pg_toast%'
-                       AND p.prokind IN ('f', 'p')
+                       AND p.prokind IN ('f', 'p', 'a', 'w')
                        AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')";
 
 /// Triggers, not internal ones nor a partition's copy of its parent's.
@@ -223,12 +224,14 @@ const ROUTINE_SEQUENCES: &str = "SELECT n.nspname::text, c.relname::text, 'seque
                        AND NOT EXISTS (SELECT 1 FROM pg_depend d
                                        WHERE d.objid = c.oid AND d.deptype IN ('a', 'i', 'e'))";
 
-/// Enums, domains and composite types, not those of extensions.
+/// Enums, domains, range types and composite types, not those of
+/// extensions (a range's multirange is the server's, made with it).
 const ROUTINE_TYPES: &str = "SELECT n.nspname::text, t.typname::text,
-                            CASE t.typtype WHEN 'e' THEN 'enum' WHEN 'd' THEN 'domain' ELSE 'type' END,
+                            CASE t.typtype WHEN 'e' THEN 'enum' WHEN 'd' THEN 'domain' WHEN 'r' THEN 'range'
+                                 ELSE 'type' END,
                             t.oid::text
                      FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
-                     WHERE (t.typtype IN ('e', 'd')
+                     WHERE (t.typtype IN ('e', 'd', 'r')
                             OR (t.typtype = 'c'
                                 AND (SELECT relkind FROM pg_class WHERE oid = t.typrelid) = 'c'))
                        AND n.nspname NOT IN ('pg_catalog', 'information_schema')
@@ -281,6 +284,30 @@ const DOMAIN_DEFINITION: &str = "SELECT format('CREATE DOMAIN %I.%I AS %s%s%s%s;
      FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
      WHERE t.oid = $1::text::oid";
 
+/// An aggregate as a CREATE AGGREGATE: its state function and type, and
+/// what it has of its final and combine functions and initial state. An
+/// ordered-set or hypothetical one (`WITHIN GROUP`) is said to be, in a
+/// comment: its own form isn't written.
+const AGGREGATE_DEFINITION: &str = "SELECT format(E'%sCREATE AGGREGATE %I.%I(%s) (\\n  SFUNC = %s,\\n  STYPE = %s%s%s%s\\n);',
+        CASE WHEN a.aggkind <> 'n' THEN E'-- an ordered-set aggregate (WITHIN GROUP): its form differs\\n' ELSE '' END,
+        n.nspname, p.proname, pg_get_function_identity_arguments(p.oid),
+        a.aggtransfn::regproc, format_type(a.aggtranstype, NULL),
+        CASE WHEN a.aggfinalfn <> 0 THEN E',\\n  FINALFUNC = ' || a.aggfinalfn::regproc ELSE '' END,
+        CASE WHEN a.aggcombinefn <> 0 THEN E',\\n  COMBINEFUNC = ' || a.aggcombinefn::regproc ELSE '' END,
+        CASE WHEN a.agginitval IS NOT NULL THEN E',\\n  INITCOND = ' || quote_literal(a.agginitval) ELSE '' END)
+     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     JOIN pg_aggregate a ON a.aggfnoid = p.oid
+     WHERE p.oid = $1::text::oid";
+
+/// A range type as a CREATE TYPE … AS RANGE: its subtype, and its
+/// difference function where it has one.
+const RANGE_DEFINITION: &str = "SELECT format('CREATE TYPE %I.%I AS RANGE (SUBTYPE = %s%s);', n.nspname, t.typname,
+        format_type(r.rngsubtype, NULL),
+        CASE WHEN r.rngsubdiff <> 0 THEN ', SUBTYPE_DIFF = ' || r.rngsubdiff::regproc ELSE '' END)
+     FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+     JOIN pg_range r ON r.rngtypid = t.oid
+     WHERE t.oid = $1::text::oid";
+
 /// A composite type as a CREATE TYPE, a field a line.
 const COMPOSITE_DEFINITION: &str = "SELECT format(E'CREATE TYPE %I.%I AS (\\n%s\\n);', n.nspname, t.typname,
         string_agg('  ' || quote_ident(a.attname) || ' ' || format_type(a.atttypid, a.atttypmod),
@@ -299,6 +326,8 @@ pub(in crate::db) async fn routine_definition(db: &Database, routine: &RoutineIn
             "enum" => ENUM_DEFINITION,
             "domain" => DOMAIN_DEFINITION,
             "type" => COMPOSITE_DEFINITION,
+            "aggregate" => AGGREGATE_DEFINITION,
+            "range" => RANGE_DEFINITION,
             _ => "SELECT pg_get_functiondef($1::text::oid)",
         };
         let (def,): (Option<String>,) = sqlx::query_as(sql).bind(&routine.id).fetch_one(p).await?;

@@ -97,9 +97,10 @@ pub struct RoutineInfo {
 }
 
 impl RoutineInfo {
-    /// A function or a procedure, not another object listed with them.
+    /// A function, a procedure or an aggregate, not another object listed
+    /// with them.
     pub fn is_function(&self) -> bool {
-        matches!(self.kind.as_str(), "function" | "procedure")
+        matches!(self.kind.as_str(), "function" | "procedure" | "aggregate")
     }
 
     /// Its name as SQL writes it on `engine`: a function's with its
@@ -108,7 +109,7 @@ impl RoutineInfo {
     /// (orders)`); anything else's quoted, with its schema.
     pub fn sql_name(&self, engine: Engine) -> String {
         match self.kind.as_str() {
-            "function" | "procedure" => self.name.clone(),
+            "function" | "procedure" | "aggregate" => self.name.clone(),
             "trigger" => {
                 let name = self.name.rsplit_once(" (").map_or(self.name.as_str(), |(name, _)| name);
                 engine.quote_ident(name)

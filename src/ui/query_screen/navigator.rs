@@ -138,6 +138,7 @@ fn routine_marks(routine: &crate::db::RoutineInfo) -> (&'static str, String) {
         "procedure" => "proc",
         "function" => "fn",
         "sequence" => "seq",
+        "aggregate" => "agg",
         other => other,
     };
     (if routine.is_function() { "  ƒ " } else { "  ◦ " }, kind.to_string())
