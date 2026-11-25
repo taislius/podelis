@@ -551,11 +551,14 @@ fn c_is_offered_only_where_the_server_writes_one() {
     select_node(&mut app, SchemaNode::Table(0));
     app.handle_schema_key(key(KeyCode::Char('d')));
     assert!(app.popups.cell_view.as_ref().unwrap().create_table.is_none());
-    let (mut app, _dir) = definition_app();
-    app.connection.form.engine = file_engine();
-    select_node(&mut app, SchemaNode::Table(0));
-    app.handle_schema_key(key(KeyCode::Char('d')));
-    assert!(app.popups.cell_view.as_ref().unwrap().create_table.is_none());
+    #[cfg(feature = "sqlite")]
+    {
+        let (mut app, _dir) = definition_app();
+        app.connection.form.engine = file_engine();
+        select_node(&mut app, SchemaNode::Table(0));
+        app.handle_schema_key(key(KeyCode::Char('d')));
+        assert!(app.popups.cell_view.as_ref().unwrap().create_table.is_none());
+    }
 }
 
 /// `d` on a table whose details are on their way says so at once; they
